@@ -26,23 +26,31 @@ const (
 )
 
 type Job struct {
-	ID               string
-	Type             string
-	SourceID         string
-	CreatedBy        string
-	Status           Status
-	Stage            string
-	ProgressCurrent  int64
-	ProgressTotal    int64
-	ProgressSequence uint64
-	IssueCode        string
-	PublicationID    string
-	RetryOf          string
-	Attempt          int
-	CreatedAt        time.Time
-	StartedAt        *time.Time
-	FinishedAt       *time.Time
-	UpdatedAt        time.Time
+	ID                string
+	Type              string
+	SourceID          string
+	CreatedBy         string
+	Status            Status
+	Stage             string
+	ProgressCurrent   int64
+	ProgressTotal     int64
+	ProgressSequence  uint64
+	IssueCode         string
+	PublicationID     string
+	RetryOf           string
+	Attempt           int
+	CreatedAt         time.Time
+	StartedAt         *time.Time
+	FinishedAt        *time.Time
+	UpdatedAt         time.Time
+	TargetWatermark   int64
+	TargetCatalogID   string
+	BasePublicationID string
+}
+
+type OverlayEnqueueResult struct {
+	JobID   string
+	Created bool
 }
 
 type Store struct {
@@ -101,22 +109,67 @@ VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`, job.ID, job.Type, job.SourceID, job.C
 	return job, nil
 }
 
+// EnqueueOverlayProjectionTx 与 Overlay fact 使用同一个 control.db 事务：同一 Catalog
+// 上的连续写入合并为更高 watermark，Catalog 已切换时显式 supersede 旧请求。
+func (s *Store) EnqueueOverlayProjectionTx(ctx context.Context, tx *sql.Tx, createdBy, catalogRevisionID, basePublicationID string, targetWatermark int64) (OverlayEnqueueResult, error) {
+	if tx == nil || strings.TrimSpace(createdBy) == "" || catalogRevisionID == "" || basePublicationID == "" || targetWatermark < 1 {
+		return OverlayEnqueueResult{}, fault.New(fault.CodeValidation, false, nil)
+	}
+	var activeID, activeCatalog string
+	err := tx.QueryRowContext(ctx, `SELECT job_id, target_catalog_revision_id FROM jobs
+WHERE job_type='overlay_projection' AND status IN ('queued', 'running', 'publishing')
+ORDER BY created_at, job_id LIMIT 1`).Scan(&activeID, &activeCatalog)
+	if err != nil && !errors.Is(err, sql.ErrNoRows) {
+		return OverlayEnqueueResult{}, fault.New(fault.CodeInternal, true, err)
+	}
+	now := s.clock.Now().UTC()
+	if err == nil && activeCatalog == catalogRevisionID {
+		if _, err := tx.ExecContext(ctx, `UPDATE jobs SET target_watermark=max(target_watermark, ?),
+progress_sequence=progress_sequence+1, updated_at=? WHERE job_id=?`, targetWatermark, now.Unix(), activeID); err != nil {
+			return OverlayEnqueueResult{}, fault.New(fault.CodeInternal, true, err)
+		}
+		return OverlayEnqueueResult{JobID: activeID}, nil
+	}
+	if err == nil {
+		if _, err := tx.ExecContext(ctx, `UPDATE jobs SET status='cancelled', stage='superseded',
+issue_code='OVERLAY_SUPERSEDED', finished_at=?, progress_sequence=progress_sequence+1, updated_at=?
+WHERE job_id=?`, now.Unix(), now.Unix(), activeID); err != nil {
+			return OverlayEnqueueResult{}, fault.New(fault.CodeInternal, true, err)
+		}
+	}
+	id, err := s.ids.New(domain.IDJob)
+	if err != nil {
+		return OverlayEnqueueResult{}, fault.New(fault.CodeInternal, true, err)
+	}
+	_, err = tx.ExecContext(ctx, `INSERT INTO jobs
+(job_id, job_type, source_id, created_by, status, stage, progress_sequence, attempt,
+ created_at, updated_at, target_watermark, target_catalog_revision_id, base_query_publication_id)
+VALUES (?, 'overlay_projection', NULL, ?, 'queued', 'queued', 1, 1, ?, ?, ?, ?, ?)`,
+		id.String(), createdBy, now.Unix(), now.Unix(), targetWatermark, catalogRevisionID, basePublicationID)
+	if err != nil {
+		return OverlayEnqueueResult{}, fault.New(fault.CodeInternal, true, err)
+	}
+	return OverlayEnqueueResult{JobID: id.String(), Created: true}, nil
+}
+
 func (s *Store) Get(ctx context.Context, id string) (Job, error) {
 	if _, err := domain.ParseID(domain.IDJob, id); err != nil {
 		return Job{}, fault.New(fault.CodeNotFound, false, nil)
 	}
 	var job Job
-	var sourceID, issueCode, publicationID, retryOf sql.NullString
-	var startedAt, finishedAt sql.NullInt64
+	var sourceID, issueCode, publicationID, retryOf, targetCatalogID, basePublicationID sql.NullString
+	var startedAt, finishedAt, targetWatermark sql.NullInt64
 	var createdAt, updatedAt int64
 	err := s.db.QueryRowContext(ctx, `
 SELECT job_id, job_type, source_id, created_by, status, stage,
        progress_current, progress_total, progress_sequence, issue_code, publication_id,
-       retry_of, attempt, created_at, started_at, finished_at, updated_at
+       retry_of, attempt, created_at, started_at, finished_at, updated_at,
+       target_watermark, target_catalog_revision_id, base_query_publication_id
 FROM jobs WHERE job_id = ?`, id).Scan(
 		&job.ID, &job.Type, &sourceID, &job.CreatedBy, &job.Status, &job.Stage,
 		&job.ProgressCurrent, &job.ProgressTotal, &job.ProgressSequence, &issueCode, &publicationID,
 		&retryOf, &job.Attempt, &createdAt, &startedAt, &finishedAt, &updatedAt,
+		&targetWatermark, &targetCatalogID, &basePublicationID,
 	)
 	if errors.Is(err, sql.ErrNoRows) {
 		return Job{}, fault.New(fault.CodeNotFound, false, nil)
@@ -125,6 +178,8 @@ FROM jobs WHERE job_id = ?`, id).Scan(
 		return Job{}, fault.New(fault.CodeInternal, true, err)
 	}
 	job.SourceID, job.IssueCode, job.PublicationID, job.RetryOf = sourceID.String, issueCode.String, publicationID.String, retryOf.String
+	job.TargetWatermark = targetWatermark.Int64
+	job.TargetCatalogID, job.BasePublicationID = targetCatalogID.String, basePublicationID.String
 	job.CreatedAt, job.UpdatedAt = time.Unix(createdAt, 0).UTC(), time.Unix(updatedAt, 0).UTC()
 	job.StartedAt = nullableTime(startedAt)
 	job.FinishedAt = nullableTime(finishedAt)
@@ -132,8 +187,67 @@ FROM jobs WHERE job_id = ?`, id).Scan(
 }
 
 func (s *Store) Start(ctx context.Context, id string) (Job, error) {
+	return s.StartStage(ctx, id, "discovering")
+}
+
+func (s *Store) StartStage(ctx context.Context, id, stage string) (Job, error) {
+	if stage == "" {
+		return Job{}, fault.New(fault.CodeValidation, false, nil)
+	}
 	now := s.clock.Now().UTC()
-	return s.transition(ctx, id, StatusQueued, StatusRunning, "discovering", `started_at = ?,`, []any{now.Unix()}, now)
+	return s.transition(ctx, id, StatusQueued, StatusRunning, stage, `started_at = ?,`, []any{now.Unix()}, now)
+}
+
+func (s *Store) RequeueInterruptedOverlay(ctx context.Context, id string) (Job, error) {
+	now := s.clock.Now().UTC()
+	result, err := s.db.ExecContext(ctx, `UPDATE jobs SET status='queued', stage='recovery_queued',
+started_at=NULL, issue_code=NULL, progress_sequence=progress_sequence+1, updated_at=?
+WHERE job_id=? AND job_type='overlay_projection' AND status IN ('running', 'publishing')`, now.Unix(), id)
+	if err != nil {
+		return Job{}, fault.New(fault.CodeInternal, true, err)
+	}
+	if err := requireOne(result); err != nil {
+		return Job{}, err
+	}
+	return s.Get(ctx, id)
+}
+
+func (s *Store) ResumeOverlayProjection(ctx context.Context, id string) (Job, error) {
+	now := s.clock.Now().UTC()
+	return s.transition(ctx, id, StatusPublishing, StatusRunning, "reprojecting", "", nil, now)
+}
+
+func (s *Store) RetargetOverlayProjection(ctx context.Context, id, catalogRevisionID, basePublicationID string) (Job, error) {
+	if catalogRevisionID == "" || basePublicationID == "" {
+		return Job{}, fault.New(fault.CodeValidation, false, nil)
+	}
+	now := s.clock.Now().UTC()
+	result, err := s.db.ExecContext(ctx, `UPDATE jobs SET target_catalog_revision_id=?,
+base_query_publication_id=?, stage='retargeting', progress_sequence=progress_sequence+1, updated_at=?
+WHERE job_id=? AND job_type='overlay_projection' AND status='running'`,
+		catalogRevisionID, basePublicationID, now.Unix(), id)
+	if err != nil {
+		return Job{}, fault.New(fault.CodeInternal, true, err)
+	}
+	if err := requireOne(result); err != nil {
+		return Job{}, err
+	}
+	return s.Get(ctx, id)
+}
+
+func (s *Store) CancelOverlayAsSuperseded(ctx context.Context, id string) (Job, error) {
+	now := s.clock.Now().UTC()
+	result, err := s.db.ExecContext(ctx, `UPDATE jobs SET status='cancelled', stage='superseded',
+issue_code='OVERLAY_SUPERSEDED', finished_at=?, progress_sequence=progress_sequence+1, updated_at=?
+WHERE job_id=? AND job_type='overlay_projection' AND status IN ('queued', 'running', 'publishing')`,
+		now.Unix(), now.Unix(), id)
+	if err != nil {
+		return Job{}, fault.New(fault.CodeInternal, true, err)
+	}
+	if err := requireOne(result); err != nil {
+		return Job{}, err
+	}
+	return s.Get(ctx, id)
 }
 
 func (s *Store) Progress(ctx context.Context, id, stage string, current, total int64) (Job, error) {

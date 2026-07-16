@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"sort"
 	"time"
 
 	"github.com/RecRivenVI/gallery/internal/contract/fault"
@@ -22,16 +23,34 @@ type Candidate struct {
 	ControlWatermark  int64
 }
 
+type OverlayCandidate struct {
+	CatalogRevisionID     string
+	BaseOverlayRevisionID string
+	OverlayRevisionID     string
+	JobID                 string
+	ControlWatermark      int64
+}
+
+type OverlayFact struct {
+	TitleOverride      string
+	ManualTags         []string
+	Hidden             bool
+	CustomCoverMediaID string
+}
+
 type WorkFact struct {
-	SourceID  string
-	LibraryID string
-	SourceKey string
-	Title     string
-	Creator   string
-	Tags      []string
-	Filenames []string
-	Hidden    bool
-	WorkID    string
+	SourceID           string
+	LibraryID          string
+	SourceKey          string
+	SourceTitle        string
+	SourceTags         []string
+	Title              string
+	Creator            string
+	Tags               []string
+	Filenames          []string
+	Hidden             bool
+	CustomCoverMediaID string
+	WorkID             string
 }
 
 type MediaFact struct {
@@ -140,6 +159,16 @@ func (s *Store) Stage(ctx context.Context, candidate Candidate, works []WorkFact
 			return err
 		}
 	}
+	for _, work := range works {
+		if work.CustomCoverMediaID == "" {
+			continue
+		}
+		if _, err := s.db.ExecContext(ctx, `UPDATE media_projections SET ordinal=-1
+WHERE catalog_revision_id=? AND overlay_revision_id=? AND work_id=? AND media_id=?`,
+			candidate.CatalogRevisionID, candidate.OverlayRevisionID, work.WorkID, work.CustomCoverMediaID); err != nil {
+			return fault.New(fault.CodeInternal, true, err)
+		}
+	}
 	return nil
 }
 
@@ -210,6 +239,228 @@ ON CONFLICT(singleton) DO UPDATE SET query_publication_id = excluded.query_publi
 		return Publication{}, fault.New(fault.CodeInternal, true, err)
 	}
 	return publication, nil
+}
+
+// BeginOverlayCandidate 固定当前合法 publication 的 Catalog 与 Overlay 基线，
+// 只在新的 Overlay revision 中构造查询投影，不改动 Source-derived 事实。
+func (s *Store) BeginOverlayCandidate(ctx context.Context, jobID, catalogRevisionID string, controlWatermark int64) (OverlayCandidate, error) {
+	current, err := s.Current(ctx)
+	if err != nil {
+		return OverlayCandidate{}, err
+	}
+	if current.CatalogRevisionID != catalogRevisionID || controlWatermark <= current.ControlWatermark {
+		return OverlayCandidate{}, fault.New(fault.CodeConflict, true, nil)
+	}
+	overlayID, err := s.ids.New(domain.IDOverlayRevision)
+	if err != nil {
+		return OverlayCandidate{}, fault.New(fault.CodeInternal, true, err)
+	}
+	candidate := OverlayCandidate{
+		CatalogRevisionID: catalogRevisionID, BaseOverlayRevisionID: current.OverlayRevisionID,
+		OverlayRevisionID: overlayID.String(), JobID: jobID, ControlWatermark: controlWatermark,
+	}
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return OverlayCandidate{}, fault.New(fault.CodeInternal, true, err)
+	}
+	defer tx.Rollback()
+	now := s.clock.Now().UTC().Unix()
+	if _, err := tx.ExecContext(ctx, `INSERT INTO overlay_projection_revisions
+(overlay_revision_id, catalog_revision_id, control_watermark, status, created_at, projection_job_id)
+VALUES (?, ?, ?, 'staging', ?, ?)`, candidate.OverlayRevisionID, candidate.CatalogRevisionID, candidate.ControlWatermark, now, candidate.JobID); err != nil {
+		return OverlayCandidate{}, fault.New(fault.CodeInternal, true, err)
+	}
+	if _, err := tx.ExecContext(ctx, `INSERT INTO work_projections
+SELECT catalog_revision_id, ?, work_id, source_id, source_key, library_id, title, creator,
+tags_json, filenames_text, normalized_original_text, cjk_bigram_token_text,
+latin_trigram_token_text, sort_title_key, hidden
+FROM work_projections WHERE catalog_revision_id=? AND overlay_revision_id=?`,
+		candidate.OverlayRevisionID, candidate.CatalogRevisionID, candidate.BaseOverlayRevisionID); err != nil {
+		return OverlayCandidate{}, fault.New(fault.CodeInternal, true, err)
+	}
+	if _, err := tx.ExecContext(ctx, `INSERT INTO media_projections
+SELECT catalog_revision_id, ?, media_id, work_id, source_id, source_key, relative_path,
+media_kind, mime_type, size_bytes, algorithm, digest, location_status, base_ordinal,
+hidden, base_ordinal
+FROM media_projections WHERE catalog_revision_id=? AND overlay_revision_id=?`,
+		candidate.OverlayRevisionID, candidate.CatalogRevisionID, candidate.BaseOverlayRevisionID); err != nil {
+		return OverlayCandidate{}, fault.New(fault.CodeInternal, true, err)
+	}
+	if err := tx.Commit(); err != nil {
+		return OverlayCandidate{}, fault.New(fault.CodeInternal, true, err)
+	}
+	return candidate, nil
+}
+
+func (s *Store) ApplyOverlayFacts(ctx context.Context, candidate OverlayCandidate, facts map[string]OverlayFact) error {
+	rows, err := s.db.QueryContext(ctx, `SELECT w.work_id, sw.title, sw.creator, sw.tags_json, sw.filenames_text
+FROM work_projections w JOIN source_works sw
+ON sw.catalog_revision_id=w.catalog_revision_id AND sw.source_id=w.source_id AND sw.source_key=w.source_key
+WHERE w.catalog_revision_id=? AND w.overlay_revision_id=? ORDER BY w.work_id`, candidate.CatalogRevisionID, candidate.OverlayRevisionID)
+	if err != nil {
+		return fault.New(fault.CodeInternal, true, err)
+	}
+	type baseWork struct{ id, title, creator, tags, filenames string }
+	var works []baseWork
+	for rows.Next() {
+		var item baseWork
+		if err := rows.Scan(&item.id, &item.title, &item.creator, &item.tags, &item.filenames); err != nil {
+			rows.Close()
+			return fault.New(fault.CodeInternal, true, err)
+		}
+		works = append(works, item)
+	}
+	if err := rows.Close(); err != nil {
+		return fault.New(fault.CodeInternal, true, err)
+	}
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return fault.New(fault.CodeInternal, true, err)
+	}
+	defer tx.Rollback()
+	for _, item := range works {
+		var tags, filenames []string
+		_ = json.Unmarshal([]byte(item.tags), &tags)
+		_ = json.Unmarshal([]byte(item.filenames), &filenames)
+		fact := facts[item.id]
+		title := item.title
+		if fact.TitleOverride != "" {
+			title = fact.TitleOverride
+		}
+		tags = mergeStrings(tags, fact.ManualTags)
+		tagsJSON, _ := json.Marshal(tags)
+		document := querytext.BuildDocument(title, item.creator, tags, filenames)
+		hidden := 0
+		if fact.Hidden {
+			hidden = 1
+		}
+		if _, err := tx.ExecContext(ctx, `UPDATE work_projections SET title=?, creator=?, tags_json=?,
+normalized_original_text=?, cjk_bigram_token_text=?, latin_trigram_token_text=?,
+sort_title_key=?, hidden=? WHERE catalog_revision_id=? AND overlay_revision_id=? AND work_id=?`,
+			title, item.creator, string(tagsJSON), document.NormalizedOriginal, document.CJKTokens,
+			document.LatinTokens, document.SortTitleKey, hidden, candidate.CatalogRevisionID,
+			candidate.OverlayRevisionID, item.id); err != nil {
+			return fault.New(fault.CodeInternal, true, err)
+		}
+		if fact.CustomCoverMediaID != "" {
+			if _, err := tx.ExecContext(ctx, `UPDATE media_projections SET ordinal=-1
+WHERE catalog_revision_id=? AND overlay_revision_id=? AND work_id=? AND media_id=?`,
+				candidate.CatalogRevisionID, candidate.OverlayRevisionID, item.id, fact.CustomCoverMediaID); err != nil {
+				return fault.New(fault.CodeInternal, true, err)
+			}
+		}
+	}
+	if _, err := tx.ExecContext(ctx, `INSERT INTO work_search
+(catalog_revision_id, overlay_revision_id, work_id, normalized_original_text, cjk_bigram_token_text, latin_trigram_token_text)
+SELECT catalog_revision_id, overlay_revision_id, work_id, normalized_original_text,
+cjk_bigram_token_text, latin_trigram_token_text FROM work_projections
+WHERE catalog_revision_id=? AND overlay_revision_id=?`, candidate.CatalogRevisionID, candidate.OverlayRevisionID); err != nil {
+		return fault.New(fault.CodeInternal, true, err)
+	}
+	if err := tx.Commit(); err != nil {
+		return fault.New(fault.CodeInternal, true, err)
+	}
+	return nil
+}
+
+func (s *Store) ApplyCatalogCandidateOverlays(ctx context.Context, candidate Candidate, facts map[string]OverlayFact) error {
+	if _, err := s.db.ExecContext(ctx, `DELETE FROM work_search
+WHERE catalog_revision_id=? AND overlay_revision_id=?`, candidate.CatalogRevisionID, candidate.OverlayRevisionID); err != nil {
+		return fault.New(fault.CodeInternal, true, err)
+	}
+	return s.ApplyOverlayFacts(ctx, OverlayCandidate{
+		CatalogRevisionID: candidate.CatalogRevisionID, OverlayRevisionID: candidate.OverlayRevisionID,
+		JobID: candidate.JobID, ControlWatermark: candidate.ControlWatermark,
+	}, facts)
+}
+
+func (s *Store) ValidateOverlayCandidate(ctx context.Context, candidate OverlayCandidate) error {
+	var baseWorks, works, baseMedia, media, search int
+	err := s.db.QueryRowContext(ctx, `SELECT
+(SELECT count(*) FROM work_projections WHERE catalog_revision_id=? AND overlay_revision_id=?),
+(SELECT count(*) FROM work_projections WHERE catalog_revision_id=? AND overlay_revision_id=?),
+(SELECT count(*) FROM media_projections WHERE catalog_revision_id=? AND overlay_revision_id=?),
+(SELECT count(*) FROM media_projections WHERE catalog_revision_id=? AND overlay_revision_id=?),
+(SELECT count(*) FROM work_search WHERE catalog_revision_id=? AND overlay_revision_id=?)`,
+		candidate.CatalogRevisionID, candidate.BaseOverlayRevisionID,
+		candidate.CatalogRevisionID, candidate.OverlayRevisionID,
+		candidate.CatalogRevisionID, candidate.BaseOverlayRevisionID,
+		candidate.CatalogRevisionID, candidate.OverlayRevisionID,
+		candidate.CatalogRevisionID, candidate.OverlayRevisionID).Scan(&baseWorks, &works, &baseMedia, &media, &search)
+	if err != nil {
+		return fault.New(fault.CodeInternal, true, err)
+	}
+	if works != baseWorks || media != baseMedia || search != works {
+		return fault.New(fault.CodeCatalogCandidateInvalid, false, nil)
+	}
+	return nil
+}
+
+func (s *Store) PublishOverlay(ctx context.Context, candidate OverlayCandidate) (Publication, error) {
+	publicationID, err := s.ids.New(domain.IDQueryPublication)
+	if err != nil {
+		return Publication{}, fault.New(fault.CodeInternal, true, err)
+	}
+	publication := Publication{ID: publicationID.String(), CatalogRevisionID: candidate.CatalogRevisionID,
+		OverlayRevisionID: candidate.OverlayRevisionID, JobID: candidate.JobID,
+		ControlWatermark: candidate.ControlWatermark, CreatedAt: s.clock.Now().UTC()}
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return Publication{}, fault.New(fault.CodeInternal, true, err)
+	}
+	defer tx.Rollback()
+	var activeCatalog, activeOverlay, candidateStatus, catalogStatus string
+	var activeWatermark int64
+	if err := tx.QueryRowContext(ctx, `SELECT q.catalog_revision_id, q.overlay_revision_id, q.control_watermark,
+o.status, c.status FROM active_query_publication a
+JOIN query_publications q ON q.query_publication_id=a.query_publication_id
+JOIN overlay_projection_revisions o ON o.overlay_revision_id=?
+JOIN catalog_revisions c ON c.catalog_revision_id=o.catalog_revision_id
+WHERE a.singleton=1`, candidate.OverlayRevisionID).Scan(&activeCatalog, &activeOverlay, &activeWatermark, &candidateStatus, &catalogStatus); err != nil {
+		return Publication{}, fault.New(fault.CodeCatalogCandidateInvalid, false, err)
+	}
+	if activeCatalog != candidate.CatalogRevisionID || activeOverlay != candidate.BaseOverlayRevisionID ||
+		activeWatermark >= candidate.ControlWatermark || candidateStatus != "staging" || catalogStatus != "published" {
+		return Publication{}, fault.New(fault.CodeConflict, true, nil)
+	}
+	if _, err := tx.ExecContext(ctx, `INSERT INTO query_publications
+(query_publication_id, catalog_revision_id, overlay_revision_id, job_id, control_watermark, created_at)
+VALUES (?, ?, ?, ?, ?, ?)`, publication.ID, publication.CatalogRevisionID, publication.OverlayRevisionID,
+		publication.JobID, publication.ControlWatermark, publication.CreatedAt.Unix()); err != nil {
+		return Publication{}, fault.New(fault.CodeInternal, true, err)
+	}
+	if _, err := tx.ExecContext(ctx, `UPDATE overlay_projection_revisions SET status='published', published_at=?
+WHERE overlay_revision_id=? AND status='staging'`, publication.CreatedAt.Unix(), publication.OverlayRevisionID); err != nil {
+		return Publication{}, fault.New(fault.CodeInternal, true, err)
+	}
+	if _, err := tx.ExecContext(ctx, `UPDATE active_query_publication SET query_publication_id=? WHERE singleton=1`, publication.ID); err != nil {
+		return Publication{}, fault.New(fault.CodeInternal, true, err)
+	}
+	if err := tx.Commit(); err != nil {
+		return Publication{}, fault.New(fault.CodeInternal, true, err)
+	}
+	return publication, nil
+}
+
+func (s *Store) FinishOverlayCandidate(ctx context.Context, candidate OverlayCandidate, status string) error {
+	if status != "aborted" && status != "superseded" {
+		return fault.New(fault.CodeValidation, false, nil)
+	}
+	_, err := s.db.ExecContext(ctx, `UPDATE overlay_projection_revisions SET status=?
+WHERE overlay_revision_id=? AND status='staging'`, status, candidate.OverlayRevisionID)
+	if err != nil {
+		return fault.New(fault.CodeInternal, true, err)
+	}
+	return nil
+}
+
+func (s *Store) AbortOverlayCandidatesForJob(ctx context.Context, jobID string) error {
+	_, err := s.db.ExecContext(ctx, `UPDATE overlay_projection_revisions SET status='aborted'
+WHERE status='staging' AND projection_job_id=?`, jobID)
+	if err != nil {
+		return fault.New(fault.CodeInternal, true, err)
+	}
+	return nil
 }
 
 func (s *Store) Current(ctx context.Context) (Publication, error) {
@@ -365,6 +616,11 @@ func (s *Store) stageWorks(ctx context.Context, candidate Candidate, works []Wor
 	defer tx.Rollback()
 	for _, work := range works {
 		tagsJSON, _ := json.Marshal(work.Tags)
+		sourceTitle, sourceTags := work.Title, work.Tags
+		if work.SourceTitle != "" {
+			sourceTitle, sourceTags = work.SourceTitle, work.SourceTags
+		}
+		sourceTagsJSON, _ := json.Marshal(sourceTags)
 		filenamesJSON, _ := json.Marshal(work.Filenames)
 		document := querytext.BuildDocument(work.Title, work.Creator, work.Tags, work.Filenames)
 		hidden := 0
@@ -372,7 +628,7 @@ func (s *Store) stageWorks(ctx context.Context, candidate Candidate, works []Wor
 			hidden = 1
 		}
 		if _, err := tx.ExecContext(ctx, `INSERT INTO source_works
-(catalog_revision_id, source_id, source_key, title, creator, tags_json, filenames_text) VALUES (?, ?, ?, ?, ?, ?, ?)`, candidate.CatalogRevisionID, work.SourceID, work.SourceKey, work.Title, work.Creator, string(tagsJSON), string(filenamesJSON)); err != nil {
+(catalog_revision_id, source_id, source_key, title, creator, tags_json, filenames_text) VALUES (?, ?, ?, ?, ?, ?, ?)`, candidate.CatalogRevisionID, work.SourceID, work.SourceKey, sourceTitle, work.Creator, string(sourceTagsJSON), string(filenamesJSON)); err != nil {
 			return fault.New(fault.CodeInternal, true, err)
 		}
 		if _, err := tx.ExecContext(ctx, `INSERT INTO work_projections
@@ -416,8 +672,8 @@ VALUES (?, ?, ?, ?, ?, ?, ?, 'present')`, candidate.CatalogRevisionID, item.Sour
 		}
 		if _, err := tx.ExecContext(ctx, `INSERT INTO media_projections
 (catalog_revision_id, overlay_revision_id, media_id, work_id, source_id, source_key, relative_path,
- media_kind, mime_type, size_bytes, algorithm, digest, location_status, ordinal)
-VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'present', ?)`, candidate.CatalogRevisionID, candidate.OverlayRevisionID, item.MediaID, item.WorkID, item.SourceID, item.SourceKey, item.RelativePath, item.Kind, item.MIME, item.Size, item.Algorithm, item.Digest, item.Ordinal); err != nil {
+ media_kind, mime_type, size_bytes, algorithm, digest, location_status, ordinal, base_ordinal)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'present', ?, ?)`, candidate.CatalogRevisionID, candidate.OverlayRevisionID, item.MediaID, item.WorkID, item.SourceID, item.SourceKey, item.RelativePath, item.Kind, item.MIME, item.Size, item.Algorithm, item.Digest, item.Ordinal, item.Ordinal); err != nil {
 			return fault.New(fault.CodeInternal, true, err)
 		}
 	}
@@ -448,7 +704,7 @@ WHERE f.catalog_revision_id=q.catalog_revision_id AND f.source_id<>?`, []any{can
 		{`INSERT INTO work_projections SELECT ?, ?, w.work_id, w.source_id, w.source_key, w.library_id, w.title, w.creator, w.tags_json, w.filenames_text, w.normalized_original_text, w.cjk_bigram_token_text, w.latin_trigram_token_text, w.sort_title_key, w.hidden FROM work_projections w
 JOIN active_query_publication a ON a.singleton=1 JOIN query_publications q ON q.query_publication_id=a.query_publication_id
 WHERE w.catalog_revision_id=q.catalog_revision_id AND w.overlay_revision_id=q.overlay_revision_id AND w.source_id<>?`, []any{candidate.CatalogRevisionID, candidate.OverlayRevisionID, candidate.SourceID}},
-		{`INSERT INTO media_projections SELECT ?, ?, m.media_id, m.work_id, m.source_id, m.source_key, m.relative_path, m.media_kind, m.mime_type, m.size_bytes, m.algorithm, m.digest, m.location_status, m.ordinal, m.hidden FROM media_projections m
+		{`INSERT INTO media_projections SELECT ?, ?, m.media_id, m.work_id, m.source_id, m.source_key, m.relative_path, m.media_kind, m.mime_type, m.size_bytes, m.algorithm, m.digest, m.location_status, m.ordinal, m.hidden, m.base_ordinal FROM media_projections m
 JOIN active_query_publication a ON a.singleton=1 JOIN query_publications q ON q.query_publication_id=a.query_publication_id
 WHERE m.catalog_revision_id=q.catalog_revision_id AND m.overlay_revision_id=q.overlay_revision_id AND m.source_id<>?`, []any{candidate.CatalogRevisionID, candidate.OverlayRevisionID, candidate.SourceID}},
 		{`INSERT INTO work_search (catalog_revision_id, overlay_revision_id, work_id, normalized_original_text, cjk_bigram_token_text, latin_trigram_token_text)
@@ -463,4 +719,20 @@ WHERE s.catalog_revision_id=q.catalog_revision_id AND s.overlay_revision_id=q.ov
 		}
 	}
 	return nil
+}
+
+func mergeStrings(base, added []string) []string {
+	seen := make(map[string]struct{}, len(base)+len(added))
+	result := make([]string, 0, len(base)+len(added))
+	for _, group := range [][]string{base, added} {
+		for _, value := range group {
+			if _, ok := seen[value]; ok {
+				continue
+			}
+			seen[value] = struct{}{}
+			result = append(result, value)
+		}
+	}
+	sort.Strings(result)
+	return result
 }

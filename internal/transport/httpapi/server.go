@@ -24,6 +24,7 @@ import (
 	"github.com/RecRivenVI/gallery/internal/contract/realtime"
 	"github.com/RecRivenVI/gallery/internal/jobs"
 	"github.com/RecRivenVI/gallery/internal/media"
+	"github.com/RecRivenVI/gallery/internal/overlay"
 	"github.com/RecRivenVI/gallery/internal/ports"
 	queryservice "github.com/RecRivenVI/gallery/internal/query"
 	"github.com/RecRivenVI/gallery/internal/rules"
@@ -45,9 +46,10 @@ type Server struct {
 	hub     *realtime.Hub
 	rules   *rules.Lifecycle
 	query   *queryservice.Service
+	overlay *overlay.Service
 }
 
-func New(mode config.Mode, store *storage.Store, clock ports.Clock, personal *auth.Personal, resources *application.Resources, jobStore *jobs.Store, catalogStore *catalog.Store, scannerService *scanner.Service, hub *realtime.Hub, logger *slog.Logger) http.Handler {
+func New(mode config.Mode, store *storage.Store, clock ports.Clock, personal *auth.Personal, resources *application.Resources, jobStore *jobs.Store, catalogStore *catalog.Store, scannerService *scanner.Service, overlayService *overlay.Service, hub *realtime.Hub, logger *slog.Logger) http.Handler {
 	if hub == nil {
 		hub = realtime.NewHub(clock)
 	}
@@ -59,7 +61,7 @@ func New(mode config.Mode, store *storage.Store, clock ports.Clock, personal *au
 	if err != nil {
 		panic(fmt.Sprintf("初始化查询服务: %v", err))
 	}
-	server := &Server{mode: mode, store: store, clock: clock, auth: personal, data: resources, jobs: jobStore, catalog: catalogStore, scanner: scannerService, hub: hub, logger: logger, rules: ruleLifecycle, query: queryService}
+	server := &Server{mode: mode, store: store, clock: clock, auth: personal, data: resources, jobs: jobStore, catalog: catalogStore, scanner: scannerService, hub: hub, logger: logger, rules: ruleLifecycle, query: queryService, overlay: overlayService}
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /api/v1/health", server.health)
 	mux.HandleFunc("GET /api/v1/bootstrap", server.bootstrap)
@@ -84,6 +86,8 @@ func New(mode config.Mode, store *storage.Store, clock ports.Clock, personal *au
 	mux.HandleFunc("GET /api/v1/query-publications/current", server.getCurrentQueryPublication)
 	mux.HandleFunc("GET /api/v1/works", server.listWorks)
 	mux.HandleFunc("GET /api/v1/works/{workId}", server.getWork)
+	mux.HandleFunc("GET /api/v1/works/{workId}/overlay", server.getWorkOverlay)
+	mux.HandleFunc("PUT /api/v1/works/{workId}/overlay", server.putWorkOverlay)
 	mux.HandleFunc("GET /api/v1/works/{workId}/media", server.listWorkMedia)
 	mux.HandleFunc("GET /api/v1/media/{mediaId}", server.getMedia)
 	mux.HandleFunc("GET /api/v1/media/{mediaId}/content", server.mediaContent)
@@ -586,6 +590,60 @@ func (s *Server) getWork(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, workDTO(publication, work))
 }
 
+func (s *Server) getWorkOverlay(w http.ResponseWriter, r *http.Request) {
+	if _, err := s.requireCapability(r, "library.read"); err != nil {
+		s.writeRequestError(w, err)
+		return
+	}
+	if s.overlay == nil {
+		s.writeRequestError(w, fault.New(fault.CodeInternal, false, nil))
+		return
+	}
+	state, err := s.overlay.Get(r.Context(), r.PathValue("workId"))
+	if err != nil {
+		s.writeRequestError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, overlayDTO(state))
+}
+
+func (s *Server) putWorkOverlay(w http.ResponseWriter, r *http.Request) {
+	session, err := s.requireCapability(r, "overlays.write")
+	if err != nil {
+		s.writeRequestError(w, err)
+		return
+	}
+	if err := auth.ValidateMutation(r, session.CSRFToken); err != nil {
+		s.writeRequestError(w, err)
+		return
+	}
+	if s.overlay == nil {
+		s.writeRequestError(w, fault.New(fault.CodeInternal, false, nil))
+		return
+	}
+	var request api.WorkOverlayPutRequest
+	if err := decodeJSON(r, &request); err != nil {
+		s.writeRequestError(w, fault.WithField(fault.CodeOverlayFactInvalid, "body", err))
+		return
+	}
+	cover := ""
+	if request.CustomCoverMediaId != nil {
+		cover = *request.CustomCoverMediaId
+	}
+	result, err := s.overlay.Put(r.Context(), r.PathValue("workId"), session.PrincipalID, overlay.Input{
+		TitleOverride: request.TitleOverride, ManualTags: request.ManualTags, Hidden: request.Hidden,
+		CustomCoverMediaID: cover, Favorite: request.Favorite, Progress: float64(request.Progress),
+	})
+	if err != nil {
+		s.writeRequestError(w, err)
+		return
+	}
+	if result.StartJob {
+		s.overlay.Start(result.ProjectionJobID)
+	}
+	writeJSON(w, http.StatusOK, overlayDTO(result.State))
+}
+
 func (s *Server) listWorkMedia(w http.ResponseWriter, r *http.Request) {
 	if _, err := s.requireCapability(r, "media.read"); err != nil {
 		s.writeRequestError(w, err)
@@ -713,9 +771,13 @@ func sourceRuleBindingDTO(value application.SourceRuleBinding) api.SourceRuleBin
 
 func jobDTO(value jobs.Job) api.Job {
 	result := api.Job{
-		Id: value.ID, Type: api.JobType(value.Type), SourceId: value.SourceID, Status: api.JobStatus(value.Status),
+		Id: value.ID, Type: api.JobType(value.Type), Status: api.JobStatus(value.Status),
 		Stage: value.Stage, Attempt: value.Attempt, CreatedAt: value.CreatedAt, StartedAt: value.StartedAt,
 		FinishedAt: value.FinishedAt, UpdatedAt: value.UpdatedAt,
+	}
+	if value.SourceID != "" {
+		sourceID := api.SourceId(value.SourceID)
+		result.SourceId = &sourceID
 	}
 	result.Progress.Current, result.Progress.Total, result.Progress.Sequence = value.ProgressCurrent, value.ProgressTotal, int64(value.ProgressSequence)
 	if value.IssueCode != "" {
@@ -728,6 +790,32 @@ func jobDTO(value jobs.Job) api.Job {
 	if value.RetryOf != "" {
 		retry := api.JobId(value.RetryOf)
 		result.RetryOf = &retry
+	}
+	return result
+}
+
+func overlayDTO(value overlay.State) api.WorkOverlayState {
+	result := api.WorkOverlayState{
+		WorkId: value.WorkID, TitleOverride: value.TitleOverride, ManualTags: value.ManualTags,
+		Hidden: value.Hidden, Favorite: value.Favorite, Progress: float32(value.Progress),
+		FactWatermark: value.FactWatermark, QueryWatermark: value.QueryWatermark,
+		ProjectedWatermark: value.ProjectedWatermark,
+		ProjectionStatus:   api.WorkOverlayStateProjectionStatus(value.ProjectionStatus),
+	}
+	if value.CustomCoverMediaID != "" {
+		cover := api.CanonicalMediaId(value.CustomCoverMediaID)
+		result.CustomCoverMediaId = &cover
+	}
+	if value.ProjectionJobID != "" {
+		jobID := api.JobId(value.ProjectionJobID)
+		result.ProjectionJobId = &jobID
+	}
+	if value.PublishedQueryPublicationID != "" {
+		publicationID := api.QueryPublicationId(value.PublishedQueryPublicationID)
+		result.PublishedQueryPublicationId = &publicationID
+	}
+	if value.IssueCode != "" {
+		result.IssueCode = &value.IssueCode
 	}
 	return result
 }
@@ -830,6 +918,7 @@ func statusForFault(err error) int {
 	case fault.CodeValidation:
 		return http.StatusBadRequest
 	case fault.CodeSourcePathInvalid, fault.CodeCursorInvalid, fault.CodeCursorExpired, fault.CodeQueryTooShort,
+		fault.CodeOverlayFactInvalid,
 		fault.CodeRuleSchemaInvalid, fault.CodeRuleParameterInvalid, fault.CodeRuleCompile,
 		fault.CodeRuleCELLimit, fault.CodeRuleDryRun, fault.CodeRuleImpact, fault.CodeRuleEval:
 		return http.StatusBadRequest

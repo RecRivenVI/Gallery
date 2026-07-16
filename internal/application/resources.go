@@ -67,6 +67,13 @@ type CanonicalMedia struct {
 	Ordinal int
 }
 
+type QueryOverlay struct {
+	TitleOverride      string
+	ManualTags         []string
+	Hidden             bool
+	CustomCoverMediaID string
+}
+
 type DiscoveredWork struct {
 	SourceKey string
 	Title     string
@@ -374,7 +381,56 @@ WHERE source_id = ? AND source_key = ?`, sourceID, mediaKey).Scan(&mediaID, &med
 	return result, nil
 }
 
-func (r *Resources) ControlWatermark() int64 { return r.clock.Now().UTC().UnixNano() }
+// QueryOverlaySnapshot 从同一个 control.db 读事务取得 watermark 与事实，避免把
+// 尚未进入快照的并发写错误标记为已投影。
+func (r *Resources) QueryOverlaySnapshot(ctx context.Context, workIDs []string) (map[string]QueryOverlay, int64, error) {
+	tx, err := r.control.BeginTx(ctx, &sql.TxOptions{ReadOnly: true})
+	if err != nil {
+		return nil, 0, fault.New(fault.CodeInternal, true, err)
+	}
+	defer tx.Rollback()
+	var watermark int64
+	if err := tx.QueryRowContext(ctx, "SELECT watermark FROM gallery_control_sequence WHERE singleton=1").Scan(&watermark); err != nil {
+		return nil, 0, fault.New(fault.CodeInternal, true, err)
+	}
+	wanted := make(map[string]struct{}, len(workIDs))
+	for _, id := range workIDs {
+		wanted[id] = struct{}{}
+	}
+	rows, err := tx.QueryContext(ctx, `SELECT work_id, title_override, manual_tags_json, hidden, custom_cover_media_id
+FROM work_overlays WHERE query_watermark<=? ORDER BY work_id`, watermark)
+	if err != nil {
+		return nil, 0, fault.New(fault.CodeInternal, true, err)
+	}
+	defer rows.Close()
+	result := make(map[string]QueryOverlay)
+	for rows.Next() {
+		var id, tagsJSON string
+		var title string
+		var hidden int
+		var cover sql.NullString
+		if err := rows.Scan(&id, &title, &tagsJSON, &hidden, &cover); err != nil {
+			return nil, 0, fault.New(fault.CodeInternal, true, err)
+		}
+		if len(wanted) > 0 {
+			if _, ok := wanted[id]; !ok {
+				continue
+			}
+		}
+		var tags []string
+		if err := json.Unmarshal([]byte(tagsJSON), &tags); err != nil {
+			return nil, 0, fault.New(fault.CodeInternal, false, err)
+		}
+		result[id] = QueryOverlay{TitleOverride: title, ManualTags: tags, Hidden: hidden != 0, CustomCoverMediaID: cover.String}
+	}
+	if err := rows.Err(); err != nil {
+		return nil, 0, fault.New(fault.CodeInternal, true, err)
+	}
+	if err := tx.Commit(); err != nil {
+		return nil, 0, fault.New(fault.CodeInternal, true, err)
+	}
+	return result, watermark, nil
+}
 
 func (r *Resources) TempRoot() string { return r.dirs.Temp }
 
