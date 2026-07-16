@@ -138,7 +138,7 @@ func (s *Service) Execute(ctx context.Context, jobID string) error {
 	if err != nil {
 		return s.fail(ctx, job.ID, err)
 	}
-	overlays, controlWatermark, err := s.resources.QueryOverlaySnapshot(ctx, nil)
+	overlays, creatorMerges, controlWatermark, err := s.resources.QueryOverlaySnapshot(ctx, nil)
 	if err != nil {
 		return s.fail(ctx, job.ID, err)
 	}
@@ -189,6 +189,10 @@ func (s *Service) Execute(ctx context.Context, jobID string) error {
 			Hidden: value.Hidden, CustomCoverMediaID: value.CustomCoverMediaID}
 	}
 	if err := s.catalog.ApplyCatalogCandidateOverlays(ctx, candidate, overlayFacts); err != nil {
+		_ = s.catalog.AbortCandidate(ctx, job.ID)
+		return s.fail(ctx, job.ID, err)
+	}
+	if err := s.catalog.ApplyCreatorMerges(ctx, candidate.CatalogRevisionID, candidate.OverlayRevisionID, creatorMerges); err != nil {
 		_ = s.catalog.AbortCandidate(ctx, job.ID)
 		return s.fail(ctx, job.ID, err)
 	}

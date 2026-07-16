@@ -414,6 +414,78 @@ WHERE catalog_revision_id=? AND overlay_revision_id=?`, candidate.CatalogRevisio
 	}, facts)
 }
 
+// ApplyCreatorMerges 让查询投影的展示层反映 control.db 中已生效的创作者合并：把
+// 主创作者 base 身份属于被合并集合的作品的规范化创作者名重写为 target 名，并重建这
+// 些作品的 work_search 文档。它在 ApplyOverlayFacts 之后运行——后者已把整个 revision
+// 的 work_projections.creator 复位为 source_works 的 base 名，因此本方法只需按当前合并
+// 映射覆盖受影响作品；撤销合并即传入空映射，展示名自然回落到 base，投影可靠恢复。
+//
+// work_creator_relations 与 creator_projections 保持 base（原始绑定）身份不变：它们当前
+// 不参与任何查询路径，把有效创作者折叠进投影会破坏撤销可逆性；待未来“按创作者浏览”
+// 查询需要时，再引入 base_creator_id 单独物化有效关系。该方法对 Scan 的 Candidate 与
+// Overlay 重投影通用，因此以显式 revision 传参。
+func (s *Store) ApplyCreatorMerges(ctx context.Context, catalogRevisionID, overlayRevisionID string, merges []domain.CreatorMergePair) error {
+	if len(merges) == 0 {
+		return nil
+	}
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return fault.New(fault.CodeInternal, true, err)
+	}
+	defer tx.Rollback()
+	type affectedWork struct{ workID, title, tagsJSON, filenames, creator string }
+	var affected []affectedWork
+	for _, pair := range merges {
+		rows, err := tx.QueryContext(ctx, `SELECT w.work_id, w.title, w.tags_json, w.filenames_text
+FROM work_creator_relations r JOIN work_projections w
+ ON w.catalog_revision_id=r.catalog_revision_id AND w.overlay_revision_id=r.overlay_revision_id AND w.work_id=r.work_id
+WHERE r.catalog_revision_id=? AND r.overlay_revision_id=? AND r.creator_id=? AND r.role='primary' AND r.ordinal=0`,
+			catalogRevisionID, overlayRevisionID, pair.Absorbed)
+		if err != nil {
+			return fault.New(fault.CodeInternal, true, err)
+		}
+		for rows.Next() {
+			item := affectedWork{creator: pair.TargetName}
+			if err := rows.Scan(&item.workID, &item.title, &item.tagsJSON, &item.filenames); err != nil {
+				rows.Close()
+				return fault.New(fault.CodeInternal, true, err)
+			}
+			affected = append(affected, item)
+		}
+		if err := rows.Close(); err != nil {
+			return fault.New(fault.CodeInternal, true, err)
+		}
+	}
+	for _, item := range affected {
+		var tags, filenames []string
+		_ = json.Unmarshal([]byte(item.tagsJSON), &tags)
+		_ = json.Unmarshal([]byte(item.filenames), &filenames)
+		document := querytext.BuildDocument(item.title, item.creator, tags, filenames)
+		if _, err := tx.ExecContext(ctx, `UPDATE work_projections SET creator=?,
+normalized_original_text=?, cjk_bigram_token_text=?, latin_trigram_token_text=?, sort_title_key=?
+WHERE catalog_revision_id=? AND overlay_revision_id=? AND work_id=?`,
+			item.creator, document.NormalizedOriginal, document.CJKTokens, document.LatinTokens,
+			document.SortTitleKey, catalogRevisionID, overlayRevisionID, item.workID); err != nil {
+			return fault.New(fault.CodeInternal, true, err)
+		}
+		if _, err := tx.ExecContext(ctx, `DELETE FROM work_search
+WHERE catalog_revision_id=? AND overlay_revision_id=? AND work_id=?`,
+			catalogRevisionID, overlayRevisionID, item.workID); err != nil {
+			return fault.New(fault.CodeInternal, true, err)
+		}
+		if _, err := tx.ExecContext(ctx, `INSERT INTO work_search
+(catalog_revision_id, overlay_revision_id, work_id, normalized_original_text, cjk_bigram_token_text, latin_trigram_token_text)
+VALUES (?, ?, ?, ?, ?, ?)`, catalogRevisionID, overlayRevisionID, item.workID,
+			document.NormalizedOriginal, document.CJKTokens, document.LatinTokens); err != nil {
+			return fault.New(fault.CodeInternal, true, err)
+		}
+	}
+	if err := tx.Commit(); err != nil {
+		return fault.New(fault.CodeInternal, true, err)
+	}
+	return nil
+}
+
 func (s *Store) ValidateOverlayCandidate(ctx context.Context, candidate OverlayCandidate) error {
 	var baseWorks, works, baseMedia, media, baseCreators, creators, baseRelations, relations, search int
 	err := s.db.QueryRowContext(ctx, `SELECT

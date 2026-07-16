@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/RecRivenVI/gallery/internal/contract/fault"
+	"github.com/RecRivenVI/gallery/internal/creators"
 	"github.com/RecRivenVI/gallery/internal/domain"
 	"github.com/RecRivenVI/gallery/internal/platform/appdirs"
 	"github.com/RecRivenVI/gallery/internal/ports"
@@ -737,17 +738,22 @@ func containsControl(value string) bool {
 	return false
 }
 
-// QueryOverlaySnapshot 从同一个 control.db 读事务取得 watermark 与事实，避免把
-// 尚未进入快照的并发写错误标记为已投影。
-func (r *Resources) QueryOverlaySnapshot(ctx context.Context, workIDs []string) (map[string]QueryOverlay, int64, error) {
+// QueryOverlaySnapshot 从同一个 control.db 读事务取得 watermark、Overlay 事实与
+// 创作者合并映射，避免把尚未进入快照的并发写错误标记为已投影，并让扫描应用与该
+// watermark 一致的合并集合。
+func (r *Resources) QueryOverlaySnapshot(ctx context.Context, workIDs []string) (map[string]QueryOverlay, []domain.CreatorMergePair, int64, error) {
 	tx, err := r.control.BeginTx(ctx, &sql.TxOptions{ReadOnly: true})
 	if err != nil {
-		return nil, 0, fault.New(fault.CodeInternal, true, err)
+		return nil, nil, 0, fault.New(fault.CodeInternal, true, err)
 	}
 	defer tx.Rollback()
 	var watermark int64
 	if err := tx.QueryRowContext(ctx, "SELECT watermark FROM gallery_control_sequence WHERE singleton=1").Scan(&watermark); err != nil {
-		return nil, 0, fault.New(fault.CodeInternal, true, err)
+		return nil, nil, 0, fault.New(fault.CodeInternal, true, err)
+	}
+	merges, err := creators.ReadMergePairs(ctx, tx)
+	if err != nil {
+		return nil, nil, 0, err
 	}
 	wanted := make(map[string]struct{}, len(workIDs))
 	for _, id := range workIDs {
@@ -756,7 +762,7 @@ func (r *Resources) QueryOverlaySnapshot(ctx context.Context, workIDs []string) 
 	rows, err := tx.QueryContext(ctx, `SELECT work_id, title_override, manual_tags_json, hidden, custom_cover_media_id
 FROM work_overlays WHERE query_watermark<=? ORDER BY work_id`, watermark)
 	if err != nil {
-		return nil, 0, fault.New(fault.CodeInternal, true, err)
+		return nil, nil, 0, fault.New(fault.CodeInternal, true, err)
 	}
 	defer rows.Close()
 	result := make(map[string]QueryOverlay)
@@ -766,7 +772,7 @@ FROM work_overlays WHERE query_watermark<=? ORDER BY work_id`, watermark)
 		var hidden int
 		var cover sql.NullString
 		if err := rows.Scan(&id, &title, &tagsJSON, &hidden, &cover); err != nil {
-			return nil, 0, fault.New(fault.CodeInternal, true, err)
+			return nil, nil, 0, fault.New(fault.CodeInternal, true, err)
 		}
 		if len(wanted) > 0 {
 			if _, ok := wanted[id]; !ok {
@@ -775,17 +781,17 @@ FROM work_overlays WHERE query_watermark<=? ORDER BY work_id`, watermark)
 		}
 		var tags []string
 		if err := json.Unmarshal([]byte(tagsJSON), &tags); err != nil {
-			return nil, 0, fault.New(fault.CodeInternal, false, err)
+			return nil, nil, 0, fault.New(fault.CodeInternal, false, err)
 		}
 		result[id] = QueryOverlay{TitleOverride: title, ManualTags: tags, Hidden: hidden != 0, CustomCoverMediaID: cover.String}
 	}
 	if err := rows.Err(); err != nil {
-		return nil, 0, fault.New(fault.CodeInternal, true, err)
+		return nil, nil, 0, fault.New(fault.CodeInternal, true, err)
 	}
 	if err := tx.Commit(); err != nil {
-		return nil, 0, fault.New(fault.CodeInternal, true, err)
+		return nil, nil, 0, fault.New(fault.CodeInternal, true, err)
 	}
-	return result, watermark, nil
+	return result, merges, watermark, nil
 }
 
 func (r *Resources) MarkOverlaySnapshotPublished(ctx context.Context, watermark int64, publicationID string) error {

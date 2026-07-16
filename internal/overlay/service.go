@@ -13,6 +13,7 @@ import (
 
 	"github.com/RecRivenVI/gallery/internal/catalog"
 	"github.com/RecRivenVI/gallery/internal/contract/fault"
+	"github.com/RecRivenVI/gallery/internal/creators"
 	"github.com/RecRivenVI/gallery/internal/domain"
 	"github.com/RecRivenVI/gallery/internal/jobs"
 	"github.com/RecRivenVI/gallery/internal/ports"
@@ -272,6 +273,13 @@ func (s *Service) Execute(ctx context.Context, jobID string) error {
 		facts, err := s.readFacts(ctx, job.TargetWatermark)
 		if err == nil {
 			err = s.catalog.ApplyOverlayFacts(ctx, candidate, facts)
+		}
+		if err == nil {
+			var merges []domain.CreatorMergePair
+			merges, err = creators.ReadMergePairs(ctx, s.control)
+			if err == nil {
+				err = s.catalog.ApplyCreatorMerges(ctx, candidate.CatalogRevisionID, candidate.OverlayRevisionID, merges)
+			}
 		}
 		if err == nil {
 			err = s.catalog.ValidateOverlayCandidate(ctx, candidate)
