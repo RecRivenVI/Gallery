@@ -932,6 +932,8 @@ func statusForFault(err error) int {
 		return http.StatusConflict
 	case fault.CodeJobStateConflict, fault.CodeScanAlreadyRunning, fault.CodeCatalogCandidateInvalid:
 		return http.StatusConflict
+	case fault.CodeBindingReviewRequired:
+		return http.StatusConflict
 	case fault.CodeContentChangedDuringHash:
 		return http.StatusConflict
 	case fault.CodeRangeInvalid:

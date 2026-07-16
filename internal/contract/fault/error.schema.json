@@ -31,6 +31,7 @@
             "QUERY_TOO_SHORT",
             "OVERLAY_FACT_INVALID",
             "OVERLAY_PROJECTION_FAILED",
+            "BINDING_REVIEW_REQUIRED",
             "RULE_SCHEMA_INVALID",
             "RULE_COMPILE_ERROR",
             "RULE_CEL_LIMIT",

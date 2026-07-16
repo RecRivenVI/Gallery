@@ -23,6 +23,7 @@ const (
 	CodeQueryTooShort            Code = "QUERY_TOO_SHORT"
 	CodeOverlayFactInvalid       Code = "OVERLAY_FACT_INVALID"
 	CodeOverlayProjectionFailed  Code = "OVERLAY_PROJECTION_FAILED"
+	CodeBindingReviewRequired    Code = "BINDING_REVIEW_REQUIRED"
 	CodeRuleSchemaInvalid        Code = "RULE_SCHEMA_INVALID"
 	CodeRuleCompile              Code = "RULE_COMPILE_ERROR"
 	CodeRuleCELLimit             Code = "RULE_CEL_LIMIT"

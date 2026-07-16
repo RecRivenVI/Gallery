@@ -119,6 +119,7 @@ func (e ContentBlobRefAlgorithm) Valid() bool {
 const (
 	APPDIRSSOURCEOVERLAP      ErrorCode = "APPDIRS_SOURCE_OVERLAP"
 	BACKUPFAILED              ErrorCode = "BACKUP_FAILED"
+	BINDINGREVIEWREQUIRED     ErrorCode = "BINDING_REVIEW_REQUIRED"
 	CATALOGCANDIDATEINVALID   ErrorCode = "CATALOG_CANDIDATE_INVALID"
 	CATALOGPUBLICATIONMISSING ErrorCode = "CATALOG_PUBLICATION_MISSING"
 	CONFIGINVALID             ErrorCode = "CONFIG_INVALID"
@@ -167,6 +168,8 @@ func (e ErrorCode) Valid() bool {
 	case APPDIRSSOURCEOVERLAP:
 		return true
 	case BACKUPFAILED:
+		return true
+	case BINDINGREVIEWREQUIRED:
 		return true
 	case CATALOGCANDIDATEINVALID:
 		return true

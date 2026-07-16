@@ -54,6 +54,7 @@ type DryRunWork struct {
 	StableKey  string        `json:"stableKey"`
 	Title      string        `json:"title"`
 	ExternalID string        `json:"externalId,omitempty"`
+	ProviderID string        `json:"providerId,omitempty"`
 	Creator    string        `json:"creator,omitempty"`
 	Tags       []string      `json:"tags"`
 	Ignored    bool          `json:"ignored"`
@@ -453,6 +454,8 @@ func assignTarget(work *DryRunWork, target string, value any) {
 		work.Title = fmt.Sprint(value)
 	case "external_id":
 		work.ExternalID = fmt.Sprint(value)
+	case "provider_id":
+		work.ProviderID = fmt.Sprint(value)
 	case "creator":
 		work.Creator = fmt.Sprint(value)
 	case "tags":
