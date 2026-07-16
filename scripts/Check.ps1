@@ -20,14 +20,14 @@ $gofmt = Join-Path $goBin $gofmtName
 & $go mod tidy -diff
 if ($LASTEXITCODE -ne 0) { throw 'go.mod/go.sum 不是 tidy 状态' }
 
-$generatedPath = Join-Path $PSScriptRoot '..\internal\contract\api\openapi.gen.go'
+$generatedPath = Join-Path $PSScriptRoot '..\pkg\galleryapi\openapi.gen.go'
 $generatedBefore = (Get-FileHash -LiteralPath $generatedPath -Algorithm SHA256).Hash
 & $go generate ./...
 if ($LASTEXITCODE -ne 0) { throw 'go generate 失败' }
 $generatedAfter = (Get-FileHash -LiteralPath $generatedPath -Algorithm SHA256).Hash
 if ($generatedBefore -ne $generatedAfter) { throw 'OpenAPI 生成文件不是最新状态' }
 
-$unformatted = & $gofmt -l cmd internal
+$unformatted = & $gofmt -l cmd internal pkg
 if ($LASTEXITCODE -ne 0) { throw 'gofmt 检查失败' }
 if ($unformatted) { throw "以下文件尚未 gofmt：$($unformatted -join ', ')" }
 

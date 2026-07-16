@@ -18,7 +18,12 @@
         "overlay.publication_failed",
         "session.revoked",
         "grant.revoked",
-        "service.lifecycle"
+        "service.lifecycle",
+        "job.queued",
+        "job.progress",
+        "job.completed",
+        "job.failed",
+        "query.publication.published"
       ]
     },
     "sequence": {"type": "integer", "minimum": 1},

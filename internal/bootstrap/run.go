@@ -12,6 +12,7 @@ import (
 	"github.com/RecRivenVI/gallery/internal/auth"
 	"github.com/RecRivenVI/gallery/internal/catalog"
 	"github.com/RecRivenVI/gallery/internal/config"
+	"github.com/RecRivenVI/gallery/internal/contract/realtime"
 	"github.com/RecRivenVI/gallery/internal/jobs"
 	"github.com/RecRivenVI/gallery/internal/platform/clock"
 	"github.com/RecRivenVI/gallery/internal/platform/descriptor"
@@ -72,14 +73,15 @@ func Run(ctx context.Context, cfg config.Config, logger *slog.Logger) error {
 	if err != nil {
 		return err
 	}
-	scannerService, err := scanner.New(ctx, resources, jobStore, catalogStore, nil)
+	hub := realtime.NewHub(systemClock)
+	scannerService, err := scanner.New(ctx, resources, jobStore, catalogStore, hub)
 	if err != nil {
 		return err
 	}
 	if err := scannerService.Reconcile(ctx); err != nil {
 		return err
 	}
-	handler := httpapi.New(cfg.Mode, store, systemClock, personal, resources, jobStore, catalogStore, scannerService, logger)
+	handler := httpapi.New(cfg.Mode, store, systemClock, personal, resources, jobStore, catalogStore, scannerService, hub, logger)
 	server := &http.Server{
 		Handler: handler, ReadHeaderTimeout: 10 * time.Second, IdleTimeout: 60 * time.Second,
 	}
