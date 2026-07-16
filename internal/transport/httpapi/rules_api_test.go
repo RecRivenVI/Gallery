@@ -89,7 +89,7 @@ func pairedRuleServer(t *testing.T) (*httptest.Server, *http.Client, string) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	server := httptest.NewServer(httpapi.New(config.ModePersonal, store, fixedClock, personal, resources, nil, nil, nil, nil, nil, slog.New(slog.NewJSONHandler(io.Discard, nil))))
+	server := httptest.NewServer(httpapi.New(config.ModePersonal, store, fixedClock, personal, resources, nil, nil, nil, nil, nil, nil, slog.New(slog.NewJSONHandler(io.Discard, nil))))
 	t.Cleanup(server.Close)
 	jar, _ := cookiejar.New(nil)
 	httpClient := &http.Client{Jar: jar}

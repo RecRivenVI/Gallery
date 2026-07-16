@@ -13,6 +13,7 @@ import (
 	"github.com/RecRivenVI/gallery/internal/catalog"
 	"github.com/RecRivenVI/gallery/internal/config"
 	"github.com/RecRivenVI/gallery/internal/contract/realtime"
+	"github.com/RecRivenVI/gallery/internal/creators"
 	"github.com/RecRivenVI/gallery/internal/derived"
 	"github.com/RecRivenVI/gallery/internal/jobs"
 	"github.com/RecRivenVI/gallery/internal/overlay"
@@ -97,7 +98,11 @@ func Run(ctx context.Context, cfg config.Config, logger *slog.Logger) error {
 	if err := overlayService.Reconcile(ctx); err != nil {
 		return err
 	}
-	handler := httpapi.New(cfg.Mode, store, systemClock, personal, resources, jobStore, catalogStore, scannerService, overlayService, hub, logger)
+	creatorsService, err := creators.New(ctx, store.Control.SQL(), jobStore, catalogStore, systemClock, identity.NewGenerator(systemClock), overlayService)
+	if err != nil {
+		return err
+	}
+	handler := httpapi.New(cfg.Mode, store, systemClock, personal, resources, jobStore, catalogStore, scannerService, overlayService, creatorsService, hub, logger)
 	server := &http.Server{
 		Handler: handler, ReadHeaderTimeout: 10 * time.Second, IdleTimeout: 60 * time.Second,
 	}

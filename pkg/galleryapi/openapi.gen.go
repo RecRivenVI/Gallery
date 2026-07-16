@@ -115,6 +115,48 @@ func (e ContentBlobRefAlgorithm) Valid() bool {
 	}
 }
 
+// Defines values for CreatorMergeStatus.
+const (
+	Applied CreatorMergeStatus = "applied"
+	Undone  CreatorMergeStatus = "undone"
+)
+
+// Valid indicates whether the value is a known member of the CreatorMergeStatus enum.
+func (e CreatorMergeStatus) Valid() bool {
+	switch e {
+	case Applied:
+		return true
+	case Undone:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for CreatorSourceBindingStatus.
+const (
+	Active        CreatorSourceBindingStatus = "active"
+	Conflict      CreatorSourceBindingStatus = "conflict"
+	ManualUnbound CreatorSourceBindingStatus = "manual_unbound"
+	Orphaned      CreatorSourceBindingStatus = "orphaned"
+)
+
+// Valid indicates whether the value is a known member of the CreatorSourceBindingStatus enum.
+func (e CreatorSourceBindingStatus) Valid() bool {
+	switch e {
+	case Active:
+		return true
+	case Conflict:
+		return true
+	case ManualUnbound:
+		return true
+	case Orphaned:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for ErrorCode.
 const (
 	APPDIRSSOURCEOVERLAP      ErrorCode = "APPDIRS_SOURCE_OVERLAP"
@@ -473,6 +515,69 @@ type ContentBlobRef struct {
 
 // ContentBlobRefAlgorithm defines model for ContentBlobRef.Algorithm.
 type ContentBlobRefAlgorithm string
+
+// Creator defines model for Creator.
+type Creator struct {
+	CreatedAt   time.Time           `json:"createdAt"`
+	EffectiveId CanonicalCreatorId  `json:"effectiveId"`
+	Id          CanonicalCreatorId  `json:"id"`
+	MergedInto  *CanonicalCreatorId `json:"mergedInto,omitempty"`
+	Name        string              `json:"name"`
+	SourceCount int                 `json:"sourceCount"`
+}
+
+// CreatorDetail defines model for CreatorDetail.
+type CreatorDetail struct {
+	Creator        Creator                `json:"creator"`
+	SourceBindings []CreatorSourceBinding `json:"sourceBindings"`
+}
+
+// CreatorListResponse defines model for CreatorListResponse.
+type CreatorListResponse struct {
+	Creators []Creator `json:"creators"`
+}
+
+// CreatorMerge defines model for CreatorMerge.
+type CreatorMerge struct {
+	AbsorbedCreatorIds []CanonicalCreatorId `json:"absorbedCreatorIds"`
+	CreatedAt          time.Time            `json:"createdAt"`
+	CreatedBy          string               `json:"createdBy"`
+	Id                 CreatorMergeId       `json:"id"`
+	ProjectionJobId    *JobId               `json:"projectionJobId,omitempty"`
+	Status             CreatorMergeStatus   `json:"status"`
+	TargetCreatorId    CanonicalCreatorId   `json:"targetCreatorId"`
+	UndoneAt           *time.Time           `json:"undoneAt,omitempty"`
+}
+
+// CreatorMergeStatus defines model for CreatorMerge.Status.
+type CreatorMergeStatus string
+
+// CreatorMergeId defines model for CreatorMergeId.
+type CreatorMergeId = string
+
+// CreatorMergeListResponse defines model for CreatorMergeListResponse.
+type CreatorMergeListResponse struct {
+	Merges []CreatorMerge `json:"merges"`
+}
+
+// CreatorMergeRequest defines model for CreatorMergeRequest.
+type CreatorMergeRequest struct {
+	AbsorbedCreatorIds []CanonicalCreatorId `json:"absorbedCreatorIds"`
+	TargetCreatorId    CanonicalCreatorId   `json:"targetCreatorId"`
+}
+
+// CreatorSourceBinding defines model for CreatorSourceBinding.
+type CreatorSourceBinding struct {
+	BindingId  string                     `json:"bindingId"`
+	ExternalId string                     `json:"externalId"`
+	ProviderId string                     `json:"providerId"`
+	SourceId   SourceId                   `json:"sourceId"`
+	SourceKey  string                     `json:"sourceKey"`
+	Status     CreatorSourceBindingStatus `json:"status"`
+}
+
+// CreatorSourceBindingStatus defines model for CreatorSourceBinding.Status.
+type CreatorSourceBindingStatus string
 
 // ErrorCode defines model for ErrorCode.
 type ErrorCode string
@@ -846,6 +951,16 @@ type apiTokenContextKey string
 // sessionCookieContextKey is the context key for sessionCookie security scheme
 type sessionCookieContextKey string
 
+// MergeCreatorsParams defines parameters for MergeCreators.
+type MergeCreatorsParams struct {
+	XGalleryCSRF CSRFHeader `json:"X-Gallery-CSRF"`
+}
+
+// UndoCreatorMergeParams defines parameters for UndoCreatorMerge.
+type UndoCreatorMergeParams struct {
+	XGalleryCSRF CSRFHeader `json:"X-Gallery-CSRF"`
+}
+
 // CreateLibraryParams defines parameters for CreateLibrary.
 type CreateLibraryParams struct {
 	XGalleryCSRF CSRFHeader `json:"X-Gallery-CSRF"`
@@ -937,6 +1052,9 @@ type ListWorksParamsSortDirection string
 type PutWorkOverlayParams struct {
 	XGalleryCSRF CSRFHeader `json:"X-Gallery-CSRF"`
 }
+
+// MergeCreatorsJSONRequestBody defines body for MergeCreators for application/json ContentType.
+type MergeCreatorsJSONRequestBody = CreatorMergeRequest
 
 // CreateLibraryJSONRequestBody defines body for CreateLibrary for application/json ContentType.
 type CreateLibraryJSONRequestBody = LibraryCreateRequest
@@ -1043,6 +1161,23 @@ func WithRequestEditorFn(fn RequestEditorFn) ClientOption {
 type ClientInterface interface {
 	// GetBootstrap request
 	GetBootstrap(ctx context.Context, reqEditors ...RequestEditorFn) (*http.Response, error)
+
+	// ListCreators request
+	ListCreators(ctx context.Context, reqEditors ...RequestEditorFn) (*http.Response, error)
+
+	// ListCreatorMerges request
+	ListCreatorMerges(ctx context.Context, reqEditors ...RequestEditorFn) (*http.Response, error)
+
+	// MergeCreatorsWithBody request with any body
+	MergeCreatorsWithBody(ctx context.Context, params *MergeCreatorsParams, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*http.Response, error)
+
+	MergeCreators(ctx context.Context, params *MergeCreatorsParams, body MergeCreatorsJSONRequestBody, reqEditors ...RequestEditorFn) (*http.Response, error)
+
+	// UndoCreatorMerge request
+	UndoCreatorMerge(ctx context.Context, mergeId CreatorMergeId, params *UndoCreatorMergeParams, reqEditors ...RequestEditorFn) (*http.Response, error)
+
+	// GetCreator request
+	GetCreator(ctx context.Context, creatorId CanonicalCreatorId, reqEditors ...RequestEditorFn) (*http.Response, error)
 
 	// GetHealth request
 	GetHealth(ctx context.Context, reqEditors ...RequestEditorFn) (*http.Response, error)
@@ -1151,6 +1286,78 @@ type ClientInterface interface {
 
 func (c *Client) GetBootstrap(ctx context.Context, reqEditors ...RequestEditorFn) (*http.Response, error) {
 	req, err := NewGetBootstrapRequest(c.Server)
+	if err != nil {
+		return nil, err
+	}
+	req = req.WithContext(ctx)
+	if err := c.applyEditors(ctx, req, reqEditors); err != nil {
+		return nil, err
+	}
+	return c.Client.Do(req)
+}
+
+func (c *Client) ListCreators(ctx context.Context, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewListCreatorsRequest(c.Server)
+	if err != nil {
+		return nil, err
+	}
+	req = req.WithContext(ctx)
+	if err := c.applyEditors(ctx, req, reqEditors); err != nil {
+		return nil, err
+	}
+	return c.Client.Do(req)
+}
+
+func (c *Client) ListCreatorMerges(ctx context.Context, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewListCreatorMergesRequest(c.Server)
+	if err != nil {
+		return nil, err
+	}
+	req = req.WithContext(ctx)
+	if err := c.applyEditors(ctx, req, reqEditors); err != nil {
+		return nil, err
+	}
+	return c.Client.Do(req)
+}
+
+func (c *Client) MergeCreatorsWithBody(ctx context.Context, params *MergeCreatorsParams, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewMergeCreatorsRequestWithBody(c.Server, params, contentType, body)
+	if err != nil {
+		return nil, err
+	}
+	req = req.WithContext(ctx)
+	if err := c.applyEditors(ctx, req, reqEditors); err != nil {
+		return nil, err
+	}
+	return c.Client.Do(req)
+}
+
+func (c *Client) MergeCreators(ctx context.Context, params *MergeCreatorsParams, body MergeCreatorsJSONRequestBody, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewMergeCreatorsRequest(c.Server, params, body)
+	if err != nil {
+		return nil, err
+	}
+	req = req.WithContext(ctx)
+	if err := c.applyEditors(ctx, req, reqEditors); err != nil {
+		return nil, err
+	}
+	return c.Client.Do(req)
+}
+
+func (c *Client) UndoCreatorMerge(ctx context.Context, mergeId CreatorMergeId, params *UndoCreatorMergeParams, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewUndoCreatorMergeRequest(c.Server, mergeId, params)
+	if err != nil {
+		return nil, err
+	}
+	req = req.WithContext(ctx)
+	if err := c.applyEditors(ctx, req, reqEditors); err != nil {
+		return nil, err
+	}
+	return c.Client.Do(req)
+}
+
+func (c *Client) GetCreator(ctx context.Context, creatorId CanonicalCreatorId, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewGetCreatorRequest(c.Server, creatorId)
 	if err != nil {
 		return nil, err
 	}
@@ -1627,6 +1834,194 @@ func NewGetBootstrapRequest(server string) (*http.Request, error) {
 	}
 
 	operationPath := fmt.Sprintf("/api/v1/bootstrap")
+	if operationPath[0] == '/' {
+		operationPath = "." + operationPath
+	}
+
+	queryURL, err := serverURL.Parse(operationPath)
+	if err != nil {
+		return nil, err
+	}
+
+	req, err := http.NewRequest(http.MethodGet, queryURL.String(), nil)
+	if err != nil {
+		return nil, err
+	}
+
+	return req, nil
+}
+
+// NewListCreatorsRequest generates requests for ListCreators
+func NewListCreatorsRequest(server string) (*http.Request, error) {
+	var err error
+
+	serverURL, err := url.Parse(server)
+	if err != nil {
+		return nil, err
+	}
+
+	operationPath := fmt.Sprintf("/api/v1/creators")
+	if operationPath[0] == '/' {
+		operationPath = "." + operationPath
+	}
+
+	queryURL, err := serverURL.Parse(operationPath)
+	if err != nil {
+		return nil, err
+	}
+
+	req, err := http.NewRequest(http.MethodGet, queryURL.String(), nil)
+	if err != nil {
+		return nil, err
+	}
+
+	return req, nil
+}
+
+// NewListCreatorMergesRequest generates requests for ListCreatorMerges
+func NewListCreatorMergesRequest(server string) (*http.Request, error) {
+	var err error
+
+	serverURL, err := url.Parse(server)
+	if err != nil {
+		return nil, err
+	}
+
+	operationPath := fmt.Sprintf("/api/v1/creators/merges")
+	if operationPath[0] == '/' {
+		operationPath = "." + operationPath
+	}
+
+	queryURL, err := serverURL.Parse(operationPath)
+	if err != nil {
+		return nil, err
+	}
+
+	req, err := http.NewRequest(http.MethodGet, queryURL.String(), nil)
+	if err != nil {
+		return nil, err
+	}
+
+	return req, nil
+}
+
+// NewMergeCreatorsRequest calls the generic MergeCreators builder with application/json body
+func NewMergeCreatorsRequest(server string, params *MergeCreatorsParams, body MergeCreatorsJSONRequestBody) (*http.Request, error) {
+	var bodyReader io.Reader
+	buf, err := json.Marshal(body)
+	if err != nil {
+		return nil, err
+	}
+	bodyReader = bytes.NewReader(buf)
+	return NewMergeCreatorsRequestWithBody(server, params, "application/json", bodyReader)
+}
+
+// NewMergeCreatorsRequestWithBody generates requests for MergeCreators with any type of body
+func NewMergeCreatorsRequestWithBody(server string, params *MergeCreatorsParams, contentType string, body io.Reader) (*http.Request, error) {
+	var err error
+
+	serverURL, err := url.Parse(server)
+	if err != nil {
+		return nil, err
+	}
+
+	operationPath := fmt.Sprintf("/api/v1/creators/merges")
+	if operationPath[0] == '/' {
+		operationPath = "." + operationPath
+	}
+
+	queryURL, err := serverURL.Parse(operationPath)
+	if err != nil {
+		return nil, err
+	}
+
+	req, err := http.NewRequest(http.MethodPost, queryURL.String(), body)
+	if err != nil {
+		return nil, err
+	}
+
+	req.Header.Add("Content-Type", contentType)
+
+	if params != nil {
+
+		var headerParam0 string
+
+		headerParam0, err = runtime.StyleParamWithOptions("simple", false, "X-Gallery-CSRF", params.XGalleryCSRF, runtime.StyleParamOptions{ParamLocation: runtime.ParamLocationHeader, Type: "string", Format: ""})
+		if err != nil {
+			return nil, err
+		}
+
+		req.Header.Set("X-Gallery-CSRF", headerParam0)
+
+	}
+
+	return req, nil
+}
+
+// NewUndoCreatorMergeRequest generates requests for UndoCreatorMerge
+func NewUndoCreatorMergeRequest(server string, mergeId CreatorMergeId, params *UndoCreatorMergeParams) (*http.Request, error) {
+	var err error
+
+	var pathParam0 string
+
+	pathParam0, err = runtime.StyleParamWithOptions("simple", false, "mergeId", mergeId, runtime.StyleParamOptions{ParamLocation: runtime.ParamLocationPath, Type: "string", Format: ""})
+	if err != nil {
+		return nil, err
+	}
+
+	serverURL, err := url.Parse(server)
+	if err != nil {
+		return nil, err
+	}
+
+	operationPath := fmt.Sprintf("/api/v1/creators/merges/%s", pathParam0)
+	if operationPath[0] == '/' {
+		operationPath = "." + operationPath
+	}
+
+	queryURL, err := serverURL.Parse(operationPath)
+	if err != nil {
+		return nil, err
+	}
+
+	req, err := http.NewRequest(http.MethodDelete, queryURL.String(), nil)
+	if err != nil {
+		return nil, err
+	}
+
+	if params != nil {
+
+		var headerParam0 string
+
+		headerParam0, err = runtime.StyleParamWithOptions("simple", false, "X-Gallery-CSRF", params.XGalleryCSRF, runtime.StyleParamOptions{ParamLocation: runtime.ParamLocationHeader, Type: "string", Format: ""})
+		if err != nil {
+			return nil, err
+		}
+
+		req.Header.Set("X-Gallery-CSRF", headerParam0)
+
+	}
+
+	return req, nil
+}
+
+// NewGetCreatorRequest generates requests for GetCreator
+func NewGetCreatorRequest(server string, creatorId CanonicalCreatorId) (*http.Request, error) {
+	var err error
+
+	var pathParam0 string
+
+	pathParam0, err = runtime.StyleParamWithOptions("simple", false, "creatorId", creatorId, runtime.StyleParamOptions{ParamLocation: runtime.ParamLocationPath, Type: "string", Format: ""})
+	if err != nil {
+		return nil, err
+	}
+
+	serverURL, err := url.Parse(server)
+	if err != nil {
+		return nil, err
+	}
+
+	operationPath := fmt.Sprintf("/api/v1/creators/%s", pathParam0)
 	if operationPath[0] == '/' {
 		operationPath = "." + operationPath
 	}
@@ -3006,6 +3401,23 @@ type ClientWithResponsesInterface interface {
 	// GetBootstrapWithResponse request
 	GetBootstrapWithResponse(ctx context.Context, reqEditors ...RequestEditorFn) (*GetBootstrapResponse, error)
 
+	// ListCreatorsWithResponse request
+	ListCreatorsWithResponse(ctx context.Context, reqEditors ...RequestEditorFn) (*ListCreatorsResponse, error)
+
+	// ListCreatorMergesWithResponse request
+	ListCreatorMergesWithResponse(ctx context.Context, reqEditors ...RequestEditorFn) (*ListCreatorMergesResponse, error)
+
+	// MergeCreatorsWithBodyWithResponse request with any body
+	MergeCreatorsWithBodyWithResponse(ctx context.Context, params *MergeCreatorsParams, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*MergeCreatorsResponse, error)
+
+	MergeCreatorsWithResponse(ctx context.Context, params *MergeCreatorsParams, body MergeCreatorsJSONRequestBody, reqEditors ...RequestEditorFn) (*MergeCreatorsResponse, error)
+
+	// UndoCreatorMergeWithResponse request
+	UndoCreatorMergeWithResponse(ctx context.Context, mergeId CreatorMergeId, params *UndoCreatorMergeParams, reqEditors ...RequestEditorFn) (*UndoCreatorMergeResponse, error)
+
+	// GetCreatorWithResponse request
+	GetCreatorWithResponse(ctx context.Context, creatorId CanonicalCreatorId, reqEditors ...RequestEditorFn) (*GetCreatorResponse, error)
+
 	// GetHealthWithResponse request
 	GetHealthWithResponse(ctx context.Context, reqEditors ...RequestEditorFn) (*GetHealthResponse, error)
 
@@ -3136,6 +3548,172 @@ func (r GetBootstrapResponse) StatusCode() int {
 
 // ContentType is a convenience method to retrieve the Content-Type value from the HTTP response headers
 func (r GetBootstrapResponse) ContentType() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Header.Get("Content-Type")
+	}
+	return ""
+}
+
+type ListCreatorsResponse struct {
+	Body         []byte
+	HTTPResponse *http.Response
+	JSON200      *CreatorListResponse
+	JSON401      *UnauthenticatedError
+	JSON403      *ForbiddenError
+}
+
+// Status returns HTTPResponse.Status
+func (r ListCreatorsResponse) Status() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Status
+	}
+	return http.StatusText(0)
+}
+
+// StatusCode returns HTTPResponse.StatusCode
+func (r ListCreatorsResponse) StatusCode() int {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.StatusCode
+	}
+	return 0
+}
+
+// ContentType is a convenience method to retrieve the Content-Type value from the HTTP response headers
+func (r ListCreatorsResponse) ContentType() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Header.Get("Content-Type")
+	}
+	return ""
+}
+
+type ListCreatorMergesResponse struct {
+	Body         []byte
+	HTTPResponse *http.Response
+	JSON200      *CreatorMergeListResponse
+	JSON401      *UnauthenticatedError
+	JSON403      *ForbiddenError
+}
+
+// Status returns HTTPResponse.Status
+func (r ListCreatorMergesResponse) Status() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Status
+	}
+	return http.StatusText(0)
+}
+
+// StatusCode returns HTTPResponse.StatusCode
+func (r ListCreatorMergesResponse) StatusCode() int {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.StatusCode
+	}
+	return 0
+}
+
+// ContentType is a convenience method to retrieve the Content-Type value from the HTTP response headers
+func (r ListCreatorMergesResponse) ContentType() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Header.Get("Content-Type")
+	}
+	return ""
+}
+
+type MergeCreatorsResponse struct {
+	Body         []byte
+	HTTPResponse *http.Response
+	JSON201      *CreatorMerge
+	JSON400      *ValidationError
+	JSON401      *UnauthenticatedError
+	JSON403      *ForbiddenError
+	JSON404      *NotFoundError
+	JSON409      *ConflictError
+}
+
+// Status returns HTTPResponse.Status
+func (r MergeCreatorsResponse) Status() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Status
+	}
+	return http.StatusText(0)
+}
+
+// StatusCode returns HTTPResponse.StatusCode
+func (r MergeCreatorsResponse) StatusCode() int {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.StatusCode
+	}
+	return 0
+}
+
+// ContentType is a convenience method to retrieve the Content-Type value from the HTTP response headers
+func (r MergeCreatorsResponse) ContentType() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Header.Get("Content-Type")
+	}
+	return ""
+}
+
+type UndoCreatorMergeResponse struct {
+	Body         []byte
+	HTTPResponse *http.Response
+	JSON200      *CreatorMerge
+	JSON401      *UnauthenticatedError
+	JSON403      *ForbiddenError
+	JSON404      *NotFoundError
+	JSON409      *ConflictError
+}
+
+// Status returns HTTPResponse.Status
+func (r UndoCreatorMergeResponse) Status() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Status
+	}
+	return http.StatusText(0)
+}
+
+// StatusCode returns HTTPResponse.StatusCode
+func (r UndoCreatorMergeResponse) StatusCode() int {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.StatusCode
+	}
+	return 0
+}
+
+// ContentType is a convenience method to retrieve the Content-Type value from the HTTP response headers
+func (r UndoCreatorMergeResponse) ContentType() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Header.Get("Content-Type")
+	}
+	return ""
+}
+
+type GetCreatorResponse struct {
+	Body         []byte
+	HTTPResponse *http.Response
+	JSON200      *CreatorDetail
+	JSON401      *UnauthenticatedError
+	JSON403      *ForbiddenError
+	JSON404      *NotFoundError
+}
+
+// Status returns HTTPResponse.Status
+func (r GetCreatorResponse) Status() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Status
+	}
+	return http.StatusText(0)
+}
+
+// StatusCode returns HTTPResponse.StatusCode
+func (r GetCreatorResponse) StatusCode() int {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.StatusCode
+	}
+	return 0
+}
+
+// ContentType is a convenience method to retrieve the Content-Type value from the HTTP response headers
+func (r GetCreatorResponse) ContentType() string {
 	if r.HTTPResponse != nil {
 		return r.HTTPResponse.Header.Get("Content-Type")
 	}
@@ -4082,6 +4660,59 @@ func (c *ClientWithResponses) GetBootstrapWithResponse(ctx context.Context, reqE
 	return ParseGetBootstrapResponse(rsp)
 }
 
+// ListCreatorsWithResponse request returning *ListCreatorsResponse
+func (c *ClientWithResponses) ListCreatorsWithResponse(ctx context.Context, reqEditors ...RequestEditorFn) (*ListCreatorsResponse, error) {
+	rsp, err := c.ListCreators(ctx, reqEditors...)
+	if err != nil {
+		return nil, err
+	}
+	return ParseListCreatorsResponse(rsp)
+}
+
+// ListCreatorMergesWithResponse request returning *ListCreatorMergesResponse
+func (c *ClientWithResponses) ListCreatorMergesWithResponse(ctx context.Context, reqEditors ...RequestEditorFn) (*ListCreatorMergesResponse, error) {
+	rsp, err := c.ListCreatorMerges(ctx, reqEditors...)
+	if err != nil {
+		return nil, err
+	}
+	return ParseListCreatorMergesResponse(rsp)
+}
+
+// MergeCreatorsWithBodyWithResponse request with arbitrary body returning *MergeCreatorsResponse
+func (c *ClientWithResponses) MergeCreatorsWithBodyWithResponse(ctx context.Context, params *MergeCreatorsParams, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*MergeCreatorsResponse, error) {
+	rsp, err := c.MergeCreatorsWithBody(ctx, params, contentType, body, reqEditors...)
+	if err != nil {
+		return nil, err
+	}
+	return ParseMergeCreatorsResponse(rsp)
+}
+
+func (c *ClientWithResponses) MergeCreatorsWithResponse(ctx context.Context, params *MergeCreatorsParams, body MergeCreatorsJSONRequestBody, reqEditors ...RequestEditorFn) (*MergeCreatorsResponse, error) {
+	rsp, err := c.MergeCreators(ctx, params, body, reqEditors...)
+	if err != nil {
+		return nil, err
+	}
+	return ParseMergeCreatorsResponse(rsp)
+}
+
+// UndoCreatorMergeWithResponse request returning *UndoCreatorMergeResponse
+func (c *ClientWithResponses) UndoCreatorMergeWithResponse(ctx context.Context, mergeId CreatorMergeId, params *UndoCreatorMergeParams, reqEditors ...RequestEditorFn) (*UndoCreatorMergeResponse, error) {
+	rsp, err := c.UndoCreatorMerge(ctx, mergeId, params, reqEditors...)
+	if err != nil {
+		return nil, err
+	}
+	return ParseUndoCreatorMergeResponse(rsp)
+}
+
+// GetCreatorWithResponse request returning *GetCreatorResponse
+func (c *ClientWithResponses) GetCreatorWithResponse(ctx context.Context, creatorId CanonicalCreatorId, reqEditors ...RequestEditorFn) (*GetCreatorResponse, error) {
+	rsp, err := c.GetCreator(ctx, creatorId, reqEditors...)
+	if err != nil {
+		return nil, err
+	}
+	return ParseGetCreatorResponse(rsp)
+}
+
 // GetHealthWithResponse request returning *GetHealthResponse
 func (c *ClientWithResponses) GetHealthWithResponse(ctx context.Context, reqEditors ...RequestEditorFn) (*GetHealthResponse, error) {
 	rsp, err := c.GetHealth(ctx, reqEditors...)
@@ -4441,6 +5072,248 @@ func ParseGetBootstrapResponse(rsp *http.Response) (*GetBootstrapResponse, error
 			return nil, err
 		}
 		response.JSON500 = &dest
+
+	}
+
+	return response, nil
+}
+
+// ParseListCreatorsResponse parses an HTTP response from a ListCreatorsWithResponse call
+func ParseListCreatorsResponse(rsp *http.Response) (*ListCreatorsResponse, error) {
+	bodyBytes, err := io.ReadAll(rsp.Body)
+	defer func() { _ = rsp.Body.Close() }()
+	if err != nil {
+		return nil, err
+	}
+
+	response := &ListCreatorsResponse{
+		Body:         bodyBytes,
+		HTTPResponse: rsp,
+	}
+
+	switch {
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 200:
+		var dest CreatorListResponse
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON200 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 401:
+		var dest UnauthenticatedError
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON401 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 403:
+		var dest ForbiddenError
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON403 = &dest
+
+	}
+
+	return response, nil
+}
+
+// ParseListCreatorMergesResponse parses an HTTP response from a ListCreatorMergesWithResponse call
+func ParseListCreatorMergesResponse(rsp *http.Response) (*ListCreatorMergesResponse, error) {
+	bodyBytes, err := io.ReadAll(rsp.Body)
+	defer func() { _ = rsp.Body.Close() }()
+	if err != nil {
+		return nil, err
+	}
+
+	response := &ListCreatorMergesResponse{
+		Body:         bodyBytes,
+		HTTPResponse: rsp,
+	}
+
+	switch {
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 200:
+		var dest CreatorMergeListResponse
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON200 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 401:
+		var dest UnauthenticatedError
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON401 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 403:
+		var dest ForbiddenError
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON403 = &dest
+
+	}
+
+	return response, nil
+}
+
+// ParseMergeCreatorsResponse parses an HTTP response from a MergeCreatorsWithResponse call
+func ParseMergeCreatorsResponse(rsp *http.Response) (*MergeCreatorsResponse, error) {
+	bodyBytes, err := io.ReadAll(rsp.Body)
+	defer func() { _ = rsp.Body.Close() }()
+	if err != nil {
+		return nil, err
+	}
+
+	response := &MergeCreatorsResponse{
+		Body:         bodyBytes,
+		HTTPResponse: rsp,
+	}
+
+	switch {
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 201:
+		var dest CreatorMerge
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON201 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 400:
+		var dest ValidationError
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON400 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 401:
+		var dest UnauthenticatedError
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON401 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 403:
+		var dest ForbiddenError
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON403 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 404:
+		var dest NotFoundError
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON404 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 409:
+		var dest ConflictError
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON409 = &dest
+
+	}
+
+	return response, nil
+}
+
+// ParseUndoCreatorMergeResponse parses an HTTP response from a UndoCreatorMergeWithResponse call
+func ParseUndoCreatorMergeResponse(rsp *http.Response) (*UndoCreatorMergeResponse, error) {
+	bodyBytes, err := io.ReadAll(rsp.Body)
+	defer func() { _ = rsp.Body.Close() }()
+	if err != nil {
+		return nil, err
+	}
+
+	response := &UndoCreatorMergeResponse{
+		Body:         bodyBytes,
+		HTTPResponse: rsp,
+	}
+
+	switch {
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 200:
+		var dest CreatorMerge
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON200 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 401:
+		var dest UnauthenticatedError
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON401 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 403:
+		var dest ForbiddenError
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON403 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 404:
+		var dest NotFoundError
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON404 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 409:
+		var dest ConflictError
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON409 = &dest
+
+	}
+
+	return response, nil
+}
+
+// ParseGetCreatorResponse parses an HTTP response from a GetCreatorWithResponse call
+func ParseGetCreatorResponse(rsp *http.Response) (*GetCreatorResponse, error) {
+	bodyBytes, err := io.ReadAll(rsp.Body)
+	defer func() { _ = rsp.Body.Close() }()
+	if err != nil {
+		return nil, err
+	}
+
+	response := &GetCreatorResponse{
+		Body:         bodyBytes,
+		HTTPResponse: rsp,
+	}
+
+	switch {
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 200:
+		var dest CreatorDetail
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON200 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 401:
+		var dest UnauthenticatedError
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON401 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 403:
+		var dest ForbiddenError
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON403 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 404:
+		var dest NotFoundError
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON404 = &dest
 
 	}
 
