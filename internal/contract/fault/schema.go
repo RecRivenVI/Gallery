@@ -15,7 +15,11 @@ func AllCodes() []Code {
 		CodeNotFound, CodeConflict, CodeAppDirsOverlap, CodeSourceRootsOverlap, CodeDatabaseOpen,
 		CodeMigrationFailed, CodeBackupFailed, CodeCursorInvalid, CodeCursorExpired,
 		CodeRuleSchemaInvalid, CodeRuleEval, CodeCatalogPublicationAbsent,
-		CodeContentChangedDuringHash, CodeMediaOffline,
+		CodeContentChangedDuringHash, CodeMediaOffline, CodeHostRejected, CodeOriginRejected,
+		CodeCSRFInvalid, CodePairingInvalid, CodePairingExpired, CodeSourcePathInvalid,
+		CodeRuleParameterInvalid, CodeJobStateConflict, CodeScanAlreadyRunning,
+		CodeSourceUnavailable, CodeSourceReadFailed, CodeContentDisappeared, CodePathEscape,
+		CodeCatalogCandidateInvalid, CodeProcessInterrupted, CodeRangeInvalid,
 	}
 }
 

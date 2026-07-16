@@ -10,8 +10,10 @@ import (
 	"net/http"
 	"net/http/cookiejar"
 	"net/http/httptest"
+	"net/url"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -19,8 +21,8 @@ import (
 	"github.com/RecRivenVI/gallery/internal/auth"
 	"github.com/RecRivenVI/gallery/internal/catalog"
 	"github.com/RecRivenVI/gallery/internal/config"
-	"github.com/RecRivenVI/gallery/internal/contract/api"
 	"github.com/RecRivenVI/gallery/internal/contract/fault"
+	"github.com/RecRivenVI/gallery/internal/contract/realtime"
 	"github.com/RecRivenVI/gallery/internal/jobs"
 	"github.com/RecRivenVI/gallery/internal/platform/appdirs"
 	"github.com/RecRivenVI/gallery/internal/platform/clock"
@@ -29,6 +31,9 @@ import (
 	"github.com/RecRivenVI/gallery/internal/scanner"
 	"github.com/RecRivenVI/gallery/internal/storage"
 	"github.com/RecRivenVI/gallery/internal/transport/httpapi"
+	api "github.com/RecRivenVI/gallery/pkg/galleryapi"
+	"github.com/coder/websocket"
+	"github.com/coder/websocket/wsjson"
 )
 
 func TestGeneratedClientHealthBootstrapAndAnonymousWS(t *testing.T) {
@@ -51,7 +56,7 @@ func TestGeneratedClientHealthBootstrapAndAnonymousWS(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	server := httptest.NewServer(httpapi.New(config.ModePersonal, store, fixedClock, personal, resources, nil, nil, nil, logger))
+	server := httptest.NewServer(httpapi.New(config.ModePersonal, store, fixedClock, personal, resources, nil, nil, nil, nil, logger))
 	defer server.Close()
 
 	client, err := api.NewClientWithResponses(server.URL)
@@ -70,7 +75,13 @@ func TestGeneratedClientHealthBootstrapAndAnonymousWS(t *testing.T) {
 		t.Fatal("loopback 匿名主体获得了 capability")
 	}
 
-	response, err := http.Get(server.URL + "/ws/v1")
+	request, err := http.NewRequest(http.MethodGet, server.URL+"/ws/v1", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	request.Header.Set("Origin", server.URL)
+	request.Header.Set("Sec-Fetch-Site", "same-origin")
+	response, err := http.DefaultClient.Do(request)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -122,12 +133,13 @@ func TestPersonalPairingIsSingleUseAndRevocationInvalidatesREST(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	scannerService, err := scanner.New(context.Background(), resources, jobStore, catalogStore, nil)
+	hub := realtime.NewHub(fixedClock)
+	scannerService, err := scanner.New(context.Background(), resources, jobStore, catalogStore, hub)
 	if err != nil {
 		t.Fatal(err)
 	}
 	server := httptest.NewServer(httpapi.New(
-		config.ModePersonal, store, fixedClock, personal, resources, jobStore, catalogStore, scannerService,
+		config.ModePersonal, store, fixedClock, personal, resources, jobStore, catalogStore, scannerService, hub,
 		slog.New(slog.NewJSONHandler(io.Discard, nil)),
 	))
 	defer server.Close()
@@ -218,12 +230,19 @@ func TestPersonalPairingIsSingleUseAndRevocationInvalidatesREST(t *testing.T) {
 	if err != nil || bindingResponse.JSON201 == nil {
 		t.Fatalf("通过公开 API 创建 SourceRuleBinding 失败: %v status=%d body=%s", err, bindingResponse.StatusCode(), bindingResponse.Body)
 	}
+	websocketConnection := dialWebSocket(t, server.URL, jar)
+	defer websocketConnection.CloseNow()
+	var ready realtime.Envelope
+	if err := wsjson.Read(context.Background(), websocketConnection, &ready); err != nil || ready.EventType != realtime.EventConnectionReady {
+		t.Fatalf("WebSocket ready 错误: %+v %v", ready, err)
+	}
 	scanResponse, err := client.CreateScanJobWithResponse(context.Background(), sourceResponse.JSON201.Id, &api.CreateScanJobParams{
 		XGalleryCSRF: exchange.JSON201.CsrfToken,
 	}, mutation)
 	if err != nil || scanResponse.JSON202 == nil {
 		t.Fatalf("创建 Scan Job 失败: %v status=%d body=%s", err, scanResponse.StatusCode(), scanResponse.Body)
 	}
+	assertScanEvents(t, websocketConnection, ready.Sequence, scanResponse.JSON202.Id)
 	completedJob := waitForJob(t, client, scanResponse.JSON202.Id)
 	if string(completedJob.Status) != "completed" || completedJob.QueryPublicationId == nil {
 		t.Fatalf("Scan Job 未完成: %+v", completedJob)
@@ -292,6 +311,13 @@ func TestPersonalPairingIsSingleUseAndRevocationInvalidatesREST(t *testing.T) {
 	if err != nil || revoke.StatusCode() != http.StatusNoContent {
 		t.Fatalf("吊销 Session 失败: %v status=%d", err, revoke.StatusCode())
 	}
+	var revoked realtime.Envelope
+	if err := wsjson.Read(context.Background(), websocketConnection, &revoked); err != nil || revoked.EventType != realtime.EventSessionRevoked {
+		t.Fatalf("Session 吊销事件错误: %+v %v", revoked, err)
+	}
+	if _, _, err := websocketConnection.Read(context.Background()); websocket.CloseStatus(err) != websocket.StatusCode(4401) {
+		t.Fatalf("已吊销 WebSocket close status = %d err=%v", websocket.CloseStatus(err), err)
+	}
 	afterRevoke, err := client.ListSessionsWithResponse(context.Background())
 	if err != nil || afterRevoke.JSON401 == nil {
 		t.Fatalf("已吊销 Session 仍可访问 REST: %v status=%d", err, afterRevoke.StatusCode())
@@ -325,4 +351,56 @@ func waitForJob(t *testing.T, client *api.ClientWithResponses, jobID string) api
 	}
 	t.Fatal("Job 未在期限内终止")
 	return api.Job{}
+}
+
+func dialWebSocket(t *testing.T, serverURL string, jar http.CookieJar) *websocket.Conn {
+	t.Helper()
+	parsed, err := url.Parse(serverURL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	header := http.Header{}
+	header.Set("Origin", serverURL)
+	header.Set("Sec-Fetch-Site", "same-origin")
+	request := &http.Request{Header: header}
+	for _, cookie := range jar.Cookies(parsed) {
+		request.AddCookie(cookie)
+	}
+	websocketURL := "ws" + strings.TrimPrefix(serverURL, "http") + "/ws/v1"
+	connection, _, err := websocket.Dial(context.Background(), websocketURL, &websocket.DialOptions{HTTPHeader: request.Header})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return connection
+}
+
+func assertScanEvents(t *testing.T, connection *websocket.Conn, previous uint64, jobID string) {
+	t.Helper()
+	validator, err := realtime.NewEnvelopeValidator()
+	if err != nil {
+		t.Fatal(err)
+	}
+	seen := map[realtime.EventType]bool{}
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	for !(seen[realtime.EventJobQueued] && seen[realtime.EventJobProgress] && seen[realtime.EventQueryPublicationPublished] && seen[realtime.EventJobCompleted]) {
+		var envelope realtime.Envelope
+		if err := wsjson.Read(ctx, connection, &envelope); err != nil {
+			t.Fatalf("等待扫描事件: %v seen=%v", err, seen)
+		}
+		if envelope.Sequence <= previous {
+			t.Fatalf("WebSocket sequence 未递增: %d <= %d", envelope.Sequence, previous)
+		}
+		previous = envelope.Sequence
+		serialized, err := json.Marshal(envelope)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := validator.ValidateJSON(serialized); err != nil {
+			t.Fatalf("事件不符合 WS Schema: %v body=%s", err, serialized)
+		}
+		if envelope.Scope.JobID == jobID {
+			seen[envelope.EventType] = true
+		}
+	}
 }

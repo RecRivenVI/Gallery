@@ -252,6 +252,16 @@ func (p *Personal) Revoke(ctx context.Context, id string) error {
 	return nil
 }
 
+func (p *Personal) IsActive(ctx context.Context, id string) bool {
+	if _, err := domain.ParseID(domain.IDSession, id); err != nil {
+		return false
+	}
+	var expiresAt int64
+	var revokedAt sql.NullInt64
+	err := p.db.QueryRowContext(ctx, "SELECT expires_at, revoked_at FROM sessions WHERE session_id = ?", id).Scan(&expiresAt, &revokedAt)
+	return err == nil && !revokedAt.Valid && p.clock.Now().Unix() < expiresAt
+}
+
 func HasCapability(session Session, capability string) bool {
 	for _, available := range session.Capabilities {
 		if available == capability {
