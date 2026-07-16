@@ -475,6 +475,79 @@ paths:
           $ref: "#/components/responses/ForbiddenError"
         "404":
           $ref: "#/components/responses/NotFoundError"
+  /api/v1/media/{mediaId}/content:
+    parameters:
+      - name: mediaId
+        in: path
+        required: true
+        schema:
+          $ref: "#/components/schemas/CanonicalMediaId"
+      - name: Range
+        in: header
+        required: false
+        schema:
+          type: string
+      - name: If-None-Match
+        in: header
+        required: false
+        schema:
+          type: string
+    head:
+      operationId: headMediaContent
+      summary: 读取稳定 Media ID 内容的 HTTP metadata
+      responses:
+        "200":
+          description: 完整内容 metadata
+          headers:
+            Accept-Ranges: {schema: {type: string, enum: [bytes]}}
+            Content-Length: {schema: {type: integer, format: int64}}
+            ETag: {schema: {type: string}}
+        "206":
+          description: 单区间 metadata
+          headers:
+            Accept-Ranges: {schema: {type: string, enum: [bytes]}}
+            Content-Length: {schema: {type: integer, format: int64}}
+            Content-Range: {schema: {type: string}}
+            ETag: {schema: {type: string}}
+        "304":
+          description: ETag 未变化
+        "401": {$ref: "#/components/responses/UnauthenticatedError"}
+        "403": {$ref: "#/components/responses/ForbiddenError"}
+        "404": {$ref: "#/components/responses/NotFoundError"}
+        "409": {$ref: "#/components/responses/ConflictError"}
+        "416": {$ref: "#/components/responses/RangeError"}
+        "503": {$ref: "#/components/responses/MediaOfflineError"}
+    get:
+      operationId: getMediaContent
+      summary: 完整或单区间读取稳定 Media ID 内容
+      responses:
+        "200":
+          description: 完整内容
+          headers:
+            Accept-Ranges: {schema: {type: string, enum: [bytes]}}
+            Content-Length: {schema: {type: integer, format: int64}}
+            ETag: {schema: {type: string}}
+          content:
+            application/octet-stream:
+              schema: {type: string, format: binary}
+        "206":
+          description: 单区间内容
+          headers:
+            Accept-Ranges: {schema: {type: string, enum: [bytes]}}
+            Content-Length: {schema: {type: integer, format: int64}}
+            Content-Range: {schema: {type: string}}
+            ETag: {schema: {type: string}}
+          content:
+            application/octet-stream:
+              schema: {type: string, format: binary}
+        "304":
+          description: ETag 未变化
+        "401": {$ref: "#/components/responses/UnauthenticatedError"}
+        "403": {$ref: "#/components/responses/ForbiddenError"}
+        "404": {$ref: "#/components/responses/NotFoundError"}
+        "409": {$ref: "#/components/responses/ConflictError"}
+        "416": {$ref: "#/components/responses/RangeError"}
+        "503": {$ref: "#/components/responses/MediaOfflineError"}
 components:
   securitySchemes:
     sessionCookie:
@@ -526,6 +599,18 @@ components:
             $ref: "#/components/schemas/ErrorEnvelope"
     ConflictError:
       description: 资源或同类操作冲突
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorEnvelope"
+    RangeError:
+      description: Range 无效或不支持多区间
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorEnvelope"
+    MediaOfflineError:
+      description: 当前 publication 中的媒体位置暂不可用
       content:
         application/json:
           schema:
@@ -660,6 +745,7 @@ components:
         - PATH_ESCAPE
         - CATALOG_CANDIDATE_INVALID
         - PROCESS_INTERRUPTED
+        - RANGE_INVALID
     Job:
       type: object
       additionalProperties: false

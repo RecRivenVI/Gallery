@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"math/big"
+	"mime"
 	"regexp"
 	"sort"
 	"strconv"
@@ -203,6 +204,9 @@ func compilePrimitives(primitives []rawPrimitive) (RuleIR, error) {
 			}
 			if config.Glob == "" || config.Kind == "" || config.MIME == "" {
 				return RuleIR{}, fmt.Errorf("media_classify %s 缺少 glob/kind/mime", primitive.ID)
+			}
+			if _, _, err := mime.ParseMediaType(config.MIME); err != nil {
+				return RuleIR{}, fmt.Errorf("media_classify %s MIME 无效: %w", primitive.ID, err)
 			}
 			ir.MediaGlob, ir.MediaKind, ir.MediaMIME = config.Glob, config.Kind, config.MIME
 		}

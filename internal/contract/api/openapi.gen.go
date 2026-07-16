@@ -141,6 +141,7 @@ const (
 	PAIRINGINVALID            ErrorCode = "PAIRING_INVALID"
 	PATHESCAPE                ErrorCode = "PATH_ESCAPE"
 	PROCESSINTERRUPTED        ErrorCode = "PROCESS_INTERRUPTED"
+	RANGEINVALID              ErrorCode = "RANGE_INVALID"
 	RULEEVALERROR             ErrorCode = "RULE_EVAL_ERROR"
 	RULEPARAMETERINVALID      ErrorCode = "RULE_PARAMETER_INVALID"
 	RULESCHEMAINVALID         ErrorCode = "RULE_SCHEMA_INVALID"
@@ -203,6 +204,8 @@ func (e ErrorCode) Valid() bool {
 	case PATHESCAPE:
 		return true
 	case PROCESSINTERRUPTED:
+		return true
+	case RANGEINVALID:
 		return true
 	case RULEEVALERROR:
 		return true
@@ -643,8 +646,14 @@ type ForbiddenError = ErrorEnvelope
 // InternalError defines model for InternalError.
 type InternalError = ErrorEnvelope
 
+// MediaOfflineError defines model for MediaOfflineError.
+type MediaOfflineError = ErrorEnvelope
+
 // NotFoundError defines model for NotFoundError.
 type NotFoundError = ErrorEnvelope
+
+// RangeError defines model for RangeError.
+type RangeError = ErrorEnvelope
 
 // UnauthenticatedError defines model for UnauthenticatedError.
 type UnauthenticatedError = ErrorEnvelope
@@ -661,6 +670,18 @@ type sessionCookieContextKey string
 // CreateLibraryParams defines parameters for CreateLibrary.
 type CreateLibraryParams struct {
 	XGalleryCSRF CSRFHeader `json:"X-Gallery-CSRF"`
+}
+
+// GetMediaContentParams defines parameters for GetMediaContent.
+type GetMediaContentParams struct {
+	Range       *string `json:"Range,omitempty"`
+	IfNoneMatch *string `json:"If-None-Match,omitempty"`
+}
+
+// HeadMediaContentParams defines parameters for HeadMediaContent.
+type HeadMediaContentParams struct {
+	Range       *string `json:"Range,omitempty"`
+	IfNoneMatch *string `json:"If-None-Match,omitempty"`
 }
 
 // ExchangePairingCredentialParams defines parameters for ExchangePairingCredential.
@@ -806,6 +827,12 @@ type ClientInterface interface {
 	// GetMedia request
 	GetMedia(ctx context.Context, mediaId CanonicalMediaId, reqEditors ...RequestEditorFn) (*http.Response, error)
 
+	// GetMediaContent request
+	GetMediaContent(ctx context.Context, mediaId CanonicalMediaId, params *GetMediaContentParams, reqEditors ...RequestEditorFn) (*http.Response, error)
+
+	// HeadMediaContent request
+	HeadMediaContent(ctx context.Context, mediaId CanonicalMediaId, params *HeadMediaContentParams, reqEditors ...RequestEditorFn) (*http.Response, error)
+
 	// ExchangePairingCredentialWithBody request with any body
 	ExchangePairingCredentialWithBody(ctx context.Context, params *ExchangePairingCredentialParams, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*http.Response, error)
 
@@ -934,6 +961,30 @@ func (c *Client) GetLibrary(ctx context.Context, libraryId LibraryId, reqEditors
 
 func (c *Client) GetMedia(ctx context.Context, mediaId CanonicalMediaId, reqEditors ...RequestEditorFn) (*http.Response, error) {
 	req, err := NewGetMediaRequest(c.Server, mediaId)
+	if err != nil {
+		return nil, err
+	}
+	req = req.WithContext(ctx)
+	if err := c.applyEditors(ctx, req, reqEditors); err != nil {
+		return nil, err
+	}
+	return c.Client.Do(req)
+}
+
+func (c *Client) GetMediaContent(ctx context.Context, mediaId CanonicalMediaId, params *GetMediaContentParams, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewGetMediaContentRequest(c.Server, mediaId, params)
+	if err != nil {
+		return nil, err
+	}
+	req = req.WithContext(ctx)
+	if err := c.applyEditors(ctx, req, reqEditors); err != nil {
+		return nil, err
+	}
+	return c.Client.Do(req)
+}
+
+func (c *Client) HeadMediaContent(ctx context.Context, mediaId CanonicalMediaId, params *HeadMediaContentParams, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewHeadMediaContentRequest(c.Server, mediaId, params)
 	if err != nil {
 		return nil, err
 	}
@@ -1376,6 +1427,126 @@ func NewGetMediaRequest(server string, mediaId CanonicalMediaId) (*http.Request,
 	req, err := http.NewRequest(http.MethodGet, queryURL.String(), nil)
 	if err != nil {
 		return nil, err
+	}
+
+	return req, nil
+}
+
+// NewGetMediaContentRequest generates requests for GetMediaContent
+func NewGetMediaContentRequest(server string, mediaId CanonicalMediaId, params *GetMediaContentParams) (*http.Request, error) {
+	var err error
+
+	var pathParam0 string
+
+	pathParam0, err = runtime.StyleParamWithOptions("simple", false, "mediaId", mediaId, runtime.StyleParamOptions{ParamLocation: runtime.ParamLocationPath, Type: "string", Format: ""})
+	if err != nil {
+		return nil, err
+	}
+
+	serverURL, err := url.Parse(server)
+	if err != nil {
+		return nil, err
+	}
+
+	operationPath := fmt.Sprintf("/api/v1/media/%s/content", pathParam0)
+	if operationPath[0] == '/' {
+		operationPath = "." + operationPath
+	}
+
+	queryURL, err := serverURL.Parse(operationPath)
+	if err != nil {
+		return nil, err
+	}
+
+	req, err := http.NewRequest(http.MethodGet, queryURL.String(), nil)
+	if err != nil {
+		return nil, err
+	}
+
+	if params != nil {
+
+		if params.Range != nil {
+			var headerParam0 string
+
+			headerParam0, err = runtime.StyleParamWithOptions("simple", false, "Range", *params.Range, runtime.StyleParamOptions{ParamLocation: runtime.ParamLocationHeader, Type: "string", Format: ""})
+			if err != nil {
+				return nil, err
+			}
+
+			req.Header.Set("Range", headerParam0)
+		}
+
+		if params.IfNoneMatch != nil {
+			var headerParam1 string
+
+			headerParam1, err = runtime.StyleParamWithOptions("simple", false, "If-None-Match", *params.IfNoneMatch, runtime.StyleParamOptions{ParamLocation: runtime.ParamLocationHeader, Type: "string", Format: ""})
+			if err != nil {
+				return nil, err
+			}
+
+			req.Header.Set("If-None-Match", headerParam1)
+		}
+
+	}
+
+	return req, nil
+}
+
+// NewHeadMediaContentRequest generates requests for HeadMediaContent
+func NewHeadMediaContentRequest(server string, mediaId CanonicalMediaId, params *HeadMediaContentParams) (*http.Request, error) {
+	var err error
+
+	var pathParam0 string
+
+	pathParam0, err = runtime.StyleParamWithOptions("simple", false, "mediaId", mediaId, runtime.StyleParamOptions{ParamLocation: runtime.ParamLocationPath, Type: "string", Format: ""})
+	if err != nil {
+		return nil, err
+	}
+
+	serverURL, err := url.Parse(server)
+	if err != nil {
+		return nil, err
+	}
+
+	operationPath := fmt.Sprintf("/api/v1/media/%s/content", pathParam0)
+	if operationPath[0] == '/' {
+		operationPath = "." + operationPath
+	}
+
+	queryURL, err := serverURL.Parse(operationPath)
+	if err != nil {
+		return nil, err
+	}
+
+	req, err := http.NewRequest(http.MethodHead, queryURL.String(), nil)
+	if err != nil {
+		return nil, err
+	}
+
+	if params != nil {
+
+		if params.Range != nil {
+			var headerParam0 string
+
+			headerParam0, err = runtime.StyleParamWithOptions("simple", false, "Range", *params.Range, runtime.StyleParamOptions{ParamLocation: runtime.ParamLocationHeader, Type: "string", Format: ""})
+			if err != nil {
+				return nil, err
+			}
+
+			req.Header.Set("Range", headerParam0)
+		}
+
+		if params.IfNoneMatch != nil {
+			var headerParam1 string
+
+			headerParam1, err = runtime.StyleParamWithOptions("simple", false, "If-None-Match", *params.IfNoneMatch, runtime.StyleParamOptions{ParamLocation: runtime.ParamLocationHeader, Type: "string", Format: ""})
+			if err != nil {
+				return nil, err
+			}
+
+			req.Header.Set("If-None-Match", headerParam1)
+		}
+
 	}
 
 	return req, nil
@@ -2041,6 +2212,12 @@ type ClientWithResponsesInterface interface {
 	// GetMediaWithResponse request
 	GetMediaWithResponse(ctx context.Context, mediaId CanonicalMediaId, reqEditors ...RequestEditorFn) (*GetMediaResponse, error)
 
+	// GetMediaContentWithResponse request
+	GetMediaContentWithResponse(ctx context.Context, mediaId CanonicalMediaId, params *GetMediaContentParams, reqEditors ...RequestEditorFn) (*GetMediaContentResponse, error)
+
+	// HeadMediaContentWithResponse request
+	HeadMediaContentWithResponse(ctx context.Context, mediaId CanonicalMediaId, params *HeadMediaContentParams, reqEditors ...RequestEditorFn) (*HeadMediaContentResponse, error)
+
 	// ExchangePairingCredentialWithBodyWithResponse request with any body
 	ExchangePairingCredentialWithBodyWithResponse(ctx context.Context, params *ExchangePairingCredentialParams, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*ExchangePairingCredentialResponse, error)
 
@@ -2283,6 +2460,76 @@ func (r GetMediaResponse) StatusCode() int {
 
 // ContentType is a convenience method to retrieve the Content-Type value from the HTTP response headers
 func (r GetMediaResponse) ContentType() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Header.Get("Content-Type")
+	}
+	return ""
+}
+
+type GetMediaContentResponse struct {
+	Body         []byte
+	HTTPResponse *http.Response
+	JSON401      *UnauthenticatedError
+	JSON403      *ForbiddenError
+	JSON404      *NotFoundError
+	JSON409      *ConflictError
+	JSON416      *RangeError
+	JSON503      *MediaOfflineError
+}
+
+// Status returns HTTPResponse.Status
+func (r GetMediaContentResponse) Status() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Status
+	}
+	return http.StatusText(0)
+}
+
+// StatusCode returns HTTPResponse.StatusCode
+func (r GetMediaContentResponse) StatusCode() int {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.StatusCode
+	}
+	return 0
+}
+
+// ContentType is a convenience method to retrieve the Content-Type value from the HTTP response headers
+func (r GetMediaContentResponse) ContentType() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Header.Get("Content-Type")
+	}
+	return ""
+}
+
+type HeadMediaContentResponse struct {
+	Body         []byte
+	HTTPResponse *http.Response
+	JSON401      *UnauthenticatedError
+	JSON403      *ForbiddenError
+	JSON404      *NotFoundError
+	JSON409      *ConflictError
+	JSON416      *RangeError
+	JSON503      *MediaOfflineError
+}
+
+// Status returns HTTPResponse.Status
+func (r HeadMediaContentResponse) Status() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Status
+	}
+	return http.StatusText(0)
+}
+
+// StatusCode returns HTTPResponse.StatusCode
+func (r HeadMediaContentResponse) StatusCode() int {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.StatusCode
+	}
+	return 0
+}
+
+// ContentType is a convenience method to retrieve the Content-Type value from the HTTP response headers
+func (r HeadMediaContentResponse) ContentType() string {
 	if r.HTTPResponse != nil {
 		return r.HTTPResponse.Header.Get("Content-Type")
 	}
@@ -2848,6 +3095,24 @@ func (c *ClientWithResponses) GetMediaWithResponse(ctx context.Context, mediaId 
 	return ParseGetMediaResponse(rsp)
 }
 
+// GetMediaContentWithResponse request returning *GetMediaContentResponse
+func (c *ClientWithResponses) GetMediaContentWithResponse(ctx context.Context, mediaId CanonicalMediaId, params *GetMediaContentParams, reqEditors ...RequestEditorFn) (*GetMediaContentResponse, error) {
+	rsp, err := c.GetMediaContent(ctx, mediaId, params, reqEditors...)
+	if err != nil {
+		return nil, err
+	}
+	return ParseGetMediaContentResponse(rsp)
+}
+
+// HeadMediaContentWithResponse request returning *HeadMediaContentResponse
+func (c *ClientWithResponses) HeadMediaContentWithResponse(ctx context.Context, mediaId CanonicalMediaId, params *HeadMediaContentParams, reqEditors ...RequestEditorFn) (*HeadMediaContentResponse, error) {
+	rsp, err := c.HeadMediaContent(ctx, mediaId, params, reqEditors...)
+	if err != nil {
+		return nil, err
+	}
+	return ParseHeadMediaContentResponse(rsp)
+}
+
 // ExchangePairingCredentialWithBodyWithResponse request with arbitrary body returning *ExchangePairingCredentialResponse
 func (c *ClientWithResponses) ExchangePairingCredentialWithBodyWithResponse(ctx context.Context, params *ExchangePairingCredentialParams, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*ExchangePairingCredentialResponse, error) {
 	rsp, err := c.ExchangePairingCredentialWithBody(ctx, params, contentType, body, reqEditors...)
@@ -3263,6 +3528,128 @@ func ParseGetMediaResponse(rsp *http.Response) (*GetMediaResponse, error) {
 			return nil, err
 		}
 		response.JSON404 = &dest
+
+	}
+
+	return response, nil
+}
+
+// ParseGetMediaContentResponse parses an HTTP response from a GetMediaContentWithResponse call
+func ParseGetMediaContentResponse(rsp *http.Response) (*GetMediaContentResponse, error) {
+	bodyBytes, err := io.ReadAll(rsp.Body)
+	defer func() { _ = rsp.Body.Close() }()
+	if err != nil {
+		return nil, err
+	}
+
+	response := &GetMediaContentResponse{
+		Body:         bodyBytes,
+		HTTPResponse: rsp,
+	}
+
+	switch {
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 401:
+		var dest UnauthenticatedError
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON401 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 403:
+		var dest ForbiddenError
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON403 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 404:
+		var dest NotFoundError
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON404 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 409:
+		var dest ConflictError
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON409 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 416:
+		var dest RangeError
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON416 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 503:
+		var dest MediaOfflineError
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON503 = &dest
+
+	}
+
+	return response, nil
+}
+
+// ParseHeadMediaContentResponse parses an HTTP response from a HeadMediaContentWithResponse call
+func ParseHeadMediaContentResponse(rsp *http.Response) (*HeadMediaContentResponse, error) {
+	bodyBytes, err := io.ReadAll(rsp.Body)
+	defer func() { _ = rsp.Body.Close() }()
+	if err != nil {
+		return nil, err
+	}
+
+	response := &HeadMediaContentResponse{
+		Body:         bodyBytes,
+		HTTPResponse: rsp,
+	}
+
+	switch {
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 401:
+		var dest UnauthenticatedError
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON401 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 403:
+		var dest ForbiddenError
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON403 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 404:
+		var dest NotFoundError
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON404 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 409:
+		var dest ConflictError
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON409 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 416:
+		var dest RangeError
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON416 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 503:
+		var dest MediaOfflineError
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON503 = &dest
 
 	}
 
