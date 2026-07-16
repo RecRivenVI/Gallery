@@ -1,0 +1,33 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  go:
+    name: Go (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, ubuntu-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-go@v6
+        with:
+          go-version: 1.26.5
+          cache-dependency-path: go.sum
+      - name: 契约生成、静态检查、纯 Go 测试和构建
+        shell: pwsh
+        run: ./scripts/Check.ps1
+      - name: Race detector
+        if: runner.os == 'Linux'
+        shell: pwsh
+        run: ./scripts/Check.ps1 -Race
+      - name: Go vulnerability database
+        if: runner.os == 'Linux'
+        run: go run golang.org/x/vuln/cmd/govulncheck@v1.6.0 ./...
