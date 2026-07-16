@@ -249,6 +249,75 @@ func TestCatalogDeleteRebuildPreservesCanonicalOverlayAndMediaURL(t *testing.T) 
 	}
 }
 
+func TestBlobLocationOccurrencesAndContentReplacement(t *testing.T) {
+	fixture := []byte("shared blob bytes")
+	_, _, catalogStore, service, source, store := setup(t, fixture)
+	defer store.Close()
+	ctx := context.Background()
+	duplicatePath := filepath.Join(source.RootPath, "work-one", "duplicate.bin")
+	if err := os.WriteFile(duplicatePath, fixture, 0o400); err != nil {
+		t.Fatal(err)
+	}
+	job, err := service.CreateScan(ctx, source.ID, "personal-owner")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := service.Execute(ctx, job.ID); err != nil {
+		t.Fatal(err)
+	}
+	publication, works, err := catalogStore.ListWorks(ctx)
+	if err != nil || len(works) != 1 || works[0].MediaCount != 2 {
+		t.Fatalf("重复 occurrence 扫描错误: %+v %+v %v", publication, works, err)
+	}
+	_, mediaBefore, err := catalogStore.ListMediaForWork(ctx, works[0].ID)
+	if err != nil || len(mediaBefore) != 2 || mediaBefore[0].ID == mediaBefore[1].ID || mediaBefore[0].Digest != mediaBefore[1].Digest {
+		t.Fatalf("相同 Blob 未保持两个 CanonicalMedia occurrence: %+v %v", mediaBefore, err)
+	}
+	var blobCount, locationCount int
+	_ = store.Catalog.SQL().QueryRowContext(ctx, "SELECT count(*) FROM content_blobs WHERE catalog_revision_id=?", publication.CatalogRevisionID).Scan(&blobCount)
+	_ = store.Catalog.SQL().QueryRowContext(ctx, "SELECT count(*) FROM file_locations WHERE catalog_revision_id=?", publication.CatalogRevisionID).Scan(&locationCount)
+	if blobCount != 1 || locationCount != 2 {
+		t.Fatalf("Blob/Location 基数错误: blobs=%d locations=%d", blobCount, locationCount)
+	}
+	var duplicateID string
+	for _, item := range mediaBefore {
+		if item.RelativePath == "work-one/duplicate.bin" {
+			duplicateID = item.ID
+		}
+	}
+	if err := os.Chmod(duplicatePath, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(duplicatePath, []byte("replacement blob bytes"), 0o400); err != nil {
+		t.Fatal(err)
+	}
+	replacementJob, err := service.CreateScan(ctx, source.ID, "personal-owner")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := service.Execute(ctx, replacementJob.ID); err != nil {
+		t.Fatal(err)
+	}
+	replacementPublication, _, _ := catalogStore.ListWorks(ctx)
+	_, mediaAfter, err := catalogStore.ListMediaForWork(ctx, works[0].ID)
+	if err != nil || len(mediaAfter) != 2 {
+		t.Fatal(err)
+	}
+	var replacementID, replacementDigest string
+	for _, item := range mediaAfter {
+		if item.RelativePath == "work-one/duplicate.bin" {
+			replacementID, replacementDigest = item.ID, item.Digest
+		}
+	}
+	if replacementID != duplicateID || replacementDigest == mediaBefore[0].Digest {
+		t.Fatalf("路径内容替换未保持 Media/建立新 Blob: before=%+v after=%+v", mediaBefore, mediaAfter)
+	}
+	_ = store.Catalog.SQL().QueryRowContext(ctx, "SELECT count(*) FROM content_blobs WHERE catalog_revision_id=?", replacementPublication.CatalogRevisionID).Scan(&blobCount)
+	if blobCount != 2 {
+		t.Fatalf("替换后当前 Catalog Blob 数=%d", blobCount)
+	}
+}
+
 func setup(t *testing.T, fixture []byte) (*application.Resources, *jobs.Store, *catalog.Store, *scanner.Service, application.Source, *storage.Store) {
 	t.Helper()
 	root := t.TempDir()

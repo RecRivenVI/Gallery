@@ -32,6 +32,8 @@
             "OVERLAY_FACT_INVALID",
             "OVERLAY_PROJECTION_FAILED",
             "BINDING_REVIEW_REQUIRED",
+            "DERIVED_ASSET_INVALID",
+            "DERIVED_ASSET_FAILED",
             "RULE_SCHEMA_INVALID",
             "RULE_COMPILE_ERROR",
             "RULE_CEL_LIMIT",
