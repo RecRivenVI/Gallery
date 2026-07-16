@@ -40,6 +40,7 @@ const (
 	CodePathEscape               Code = "PATH_ESCAPE"
 	CodeCatalogCandidateInvalid  Code = "CATALOG_CANDIDATE_INVALID"
 	CodeProcessInterrupted       Code = "PROCESS_INTERRUPTED"
+	CodeRangeInvalid             Code = "RANGE_INVALID"
 )
 
 // Error 在进程内保留 cause，但对外序列化时只应暴露稳定字段。

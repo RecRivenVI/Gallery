@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
 	"io"
 	"log/slog"
 	"net/http"
@@ -16,13 +17,16 @@ import (
 
 	"github.com/RecRivenVI/gallery/internal/application"
 	"github.com/RecRivenVI/gallery/internal/auth"
+	"github.com/RecRivenVI/gallery/internal/catalog"
 	"github.com/RecRivenVI/gallery/internal/config"
 	"github.com/RecRivenVI/gallery/internal/contract/api"
 	"github.com/RecRivenVI/gallery/internal/contract/fault"
+	"github.com/RecRivenVI/gallery/internal/jobs"
 	"github.com/RecRivenVI/gallery/internal/platform/appdirs"
 	"github.com/RecRivenVI/gallery/internal/platform/clock"
 	"github.com/RecRivenVI/gallery/internal/platform/filesystem"
 	"github.com/RecRivenVI/gallery/internal/platform/identity"
+	"github.com/RecRivenVI/gallery/internal/scanner"
 	"github.com/RecRivenVI/gallery/internal/storage"
 	"github.com/RecRivenVI/gallery/internal/transport/httpapi"
 )
@@ -110,8 +114,20 @@ func TestPersonalPairingIsSingleUseAndRevocationInvalidatesREST(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	jobStore, err := jobs.NewStore(store.Control.SQL(), fixedClock, identity.NewGenerator(fixedClock))
+	if err != nil {
+		t.Fatal(err)
+	}
+	catalogStore, err := catalog.NewStore(store.Catalog.SQL(), fixedClock, identity.NewGenerator(fixedClock))
+	if err != nil {
+		t.Fatal(err)
+	}
+	scannerService, err := scanner.New(context.Background(), resources, jobStore, catalogStore, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
 	server := httptest.NewServer(httpapi.New(
-		config.ModePersonal, store, fixedClock, personal, resources, nil, nil, nil,
+		config.ModePersonal, store, fixedClock, personal, resources, jobStore, catalogStore, scannerService,
 		slog.New(slog.NewJSONHandler(io.Discard, nil)),
 	))
 	defer server.Close()
@@ -160,7 +176,12 @@ func TestPersonalPairingIsSingleUseAndRevocationInvalidatesREST(t *testing.T) {
 		t.Fatalf("通过公开 API 创建 Library 失败: %v status=%d", err, libraryResponse.StatusCode())
 	}
 	sourceRoot := filepath.Join(filepath.Dir(dirs.Data), "synthetic-source")
-	if err := os.MkdirAll(sourceRoot, 0o700); err != nil {
+	if err := os.MkdirAll(filepath.Join(sourceRoot, "work-one"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	mediaContent := []byte("gallery walking skeleton media\n")
+	mediaPath := filepath.Join(sourceRoot, "work-one", "media.bin")
+	if err := os.WriteFile(mediaPath, mediaContent, 0o400); err != nil {
 		t.Fatal(err)
 	}
 	sourceResponse, err := client.CreateSourceWithResponse(context.Background(), &api.CreateSourceParams{
@@ -197,6 +218,70 @@ func TestPersonalPairingIsSingleUseAndRevocationInvalidatesREST(t *testing.T) {
 	if err != nil || bindingResponse.JSON201 == nil {
 		t.Fatalf("通过公开 API 创建 SourceRuleBinding 失败: %v status=%d body=%s", err, bindingResponse.StatusCode(), bindingResponse.Body)
 	}
+	scanResponse, err := client.CreateScanJobWithResponse(context.Background(), sourceResponse.JSON201.Id, &api.CreateScanJobParams{
+		XGalleryCSRF: exchange.JSON201.CsrfToken,
+	}, mutation)
+	if err != nil || scanResponse.JSON202 == nil {
+		t.Fatalf("创建 Scan Job 失败: %v status=%d body=%s", err, scanResponse.StatusCode(), scanResponse.Body)
+	}
+	completedJob := waitForJob(t, client, scanResponse.JSON202.Id)
+	if string(completedJob.Status) != "completed" || completedJob.QueryPublicationId == nil {
+		t.Fatalf("Scan Job 未完成: %+v", completedJob)
+	}
+	worksResponse, err := client.ListWorksWithResponse(context.Background())
+	if err != nil || worksResponse.JSON200 == nil || len(worksResponse.JSON200.Works) != 1 {
+		t.Fatalf("公开 Work 查询失败: %v status=%d", err, worksResponse.StatusCode())
+	}
+	mediaResponse, err := client.ListWorkMediaWithResponse(context.Background(), worksResponse.JSON200.Works[0].Id)
+	if err != nil || mediaResponse.JSON200 == nil || len(mediaResponse.JSON200.Media) != 1 {
+		t.Fatalf("公开 Media 查询失败: %v status=%d", err, mediaResponse.StatusCode())
+	}
+	mediaID := mediaResponse.JSON200.Media[0].Id
+	headResponse, err := client.HeadMediaContentWithResponse(context.Background(), mediaID, &api.HeadMediaContentParams{})
+	if err != nil || headResponse.StatusCode() != http.StatusOK || headResponse.HTTPResponse.Header.Get("Accept-Ranges") != "bytes" || headResponse.HTTPResponse.Header.Get("Content-Length") != fmt.Sprint(len(mediaContent)) {
+		t.Fatalf("媒体 HEAD 错误: %v status=%d headers=%v", err, headResponse.StatusCode(), headResponse.HTTPResponse.Header)
+	}
+	fullResponse, err := client.GetMediaContentWithResponse(context.Background(), mediaID, &api.GetMediaContentParams{})
+	if err != nil || fullResponse.StatusCode() != http.StatusOK || !bytes.Equal(fullResponse.Body, mediaContent) {
+		t.Fatalf("媒体完整 GET 错误: %v status=%d body=%q", err, fullResponse.StatusCode(), fullResponse.Body)
+	}
+	etag := fullResponse.HTTPResponse.Header.Get("ETag")
+	rangeHeader := "bytes=0-6"
+	rangeResponse, err := client.GetMediaContentWithResponse(context.Background(), mediaID, &api.GetMediaContentParams{Range: &rangeHeader})
+	if err != nil || rangeResponse.StatusCode() != http.StatusPartialContent || string(rangeResponse.Body) != "gallery" || rangeResponse.HTTPResponse.Header.Get("Content-Range") != fmt.Sprintf("bytes 0-6/%d", len(mediaContent)) {
+		t.Fatalf("媒体 Range GET 错误: %v status=%d body=%q headers=%v", err, rangeResponse.StatusCode(), rangeResponse.Body, rangeResponse.HTTPResponse.Header)
+	}
+	notModified, err := client.GetMediaContentWithResponse(context.Background(), mediaID, &api.GetMediaContentParams{IfNoneMatch: &etag})
+	if err != nil || notModified.StatusCode() != http.StatusNotModified || len(notModified.Body) != 0 {
+		t.Fatalf("If-None-Match 错误: %v status=%d", err, notModified.StatusCode())
+	}
+	invalidRange := "bytes=0-1,3-4"
+	invalid, err := client.GetMediaContentWithResponse(context.Background(), mediaID, &api.GetMediaContentParams{Range: &invalidRange})
+	if err != nil || invalid.JSON416 == nil || invalid.JSON416.Error.Code != api.RANGEINVALID {
+		t.Fatalf("无效 Range 未结构化拒绝: %v status=%d body=%s", err, invalid.StatusCode(), invalid.Body)
+	}
+	changed := bytes.Repeat([]byte("x"), len(mediaContent))
+	if err := os.Chmod(mediaPath, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(mediaPath, changed, 0o400); err != nil {
+		t.Fatal(err)
+	}
+	contentChanged, err := client.GetMediaContentWithResponse(context.Background(), mediaID, &api.GetMediaContentParams{})
+	if err != nil || contentChanged.JSON409 == nil || contentChanged.JSON409.Error.Code != api.CONTENTCHANGEDDURINGHASH {
+		t.Fatalf("内容变化未在发送前拒绝: %v status=%d body=%s", err, contentChanged.StatusCode(), contentChanged.Body)
+	}
+	if err := os.Remove(mediaPath); err != nil {
+		t.Fatal(err)
+	}
+	offline, err := client.GetMediaContentWithResponse(context.Background(), mediaID, &api.GetMediaContentParams{})
+	if err != nil || offline.JSON503 == nil || offline.JSON503.Error.Code != api.MEDIAOFFLINE {
+		t.Fatalf("离线媒体未返回 MEDIA_OFFLINE: %v status=%d body=%s", err, offline.StatusCode(), offline.Body)
+	}
+	temporaryEntries, err := os.ReadDir(dirs.Temp)
+	if err != nil || len(temporaryEntries) != 0 {
+		t.Fatalf("媒体临时快照未清理: %v entries=%d", err, len(temporaryEntries))
+	}
 	sessions, err := client.ListSessionsWithResponse(context.Background())
 	if err != nil || sessions.JSON200 == nil || len(sessions.JSON200.Sessions) != 1 {
 		t.Fatalf("Session 列表失败: %v status=%d", err, sessions.StatusCode())
@@ -211,6 +296,10 @@ func TestPersonalPairingIsSingleUseAndRevocationInvalidatesREST(t *testing.T) {
 	if err != nil || afterRevoke.JSON401 == nil {
 		t.Fatalf("已吊销 Session 仍可访问 REST: %v status=%d", err, afterRevoke.StatusCode())
 	}
+	afterRevokeMedia, err := client.GetMediaContentWithResponse(context.Background(), mediaID, &api.GetMediaContentParams{})
+	if err != nil || afterRevokeMedia.JSON401 == nil {
+		t.Fatalf("已吊销 Session 仍可读取媒体: %v status=%d", err, afterRevokeMedia.StatusCode())
+	}
 }
 
 func sameOrigin(origin string) api.RequestEditorFn {
@@ -219,4 +308,21 @@ func sameOrigin(origin string) api.RequestEditorFn {
 		request.Header.Set("Sec-Fetch-Site", "same-origin")
 		return nil
 	}
+}
+
+func waitForJob(t *testing.T, client *api.ClientWithResponses, jobID string) api.Job {
+	t.Helper()
+	deadline := time.Now().Add(10 * time.Second)
+	for time.Now().Before(deadline) {
+		response, err := client.GetJobWithResponse(context.Background(), jobID)
+		if err != nil || response.JSON200 == nil {
+			t.Fatalf("Job snapshot 失败: %v status=%d", err, response.StatusCode())
+		}
+		if status := string(response.JSON200.Status); status == "completed" || status == "failed" || status == "cancelled" || status == "needs_repair" {
+			return *response.JSON200
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	t.Fatal("Job 未在期限内终止")
+	return api.Job{}
 }
