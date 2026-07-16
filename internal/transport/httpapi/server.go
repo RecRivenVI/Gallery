@@ -22,6 +22,7 @@ import (
 	"github.com/RecRivenVI/gallery/internal/contract/fault"
 	contractquery "github.com/RecRivenVI/gallery/internal/contract/query"
 	"github.com/RecRivenVI/gallery/internal/contract/realtime"
+	"github.com/RecRivenVI/gallery/internal/domain"
 	"github.com/RecRivenVI/gallery/internal/jobs"
 	"github.com/RecRivenVI/gallery/internal/media"
 	"github.com/RecRivenVI/gallery/internal/overlay"
@@ -693,6 +694,13 @@ func (s *Server) mediaContent(w http.ResponseWriter, r *http.Request) {
 		s.writeRequestError(w, fault.New(fault.CodeMediaOffline, true, nil))
 		return
 	}
+	blobLease, err := media.AcquireBlobReadLease(r.Context(), s.store.Catalog.SQL(), s.clock,
+		domain.ContentBlobRef{Algorithm: item.Algorithm, Digest: item.Digest}, nil)
+	if err != nil {
+		s.writeRequestError(w, err)
+		return
+	}
+	defer blobLease.Close()
 	snapshot, err := media.PrepareSnapshot(source.RootPath, item.RelativePath, item.Algorithm, item.Digest, item.Size, s.data.TempRoot())
 	if err != nil {
 		var structured *fault.Error

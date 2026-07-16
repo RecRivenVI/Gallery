@@ -13,6 +13,7 @@ import (
 	"github.com/RecRivenVI/gallery/internal/catalog"
 	"github.com/RecRivenVI/gallery/internal/config"
 	"github.com/RecRivenVI/gallery/internal/contract/realtime"
+	"github.com/RecRivenVI/gallery/internal/derived"
 	"github.com/RecRivenVI/gallery/internal/jobs"
 	"github.com/RecRivenVI/gallery/internal/overlay"
 	"github.com/RecRivenVI/gallery/internal/platform/clock"
@@ -72,6 +73,13 @@ func Run(ctx context.Context, cfg config.Config, logger *slog.Logger) error {
 	}
 	catalogStore, err := catalog.NewStore(store.Catalog.SQL(), systemClock, identity.NewGenerator(systemClock))
 	if err != nil {
+		return err
+	}
+	derivedService, err := derived.New(store.Catalog.SQL(), cfg.AppDirs.Cache, systemClock, nil)
+	if err != nil {
+		return err
+	}
+	if err := derivedService.Reconcile(ctx); err != nil {
 		return err
 	}
 	hub := realtime.NewHub(systemClock)
