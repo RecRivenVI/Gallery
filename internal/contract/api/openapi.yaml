@@ -1,0 +1,213 @@
+openapi: 3.0.3
+info:
+  title: Gallery API
+  version: 0.1.0-stage0
+  description: Gallery 阶段 0 正式契约骨架；尚未冻结完整 v1 资源面。
+servers:
+  - url: http://127.0.0.1:{port}
+    variables:
+      port:
+        default: "8080"
+paths:
+  /api/v1/health:
+    get:
+      operationId: getHealth
+      summary: 读取服务与两库健康状态
+      security: []
+      responses:
+        "200":
+          description: 服务可用
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/HealthResponse"
+        "500":
+          $ref: "#/components/responses/InternalError"
+  /api/v1/bootstrap:
+    get:
+      operationId: getBootstrap
+      summary: 读取部署模式、协议版本和当前主体能力
+      security: []
+      responses:
+        "200":
+          description: Bootstrap snapshot
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/BootstrapResponse"
+        "500":
+          $ref: "#/components/responses/InternalError"
+components:
+  securitySchemes:
+    sessionCookie:
+      type: apiKey
+      in: cookie
+      name: gallery_session
+    apiToken:
+      type: http
+      scheme: bearer
+  responses:
+    InternalError:
+      description: 内部失败；不返回堆栈、路径或数据库文本
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorEnvelope"
+  schemas:
+    HealthResponse:
+      type: object
+      additionalProperties: false
+      required: [status, apiVersion, databases]
+      properties:
+        status:
+          type: string
+          enum: [ok]
+        apiVersion:
+          type: string
+          enum: [v1]
+        databases:
+          type: object
+          additionalProperties: false
+          required: [control, catalog]
+          properties:
+            control:
+              type: string
+              enum: [ok]
+            catalog:
+              type: string
+              enum: [ok]
+    BootstrapResponse:
+      type: object
+      additionalProperties: false
+      required:
+        - mode
+        - authenticated
+        - effectiveCapabilities
+        - apiVersion
+        - websocketProtocolVersion
+        - sortProtocolVersion
+        - ruleSchemaVersion
+      properties:
+        mode:
+          type: string
+          enum: [personal, lan]
+        authenticated:
+          type: boolean
+        principalId:
+          type: string
+          nullable: true
+        effectiveCapabilities:
+          type: array
+          items:
+            type: string
+        apiVersion:
+          type: string
+          enum: [v1]
+        websocketProtocolVersion:
+          type: integer
+          enum: [1]
+        sortProtocolVersion:
+          type: integer
+          enum: [1]
+        ruleSchemaVersion:
+          type: integer
+          enum: [1]
+    ErrorEnvelope:
+      type: object
+      additionalProperties: false
+      required: [error]
+      properties:
+        error:
+          $ref: "#/components/schemas/ErrorDetail"
+    ErrorDetail:
+      type: object
+      additionalProperties: false
+      required: [code, retryable, correlationId]
+      properties:
+        code:
+          $ref: "#/components/schemas/ErrorCode"
+        retryable:
+          type: boolean
+        correlationId:
+          type: string
+          minLength: 1
+          maxLength: 128
+        field:
+          type: string
+          minLength: 1
+          maxLength: 512
+    ErrorCode:
+      type: string
+      enum:
+        - INTERNAL_ERROR
+        - VALIDATION_ERROR
+        - CONFIG_INVALID
+        - UNAUTHENTICATED
+        - FORBIDDEN
+        - NOT_FOUND
+        - CONFLICT
+        - APPDIRS_SOURCE_OVERLAP
+        - SOURCE_ROOTS_OVERLAP
+        - DATABASE_OPEN_FAILED
+        - MIGRATION_FAILED
+        - BACKUP_FAILED
+        - CURSOR_INVALID
+        - CURSOR_EXPIRED
+        - RULE_SCHEMA_INVALID
+        - RULE_EVAL_ERROR
+        - CATALOG_PUBLICATION_MISSING
+        - CONTENT_CHANGED_DURING_HASH
+        - MEDIA_OFFLINE
+    LibraryId:
+      type: string
+      pattern: "^lib_[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+    SourceId:
+      type: string
+      pattern: "^src_[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+    CanonicalWorkId:
+      type: string
+      pattern: "^wrk_[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+    CanonicalCreatorId:
+      type: string
+      pattern: "^ctr_[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+    CanonicalMediaId:
+      type: string
+      pattern: "^med_[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+    SourceRuleBindingId:
+      type: string
+      pattern: "^srb_[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+    JobId:
+      type: string
+      pattern: "^job_[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+    QueryPublicationId:
+      type: string
+      pattern: "^qpub_[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+    ContentBlobRef:
+      type: object
+      additionalProperties: false
+      required: [algorithm, digest]
+      properties:
+        algorithm:
+          type: string
+          enum: [sha256-v1]
+        digest:
+          type: string
+          pattern: "^[0-9a-f]{64}$"
+    FileLocationRef:
+      type: object
+      additionalProperties: false
+      required: [sourceId, identityVersion, locationKey]
+      properties:
+        sourceId:
+          $ref: "#/components/schemas/SourceId"
+        identityVersion:
+          type: integer
+          minimum: 1
+          maximum: 65535
+        locationKey:
+          type: string
+          minLength: 1
+          maxLength: 4096
+security:
+  - sessionCookie: []
+  - apiToken: []
