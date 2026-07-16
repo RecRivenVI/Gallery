@@ -28,6 +28,7 @@
             "BACKUP_FAILED",
             "CURSOR_INVALID",
             "CURSOR_EXPIRED",
+            "QUERY_TOO_SHORT",
             "RULE_SCHEMA_INVALID",
             "RULE_COMPILE_ERROR",
             "RULE_CEL_LIMIT",

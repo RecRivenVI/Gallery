@@ -247,7 +247,7 @@ func TestPersonalPairingIsSingleUseAndRevocationInvalidatesREST(t *testing.T) {
 	if string(completedJob.Status) != "completed" || completedJob.QueryPublicationId == nil {
 		t.Fatalf("Scan Job 未完成: %+v", completedJob)
 	}
-	worksResponse, err := client.ListWorksWithResponse(context.Background())
+	worksResponse, err := client.ListWorksWithResponse(context.Background(), nil)
 	if err != nil || worksResponse.JSON200 == nil || len(worksResponse.JSON200.Works) != 1 {
 		t.Fatalf("公开 Work 查询失败: %v status=%d", err, worksResponse.StatusCode())
 	}

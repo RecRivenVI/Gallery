@@ -20,6 +20,7 @@ const (
 	CodeBackupFailed             Code = "BACKUP_FAILED"
 	CodeCursorInvalid            Code = "CURSOR_INVALID"
 	CodeCursorExpired            Code = "CURSOR_EXPIRED"
+	CodeQueryTooShort            Code = "QUERY_TOO_SHORT"
 	CodeRuleSchemaInvalid        Code = "RULE_SCHEMA_INVALID"
 	CodeRuleCompile              Code = "RULE_COMPILE_ERROR"
 	CodeRuleCELLimit             Code = "RULE_CEL_LIMIT"
