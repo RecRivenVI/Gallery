@@ -1,0 +1,44 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://gallery.local/schemas/error-envelope-v1.json",
+  "title": "Gallery Error Envelope v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["error"],
+  "properties": {
+    "error": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["code", "retryable", "correlationId"],
+      "properties": {
+        "code": {
+          "type": "string",
+          "enum": [
+            "INTERNAL_ERROR",
+            "VALIDATION_ERROR",
+            "CONFIG_INVALID",
+            "UNAUTHENTICATED",
+            "FORBIDDEN",
+            "NOT_FOUND",
+            "CONFLICT",
+            "APPDIRS_SOURCE_OVERLAP",
+            "SOURCE_ROOTS_OVERLAP",
+            "DATABASE_OPEN_FAILED",
+            "MIGRATION_FAILED",
+            "BACKUP_FAILED",
+            "CURSOR_INVALID",
+            "CURSOR_EXPIRED",
+            "RULE_SCHEMA_INVALID",
+            "RULE_EVAL_ERROR",
+            "CATALOG_PUBLICATION_MISSING",
+            "CONTENT_CHANGED_DURING_HASH",
+            "MEDIA_OFFLINE"
+          ]
+        },
+        "retryable": {"type": "boolean"},
+        "correlationId": {"type": "string", "minLength": 1, "maxLength": 128},
+        "field": {"type": "string", "minLength": 1, "maxLength": 512}
+      }
+    }
+  }
+}
