@@ -4,6 +4,7 @@
 package api
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -11,6 +12,14 @@ import (
 	"net/http"
 	"net/url"
 	"strings"
+	"time"
+
+	"github.com/oapi-codegen/runtime"
+)
+
+const (
+	ApiTokenScopes      apiTokenContextKey      = "apiToken.Scopes"
+	SessionCookieScopes sessionCookieContextKey = "sessionCookie.Scopes"
 )
 
 // Defines values for BootstrapResponseApiVersion.
@@ -114,14 +123,19 @@ const (
 	CONFIGINVALID             ErrorCode = "CONFIG_INVALID"
 	CONFLICT                  ErrorCode = "CONFLICT"
 	CONTENTCHANGEDDURINGHASH  ErrorCode = "CONTENT_CHANGED_DURING_HASH"
+	CSRFINVALID               ErrorCode = "CSRF_INVALID"
 	CURSOREXPIRED             ErrorCode = "CURSOR_EXPIRED"
 	CURSORINVALID             ErrorCode = "CURSOR_INVALID"
 	DATABASEOPENFAILED        ErrorCode = "DATABASE_OPEN_FAILED"
 	FORBIDDEN                 ErrorCode = "FORBIDDEN"
+	HOSTREJECTED              ErrorCode = "HOST_REJECTED"
 	INTERNALERROR             ErrorCode = "INTERNAL_ERROR"
 	MEDIAOFFLINE              ErrorCode = "MEDIA_OFFLINE"
 	MIGRATIONFAILED           ErrorCode = "MIGRATION_FAILED"
 	NOTFOUND                  ErrorCode = "NOT_FOUND"
+	ORIGINREJECTED            ErrorCode = "ORIGIN_REJECTED"
+	PAIRINGEXPIRED            ErrorCode = "PAIRING_EXPIRED"
+	PAIRINGINVALID            ErrorCode = "PAIRING_INVALID"
 	RULEEVALERROR             ErrorCode = "RULE_EVAL_ERROR"
 	RULESCHEMAINVALID         ErrorCode = "RULE_SCHEMA_INVALID"
 	SOURCEROOTSOVERLAP        ErrorCode = "SOURCE_ROOTS_OVERLAP"
@@ -144,6 +158,8 @@ func (e ErrorCode) Valid() bool {
 		return true
 	case CONTENTCHANGEDDURINGHASH:
 		return true
+	case CSRFINVALID:
+		return true
 	case CURSOREXPIRED:
 		return true
 	case CURSORINVALID:
@@ -152,6 +168,8 @@ func (e ErrorCode) Valid() bool {
 		return true
 	case FORBIDDEN:
 		return true
+	case HOSTREJECTED:
+		return true
 	case INTERNALERROR:
 		return true
 	case MEDIAOFFLINE:
@@ -159,6 +177,12 @@ func (e ErrorCode) Valid() bool {
 	case MIGRATIONFAILED:
 		return true
 	case NOTFOUND:
+		return true
+	case ORIGINREJECTED:
+		return true
+	case PAIRINGEXPIRED:
+		return true
+	case PAIRINGINVALID:
 		return true
 	case RULEEVALERROR:
 		return true
@@ -239,6 +263,8 @@ func (e HealthResponseStatus) Valid() bool {
 type BootstrapResponse struct {
 	ApiVersion               BootstrapResponseApiVersion               `json:"apiVersion"`
 	Authenticated            bool                                      `json:"authenticated"`
+	AvailableCapabilities    []string                                  `json:"availableCapabilities"`
+	CsrfToken                string                                    `json:"csrfToken"`
 	EffectiveCapabilities    []string                                  `json:"effectiveCapabilities"`
 	Mode                     BootstrapResponseMode                     `json:"mode"`
 	PrincipalId              *string                                   `json:"principalId,omitempty"`
@@ -331,8 +357,39 @@ type JobId = string
 // LibraryId defines model for LibraryId.
 type LibraryId = string
 
+// PairingAttemptResponse defines model for PairingAttemptResponse.
+type PairingAttemptResponse struct {
+	Credential string    `json:"credential"`
+	ExpiresAt  time.Time `json:"expiresAt"`
+}
+
+// PairingExchangeRequest defines model for PairingExchangeRequest.
+type PairingExchangeRequest struct {
+	Credential string `json:"credential"`
+}
+
 // QueryPublicationId defines model for QueryPublicationId.
 type QueryPublicationId = string
+
+// SessionEstablishedResponse defines model for SessionEstablishedResponse.
+type SessionEstablishedResponse struct {
+	CsrfToken             string         `json:"csrfToken"`
+	EffectiveCapabilities []string       `json:"effectiveCapabilities"`
+	Session               SessionSummary `json:"session"`
+}
+
+// SessionId defines model for SessionId.
+type SessionId = string
+
+// SessionSummary defines model for SessionSummary.
+type SessionSummary struct {
+	CreatedAt   time.Time `json:"createdAt"`
+	ExpiresAt   time.Time `json:"expiresAt"`
+	Id          SessionId `json:"id"`
+	LastSeenAt  time.Time `json:"lastSeenAt"`
+	PrincipalId string    `json:"principalId"`
+	Revoked     bool      `json:"revoked"`
+}
 
 // SourceId defines model for SourceId.
 type SourceId = string
@@ -340,14 +397,44 @@ type SourceId = string
 // SourceRuleBindingId defines model for SourceRuleBindingId.
 type SourceRuleBindingId = string
 
+// CSRFHeader defines model for CSRFHeader.
+type CSRFHeader = string
+
+// ForbiddenError defines model for ForbiddenError.
+type ForbiddenError = ErrorEnvelope
+
 // InternalError defines model for InternalError.
 type InternalError = ErrorEnvelope
+
+// NotFoundError defines model for NotFoundError.
+type NotFoundError = ErrorEnvelope
+
+// UnauthenticatedError defines model for UnauthenticatedError.
+type UnauthenticatedError = ErrorEnvelope
 
 // apiTokenContextKey is the context key for apiToken security scheme
 type apiTokenContextKey string
 
 // sessionCookieContextKey is the context key for sessionCookie security scheme
 type sessionCookieContextKey string
+
+// ExchangePairingCredentialParams defines parameters for ExchangePairingCredential.
+type ExchangePairingCredentialParams struct {
+	XGalleryCSRF CSRFHeader `json:"X-Gallery-CSRF"`
+}
+
+// CreatePairingAttemptParams defines parameters for CreatePairingAttempt.
+type CreatePairingAttemptParams struct {
+	XGalleryCSRF CSRFHeader `json:"X-Gallery-CSRF"`
+}
+
+// RevokeSessionParams defines parameters for RevokeSession.
+type RevokeSessionParams struct {
+	XGalleryCSRF CSRFHeader `json:"X-Gallery-CSRF"`
+}
+
+// ExchangePairingCredentialJSONRequestBody defines body for ExchangePairingCredential for application/json ContentType.
+type ExchangePairingCredentialJSONRequestBody = PairingExchangeRequest
 
 // RequestEditorFn  is the function signature for the RequestEditor callback function
 type RequestEditorFn func(ctx context.Context, req *http.Request) error
@@ -427,6 +514,20 @@ type ClientInterface interface {
 
 	// GetHealth request
 	GetHealth(ctx context.Context, reqEditors ...RequestEditorFn) (*http.Response, error)
+
+	// ExchangePairingCredentialWithBody request with any body
+	ExchangePairingCredentialWithBody(ctx context.Context, params *ExchangePairingCredentialParams, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*http.Response, error)
+
+	ExchangePairingCredential(ctx context.Context, params *ExchangePairingCredentialParams, body ExchangePairingCredentialJSONRequestBody, reqEditors ...RequestEditorFn) (*http.Response, error)
+
+	// CreatePairingAttempt request
+	CreatePairingAttempt(ctx context.Context, params *CreatePairingAttemptParams, reqEditors ...RequestEditorFn) (*http.Response, error)
+
+	// ListSessions request
+	ListSessions(ctx context.Context, reqEditors ...RequestEditorFn) (*http.Response, error)
+
+	// RevokeSession request
+	RevokeSession(ctx context.Context, sessionId SessionId, params *RevokeSessionParams, reqEditors ...RequestEditorFn) (*http.Response, error)
 }
 
 func (c *Client) GetBootstrap(ctx context.Context, reqEditors ...RequestEditorFn) (*http.Response, error) {
@@ -443,6 +544,66 @@ func (c *Client) GetBootstrap(ctx context.Context, reqEditors ...RequestEditorFn
 
 func (c *Client) GetHealth(ctx context.Context, reqEditors ...RequestEditorFn) (*http.Response, error) {
 	req, err := NewGetHealthRequest(c.Server)
+	if err != nil {
+		return nil, err
+	}
+	req = req.WithContext(ctx)
+	if err := c.applyEditors(ctx, req, reqEditors); err != nil {
+		return nil, err
+	}
+	return c.Client.Do(req)
+}
+
+func (c *Client) ExchangePairingCredentialWithBody(ctx context.Context, params *ExchangePairingCredentialParams, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewExchangePairingCredentialRequestWithBody(c.Server, params, contentType, body)
+	if err != nil {
+		return nil, err
+	}
+	req = req.WithContext(ctx)
+	if err := c.applyEditors(ctx, req, reqEditors); err != nil {
+		return nil, err
+	}
+	return c.Client.Do(req)
+}
+
+func (c *Client) ExchangePairingCredential(ctx context.Context, params *ExchangePairingCredentialParams, body ExchangePairingCredentialJSONRequestBody, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewExchangePairingCredentialRequest(c.Server, params, body)
+	if err != nil {
+		return nil, err
+	}
+	req = req.WithContext(ctx)
+	if err := c.applyEditors(ctx, req, reqEditors); err != nil {
+		return nil, err
+	}
+	return c.Client.Do(req)
+}
+
+func (c *Client) CreatePairingAttempt(ctx context.Context, params *CreatePairingAttemptParams, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewCreatePairingAttemptRequest(c.Server, params)
+	if err != nil {
+		return nil, err
+	}
+	req = req.WithContext(ctx)
+	if err := c.applyEditors(ctx, req, reqEditors); err != nil {
+		return nil, err
+	}
+	return c.Client.Do(req)
+}
+
+func (c *Client) ListSessions(ctx context.Context, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewListSessionsRequest(c.Server)
+	if err != nil {
+		return nil, err
+	}
+	req = req.WithContext(ctx)
+	if err := c.applyEditors(ctx, req, reqEditors); err != nil {
+		return nil, err
+	}
+	return c.Client.Do(req)
+}
+
+func (c *Client) RevokeSession(ctx context.Context, sessionId SessionId, params *RevokeSessionParams, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewRevokeSessionRequest(c.Server, sessionId, params)
 	if err != nil {
 		return nil, err
 	}
@@ -507,6 +668,173 @@ func NewGetHealthRequest(server string) (*http.Request, error) {
 	return req, nil
 }
 
+// NewExchangePairingCredentialRequest calls the generic ExchangePairingCredential builder with application/json body
+func NewExchangePairingCredentialRequest(server string, params *ExchangePairingCredentialParams, body ExchangePairingCredentialJSONRequestBody) (*http.Request, error) {
+	var bodyReader io.Reader
+	buf, err := json.Marshal(body)
+	if err != nil {
+		return nil, err
+	}
+	bodyReader = bytes.NewReader(buf)
+	return NewExchangePairingCredentialRequestWithBody(server, params, "application/json", bodyReader)
+}
+
+// NewExchangePairingCredentialRequestWithBody generates requests for ExchangePairingCredential with any type of body
+func NewExchangePairingCredentialRequestWithBody(server string, params *ExchangePairingCredentialParams, contentType string, body io.Reader) (*http.Request, error) {
+	var err error
+
+	serverURL, err := url.Parse(server)
+	if err != nil {
+		return nil, err
+	}
+
+	operationPath := fmt.Sprintf("/api/v1/personal/pair")
+	if operationPath[0] == '/' {
+		operationPath = "." + operationPath
+	}
+
+	queryURL, err := serverURL.Parse(operationPath)
+	if err != nil {
+		return nil, err
+	}
+
+	req, err := http.NewRequest(http.MethodPost, queryURL.String(), body)
+	if err != nil {
+		return nil, err
+	}
+
+	req.Header.Add("Content-Type", contentType)
+
+	if params != nil {
+
+		var headerParam0 string
+
+		headerParam0, err = runtime.StyleParamWithOptions("simple", false, "X-Gallery-CSRF", params.XGalleryCSRF, runtime.StyleParamOptions{ParamLocation: runtime.ParamLocationHeader, Type: "string", Format: ""})
+		if err != nil {
+			return nil, err
+		}
+
+		req.Header.Set("X-Gallery-CSRF", headerParam0)
+
+	}
+
+	return req, nil
+}
+
+// NewCreatePairingAttemptRequest generates requests for CreatePairingAttempt
+func NewCreatePairingAttemptRequest(server string, params *CreatePairingAttemptParams) (*http.Request, error) {
+	var err error
+
+	serverURL, err := url.Parse(server)
+	if err != nil {
+		return nil, err
+	}
+
+	operationPath := fmt.Sprintf("/api/v1/personal/pairing-attempts")
+	if operationPath[0] == '/' {
+		operationPath = "." + operationPath
+	}
+
+	queryURL, err := serverURL.Parse(operationPath)
+	if err != nil {
+		return nil, err
+	}
+
+	req, err := http.NewRequest(http.MethodPost, queryURL.String(), nil)
+	if err != nil {
+		return nil, err
+	}
+
+	if params != nil {
+
+		var headerParam0 string
+
+		headerParam0, err = runtime.StyleParamWithOptions("simple", false, "X-Gallery-CSRF", params.XGalleryCSRF, runtime.StyleParamOptions{ParamLocation: runtime.ParamLocationHeader, Type: "string", Format: ""})
+		if err != nil {
+			return nil, err
+		}
+
+		req.Header.Set("X-Gallery-CSRF", headerParam0)
+
+	}
+
+	return req, nil
+}
+
+// NewListSessionsRequest generates requests for ListSessions
+func NewListSessionsRequest(server string) (*http.Request, error) {
+	var err error
+
+	serverURL, err := url.Parse(server)
+	if err != nil {
+		return nil, err
+	}
+
+	operationPath := fmt.Sprintf("/api/v1/sessions")
+	if operationPath[0] == '/' {
+		operationPath = "." + operationPath
+	}
+
+	queryURL, err := serverURL.Parse(operationPath)
+	if err != nil {
+		return nil, err
+	}
+
+	req, err := http.NewRequest(http.MethodGet, queryURL.String(), nil)
+	if err != nil {
+		return nil, err
+	}
+
+	return req, nil
+}
+
+// NewRevokeSessionRequest generates requests for RevokeSession
+func NewRevokeSessionRequest(server string, sessionId SessionId, params *RevokeSessionParams) (*http.Request, error) {
+	var err error
+
+	var pathParam0 string
+
+	pathParam0, err = runtime.StyleParamWithOptions("simple", false, "sessionId", sessionId, runtime.StyleParamOptions{ParamLocation: runtime.ParamLocationPath, Type: "string", Format: ""})
+	if err != nil {
+		return nil, err
+	}
+
+	serverURL, err := url.Parse(server)
+	if err != nil {
+		return nil, err
+	}
+
+	operationPath := fmt.Sprintf("/api/v1/sessions/%s", pathParam0)
+	if operationPath[0] == '/' {
+		operationPath = "." + operationPath
+	}
+
+	queryURL, err := serverURL.Parse(operationPath)
+	if err != nil {
+		return nil, err
+	}
+
+	req, err := http.NewRequest(http.MethodDelete, queryURL.String(), nil)
+	if err != nil {
+		return nil, err
+	}
+
+	if params != nil {
+
+		var headerParam0 string
+
+		headerParam0, err = runtime.StyleParamWithOptions("simple", false, "X-Gallery-CSRF", params.XGalleryCSRF, runtime.StyleParamOptions{ParamLocation: runtime.ParamLocationHeader, Type: "string", Format: ""})
+		if err != nil {
+			return nil, err
+		}
+
+		req.Header.Set("X-Gallery-CSRF", headerParam0)
+
+	}
+
+	return req, nil
+}
+
 func (c *Client) applyEditors(ctx context.Context, req *http.Request, additionalEditors []RequestEditorFn) error {
 	for _, r := range c.RequestEditors {
 		if err := r(ctx, req); err != nil {
@@ -555,6 +883,20 @@ type ClientWithResponsesInterface interface {
 
 	// GetHealthWithResponse request
 	GetHealthWithResponse(ctx context.Context, reqEditors ...RequestEditorFn) (*GetHealthResponse, error)
+
+	// ExchangePairingCredentialWithBodyWithResponse request with any body
+	ExchangePairingCredentialWithBodyWithResponse(ctx context.Context, params *ExchangePairingCredentialParams, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*ExchangePairingCredentialResponse, error)
+
+	ExchangePairingCredentialWithResponse(ctx context.Context, params *ExchangePairingCredentialParams, body ExchangePairingCredentialJSONRequestBody, reqEditors ...RequestEditorFn) (*ExchangePairingCredentialResponse, error)
+
+	// CreatePairingAttemptWithResponse request
+	CreatePairingAttemptWithResponse(ctx context.Context, params *CreatePairingAttemptParams, reqEditors ...RequestEditorFn) (*CreatePairingAttemptResponse, error)
+
+	// ListSessionsWithResponse request
+	ListSessionsWithResponse(ctx context.Context, reqEditors ...RequestEditorFn) (*ListSessionsResponse, error)
+
+	// RevokeSessionWithResponse request
+	RevokeSessionWithResponse(ctx context.Context, sessionId SessionId, params *RevokeSessionParams, reqEditors ...RequestEditorFn) (*RevokeSessionResponse, error)
 }
 
 type GetBootstrapResponse struct {
@@ -619,6 +961,135 @@ func (r GetHealthResponse) ContentType() string {
 	return ""
 }
 
+type ExchangePairingCredentialResponse struct {
+	Body         []byte
+	HTTPResponse *http.Response
+	JSON201      *SessionEstablishedResponse
+	JSON401      *UnauthenticatedError
+	JSON403      *ForbiddenError
+}
+
+// Status returns HTTPResponse.Status
+func (r ExchangePairingCredentialResponse) Status() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Status
+	}
+	return http.StatusText(0)
+}
+
+// StatusCode returns HTTPResponse.StatusCode
+func (r ExchangePairingCredentialResponse) StatusCode() int {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.StatusCode
+	}
+	return 0
+}
+
+// ContentType is a convenience method to retrieve the Content-Type value from the HTTP response headers
+func (r ExchangePairingCredentialResponse) ContentType() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Header.Get("Content-Type")
+	}
+	return ""
+}
+
+type CreatePairingAttemptResponse struct {
+	Body         []byte
+	HTTPResponse *http.Response
+	JSON201      *PairingAttemptResponse
+	JSON403      *ForbiddenError
+}
+
+// Status returns HTTPResponse.Status
+func (r CreatePairingAttemptResponse) Status() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Status
+	}
+	return http.StatusText(0)
+}
+
+// StatusCode returns HTTPResponse.StatusCode
+func (r CreatePairingAttemptResponse) StatusCode() int {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.StatusCode
+	}
+	return 0
+}
+
+// ContentType is a convenience method to retrieve the Content-Type value from the HTTP response headers
+func (r CreatePairingAttemptResponse) ContentType() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Header.Get("Content-Type")
+	}
+	return ""
+}
+
+type ListSessionsResponse struct {
+	Body         []byte
+	HTTPResponse *http.Response
+	JSON200      *struct {
+		Sessions []SessionSummary `json:"sessions"`
+	}
+	JSON401 *UnauthenticatedError
+	JSON403 *ForbiddenError
+}
+
+// Status returns HTTPResponse.Status
+func (r ListSessionsResponse) Status() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Status
+	}
+	return http.StatusText(0)
+}
+
+// StatusCode returns HTTPResponse.StatusCode
+func (r ListSessionsResponse) StatusCode() int {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.StatusCode
+	}
+	return 0
+}
+
+// ContentType is a convenience method to retrieve the Content-Type value from the HTTP response headers
+func (r ListSessionsResponse) ContentType() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Header.Get("Content-Type")
+	}
+	return ""
+}
+
+type RevokeSessionResponse struct {
+	Body         []byte
+	HTTPResponse *http.Response
+	JSON401      *UnauthenticatedError
+	JSON403      *ForbiddenError
+	JSON404      *NotFoundError
+}
+
+// Status returns HTTPResponse.Status
+func (r RevokeSessionResponse) Status() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Status
+	}
+	return http.StatusText(0)
+}
+
+// StatusCode returns HTTPResponse.StatusCode
+func (r RevokeSessionResponse) StatusCode() int {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.StatusCode
+	}
+	return 0
+}
+
+// ContentType is a convenience method to retrieve the Content-Type value from the HTTP response headers
+func (r RevokeSessionResponse) ContentType() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Header.Get("Content-Type")
+	}
+	return ""
+}
+
 // GetBootstrapWithResponse request returning *GetBootstrapResponse
 func (c *ClientWithResponses) GetBootstrapWithResponse(ctx context.Context, reqEditors ...RequestEditorFn) (*GetBootstrapResponse, error) {
 	rsp, err := c.GetBootstrap(ctx, reqEditors...)
@@ -635,6 +1106,50 @@ func (c *ClientWithResponses) GetHealthWithResponse(ctx context.Context, reqEdit
 		return nil, err
 	}
 	return ParseGetHealthResponse(rsp)
+}
+
+// ExchangePairingCredentialWithBodyWithResponse request with arbitrary body returning *ExchangePairingCredentialResponse
+func (c *ClientWithResponses) ExchangePairingCredentialWithBodyWithResponse(ctx context.Context, params *ExchangePairingCredentialParams, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*ExchangePairingCredentialResponse, error) {
+	rsp, err := c.ExchangePairingCredentialWithBody(ctx, params, contentType, body, reqEditors...)
+	if err != nil {
+		return nil, err
+	}
+	return ParseExchangePairingCredentialResponse(rsp)
+}
+
+func (c *ClientWithResponses) ExchangePairingCredentialWithResponse(ctx context.Context, params *ExchangePairingCredentialParams, body ExchangePairingCredentialJSONRequestBody, reqEditors ...RequestEditorFn) (*ExchangePairingCredentialResponse, error) {
+	rsp, err := c.ExchangePairingCredential(ctx, params, body, reqEditors...)
+	if err != nil {
+		return nil, err
+	}
+	return ParseExchangePairingCredentialResponse(rsp)
+}
+
+// CreatePairingAttemptWithResponse request returning *CreatePairingAttemptResponse
+func (c *ClientWithResponses) CreatePairingAttemptWithResponse(ctx context.Context, params *CreatePairingAttemptParams, reqEditors ...RequestEditorFn) (*CreatePairingAttemptResponse, error) {
+	rsp, err := c.CreatePairingAttempt(ctx, params, reqEditors...)
+	if err != nil {
+		return nil, err
+	}
+	return ParseCreatePairingAttemptResponse(rsp)
+}
+
+// ListSessionsWithResponse request returning *ListSessionsResponse
+func (c *ClientWithResponses) ListSessionsWithResponse(ctx context.Context, reqEditors ...RequestEditorFn) (*ListSessionsResponse, error) {
+	rsp, err := c.ListSessions(ctx, reqEditors...)
+	if err != nil {
+		return nil, err
+	}
+	return ParseListSessionsResponse(rsp)
+}
+
+// RevokeSessionWithResponse request returning *RevokeSessionResponse
+func (c *ClientWithResponses) RevokeSessionWithResponse(ctx context.Context, sessionId SessionId, params *RevokeSessionParams, reqEditors ...RequestEditorFn) (*RevokeSessionResponse, error) {
+	rsp, err := c.RevokeSession(ctx, sessionId, params, reqEditors...)
+	if err != nil {
+		return nil, err
+	}
+	return ParseRevokeSessionResponse(rsp)
 }
 
 // ParseGetBootstrapResponse parses an HTTP response from a GetBootstrapWithResponse call
@@ -697,6 +1212,161 @@ func ParseGetHealthResponse(rsp *http.Response) (*GetHealthResponse, error) {
 			return nil, err
 		}
 		response.JSON500 = &dest
+
+	}
+
+	return response, nil
+}
+
+// ParseExchangePairingCredentialResponse parses an HTTP response from a ExchangePairingCredentialWithResponse call
+func ParseExchangePairingCredentialResponse(rsp *http.Response) (*ExchangePairingCredentialResponse, error) {
+	bodyBytes, err := io.ReadAll(rsp.Body)
+	defer func() { _ = rsp.Body.Close() }()
+	if err != nil {
+		return nil, err
+	}
+
+	response := &ExchangePairingCredentialResponse{
+		Body:         bodyBytes,
+		HTTPResponse: rsp,
+	}
+
+	switch {
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 201:
+		var dest SessionEstablishedResponse
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON201 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 401:
+		var dest UnauthenticatedError
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON401 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 403:
+		var dest ForbiddenError
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON403 = &dest
+
+	}
+
+	return response, nil
+}
+
+// ParseCreatePairingAttemptResponse parses an HTTP response from a CreatePairingAttemptWithResponse call
+func ParseCreatePairingAttemptResponse(rsp *http.Response) (*CreatePairingAttemptResponse, error) {
+	bodyBytes, err := io.ReadAll(rsp.Body)
+	defer func() { _ = rsp.Body.Close() }()
+	if err != nil {
+		return nil, err
+	}
+
+	response := &CreatePairingAttemptResponse{
+		Body:         bodyBytes,
+		HTTPResponse: rsp,
+	}
+
+	switch {
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 201:
+		var dest PairingAttemptResponse
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON201 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 403:
+		var dest ForbiddenError
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON403 = &dest
+
+	}
+
+	return response, nil
+}
+
+// ParseListSessionsResponse parses an HTTP response from a ListSessionsWithResponse call
+func ParseListSessionsResponse(rsp *http.Response) (*ListSessionsResponse, error) {
+	bodyBytes, err := io.ReadAll(rsp.Body)
+	defer func() { _ = rsp.Body.Close() }()
+	if err != nil {
+		return nil, err
+	}
+
+	response := &ListSessionsResponse{
+		Body:         bodyBytes,
+		HTTPResponse: rsp,
+	}
+
+	switch {
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 200:
+		var dest struct {
+			Sessions []SessionSummary `json:"sessions"`
+		}
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON200 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 401:
+		var dest UnauthenticatedError
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON401 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 403:
+		var dest ForbiddenError
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON403 = &dest
+
+	}
+
+	return response, nil
+}
+
+// ParseRevokeSessionResponse parses an HTTP response from a RevokeSessionWithResponse call
+func ParseRevokeSessionResponse(rsp *http.Response) (*RevokeSessionResponse, error) {
+	bodyBytes, err := io.ReadAll(rsp.Body)
+	defer func() { _ = rsp.Body.Close() }()
+	if err != nil {
+		return nil, err
+	}
+
+	response := &RevokeSessionResponse{
+		Body:         bodyBytes,
+		HTTPResponse: rsp,
+	}
+
+	switch {
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 401:
+		var dest UnauthenticatedError
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON401 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 403:
+		var dest ForbiddenError
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON403 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 404:
+		var dest NotFoundError
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON404 = &dest
 
 	}
 

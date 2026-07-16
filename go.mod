@@ -4,11 +4,13 @@ go 1.26.0
 
 require (
 	github.com/coder/websocket v1.8.15
+	github.com/oapi-codegen/runtime v1.5.0
 	github.com/santhosh-tekuri/jsonschema/v6 v6.0.2
 	modernc.org/sqlite v1.53.0
 )
 
 require (
+	github.com/apapsch/go-jsonmerge/v2 v2.0.0 // indirect
 	github.com/dustin/go-humanize v1.0.1 // indirect
 	github.com/google/uuid v1.6.0 // indirect
 	github.com/mattn/go-isatty v0.0.20 // indirect
