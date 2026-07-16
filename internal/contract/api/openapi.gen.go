@@ -137,7 +137,9 @@ const (
 	PAIRINGEXPIRED            ErrorCode = "PAIRING_EXPIRED"
 	PAIRINGINVALID            ErrorCode = "PAIRING_INVALID"
 	RULEEVALERROR             ErrorCode = "RULE_EVAL_ERROR"
+	RULEPARAMETERINVALID      ErrorCode = "RULE_PARAMETER_INVALID"
 	RULESCHEMAINVALID         ErrorCode = "RULE_SCHEMA_INVALID"
+	SOURCEPATHINVALID         ErrorCode = "SOURCE_PATH_INVALID"
 	SOURCEROOTSOVERLAP        ErrorCode = "SOURCE_ROOTS_OVERLAP"
 	UNAUTHENTICATED           ErrorCode = "UNAUTHENTICATED"
 	VALIDATIONERROR           ErrorCode = "VALIDATION_ERROR"
@@ -186,7 +188,11 @@ func (e ErrorCode) Valid() bool {
 		return true
 	case RULEEVALERROR:
 		return true
+	case RULEPARAMETERINVALID:
+		return true
 	case RULESCHEMAINVALID:
+		return true
+	case SOURCEPATHINVALID:
 		return true
 	case SOURCEROOTSOVERLAP:
 		return true
@@ -354,6 +360,18 @@ type HealthResponseStatus string
 // JobId defines model for JobId.
 type JobId = string
 
+// Library defines model for Library.
+type Library struct {
+	CreatedAt time.Time `json:"createdAt"`
+	Id        LibraryId `json:"id"`
+	Name      string    `json:"name"`
+}
+
+// LibraryCreateRequest defines model for LibraryCreateRequest.
+type LibraryCreateRequest struct {
+	Name string `json:"name"`
+}
+
 // LibraryId defines model for LibraryId.
 type LibraryId = string
 
@@ -370,6 +388,24 @@ type PairingExchangeRequest struct {
 
 // QueryPublicationId defines model for QueryPublicationId.
 type QueryPublicationId = string
+
+// RuleVersion defines model for RuleVersion.
+type RuleVersion struct {
+	CreatedAt    time.Time    `json:"createdAt"`
+	PackageHash  SHA256Digest `json:"packageHash"`
+	RuleIrHash   SHA256Digest `json:"ruleIrHash"`
+	RuleSetId    string       `json:"ruleSetId"`
+	SemanticHash SHA256Digest `json:"semanticHash"`
+	Version      string       `json:"version"`
+}
+
+// RuleVersionCreateRequest defines model for RuleVersionCreateRequest.
+type RuleVersionCreateRequest struct {
+	Package map[string]interface{} `json:"package"`
+}
+
+// SHA256Digest defines model for SHA256Digest.
+type SHA256Digest = string
 
 // SessionEstablishedResponse defines model for SessionEstablishedResponse.
 type SessionEstablishedResponse struct {
@@ -391,14 +427,53 @@ type SessionSummary struct {
 	Revoked     bool      `json:"revoked"`
 }
 
+// Source defines model for Source.
+type Source struct {
+	Available   bool      `json:"available"`
+	CreatedAt   time.Time `json:"createdAt"`
+	DisplayName string    `json:"displayName"`
+	Id          SourceId  `json:"id"`
+	LibraryId   LibraryId `json:"libraryId"`
+	ReadOnly    bool      `json:"readOnly"`
+}
+
+// SourceCreateRequest defines model for SourceCreateRequest.
+type SourceCreateRequest struct {
+	DisplayName string    `json:"displayName"`
+	LibraryId   LibraryId `json:"libraryId"`
+	RootPath    string    `json:"rootPath"`
+}
+
 // SourceId defines model for SourceId.
 type SourceId = string
+
+// SourceRuleBinding defines model for SourceRuleBinding.
+type SourceRuleBinding struct {
+	CreatedAt    time.Time              `json:"createdAt"`
+	Id           SourceRuleBindingId    `json:"id"`
+	Parameters   map[string]interface{} `json:"parameters"`
+	Priority     int                    `json:"priority"`
+	RuleIrHash   SHA256Digest           `json:"ruleIrHash"`
+	SemanticHash SHA256Digest           `json:"semanticHash"`
+	SourceId     SourceId               `json:"sourceId"`
+}
+
+// SourceRuleBindingCreateRequest defines model for SourceRuleBindingCreateRequest.
+type SourceRuleBindingCreateRequest struct {
+	Parameters   map[string]interface{} `json:"parameters"`
+	Priority     int                    `json:"priority"`
+	SemanticHash SHA256Digest           `json:"semanticHash"`
+	SourceId     SourceId               `json:"sourceId"`
+}
 
 // SourceRuleBindingId defines model for SourceRuleBindingId.
 type SourceRuleBindingId = string
 
 // CSRFHeader defines model for CSRFHeader.
 type CSRFHeader = string
+
+// ConflictError defines model for ConflictError.
+type ConflictError = ErrorEnvelope
 
 // ForbiddenError defines model for ForbiddenError.
 type ForbiddenError = ErrorEnvelope
@@ -412,11 +487,19 @@ type NotFoundError = ErrorEnvelope
 // UnauthenticatedError defines model for UnauthenticatedError.
 type UnauthenticatedError = ErrorEnvelope
 
+// ValidationError defines model for ValidationError.
+type ValidationError = ErrorEnvelope
+
 // apiTokenContextKey is the context key for apiToken security scheme
 type apiTokenContextKey string
 
 // sessionCookieContextKey is the context key for sessionCookie security scheme
 type sessionCookieContextKey string
+
+// CreateLibraryParams defines parameters for CreateLibrary.
+type CreateLibraryParams struct {
+	XGalleryCSRF CSRFHeader `json:"X-Gallery-CSRF"`
+}
 
 // ExchangePairingCredentialParams defines parameters for ExchangePairingCredential.
 type ExchangePairingCredentialParams struct {
@@ -428,13 +511,40 @@ type CreatePairingAttemptParams struct {
 	XGalleryCSRF CSRFHeader `json:"X-Gallery-CSRF"`
 }
 
+// CreateRuleVersionParams defines parameters for CreateRuleVersion.
+type CreateRuleVersionParams struct {
+	XGalleryCSRF CSRFHeader `json:"X-Gallery-CSRF"`
+}
+
 // RevokeSessionParams defines parameters for RevokeSession.
 type RevokeSessionParams struct {
 	XGalleryCSRF CSRFHeader `json:"X-Gallery-CSRF"`
 }
 
+// CreateSourceRuleBindingParams defines parameters for CreateSourceRuleBinding.
+type CreateSourceRuleBindingParams struct {
+	XGalleryCSRF CSRFHeader `json:"X-Gallery-CSRF"`
+}
+
+// CreateSourceParams defines parameters for CreateSource.
+type CreateSourceParams struct {
+	XGalleryCSRF CSRFHeader `json:"X-Gallery-CSRF"`
+}
+
+// CreateLibraryJSONRequestBody defines body for CreateLibrary for application/json ContentType.
+type CreateLibraryJSONRequestBody = LibraryCreateRequest
+
 // ExchangePairingCredentialJSONRequestBody defines body for ExchangePairingCredential for application/json ContentType.
 type ExchangePairingCredentialJSONRequestBody = PairingExchangeRequest
+
+// CreateRuleVersionJSONRequestBody defines body for CreateRuleVersion for application/json ContentType.
+type CreateRuleVersionJSONRequestBody = RuleVersionCreateRequest
+
+// CreateSourceRuleBindingJSONRequestBody defines body for CreateSourceRuleBinding for application/json ContentType.
+type CreateSourceRuleBindingJSONRequestBody = SourceRuleBindingCreateRequest
+
+// CreateSourceJSONRequestBody defines body for CreateSource for application/json ContentType.
+type CreateSourceJSONRequestBody = SourceCreateRequest
 
 // RequestEditorFn  is the function signature for the RequestEditor callback function
 type RequestEditorFn func(ctx context.Context, req *http.Request) error
@@ -515,6 +625,14 @@ type ClientInterface interface {
 	// GetHealth request
 	GetHealth(ctx context.Context, reqEditors ...RequestEditorFn) (*http.Response, error)
 
+	// CreateLibraryWithBody request with any body
+	CreateLibraryWithBody(ctx context.Context, params *CreateLibraryParams, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*http.Response, error)
+
+	CreateLibrary(ctx context.Context, params *CreateLibraryParams, body CreateLibraryJSONRequestBody, reqEditors ...RequestEditorFn) (*http.Response, error)
+
+	// GetLibrary request
+	GetLibrary(ctx context.Context, libraryId LibraryId, reqEditors ...RequestEditorFn) (*http.Response, error)
+
 	// ExchangePairingCredentialWithBody request with any body
 	ExchangePairingCredentialWithBody(ctx context.Context, params *ExchangePairingCredentialParams, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*http.Response, error)
 
@@ -523,11 +641,35 @@ type ClientInterface interface {
 	// CreatePairingAttempt request
 	CreatePairingAttempt(ctx context.Context, params *CreatePairingAttemptParams, reqEditors ...RequestEditorFn) (*http.Response, error)
 
+	// CreateRuleVersionWithBody request with any body
+	CreateRuleVersionWithBody(ctx context.Context, params *CreateRuleVersionParams, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*http.Response, error)
+
+	CreateRuleVersion(ctx context.Context, params *CreateRuleVersionParams, body CreateRuleVersionJSONRequestBody, reqEditors ...RequestEditorFn) (*http.Response, error)
+
+	// GetRuleVersion request
+	GetRuleVersion(ctx context.Context, semanticHash SHA256Digest, reqEditors ...RequestEditorFn) (*http.Response, error)
+
 	// ListSessions request
 	ListSessions(ctx context.Context, reqEditors ...RequestEditorFn) (*http.Response, error)
 
 	// RevokeSession request
 	RevokeSession(ctx context.Context, sessionId SessionId, params *RevokeSessionParams, reqEditors ...RequestEditorFn) (*http.Response, error)
+
+	// CreateSourceRuleBindingWithBody request with any body
+	CreateSourceRuleBindingWithBody(ctx context.Context, params *CreateSourceRuleBindingParams, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*http.Response, error)
+
+	CreateSourceRuleBinding(ctx context.Context, params *CreateSourceRuleBindingParams, body CreateSourceRuleBindingJSONRequestBody, reqEditors ...RequestEditorFn) (*http.Response, error)
+
+	// GetSourceRuleBinding request
+	GetSourceRuleBinding(ctx context.Context, bindingId SourceRuleBindingId, reqEditors ...RequestEditorFn) (*http.Response, error)
+
+	// CreateSourceWithBody request with any body
+	CreateSourceWithBody(ctx context.Context, params *CreateSourceParams, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*http.Response, error)
+
+	CreateSource(ctx context.Context, params *CreateSourceParams, body CreateSourceJSONRequestBody, reqEditors ...RequestEditorFn) (*http.Response, error)
+
+	// GetSource request
+	GetSource(ctx context.Context, sourceId SourceId, reqEditors ...RequestEditorFn) (*http.Response, error)
 }
 
 func (c *Client) GetBootstrap(ctx context.Context, reqEditors ...RequestEditorFn) (*http.Response, error) {
@@ -544,6 +686,42 @@ func (c *Client) GetBootstrap(ctx context.Context, reqEditors ...RequestEditorFn
 
 func (c *Client) GetHealth(ctx context.Context, reqEditors ...RequestEditorFn) (*http.Response, error) {
 	req, err := NewGetHealthRequest(c.Server)
+	if err != nil {
+		return nil, err
+	}
+	req = req.WithContext(ctx)
+	if err := c.applyEditors(ctx, req, reqEditors); err != nil {
+		return nil, err
+	}
+	return c.Client.Do(req)
+}
+
+func (c *Client) CreateLibraryWithBody(ctx context.Context, params *CreateLibraryParams, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewCreateLibraryRequestWithBody(c.Server, params, contentType, body)
+	if err != nil {
+		return nil, err
+	}
+	req = req.WithContext(ctx)
+	if err := c.applyEditors(ctx, req, reqEditors); err != nil {
+		return nil, err
+	}
+	return c.Client.Do(req)
+}
+
+func (c *Client) CreateLibrary(ctx context.Context, params *CreateLibraryParams, body CreateLibraryJSONRequestBody, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewCreateLibraryRequest(c.Server, params, body)
+	if err != nil {
+		return nil, err
+	}
+	req = req.WithContext(ctx)
+	if err := c.applyEditors(ctx, req, reqEditors); err != nil {
+		return nil, err
+	}
+	return c.Client.Do(req)
+}
+
+func (c *Client) GetLibrary(ctx context.Context, libraryId LibraryId, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewGetLibraryRequest(c.Server, libraryId)
 	if err != nil {
 		return nil, err
 	}
@@ -590,6 +768,42 @@ func (c *Client) CreatePairingAttempt(ctx context.Context, params *CreatePairing
 	return c.Client.Do(req)
 }
 
+func (c *Client) CreateRuleVersionWithBody(ctx context.Context, params *CreateRuleVersionParams, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewCreateRuleVersionRequestWithBody(c.Server, params, contentType, body)
+	if err != nil {
+		return nil, err
+	}
+	req = req.WithContext(ctx)
+	if err := c.applyEditors(ctx, req, reqEditors); err != nil {
+		return nil, err
+	}
+	return c.Client.Do(req)
+}
+
+func (c *Client) CreateRuleVersion(ctx context.Context, params *CreateRuleVersionParams, body CreateRuleVersionJSONRequestBody, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewCreateRuleVersionRequest(c.Server, params, body)
+	if err != nil {
+		return nil, err
+	}
+	req = req.WithContext(ctx)
+	if err := c.applyEditors(ctx, req, reqEditors); err != nil {
+		return nil, err
+	}
+	return c.Client.Do(req)
+}
+
+func (c *Client) GetRuleVersion(ctx context.Context, semanticHash SHA256Digest, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewGetRuleVersionRequest(c.Server, semanticHash)
+	if err != nil {
+		return nil, err
+	}
+	req = req.WithContext(ctx)
+	if err := c.applyEditors(ctx, req, reqEditors); err != nil {
+		return nil, err
+	}
+	return c.Client.Do(req)
+}
+
 func (c *Client) ListSessions(ctx context.Context, reqEditors ...RequestEditorFn) (*http.Response, error) {
 	req, err := NewListSessionsRequest(c.Server)
 	if err != nil {
@@ -604,6 +818,78 @@ func (c *Client) ListSessions(ctx context.Context, reqEditors ...RequestEditorFn
 
 func (c *Client) RevokeSession(ctx context.Context, sessionId SessionId, params *RevokeSessionParams, reqEditors ...RequestEditorFn) (*http.Response, error) {
 	req, err := NewRevokeSessionRequest(c.Server, sessionId, params)
+	if err != nil {
+		return nil, err
+	}
+	req = req.WithContext(ctx)
+	if err := c.applyEditors(ctx, req, reqEditors); err != nil {
+		return nil, err
+	}
+	return c.Client.Do(req)
+}
+
+func (c *Client) CreateSourceRuleBindingWithBody(ctx context.Context, params *CreateSourceRuleBindingParams, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewCreateSourceRuleBindingRequestWithBody(c.Server, params, contentType, body)
+	if err != nil {
+		return nil, err
+	}
+	req = req.WithContext(ctx)
+	if err := c.applyEditors(ctx, req, reqEditors); err != nil {
+		return nil, err
+	}
+	return c.Client.Do(req)
+}
+
+func (c *Client) CreateSourceRuleBinding(ctx context.Context, params *CreateSourceRuleBindingParams, body CreateSourceRuleBindingJSONRequestBody, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewCreateSourceRuleBindingRequest(c.Server, params, body)
+	if err != nil {
+		return nil, err
+	}
+	req = req.WithContext(ctx)
+	if err := c.applyEditors(ctx, req, reqEditors); err != nil {
+		return nil, err
+	}
+	return c.Client.Do(req)
+}
+
+func (c *Client) GetSourceRuleBinding(ctx context.Context, bindingId SourceRuleBindingId, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewGetSourceRuleBindingRequest(c.Server, bindingId)
+	if err != nil {
+		return nil, err
+	}
+	req = req.WithContext(ctx)
+	if err := c.applyEditors(ctx, req, reqEditors); err != nil {
+		return nil, err
+	}
+	return c.Client.Do(req)
+}
+
+func (c *Client) CreateSourceWithBody(ctx context.Context, params *CreateSourceParams, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewCreateSourceRequestWithBody(c.Server, params, contentType, body)
+	if err != nil {
+		return nil, err
+	}
+	req = req.WithContext(ctx)
+	if err := c.applyEditors(ctx, req, reqEditors); err != nil {
+		return nil, err
+	}
+	return c.Client.Do(req)
+}
+
+func (c *Client) CreateSource(ctx context.Context, params *CreateSourceParams, body CreateSourceJSONRequestBody, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewCreateSourceRequest(c.Server, params, body)
+	if err != nil {
+		return nil, err
+	}
+	req = req.WithContext(ctx)
+	if err := c.applyEditors(ctx, req, reqEditors); err != nil {
+		return nil, err
+	}
+	return c.Client.Do(req)
+}
+
+func (c *Client) GetSource(ctx context.Context, sourceId SourceId, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewGetSourceRequest(c.Server, sourceId)
 	if err != nil {
 		return nil, err
 	}
@@ -651,6 +937,93 @@ func NewGetHealthRequest(server string) (*http.Request, error) {
 	}
 
 	operationPath := fmt.Sprintf("/api/v1/health")
+	if operationPath[0] == '/' {
+		operationPath = "." + operationPath
+	}
+
+	queryURL, err := serverURL.Parse(operationPath)
+	if err != nil {
+		return nil, err
+	}
+
+	req, err := http.NewRequest(http.MethodGet, queryURL.String(), nil)
+	if err != nil {
+		return nil, err
+	}
+
+	return req, nil
+}
+
+// NewCreateLibraryRequest calls the generic CreateLibrary builder with application/json body
+func NewCreateLibraryRequest(server string, params *CreateLibraryParams, body CreateLibraryJSONRequestBody) (*http.Request, error) {
+	var bodyReader io.Reader
+	buf, err := json.Marshal(body)
+	if err != nil {
+		return nil, err
+	}
+	bodyReader = bytes.NewReader(buf)
+	return NewCreateLibraryRequestWithBody(server, params, "application/json", bodyReader)
+}
+
+// NewCreateLibraryRequestWithBody generates requests for CreateLibrary with any type of body
+func NewCreateLibraryRequestWithBody(server string, params *CreateLibraryParams, contentType string, body io.Reader) (*http.Request, error) {
+	var err error
+
+	serverURL, err := url.Parse(server)
+	if err != nil {
+		return nil, err
+	}
+
+	operationPath := fmt.Sprintf("/api/v1/libraries")
+	if operationPath[0] == '/' {
+		operationPath = "." + operationPath
+	}
+
+	queryURL, err := serverURL.Parse(operationPath)
+	if err != nil {
+		return nil, err
+	}
+
+	req, err := http.NewRequest(http.MethodPost, queryURL.String(), body)
+	if err != nil {
+		return nil, err
+	}
+
+	req.Header.Add("Content-Type", contentType)
+
+	if params != nil {
+
+		var headerParam0 string
+
+		headerParam0, err = runtime.StyleParamWithOptions("simple", false, "X-Gallery-CSRF", params.XGalleryCSRF, runtime.StyleParamOptions{ParamLocation: runtime.ParamLocationHeader, Type: "string", Format: ""})
+		if err != nil {
+			return nil, err
+		}
+
+		req.Header.Set("X-Gallery-CSRF", headerParam0)
+
+	}
+
+	return req, nil
+}
+
+// NewGetLibraryRequest generates requests for GetLibrary
+func NewGetLibraryRequest(server string, libraryId LibraryId) (*http.Request, error) {
+	var err error
+
+	var pathParam0 string
+
+	pathParam0, err = runtime.StyleParamWithOptions("simple", false, "libraryId", libraryId, runtime.StyleParamOptions{ParamLocation: runtime.ParamLocationPath, Type: "string", Format: ""})
+	if err != nil {
+		return nil, err
+	}
+
+	serverURL, err := url.Parse(server)
+	if err != nil {
+		return nil, err
+	}
+
+	operationPath := fmt.Sprintf("/api/v1/libraries/%s", pathParam0)
 	if operationPath[0] == '/' {
 		operationPath = "." + operationPath
 	}
@@ -761,6 +1134,93 @@ func NewCreatePairingAttemptRequest(server string, params *CreatePairingAttemptP
 	return req, nil
 }
 
+// NewCreateRuleVersionRequest calls the generic CreateRuleVersion builder with application/json body
+func NewCreateRuleVersionRequest(server string, params *CreateRuleVersionParams, body CreateRuleVersionJSONRequestBody) (*http.Request, error) {
+	var bodyReader io.Reader
+	buf, err := json.Marshal(body)
+	if err != nil {
+		return nil, err
+	}
+	bodyReader = bytes.NewReader(buf)
+	return NewCreateRuleVersionRequestWithBody(server, params, "application/json", bodyReader)
+}
+
+// NewCreateRuleVersionRequestWithBody generates requests for CreateRuleVersion with any type of body
+func NewCreateRuleVersionRequestWithBody(server string, params *CreateRuleVersionParams, contentType string, body io.Reader) (*http.Request, error) {
+	var err error
+
+	serverURL, err := url.Parse(server)
+	if err != nil {
+		return nil, err
+	}
+
+	operationPath := fmt.Sprintf("/api/v1/rule-versions")
+	if operationPath[0] == '/' {
+		operationPath = "." + operationPath
+	}
+
+	queryURL, err := serverURL.Parse(operationPath)
+	if err != nil {
+		return nil, err
+	}
+
+	req, err := http.NewRequest(http.MethodPost, queryURL.String(), body)
+	if err != nil {
+		return nil, err
+	}
+
+	req.Header.Add("Content-Type", contentType)
+
+	if params != nil {
+
+		var headerParam0 string
+
+		headerParam0, err = runtime.StyleParamWithOptions("simple", false, "X-Gallery-CSRF", params.XGalleryCSRF, runtime.StyleParamOptions{ParamLocation: runtime.ParamLocationHeader, Type: "string", Format: ""})
+		if err != nil {
+			return nil, err
+		}
+
+		req.Header.Set("X-Gallery-CSRF", headerParam0)
+
+	}
+
+	return req, nil
+}
+
+// NewGetRuleVersionRequest generates requests for GetRuleVersion
+func NewGetRuleVersionRequest(server string, semanticHash SHA256Digest) (*http.Request, error) {
+	var err error
+
+	var pathParam0 string
+
+	pathParam0, err = runtime.StyleParamWithOptions("simple", false, "semanticHash", semanticHash, runtime.StyleParamOptions{ParamLocation: runtime.ParamLocationPath, Type: "string", Format: ""})
+	if err != nil {
+		return nil, err
+	}
+
+	serverURL, err := url.Parse(server)
+	if err != nil {
+		return nil, err
+	}
+
+	operationPath := fmt.Sprintf("/api/v1/rule-versions/%s", pathParam0)
+	if operationPath[0] == '/' {
+		operationPath = "." + operationPath
+	}
+
+	queryURL, err := serverURL.Parse(operationPath)
+	if err != nil {
+		return nil, err
+	}
+
+	req, err := http.NewRequest(http.MethodGet, queryURL.String(), nil)
+	if err != nil {
+		return nil, err
+	}
+
+	return req, nil
+}
+
 // NewListSessionsRequest generates requests for ListSessions
 func NewListSessionsRequest(server string) (*http.Request, error) {
 	var err error
@@ -835,6 +1295,180 @@ func NewRevokeSessionRequest(server string, sessionId SessionId, params *RevokeS
 	return req, nil
 }
 
+// NewCreateSourceRuleBindingRequest calls the generic CreateSourceRuleBinding builder with application/json body
+func NewCreateSourceRuleBindingRequest(server string, params *CreateSourceRuleBindingParams, body CreateSourceRuleBindingJSONRequestBody) (*http.Request, error) {
+	var bodyReader io.Reader
+	buf, err := json.Marshal(body)
+	if err != nil {
+		return nil, err
+	}
+	bodyReader = bytes.NewReader(buf)
+	return NewCreateSourceRuleBindingRequestWithBody(server, params, "application/json", bodyReader)
+}
+
+// NewCreateSourceRuleBindingRequestWithBody generates requests for CreateSourceRuleBinding with any type of body
+func NewCreateSourceRuleBindingRequestWithBody(server string, params *CreateSourceRuleBindingParams, contentType string, body io.Reader) (*http.Request, error) {
+	var err error
+
+	serverURL, err := url.Parse(server)
+	if err != nil {
+		return nil, err
+	}
+
+	operationPath := fmt.Sprintf("/api/v1/source-rule-bindings")
+	if operationPath[0] == '/' {
+		operationPath = "." + operationPath
+	}
+
+	queryURL, err := serverURL.Parse(operationPath)
+	if err != nil {
+		return nil, err
+	}
+
+	req, err := http.NewRequest(http.MethodPost, queryURL.String(), body)
+	if err != nil {
+		return nil, err
+	}
+
+	req.Header.Add("Content-Type", contentType)
+
+	if params != nil {
+
+		var headerParam0 string
+
+		headerParam0, err = runtime.StyleParamWithOptions("simple", false, "X-Gallery-CSRF", params.XGalleryCSRF, runtime.StyleParamOptions{ParamLocation: runtime.ParamLocationHeader, Type: "string", Format: ""})
+		if err != nil {
+			return nil, err
+		}
+
+		req.Header.Set("X-Gallery-CSRF", headerParam0)
+
+	}
+
+	return req, nil
+}
+
+// NewGetSourceRuleBindingRequest generates requests for GetSourceRuleBinding
+func NewGetSourceRuleBindingRequest(server string, bindingId SourceRuleBindingId) (*http.Request, error) {
+	var err error
+
+	var pathParam0 string
+
+	pathParam0, err = runtime.StyleParamWithOptions("simple", false, "bindingId", bindingId, runtime.StyleParamOptions{ParamLocation: runtime.ParamLocationPath, Type: "string", Format: ""})
+	if err != nil {
+		return nil, err
+	}
+
+	serverURL, err := url.Parse(server)
+	if err != nil {
+		return nil, err
+	}
+
+	operationPath := fmt.Sprintf("/api/v1/source-rule-bindings/%s", pathParam0)
+	if operationPath[0] == '/' {
+		operationPath = "." + operationPath
+	}
+
+	queryURL, err := serverURL.Parse(operationPath)
+	if err != nil {
+		return nil, err
+	}
+
+	req, err := http.NewRequest(http.MethodGet, queryURL.String(), nil)
+	if err != nil {
+		return nil, err
+	}
+
+	return req, nil
+}
+
+// NewCreateSourceRequest calls the generic CreateSource builder with application/json body
+func NewCreateSourceRequest(server string, params *CreateSourceParams, body CreateSourceJSONRequestBody) (*http.Request, error) {
+	var bodyReader io.Reader
+	buf, err := json.Marshal(body)
+	if err != nil {
+		return nil, err
+	}
+	bodyReader = bytes.NewReader(buf)
+	return NewCreateSourceRequestWithBody(server, params, "application/json", bodyReader)
+}
+
+// NewCreateSourceRequestWithBody generates requests for CreateSource with any type of body
+func NewCreateSourceRequestWithBody(server string, params *CreateSourceParams, contentType string, body io.Reader) (*http.Request, error) {
+	var err error
+
+	serverURL, err := url.Parse(server)
+	if err != nil {
+		return nil, err
+	}
+
+	operationPath := fmt.Sprintf("/api/v1/sources")
+	if operationPath[0] == '/' {
+		operationPath = "." + operationPath
+	}
+
+	queryURL, err := serverURL.Parse(operationPath)
+	if err != nil {
+		return nil, err
+	}
+
+	req, err := http.NewRequest(http.MethodPost, queryURL.String(), body)
+	if err != nil {
+		return nil, err
+	}
+
+	req.Header.Add("Content-Type", contentType)
+
+	if params != nil {
+
+		var headerParam0 string
+
+		headerParam0, err = runtime.StyleParamWithOptions("simple", false, "X-Gallery-CSRF", params.XGalleryCSRF, runtime.StyleParamOptions{ParamLocation: runtime.ParamLocationHeader, Type: "string", Format: ""})
+		if err != nil {
+			return nil, err
+		}
+
+		req.Header.Set("X-Gallery-CSRF", headerParam0)
+
+	}
+
+	return req, nil
+}
+
+// NewGetSourceRequest generates requests for GetSource
+func NewGetSourceRequest(server string, sourceId SourceId) (*http.Request, error) {
+	var err error
+
+	var pathParam0 string
+
+	pathParam0, err = runtime.StyleParamWithOptions("simple", false, "sourceId", sourceId, runtime.StyleParamOptions{ParamLocation: runtime.ParamLocationPath, Type: "string", Format: ""})
+	if err != nil {
+		return nil, err
+	}
+
+	serverURL, err := url.Parse(server)
+	if err != nil {
+		return nil, err
+	}
+
+	operationPath := fmt.Sprintf("/api/v1/sources/%s", pathParam0)
+	if operationPath[0] == '/' {
+		operationPath = "." + operationPath
+	}
+
+	queryURL, err := serverURL.Parse(operationPath)
+	if err != nil {
+		return nil, err
+	}
+
+	req, err := http.NewRequest(http.MethodGet, queryURL.String(), nil)
+	if err != nil {
+		return nil, err
+	}
+
+	return req, nil
+}
+
 func (c *Client) applyEditors(ctx context.Context, req *http.Request, additionalEditors []RequestEditorFn) error {
 	for _, r := range c.RequestEditors {
 		if err := r(ctx, req); err != nil {
@@ -884,6 +1518,14 @@ type ClientWithResponsesInterface interface {
 	// GetHealthWithResponse request
 	GetHealthWithResponse(ctx context.Context, reqEditors ...RequestEditorFn) (*GetHealthResponse, error)
 
+	// CreateLibraryWithBodyWithResponse request with any body
+	CreateLibraryWithBodyWithResponse(ctx context.Context, params *CreateLibraryParams, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*CreateLibraryResponse, error)
+
+	CreateLibraryWithResponse(ctx context.Context, params *CreateLibraryParams, body CreateLibraryJSONRequestBody, reqEditors ...RequestEditorFn) (*CreateLibraryResponse, error)
+
+	// GetLibraryWithResponse request
+	GetLibraryWithResponse(ctx context.Context, libraryId LibraryId, reqEditors ...RequestEditorFn) (*GetLibraryResponse, error)
+
 	// ExchangePairingCredentialWithBodyWithResponse request with any body
 	ExchangePairingCredentialWithBodyWithResponse(ctx context.Context, params *ExchangePairingCredentialParams, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*ExchangePairingCredentialResponse, error)
 
@@ -892,11 +1534,35 @@ type ClientWithResponsesInterface interface {
 	// CreatePairingAttemptWithResponse request
 	CreatePairingAttemptWithResponse(ctx context.Context, params *CreatePairingAttemptParams, reqEditors ...RequestEditorFn) (*CreatePairingAttemptResponse, error)
 
+	// CreateRuleVersionWithBodyWithResponse request with any body
+	CreateRuleVersionWithBodyWithResponse(ctx context.Context, params *CreateRuleVersionParams, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*CreateRuleVersionResponse, error)
+
+	CreateRuleVersionWithResponse(ctx context.Context, params *CreateRuleVersionParams, body CreateRuleVersionJSONRequestBody, reqEditors ...RequestEditorFn) (*CreateRuleVersionResponse, error)
+
+	// GetRuleVersionWithResponse request
+	GetRuleVersionWithResponse(ctx context.Context, semanticHash SHA256Digest, reqEditors ...RequestEditorFn) (*GetRuleVersionResponse, error)
+
 	// ListSessionsWithResponse request
 	ListSessionsWithResponse(ctx context.Context, reqEditors ...RequestEditorFn) (*ListSessionsResponse, error)
 
 	// RevokeSessionWithResponse request
 	RevokeSessionWithResponse(ctx context.Context, sessionId SessionId, params *RevokeSessionParams, reqEditors ...RequestEditorFn) (*RevokeSessionResponse, error)
+
+	// CreateSourceRuleBindingWithBodyWithResponse request with any body
+	CreateSourceRuleBindingWithBodyWithResponse(ctx context.Context, params *CreateSourceRuleBindingParams, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*CreateSourceRuleBindingResponse, error)
+
+	CreateSourceRuleBindingWithResponse(ctx context.Context, params *CreateSourceRuleBindingParams, body CreateSourceRuleBindingJSONRequestBody, reqEditors ...RequestEditorFn) (*CreateSourceRuleBindingResponse, error)
+
+	// GetSourceRuleBindingWithResponse request
+	GetSourceRuleBindingWithResponse(ctx context.Context, bindingId SourceRuleBindingId, reqEditors ...RequestEditorFn) (*GetSourceRuleBindingResponse, error)
+
+	// CreateSourceWithBodyWithResponse request with any body
+	CreateSourceWithBodyWithResponse(ctx context.Context, params *CreateSourceParams, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*CreateSourceResponse, error)
+
+	CreateSourceWithResponse(ctx context.Context, params *CreateSourceParams, body CreateSourceJSONRequestBody, reqEditors ...RequestEditorFn) (*CreateSourceResponse, error)
+
+	// GetSourceWithResponse request
+	GetSourceWithResponse(ctx context.Context, sourceId SourceId, reqEditors ...RequestEditorFn) (*GetSourceResponse, error)
 }
 
 type GetBootstrapResponse struct {
@@ -961,6 +1627,72 @@ func (r GetHealthResponse) ContentType() string {
 	return ""
 }
 
+type CreateLibraryResponse struct {
+	Body         []byte
+	HTTPResponse *http.Response
+	JSON201      *Library
+	JSON400      *ValidationError
+	JSON401      *UnauthenticatedError
+	JSON403      *ForbiddenError
+}
+
+// Status returns HTTPResponse.Status
+func (r CreateLibraryResponse) Status() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Status
+	}
+	return http.StatusText(0)
+}
+
+// StatusCode returns HTTPResponse.StatusCode
+func (r CreateLibraryResponse) StatusCode() int {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.StatusCode
+	}
+	return 0
+}
+
+// ContentType is a convenience method to retrieve the Content-Type value from the HTTP response headers
+func (r CreateLibraryResponse) ContentType() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Header.Get("Content-Type")
+	}
+	return ""
+}
+
+type GetLibraryResponse struct {
+	Body         []byte
+	HTTPResponse *http.Response
+	JSON200      *Library
+	JSON401      *UnauthenticatedError
+	JSON403      *ForbiddenError
+	JSON404      *NotFoundError
+}
+
+// Status returns HTTPResponse.Status
+func (r GetLibraryResponse) Status() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Status
+	}
+	return http.StatusText(0)
+}
+
+// StatusCode returns HTTPResponse.StatusCode
+func (r GetLibraryResponse) StatusCode() int {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.StatusCode
+	}
+	return 0
+}
+
+// ContentType is a convenience method to retrieve the Content-Type value from the HTTP response headers
+func (r GetLibraryResponse) ContentType() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Header.Get("Content-Type")
+	}
+	return ""
+}
+
 type ExchangePairingCredentialResponse struct {
 	Body         []byte
 	HTTPResponse *http.Response
@@ -1018,6 +1750,73 @@ func (r CreatePairingAttemptResponse) StatusCode() int {
 
 // ContentType is a convenience method to retrieve the Content-Type value from the HTTP response headers
 func (r CreatePairingAttemptResponse) ContentType() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Header.Get("Content-Type")
+	}
+	return ""
+}
+
+type CreateRuleVersionResponse struct {
+	Body         []byte
+	HTTPResponse *http.Response
+	JSON201      *RuleVersion
+	JSON400      *ValidationError
+	JSON401      *UnauthenticatedError
+	JSON403      *ForbiddenError
+	JSON409      *ConflictError
+}
+
+// Status returns HTTPResponse.Status
+func (r CreateRuleVersionResponse) Status() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Status
+	}
+	return http.StatusText(0)
+}
+
+// StatusCode returns HTTPResponse.StatusCode
+func (r CreateRuleVersionResponse) StatusCode() int {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.StatusCode
+	}
+	return 0
+}
+
+// ContentType is a convenience method to retrieve the Content-Type value from the HTTP response headers
+func (r CreateRuleVersionResponse) ContentType() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Header.Get("Content-Type")
+	}
+	return ""
+}
+
+type GetRuleVersionResponse struct {
+	Body         []byte
+	HTTPResponse *http.Response
+	JSON200      *RuleVersion
+	JSON401      *UnauthenticatedError
+	JSON403      *ForbiddenError
+	JSON404      *NotFoundError
+}
+
+// Status returns HTTPResponse.Status
+func (r GetRuleVersionResponse) Status() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Status
+	}
+	return http.StatusText(0)
+}
+
+// StatusCode returns HTTPResponse.StatusCode
+func (r GetRuleVersionResponse) StatusCode() int {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.StatusCode
+	}
+	return 0
+}
+
+// ContentType is a convenience method to retrieve the Content-Type value from the HTTP response headers
+func (r GetRuleVersionResponse) ContentType() string {
 	if r.HTTPResponse != nil {
 		return r.HTTPResponse.Header.Get("Content-Type")
 	}
@@ -1090,6 +1889,141 @@ func (r RevokeSessionResponse) ContentType() string {
 	return ""
 }
 
+type CreateSourceRuleBindingResponse struct {
+	Body         []byte
+	HTTPResponse *http.Response
+	JSON201      *SourceRuleBinding
+	JSON400      *ValidationError
+	JSON401      *UnauthenticatedError
+	JSON403      *ForbiddenError
+	JSON404      *NotFoundError
+	JSON409      *ConflictError
+}
+
+// Status returns HTTPResponse.Status
+func (r CreateSourceRuleBindingResponse) Status() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Status
+	}
+	return http.StatusText(0)
+}
+
+// StatusCode returns HTTPResponse.StatusCode
+func (r CreateSourceRuleBindingResponse) StatusCode() int {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.StatusCode
+	}
+	return 0
+}
+
+// ContentType is a convenience method to retrieve the Content-Type value from the HTTP response headers
+func (r CreateSourceRuleBindingResponse) ContentType() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Header.Get("Content-Type")
+	}
+	return ""
+}
+
+type GetSourceRuleBindingResponse struct {
+	Body         []byte
+	HTTPResponse *http.Response
+	JSON200      *SourceRuleBinding
+	JSON401      *UnauthenticatedError
+	JSON403      *ForbiddenError
+	JSON404      *NotFoundError
+}
+
+// Status returns HTTPResponse.Status
+func (r GetSourceRuleBindingResponse) Status() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Status
+	}
+	return http.StatusText(0)
+}
+
+// StatusCode returns HTTPResponse.StatusCode
+func (r GetSourceRuleBindingResponse) StatusCode() int {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.StatusCode
+	}
+	return 0
+}
+
+// ContentType is a convenience method to retrieve the Content-Type value from the HTTP response headers
+func (r GetSourceRuleBindingResponse) ContentType() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Header.Get("Content-Type")
+	}
+	return ""
+}
+
+type CreateSourceResponse struct {
+	Body         []byte
+	HTTPResponse *http.Response
+	JSON201      *Source
+	JSON400      *ValidationError
+	JSON401      *UnauthenticatedError
+	JSON403      *ForbiddenError
+	JSON409      *ConflictError
+}
+
+// Status returns HTTPResponse.Status
+func (r CreateSourceResponse) Status() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Status
+	}
+	return http.StatusText(0)
+}
+
+// StatusCode returns HTTPResponse.StatusCode
+func (r CreateSourceResponse) StatusCode() int {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.StatusCode
+	}
+	return 0
+}
+
+// ContentType is a convenience method to retrieve the Content-Type value from the HTTP response headers
+func (r CreateSourceResponse) ContentType() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Header.Get("Content-Type")
+	}
+	return ""
+}
+
+type GetSourceResponse struct {
+	Body         []byte
+	HTTPResponse *http.Response
+	JSON200      *Source
+	JSON401      *UnauthenticatedError
+	JSON403      *ForbiddenError
+	JSON404      *NotFoundError
+}
+
+// Status returns HTTPResponse.Status
+func (r GetSourceResponse) Status() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Status
+	}
+	return http.StatusText(0)
+}
+
+// StatusCode returns HTTPResponse.StatusCode
+func (r GetSourceResponse) StatusCode() int {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.StatusCode
+	}
+	return 0
+}
+
+// ContentType is a convenience method to retrieve the Content-Type value from the HTTP response headers
+func (r GetSourceResponse) ContentType() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Header.Get("Content-Type")
+	}
+	return ""
+}
+
 // GetBootstrapWithResponse request returning *GetBootstrapResponse
 func (c *ClientWithResponses) GetBootstrapWithResponse(ctx context.Context, reqEditors ...RequestEditorFn) (*GetBootstrapResponse, error) {
 	rsp, err := c.GetBootstrap(ctx, reqEditors...)
@@ -1106,6 +2040,32 @@ func (c *ClientWithResponses) GetHealthWithResponse(ctx context.Context, reqEdit
 		return nil, err
 	}
 	return ParseGetHealthResponse(rsp)
+}
+
+// CreateLibraryWithBodyWithResponse request with arbitrary body returning *CreateLibraryResponse
+func (c *ClientWithResponses) CreateLibraryWithBodyWithResponse(ctx context.Context, params *CreateLibraryParams, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*CreateLibraryResponse, error) {
+	rsp, err := c.CreateLibraryWithBody(ctx, params, contentType, body, reqEditors...)
+	if err != nil {
+		return nil, err
+	}
+	return ParseCreateLibraryResponse(rsp)
+}
+
+func (c *ClientWithResponses) CreateLibraryWithResponse(ctx context.Context, params *CreateLibraryParams, body CreateLibraryJSONRequestBody, reqEditors ...RequestEditorFn) (*CreateLibraryResponse, error) {
+	rsp, err := c.CreateLibrary(ctx, params, body, reqEditors...)
+	if err != nil {
+		return nil, err
+	}
+	return ParseCreateLibraryResponse(rsp)
+}
+
+// GetLibraryWithResponse request returning *GetLibraryResponse
+func (c *ClientWithResponses) GetLibraryWithResponse(ctx context.Context, libraryId LibraryId, reqEditors ...RequestEditorFn) (*GetLibraryResponse, error) {
+	rsp, err := c.GetLibrary(ctx, libraryId, reqEditors...)
+	if err != nil {
+		return nil, err
+	}
+	return ParseGetLibraryResponse(rsp)
 }
 
 // ExchangePairingCredentialWithBodyWithResponse request with arbitrary body returning *ExchangePairingCredentialResponse
@@ -1134,6 +2094,32 @@ func (c *ClientWithResponses) CreatePairingAttemptWithResponse(ctx context.Conte
 	return ParseCreatePairingAttemptResponse(rsp)
 }
 
+// CreateRuleVersionWithBodyWithResponse request with arbitrary body returning *CreateRuleVersionResponse
+func (c *ClientWithResponses) CreateRuleVersionWithBodyWithResponse(ctx context.Context, params *CreateRuleVersionParams, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*CreateRuleVersionResponse, error) {
+	rsp, err := c.CreateRuleVersionWithBody(ctx, params, contentType, body, reqEditors...)
+	if err != nil {
+		return nil, err
+	}
+	return ParseCreateRuleVersionResponse(rsp)
+}
+
+func (c *ClientWithResponses) CreateRuleVersionWithResponse(ctx context.Context, params *CreateRuleVersionParams, body CreateRuleVersionJSONRequestBody, reqEditors ...RequestEditorFn) (*CreateRuleVersionResponse, error) {
+	rsp, err := c.CreateRuleVersion(ctx, params, body, reqEditors...)
+	if err != nil {
+		return nil, err
+	}
+	return ParseCreateRuleVersionResponse(rsp)
+}
+
+// GetRuleVersionWithResponse request returning *GetRuleVersionResponse
+func (c *ClientWithResponses) GetRuleVersionWithResponse(ctx context.Context, semanticHash SHA256Digest, reqEditors ...RequestEditorFn) (*GetRuleVersionResponse, error) {
+	rsp, err := c.GetRuleVersion(ctx, semanticHash, reqEditors...)
+	if err != nil {
+		return nil, err
+	}
+	return ParseGetRuleVersionResponse(rsp)
+}
+
 // ListSessionsWithResponse request returning *ListSessionsResponse
 func (c *ClientWithResponses) ListSessionsWithResponse(ctx context.Context, reqEditors ...RequestEditorFn) (*ListSessionsResponse, error) {
 	rsp, err := c.ListSessions(ctx, reqEditors...)
@@ -1150,6 +2136,58 @@ func (c *ClientWithResponses) RevokeSessionWithResponse(ctx context.Context, ses
 		return nil, err
 	}
 	return ParseRevokeSessionResponse(rsp)
+}
+
+// CreateSourceRuleBindingWithBodyWithResponse request with arbitrary body returning *CreateSourceRuleBindingResponse
+func (c *ClientWithResponses) CreateSourceRuleBindingWithBodyWithResponse(ctx context.Context, params *CreateSourceRuleBindingParams, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*CreateSourceRuleBindingResponse, error) {
+	rsp, err := c.CreateSourceRuleBindingWithBody(ctx, params, contentType, body, reqEditors...)
+	if err != nil {
+		return nil, err
+	}
+	return ParseCreateSourceRuleBindingResponse(rsp)
+}
+
+func (c *ClientWithResponses) CreateSourceRuleBindingWithResponse(ctx context.Context, params *CreateSourceRuleBindingParams, body CreateSourceRuleBindingJSONRequestBody, reqEditors ...RequestEditorFn) (*CreateSourceRuleBindingResponse, error) {
+	rsp, err := c.CreateSourceRuleBinding(ctx, params, body, reqEditors...)
+	if err != nil {
+		return nil, err
+	}
+	return ParseCreateSourceRuleBindingResponse(rsp)
+}
+
+// GetSourceRuleBindingWithResponse request returning *GetSourceRuleBindingResponse
+func (c *ClientWithResponses) GetSourceRuleBindingWithResponse(ctx context.Context, bindingId SourceRuleBindingId, reqEditors ...RequestEditorFn) (*GetSourceRuleBindingResponse, error) {
+	rsp, err := c.GetSourceRuleBinding(ctx, bindingId, reqEditors...)
+	if err != nil {
+		return nil, err
+	}
+	return ParseGetSourceRuleBindingResponse(rsp)
+}
+
+// CreateSourceWithBodyWithResponse request with arbitrary body returning *CreateSourceResponse
+func (c *ClientWithResponses) CreateSourceWithBodyWithResponse(ctx context.Context, params *CreateSourceParams, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*CreateSourceResponse, error) {
+	rsp, err := c.CreateSourceWithBody(ctx, params, contentType, body, reqEditors...)
+	if err != nil {
+		return nil, err
+	}
+	return ParseCreateSourceResponse(rsp)
+}
+
+func (c *ClientWithResponses) CreateSourceWithResponse(ctx context.Context, params *CreateSourceParams, body CreateSourceJSONRequestBody, reqEditors ...RequestEditorFn) (*CreateSourceResponse, error) {
+	rsp, err := c.CreateSource(ctx, params, body, reqEditors...)
+	if err != nil {
+		return nil, err
+	}
+	return ParseCreateSourceResponse(rsp)
+}
+
+// GetSourceWithResponse request returning *GetSourceResponse
+func (c *ClientWithResponses) GetSourceWithResponse(ctx context.Context, sourceId SourceId, reqEditors ...RequestEditorFn) (*GetSourceResponse, error) {
+	rsp, err := c.GetSource(ctx, sourceId, reqEditors...)
+	if err != nil {
+		return nil, err
+	}
+	return ParseGetSourceResponse(rsp)
 }
 
 // ParseGetBootstrapResponse parses an HTTP response from a GetBootstrapWithResponse call
@@ -1212,6 +2250,100 @@ func ParseGetHealthResponse(rsp *http.Response) (*GetHealthResponse, error) {
 			return nil, err
 		}
 		response.JSON500 = &dest
+
+	}
+
+	return response, nil
+}
+
+// ParseCreateLibraryResponse parses an HTTP response from a CreateLibraryWithResponse call
+func ParseCreateLibraryResponse(rsp *http.Response) (*CreateLibraryResponse, error) {
+	bodyBytes, err := io.ReadAll(rsp.Body)
+	defer func() { _ = rsp.Body.Close() }()
+	if err != nil {
+		return nil, err
+	}
+
+	response := &CreateLibraryResponse{
+		Body:         bodyBytes,
+		HTTPResponse: rsp,
+	}
+
+	switch {
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 201:
+		var dest Library
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON201 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 400:
+		var dest ValidationError
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON400 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 401:
+		var dest UnauthenticatedError
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON401 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 403:
+		var dest ForbiddenError
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON403 = &dest
+
+	}
+
+	return response, nil
+}
+
+// ParseGetLibraryResponse parses an HTTP response from a GetLibraryWithResponse call
+func ParseGetLibraryResponse(rsp *http.Response) (*GetLibraryResponse, error) {
+	bodyBytes, err := io.ReadAll(rsp.Body)
+	defer func() { _ = rsp.Body.Close() }()
+	if err != nil {
+		return nil, err
+	}
+
+	response := &GetLibraryResponse{
+		Body:         bodyBytes,
+		HTTPResponse: rsp,
+	}
+
+	switch {
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 200:
+		var dest Library
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON200 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 401:
+		var dest UnauthenticatedError
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON401 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 403:
+		var dest ForbiddenError
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON403 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 404:
+		var dest NotFoundError
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON404 = &dest
 
 	}
 
@@ -1291,6 +2423,107 @@ func ParseCreatePairingAttemptResponse(rsp *http.Response) (*CreatePairingAttemp
 	return response, nil
 }
 
+// ParseCreateRuleVersionResponse parses an HTTP response from a CreateRuleVersionWithResponse call
+func ParseCreateRuleVersionResponse(rsp *http.Response) (*CreateRuleVersionResponse, error) {
+	bodyBytes, err := io.ReadAll(rsp.Body)
+	defer func() { _ = rsp.Body.Close() }()
+	if err != nil {
+		return nil, err
+	}
+
+	response := &CreateRuleVersionResponse{
+		Body:         bodyBytes,
+		HTTPResponse: rsp,
+	}
+
+	switch {
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 201:
+		var dest RuleVersion
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON201 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 400:
+		var dest ValidationError
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON400 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 401:
+		var dest UnauthenticatedError
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON401 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 403:
+		var dest ForbiddenError
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON403 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 409:
+		var dest ConflictError
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON409 = &dest
+
+	}
+
+	return response, nil
+}
+
+// ParseGetRuleVersionResponse parses an HTTP response from a GetRuleVersionWithResponse call
+func ParseGetRuleVersionResponse(rsp *http.Response) (*GetRuleVersionResponse, error) {
+	bodyBytes, err := io.ReadAll(rsp.Body)
+	defer func() { _ = rsp.Body.Close() }()
+	if err != nil {
+		return nil, err
+	}
+
+	response := &GetRuleVersionResponse{
+		Body:         bodyBytes,
+		HTTPResponse: rsp,
+	}
+
+	switch {
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 200:
+		var dest RuleVersion
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON200 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 401:
+		var dest UnauthenticatedError
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON401 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 403:
+		var dest ForbiddenError
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON403 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 404:
+		var dest NotFoundError
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON404 = &dest
+
+	}
+
+	return response, nil
+}
+
 // ParseListSessionsResponse parses an HTTP response from a ListSessionsWithResponse call
 func ParseListSessionsResponse(rsp *http.Response) (*ListSessionsResponse, error) {
 	bodyBytes, err := io.ReadAll(rsp.Body)
@@ -1347,6 +2580,215 @@ func ParseRevokeSessionResponse(rsp *http.Response) (*RevokeSessionResponse, err
 	}
 
 	switch {
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 401:
+		var dest UnauthenticatedError
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON401 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 403:
+		var dest ForbiddenError
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON403 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 404:
+		var dest NotFoundError
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON404 = &dest
+
+	}
+
+	return response, nil
+}
+
+// ParseCreateSourceRuleBindingResponse parses an HTTP response from a CreateSourceRuleBindingWithResponse call
+func ParseCreateSourceRuleBindingResponse(rsp *http.Response) (*CreateSourceRuleBindingResponse, error) {
+	bodyBytes, err := io.ReadAll(rsp.Body)
+	defer func() { _ = rsp.Body.Close() }()
+	if err != nil {
+		return nil, err
+	}
+
+	response := &CreateSourceRuleBindingResponse{
+		Body:         bodyBytes,
+		HTTPResponse: rsp,
+	}
+
+	switch {
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 201:
+		var dest SourceRuleBinding
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON201 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 400:
+		var dest ValidationError
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON400 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 401:
+		var dest UnauthenticatedError
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON401 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 403:
+		var dest ForbiddenError
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON403 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 404:
+		var dest NotFoundError
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON404 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 409:
+		var dest ConflictError
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON409 = &dest
+
+	}
+
+	return response, nil
+}
+
+// ParseGetSourceRuleBindingResponse parses an HTTP response from a GetSourceRuleBindingWithResponse call
+func ParseGetSourceRuleBindingResponse(rsp *http.Response) (*GetSourceRuleBindingResponse, error) {
+	bodyBytes, err := io.ReadAll(rsp.Body)
+	defer func() { _ = rsp.Body.Close() }()
+	if err != nil {
+		return nil, err
+	}
+
+	response := &GetSourceRuleBindingResponse{
+		Body:         bodyBytes,
+		HTTPResponse: rsp,
+	}
+
+	switch {
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 200:
+		var dest SourceRuleBinding
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON200 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 401:
+		var dest UnauthenticatedError
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON401 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 403:
+		var dest ForbiddenError
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON403 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 404:
+		var dest NotFoundError
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON404 = &dest
+
+	}
+
+	return response, nil
+}
+
+// ParseCreateSourceResponse parses an HTTP response from a CreateSourceWithResponse call
+func ParseCreateSourceResponse(rsp *http.Response) (*CreateSourceResponse, error) {
+	bodyBytes, err := io.ReadAll(rsp.Body)
+	defer func() { _ = rsp.Body.Close() }()
+	if err != nil {
+		return nil, err
+	}
+
+	response := &CreateSourceResponse{
+		Body:         bodyBytes,
+		HTTPResponse: rsp,
+	}
+
+	switch {
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 201:
+		var dest Source
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON201 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 400:
+		var dest ValidationError
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON400 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 401:
+		var dest UnauthenticatedError
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON401 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 403:
+		var dest ForbiddenError
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON403 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 409:
+		var dest ConflictError
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON409 = &dest
+
+	}
+
+	return response, nil
+}
+
+// ParseGetSourceResponse parses an HTTP response from a GetSourceWithResponse call
+func ParseGetSourceResponse(rsp *http.Response) (*GetSourceResponse, error) {
+	bodyBytes, err := io.ReadAll(rsp.Body)
+	defer func() { _ = rsp.Body.Close() }()
+	if err != nil {
+		return nil, err
+	}
+
+	response := &GetSourceResponse{
+		Body:         bodyBytes,
+		HTTPResponse: rsp,
+	}
+
+	switch {
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 200:
+		var dest Source
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON200 = &dest
+
 	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 401:
 		var dest UnauthenticatedError
 		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
