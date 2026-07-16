@@ -23,6 +23,8 @@ import (
 	"github.com/RecRivenVI/gallery/internal/config"
 	"github.com/RecRivenVI/gallery/internal/contract/fault"
 	"github.com/RecRivenVI/gallery/internal/contract/realtime"
+	"github.com/RecRivenVI/gallery/internal/creators"
+	"github.com/RecRivenVI/gallery/internal/domain"
 	"github.com/RecRivenVI/gallery/internal/jobs"
 	"github.com/RecRivenVI/gallery/internal/overlay"
 	"github.com/RecRivenVI/gallery/internal/platform/appdirs"
@@ -57,7 +59,7 @@ func TestGeneratedClientHealthBootstrapAndAnonymousWS(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	server := httptest.NewServer(httpapi.New(config.ModePersonal, store, fixedClock, personal, resources, nil, nil, nil, nil, nil, logger))
+	server := httptest.NewServer(httpapi.New(config.ModePersonal, store, fixedClock, personal, resources, nil, nil, nil, nil, nil, nil, logger))
 	defer server.Close()
 
 	client, err := api.NewClientWithResponses(server.URL)
@@ -143,8 +145,12 @@ func TestPersonalPairingIsSingleUseAndRevocationInvalidatesREST(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	creatorsService, err := creators.New(context.Background(), store.Control.SQL(), jobStore, catalogStore, fixedClock, identity.NewGenerator(fixedClock), overlayService)
+	if err != nil {
+		t.Fatal(err)
+	}
 	server := httptest.NewServer(httpapi.New(
-		config.ModePersonal, store, fixedClock, personal, resources, jobStore, catalogStore, scannerService, overlayService, hub,
+		config.ModePersonal, store, fixedClock, personal, resources, jobStore, catalogStore, scannerService, overlayService, creatorsService, hub,
 		slog.New(slog.NewJSONHandler(io.Discard, nil)),
 	))
 	defer server.Close()
@@ -465,4 +471,166 @@ func waitForWebSocketJobCompleted(t *testing.T, connection *websocket.Conn, jobI
 			return envelope.Sequence
 		}
 	}
+}
+
+func TestCreatorMergeAPIContract(t *testing.T) {
+	ctx := context.Background()
+	dirs := appdirs.UnderRoot(filepath.Join(t.TempDir(), "app"))
+	if err := dirs.Ensure(filesystem.OS{}); err != nil {
+		t.Fatal(err)
+	}
+	store, err := storage.Open(ctx, dirs)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	fixedClock := clock.Fixed{Time: time.Now().UTC()}
+	generator := identity.NewGenerator(fixedClock)
+	personal, err := auth.NewPersonal(store.Control.SQL(), fixedClock, generator, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resources, err := application.NewResources(store.Control.SQL(), dirs, filesystem.OS{}, fixedClock, generator)
+	if err != nil {
+		t.Fatal(err)
+	}
+	jobStore, err := jobs.NewStore(store.Control.SQL(), fixedClock, generator)
+	if err != nil {
+		t.Fatal(err)
+	}
+	catalogStore, err := catalog.NewStore(store.Catalog.SQL(), fixedClock, generator)
+	if err != nil {
+		t.Fatal(err)
+	}
+	overlayService, err := overlay.New(ctx, store.Control.SQL(), jobStore, catalogStore, fixedClock, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	creatorsService, err := creators.New(ctx, store.Control.SQL(), jobStore, catalogStore, fixedClock, generator, overlayService)
+	if err != nil {
+		t.Fatal(err)
+	}
+	handler := httpapi.New(config.ModePersonal, store, fixedClock, personal, resources, jobStore, catalogStore, nil, overlayService, creatorsService, nil, slog.New(slog.NewJSONHandler(io.Discard, nil)))
+	server := httptest.NewServer(handler)
+	defer server.Close()
+
+	alphaID := newSeededCreator(t, ctx, store, generator, "作者甲")
+	betaID := newSeededCreator(t, ctx, store, generator, "作者乙")
+
+	jar, err := cookiejar.New(nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	client, err := api.NewClientWithResponses(server.URL, api.WithHTTPClient(&http.Client{Jar: jar}))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// 未认证时创作者列表应 401。
+	anonymous, err := api.NewClientWithResponses(server.URL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if unauth, err := anonymous.ListCreatorsWithResponse(ctx); err != nil || unauth.JSON401 == nil {
+		t.Fatalf("未认证列表未 401: %v status=%d", err, unauth.StatusCode())
+	}
+
+	csrf := pairSession(t, ctx, client, server.URL)
+	editor := sameOrigin(server.URL)
+
+	list, err := client.ListCreatorsWithResponse(ctx)
+	if err != nil || list.JSON200 == nil || len(list.JSON200.Creators) != 2 {
+		t.Fatalf("创作者列表错误: %v status=%d", err, list.StatusCode())
+	}
+	detail, err := client.GetCreatorWithResponse(ctx, alphaID)
+	if err != nil || detail.JSON200 == nil || detail.JSON200.Creator.Id != alphaID || detail.JSON200.Creator.EffectiveId != alphaID {
+		t.Fatalf("创作者详情错误: %v status=%d", err, detail.StatusCode())
+	}
+	if missing, err := client.GetCreatorWithResponse(ctx, newCreatorID(t, generator)); err != nil || missing.JSON404 == nil {
+		t.Fatalf("不存在创作者未 404: %v status=%d", err, missing.StatusCode())
+	}
+
+	// 缺少 CSRF 头的合并应被拒绝。
+	if noCSRF, err := client.MergeCreatorsWithResponse(ctx, &api.MergeCreatorsParams{XGalleryCSRF: ""},
+		api.CreatorMergeRequest{TargetCreatorId: alphaID, AbsorbedCreatorIds: []string{betaID}}, editor); err != nil || noCSRF.JSON403 == nil {
+		t.Fatalf("缺 CSRF 合并未 403: %v status=%d", err, noCSRF.StatusCode())
+	}
+
+	merge, err := client.MergeCreatorsWithResponse(ctx, &api.MergeCreatorsParams{XGalleryCSRF: csrf},
+		api.CreatorMergeRequest{TargetCreatorId: alphaID, AbsorbedCreatorIds: []string{betaID}}, editor)
+	if err != nil || merge.JSON201 == nil || string(merge.JSON201.Status) != "applied" ||
+		merge.JSON201.TargetCreatorId != alphaID || len(merge.JSON201.AbsorbedCreatorIds) != 1 {
+		t.Fatalf("合并接口错误: %v status=%d body=%s", err, merge.StatusCode(), merge.Body)
+	}
+	mergeID := merge.JSON201.Id
+
+	mergedBeta, err := client.GetCreatorWithResponse(ctx, betaID)
+	if err != nil || mergedBeta.JSON200 == nil || mergedBeta.JSON200.Creator.MergedInto == nil ||
+		*mergedBeta.JSON200.Creator.MergedInto != alphaID || mergedBeta.JSON200.Creator.EffectiveId != alphaID {
+		t.Fatalf("合并后被合并者状态错误: %v status=%d", err, mergedBeta.StatusCode())
+	}
+	merges, err := client.ListCreatorMergesWithResponse(ctx)
+	if err != nil || merges.JSON200 == nil || len(merges.JSON200.Merges) != 1 || merges.JSON200.Merges[0].Id != mergeID {
+		t.Fatalf("合并记录列表错误: %v status=%d", err, merges.StatusCode())
+	}
+
+	// 被合并者已非 live，重复合并应 409。
+	if repeat, err := client.MergeCreatorsWithResponse(ctx, &api.MergeCreatorsParams{XGalleryCSRF: csrf},
+		api.CreatorMergeRequest{TargetCreatorId: alphaID, AbsorbedCreatorIds: []string{betaID}}, editor); err != nil || repeat.JSON409 == nil {
+		t.Fatalf("重复合并未 409: %v status=%d", err, repeat.StatusCode())
+	}
+
+	undo, err := client.UndoCreatorMergeWithResponse(ctx, mergeID, &api.UndoCreatorMergeParams{XGalleryCSRF: csrf}, editor)
+	if err != nil || undo.JSON200 == nil || string(undo.JSON200.Status) != "undone" {
+		t.Fatalf("撤销接口错误: %v status=%d body=%s", err, undo.StatusCode(), undo.Body)
+	}
+	restored, err := client.GetCreatorWithResponse(ctx, betaID)
+	if err != nil || restored.JSON200 == nil || restored.JSON200.Creator.MergedInto != nil {
+		t.Fatalf("撤销后被合并者未恢复 live: %v status=%d", err, restored.StatusCode())
+	}
+	if repeat, err := client.UndoCreatorMergeWithResponse(ctx, mergeID, &api.UndoCreatorMergeParams{XGalleryCSRF: csrf}, editor); err != nil || repeat.JSON409 == nil {
+		t.Fatalf("重复撤销未 409: %v status=%d", err, repeat.StatusCode())
+	}
+}
+
+func pairSession(t *testing.T, ctx context.Context, client *api.ClientWithResponses, origin string) string {
+	t.Helper()
+	editor := sameOrigin(origin)
+	bootstrap, err := client.GetBootstrapWithResponse(ctx)
+	if err != nil || bootstrap.JSON200 == nil {
+		t.Fatalf("bootstrap 失败: %v", err)
+	}
+	attempt, err := client.CreatePairingAttemptWithResponse(ctx, &api.CreatePairingAttemptParams{XGalleryCSRF: bootstrap.JSON200.CsrfToken}, editor)
+	if err != nil || attempt.JSON201 == nil {
+		t.Fatalf("配对 attempt 失败: %v", err)
+	}
+	exchange, err := client.ExchangePairingCredentialWithResponse(ctx, &api.ExchangePairingCredentialParams{XGalleryCSRF: bootstrap.JSON200.CsrfToken},
+		api.PairingExchangeRequest{Credential: attempt.JSON201.Credential}, editor)
+	if err != nil || exchange.JSON201 == nil {
+		t.Fatalf("配对交换失败: %v", err)
+	}
+	return exchange.JSON201.CsrfToken
+}
+
+func newSeededCreator(t *testing.T, ctx context.Context, store *storage.Store, generator interface {
+	New(domain.IDKind) (domain.ID, error)
+}, name string) string {
+	t.Helper()
+	id := newCreatorID(t, generator)
+	if _, err := store.Control.SQL().ExecContext(ctx, `INSERT INTO canonical_creators
+(creator_id, name, created_at) VALUES (?, ?, 1)`, id, name); err != nil {
+		t.Fatal(err)
+	}
+	return id
+}
+
+func newCreatorID(t *testing.T, generator interface {
+	New(domain.IDKind) (domain.ID, error)
+}) string {
+	t.Helper()
+	id, err := generator.New(domain.IDCanonicalCreator)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return id.String()
 }

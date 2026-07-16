@@ -30,6 +30,7 @@ const (
 
 var PersonalOwnerCapabilities = []string{
 	"clients.manage",
+	"creators.write",
 	"library.read",
 	"library.write",
 	"media.read",

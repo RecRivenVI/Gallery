@@ -703,6 +703,113 @@ paths:
         "409": {$ref: "#/components/responses/ConflictError"}
         "416": {$ref: "#/components/responses/RangeError"}
         "503": {$ref: "#/components/responses/MediaOfflineError"}
+  /api/v1/creators:
+    get:
+      operationId: listCreators
+      summary: 列出 CanonicalCreator 及其有效合并状态
+      responses:
+        "200":
+          description: 全部 CanonicalCreator
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CreatorListResponse"
+        "401":
+          $ref: "#/components/responses/UnauthenticatedError"
+        "403":
+          $ref: "#/components/responses/ForbiddenError"
+  /api/v1/creators/{creatorId}:
+    get:
+      operationId: getCreator
+      summary: 读取 CanonicalCreator 及其来源 Binding 证据
+      parameters:
+        - name: creatorId
+          in: path
+          required: true
+          schema:
+            $ref: "#/components/schemas/CanonicalCreatorId"
+      responses:
+        "200":
+          description: CanonicalCreator 与证据
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CreatorDetail"
+        "401":
+          $ref: "#/components/responses/UnauthenticatedError"
+        "403":
+          $ref: "#/components/responses/ForbiddenError"
+        "404":
+          $ref: "#/components/responses/NotFoundError"
+  /api/v1/creators/merges:
+    get:
+      operationId: listCreatorMerges
+      summary: 列出创作者合并记录及其状态
+      responses:
+        "200":
+          description: 合并记录
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CreatorMergeListResponse"
+        "401":
+          $ref: "#/components/responses/UnauthenticatedError"
+        "403":
+          $ref: "#/components/responses/ForbiddenError"
+    post:
+      operationId: mergeCreators
+      summary: 将若干 CanonicalCreator 合并进一个 target 并排队查询投影
+      parameters:
+        - $ref: "#/components/parameters/CSRFHeader"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreatorMergeRequest"
+      responses:
+        "201":
+          description: 合并已记录；projectionJobId 表明查询投影进度
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CreatorMerge"
+        "400":
+          $ref: "#/components/responses/ValidationError"
+        "401":
+          $ref: "#/components/responses/UnauthenticatedError"
+        "403":
+          $ref: "#/components/responses/ForbiddenError"
+        "404":
+          $ref: "#/components/responses/NotFoundError"
+        "409":
+          $ref: "#/components/responses/ConflictError"
+  /api/v1/creators/merges/{mergeId}:
+    delete:
+      operationId: undoCreatorMerge
+      summary: 撤销一次创作者合并并排队查询投影恢复
+      parameters:
+        - name: mergeId
+          in: path
+          required: true
+          schema:
+            $ref: "#/components/schemas/CreatorMergeId"
+        - $ref: "#/components/parameters/CSRFHeader"
+      responses:
+        "200":
+          description: 合并已撤销；projectionJobId 表明恢复投影进度
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CreatorMerge"
+        "401":
+          $ref: "#/components/responses/UnauthenticatedError"
+        "403":
+          $ref: "#/components/responses/ForbiddenError"
+        "404":
+          $ref: "#/components/responses/NotFoundError"
+        "409":
+          $ref: "#/components/responses/ConflictError"
 components:
   securitySchemes:
     sessionCookie:
@@ -1118,6 +1225,116 @@ components:
           type: array
           items:
             $ref: "#/components/schemas/PublishedMedia"
+    Creator:
+      type: object
+      additionalProperties: false
+      required: [id, name, effectiveId, sourceCount, createdAt]
+      properties:
+        id:
+          $ref: "#/components/schemas/CanonicalCreatorId"
+        name:
+          type: string
+        mergedInto:
+          allOf:
+            - $ref: "#/components/schemas/CanonicalCreatorId"
+          nullable: true
+        effectiveId:
+          $ref: "#/components/schemas/CanonicalCreatorId"
+        sourceCount:
+          type: integer
+          minimum: 0
+        createdAt:
+          type: string
+          format: date-time
+    CreatorSourceBinding:
+      type: object
+      additionalProperties: false
+      required: [bindingId, sourceId, providerId, externalId, sourceKey, status]
+      properties:
+        bindingId:
+          type: string
+        sourceId:
+          $ref: "#/components/schemas/SourceId"
+        providerId:
+          type: string
+        externalId:
+          type: string
+        sourceKey:
+          type: string
+        status:
+          type: string
+          enum: [active, orphaned, manual_unbound, conflict]
+    CreatorListResponse:
+      type: object
+      additionalProperties: false
+      required: [creators]
+      properties:
+        creators:
+          type: array
+          items:
+            $ref: "#/components/schemas/Creator"
+    CreatorDetail:
+      type: object
+      additionalProperties: false
+      required: [creator, sourceBindings]
+      properties:
+        creator:
+          $ref: "#/components/schemas/Creator"
+        sourceBindings:
+          type: array
+          items:
+            $ref: "#/components/schemas/CreatorSourceBinding"
+    CreatorMergeRequest:
+      type: object
+      additionalProperties: false
+      required: [targetCreatorId, absorbedCreatorIds]
+      properties:
+        targetCreatorId:
+          $ref: "#/components/schemas/CanonicalCreatorId"
+        absorbedCreatorIds:
+          type: array
+          minItems: 1
+          maxItems: 200
+          items:
+            $ref: "#/components/schemas/CanonicalCreatorId"
+    CreatorMerge:
+      type: object
+      additionalProperties: false
+      required: [id, targetCreatorId, absorbedCreatorIds, status, createdBy, createdAt]
+      properties:
+        id:
+          $ref: "#/components/schemas/CreatorMergeId"
+        targetCreatorId:
+          $ref: "#/components/schemas/CanonicalCreatorId"
+        absorbedCreatorIds:
+          type: array
+          items:
+            $ref: "#/components/schemas/CanonicalCreatorId"
+        status:
+          type: string
+          enum: [applied, undone]
+        createdBy:
+          type: string
+        createdAt:
+          type: string
+          format: date-time
+        undoneAt:
+          type: string
+          format: date-time
+          nullable: true
+        projectionJobId:
+          allOf:
+            - $ref: "#/components/schemas/JobId"
+          nullable: true
+    CreatorMergeListResponse:
+      type: object
+      additionalProperties: false
+      required: [merges]
+      properties:
+        merges:
+          type: array
+          items:
+            $ref: "#/components/schemas/CreatorMerge"
     LibraryCreateRequest:
       type: object
       additionalProperties: false
@@ -1414,6 +1631,9 @@ components:
     QueryPublicationId:
       type: string
       pattern: "^qpub_[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+    CreatorMergeId:
+      type: string
+      pattern: "^cmrg_[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
     ContentBlobRef:
       type: object
       additionalProperties: false
