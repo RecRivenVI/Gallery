@@ -384,7 +384,7 @@ func helperCatalogCandidate(t *testing.T, runtime *runtimeServices, root, mode s
 	if err := runtime.store.Control.SQL().QueryRowContext(ctx, "SELECT library_id FROM sources WHERE source_id=?", runtime.source.ID).Scan(&libraryID); err != nil {
 		t.Fatal(err)
 	}
-	_, watermark, err := runtime.resources.QueryOverlaySnapshot(ctx, nil)
+	_, _, watermark, err := runtime.resources.QueryOverlaySnapshot(ctx, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
