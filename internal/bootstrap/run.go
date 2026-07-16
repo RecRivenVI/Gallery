@@ -8,10 +8,12 @@ import (
 	"net/http"
 	"time"
 
+	"github.com/RecRivenVI/gallery/internal/auth"
 	"github.com/RecRivenVI/gallery/internal/config"
 	"github.com/RecRivenVI/gallery/internal/platform/clock"
 	"github.com/RecRivenVI/gallery/internal/platform/descriptor"
 	"github.com/RecRivenVI/gallery/internal/platform/filesystem"
+	"github.com/RecRivenVI/gallery/internal/platform/identity"
 	"github.com/RecRivenVI/gallery/internal/storage"
 	"github.com/RecRivenVI/gallery/internal/transport/httpapi"
 )
@@ -49,7 +51,12 @@ func Run(ctx context.Context, cfg config.Config, logger *slog.Logger) error {
 	}
 	defer descriptor.RemoveIfOwned(descriptorPath, runtimeDescriptor.StartupNonce)
 
-	handler := httpapi.New(cfg.Mode, store, clock.System{}, logger)
+	systemClock := clock.System{}
+	personal, err := auth.NewPersonal(store.Control.SQL(), systemClock, identity.NewGenerator(systemClock), nil)
+	if err != nil {
+		return err
+	}
+	handler := httpapi.New(cfg.Mode, store, systemClock, personal, logger)
 	server := &http.Server{
 		Handler: handler, ReadHeaderTimeout: 10 * time.Second, IdleTimeout: 60 * time.Second,
 	}

@@ -25,6 +25,11 @@ const (
 	CodeCatalogPublicationAbsent Code = "CATALOG_PUBLICATION_MISSING"
 	CodeContentChangedDuringHash Code = "CONTENT_CHANGED_DURING_HASH"
 	CodeMediaOffline             Code = "MEDIA_OFFLINE"
+	CodeHostRejected             Code = "HOST_REJECTED"
+	CodeOriginRejected           Code = "ORIGIN_REJECTED"
+	CodeCSRFInvalid              Code = "CSRF_INVALID"
+	CodePairingInvalid           Code = "PAIRING_INVALID"
+	CodePairingExpired           Code = "PAIRING_EXPIRED"
 )
 
 // Error 在进程内保留 cause，但对外序列化时只应暴露稳定字段。
