@@ -42,6 +42,8 @@ type WorkFact struct {
 	SourceID           string
 	LibraryID          string
 	SourceKey          string
+	ProviderID         string
+	ExternalID         string
 	SourceTitle        string
 	SourceTags         []string
 	Title              string
@@ -57,6 +59,7 @@ type MediaFact struct {
 	SourceID      string
 	SourceKey     string
 	WorkSourceKey string
+	RuleKey       string
 	RelativePath  string
 	Kind          string
 	MIME          string
@@ -628,7 +631,9 @@ func (s *Store) stageWorks(ctx context.Context, candidate Candidate, works []Wor
 			hidden = 1
 		}
 		if _, err := tx.ExecContext(ctx, `INSERT INTO source_works
-(catalog_revision_id, source_id, source_key, title, creator, tags_json, filenames_text) VALUES (?, ?, ?, ?, ?, ?, ?)`, candidate.CatalogRevisionID, work.SourceID, work.SourceKey, sourceTitle, work.Creator, string(sourceTagsJSON), string(filenamesJSON)); err != nil {
+(catalog_revision_id, source_id, source_key, title, creator, tags_json, filenames_text, provider_id, external_id)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`, candidate.CatalogRevisionID, work.SourceID, work.SourceKey,
+			sourceTitle, work.Creator, string(sourceTagsJSON), string(filenamesJSON), work.ProviderID, work.ExternalID); err != nil {
 			return fault.New(fault.CodeInternal, true, err)
 		}
 		if _, err := tx.ExecContext(ctx, `INSERT INTO work_projections
@@ -657,8 +662,9 @@ func (s *Store) stageMedia(ctx context.Context, candidate Candidate, items []Med
 	defer tx.Rollback()
 	for _, item := range items {
 		if _, err := tx.ExecContext(ctx, `INSERT INTO source_media
-(catalog_revision_id, source_id, source_key, work_source_key, relative_path, media_kind, mime_type, size_bytes)
-VALUES (?, ?, ?, ?, ?, ?, ?, ?)`, candidate.CatalogRevisionID, item.SourceID, item.SourceKey, item.WorkSourceKey, item.RelativePath, item.Kind, item.MIME, item.Size); err != nil {
+(catalog_revision_id, source_id, source_key, work_source_key, relative_path, media_kind, mime_type, size_bytes, rule_key)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`, candidate.CatalogRevisionID, item.SourceID, item.SourceKey,
+			item.WorkSourceKey, item.RelativePath, item.Kind, item.MIME, item.Size, item.RuleKey); err != nil {
 			return fault.New(fault.CodeInternal, true, err)
 		}
 		if _, err := tx.ExecContext(ctx, `INSERT OR IGNORE INTO content_blobs
@@ -688,10 +694,10 @@ func cloneUnchangedSources(ctx context.Context, tx *sql.Tx, candidate Candidate)
 		query string
 		args  []any
 	}{
-		{`INSERT INTO source_works SELECT ?, w.source_id, w.source_key, w.title, w.creator, w.tags_json, w.filenames_text FROM source_works w
+		{`INSERT INTO source_works SELECT ?, w.source_id, w.source_key, w.title, w.creator, w.tags_json, w.filenames_text, w.provider_id, w.external_id FROM source_works w
 JOIN active_query_publication a ON a.singleton=1 JOIN query_publications q ON q.query_publication_id=a.query_publication_id
 WHERE w.catalog_revision_id=q.catalog_revision_id AND w.source_id<>?`, []any{candidate.CatalogRevisionID, candidate.SourceID}},
-		{`INSERT INTO source_media SELECT ?, m.source_id, m.source_key, m.work_source_key, m.relative_path, m.media_kind, m.mime_type, m.size_bytes FROM source_media m
+		{`INSERT INTO source_media SELECT ?, m.source_id, m.source_key, m.work_source_key, m.relative_path, m.media_kind, m.mime_type, m.size_bytes, m.rule_key FROM source_media m
 JOIN active_query_publication a ON a.singleton=1 JOIN query_publications q ON q.query_publication_id=a.query_publication_id
 WHERE m.catalog_revision_id=q.catalog_revision_id AND m.source_id<>?`, []any{candidate.CatalogRevisionID, candidate.SourceID}},
 		{`INSERT INTO content_blobs SELECT DISTINCT ?, b.algorithm, b.digest, b.size_bytes FROM content_blobs b
