@@ -376,6 +376,8 @@ WHERE source_id = ? AND source_key = ?`, sourceID, mediaKey).Scan(&mediaID, &med
 
 func (r *Resources) ControlWatermark() int64 { return r.clock.Now().UTC().UnixNano() }
 
+func (r *Resources) TempRoot() string { return r.dirs.Temp }
+
 func (r *Resources) sourceRoots(ctx context.Context) ([]string, error) {
 	rows, err := r.control.QueryContext(ctx, "SELECT root_path FROM sources ORDER BY source_id")
 	if err != nil {

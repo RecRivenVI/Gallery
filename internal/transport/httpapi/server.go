@@ -6,9 +6,12 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"log/slog"
 	"net/http"
+	"strconv"
+	"strings"
 	"time"
 
 	"github.com/RecRivenVI/gallery/internal/application"
@@ -20,6 +23,7 @@ import (
 	"github.com/RecRivenVI/gallery/internal/contract/query"
 	"github.com/RecRivenVI/gallery/internal/contract/realtime"
 	"github.com/RecRivenVI/gallery/internal/jobs"
+	"github.com/RecRivenVI/gallery/internal/media"
 	"github.com/RecRivenVI/gallery/internal/ports"
 	"github.com/RecRivenVI/gallery/internal/rules"
 	"github.com/RecRivenVI/gallery/internal/scanner"
@@ -62,6 +66,8 @@ func New(mode config.Mode, store *storage.Store, clock ports.Clock, personal *au
 	mux.HandleFunc("GET /api/v1/works/{workId}", server.getWork)
 	mux.HandleFunc("GET /api/v1/works/{workId}/media", server.listWorkMedia)
 	mux.HandleFunc("GET /api/v1/media/{mediaId}", server.getMedia)
+	mux.HandleFunc("GET /api/v1/media/{mediaId}/content", server.mediaContent)
+	mux.HandleFunc("HEAD /api/v1/media/{mediaId}/content", server.mediaContent)
 	mux.Handle("/ws/v1", realtime.NewHandler(clock, func(r *http.Request) bool {
 		_, err := server.authenticate(r)
 		return err == nil
@@ -440,6 +446,77 @@ func (s *Server) getMedia(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, mediaDTO(publication, item))
 }
 
+func (s *Server) mediaContent(w http.ResponseWriter, r *http.Request) {
+	if _, err := s.requireCapability(r, "media.read"); err != nil {
+		s.writeRequestError(w, err)
+		return
+	}
+	_, item, err := s.catalog.GetMedia(r.Context(), r.PathValue("mediaId"))
+	if err != nil {
+		s.writeRequestError(w, err)
+		return
+	}
+	if item.LocationStatus != "present" {
+		s.writeRequestError(w, fault.New(fault.CodeMediaOffline, true, nil))
+		return
+	}
+	source, err := s.data.GetSource(r.Context(), item.SourceID)
+	if err != nil {
+		s.writeRequestError(w, fault.New(fault.CodeMediaOffline, true, nil))
+		return
+	}
+	snapshot, err := media.PrepareSnapshot(source.RootPath, item.RelativePath, item.Algorithm, item.Digest, item.Size, s.data.TempRoot())
+	if err != nil {
+		var structured *fault.Error
+		if errors.As(err, &structured) && (structured.Code == fault.CodeSourceUnavailable || structured.Code == fault.CodeSourceReadFailed || structured.Code == fault.CodeContentDisappeared) {
+			err = fault.New(fault.CodeMediaOffline, true, nil)
+		}
+		s.writeRequestError(w, err)
+		return
+	}
+	defer snapshot.Close()
+	etag := `"gallery-` + item.Algorithm + `-` + item.Digest + `"`
+	w.Header().Set("Accept-Ranges", "bytes")
+	w.Header().Set("ETag", etag)
+	w.Header().Set("Content-Type", item.MIME)
+	w.Header().Set("X-Content-Type-Options", "nosniff")
+	if etagMatches(r.Header.Get("If-None-Match"), etag) {
+		w.WriteHeader(http.StatusNotModified)
+		return
+	}
+	selected, partial, err := media.ParseSingleRange(r.Header.Get("Range"), snapshot.Size)
+	if err != nil {
+		w.Header().Set("Content-Range", fmt.Sprintf("bytes */%d", snapshot.Size))
+		s.writeRequestError(w, err)
+		return
+	}
+	status := http.StatusOK
+	start, length := int64(0), snapshot.Size
+	if partial {
+		status, start, length = http.StatusPartialContent, selected.Start, selected.Length()
+		w.Header().Set("Content-Range", fmt.Sprintf("bytes %d-%d/%d", selected.Start, selected.End, snapshot.Size))
+	}
+	w.Header().Set("Content-Length", strconv.FormatInt(length, 10))
+	w.WriteHeader(status)
+	if r.Method == http.MethodHead {
+		return
+	}
+	if _, err := snapshot.File.Seek(start, io.SeekStart); err != nil {
+		return
+	}
+	_, _ = io.CopyN(w, snapshot.File, length)
+}
+
+func etagMatches(header, current string) bool {
+	for _, candidate := range strings.Split(header, ",") {
+		candidate = strings.TrimSpace(candidate)
+		if candidate == "*" || candidate == current || strings.TrimPrefix(candidate, "W/") == current {
+			return true
+		}
+	}
+	return false
+}
+
 func (s *Server) writeRequestError(w http.ResponseWriter, err error) {
 	writeFault(w, asFault(err), statusForFault(err))
 }
@@ -591,6 +668,12 @@ func statusForFault(err error) int {
 		return http.StatusConflict
 	case fault.CodeJobStateConflict, fault.CodeScanAlreadyRunning, fault.CodeCatalogCandidateInvalid:
 		return http.StatusConflict
+	case fault.CodeContentChangedDuringHash:
+		return http.StatusConflict
+	case fault.CodeRangeInvalid:
+		return http.StatusRequestedRangeNotSatisfiable
+	case fault.CodeMediaOffline, fault.CodeSourceUnavailable, fault.CodeSourceReadFailed, fault.CodeContentDisappeared:
+		return http.StatusServiceUnavailable
 	case fault.CodeAppDirsOverlap, fault.CodeSourceRootsOverlap:
 		return http.StatusConflict
 	default:
