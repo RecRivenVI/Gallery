@@ -1,0 +1,19 @@
+* text=auto
+
+# Go 源码与模块清单固定 LF
+*.go   text eol=lf
+go.mod text eol=lf
+go.sum text eol=lf
+
+# 结构化配置、SQL 与脚本固定 LF
+*.yaml text eol=lf
+*.yml  text eol=lf
+*.json text eol=lf
+*.sql  text eol=lf
+*.ps1  text eol=lf
+
+# 媒体与字体等二进制资产不做换行规范化
+*.png   binary
+*.jpg   binary
+*.woff2 binary
+*.bin   binary
