@@ -201,6 +201,10 @@ func TestPersonalPairingIsSingleUseAndRevocationInvalidatesREST(t *testing.T) {
 	if err := os.WriteFile(mediaPath, mediaContent, 0o400); err != nil {
 		t.Fatal(err)
 	}
+	if err := os.WriteFile(filepath.Join(sourceRoot, "work-one", "metadata.json"),
+		[]byte(`{"creator":{"name":"HTTP Creator"}}`), 0o400); err != nil {
+		t.Fatal(err)
+	}
 	sourceResponse, err := client.CreateSourceWithResponse(context.Background(), &api.CreateSourceParams{
 		XGalleryCSRF: exchange.JSON201.CsrfToken,
 	}, api.SourceCreateRequest{

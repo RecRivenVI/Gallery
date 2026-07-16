@@ -56,9 +56,15 @@ type SourceRuleBinding struct {
 }
 
 type CanonicalWork struct {
-	ID    string
-	Title string
-	Media map[string]CanonicalMedia
+	ID       string
+	Title    string
+	Creators []CanonicalCreator
+	Media    map[string]CanonicalMedia
+}
+
+type CanonicalCreator struct {
+	ID   string
+	Name string
 }
 
 type CanonicalMedia struct {
@@ -79,8 +85,16 @@ type DiscoveredWork struct {
 	ProviderID string
 	ExternalID string
 	Title      string
+	Creator    DiscoveredCreator
 	MediaKeys  []string
 	Media      []DiscoveredMedia
+}
+
+type DiscoveredCreator struct {
+	SourceKey  string
+	ProviderID string
+	ExternalID string
+	Name       string
 }
 
 type DiscoveredMedia struct {
@@ -375,6 +389,18 @@ WHERE singleton=1 RETURNING generation`).Scan(&generation); err != nil {
 			}
 		}
 		work := CanonicalWork{ID: workID, Title: title, Media: make(map[string]CanonicalMedia, len(mediaItems))}
+		if item.Creator.Name != "" {
+			creatorID, creatorName, err := r.resolveCreator(ctx, tx, sourceID, item.Creator, generation, now)
+			if err != nil {
+				return nil, err
+			}
+			if _, err := tx.ExecContext(ctx, `INSERT INTO work_creators
+(work_id, creator_id, role, ordinal, created_at) VALUES (?, ?, 'primary', 0, ?)
+ON CONFLICT(work_id, role, ordinal) DO UPDATE SET creator_id=excluded.creator_id`, workID, creatorID, now); err != nil {
+				return nil, fault.New(fault.CodeInternal, true, err)
+			}
+			work.Creators = append(work.Creators, CanonicalCreator{ID: creatorID, Name: creatorName})
+		}
 		for ordinal := range mediaItems {
 			mediaItem := mediaItems[ordinal]
 			if mediaItem.Ordinal < 0 {
@@ -393,6 +419,10 @@ WHERE source_id=? AND status='active' AND last_seen_generation<>?`, now, sourceI
 		return nil, fault.New(fault.CodeInternal, true, err)
 	}
 	if _, err := tx.ExecContext(ctx, `UPDATE media_bindings SET status='orphaned', updated_at=?
+WHERE source_id=? AND status='active' AND last_seen_generation<>?`, now, sourceID, generation); err != nil {
+		return nil, fault.New(fault.CodeInternal, true, err)
+	}
+	if _, err := tx.ExecContext(ctx, `UPDATE creator_bindings SET status='orphaned', updated_at=?
 WHERE source_id=? AND status='active' AND last_seen_generation<>?`, now, sourceID, generation); err != nil {
 		return nil, fault.New(fault.CodeInternal, true, err)
 	}
@@ -469,6 +499,78 @@ last_seen_generation=?, updated_at=? WHERE binding_id=?`, item.ProviderID, item.
 		return "", "", fault.New(fault.CodeInternal, true, err)
 	}
 	return workID, title, nil
+}
+
+func (r *Resources) resolveCreator(ctx context.Context, tx *sql.Tx, sourceID string, item DiscoveredCreator, generation, now int64) (string, string, error) {
+	if item.SourceKey == "" || item.Name == "" || len([]rune(item.SourceKey)) > 4096 || containsControl(item.SourceKey) {
+		return "", "", fault.WithField(fault.CodeValidation, "creator.sourceKey", nil)
+	}
+	if len([]rune(item.ProviderID)) > 128 || len([]rune(item.ExternalID)) > 512 ||
+		containsControl(item.ProviderID) || containsControl(item.ExternalID) {
+		return "", "", fault.WithField(fault.CodeValidation, "creator.externalId", nil)
+	}
+	blocked, err := stringSet(ctx, tx, `SELECT creator_id FROM creator_bindings
+WHERE source_id=? AND source_key=? AND status='manual_unbound'`, sourceID, item.SourceKey)
+	if err != nil {
+		return "", "", err
+	}
+	candidates, err := stringSet(ctx, tx, `SELECT DISTINCT creator_id FROM creator_bindings
+WHERE source_id=? AND source_key=? AND status IN ('active', 'orphaned')`, sourceID, item.SourceKey)
+	if err != nil {
+		return "", "", err
+	}
+	removeSet(candidates, blocked)
+	if len(candidates) == 0 && item.ExternalID != "" {
+		candidates, err = stringSet(ctx, tx, `SELECT DISTINCT creator_id FROM creator_bindings
+WHERE source_id=? AND provider_id=? AND external_id=? AND status IN ('active', 'orphaned')`,
+			sourceID, item.ProviderID, item.ExternalID)
+		if err != nil {
+			return "", "", err
+		}
+		removeSet(candidates, blocked)
+	}
+	if len(candidates) > 1 {
+		return "", "", r.bindingIssue(ctx, tx, sourceID, item.SourceKey, item.ProviderID, item.ExternalID, len(candidates), now)
+	}
+	var creatorID, name string
+	for creatorID = range candidates {
+		if err := tx.QueryRowContext(ctx, "SELECT name FROM canonical_creators WHERE creator_id=?", creatorID).Scan(&name); err != nil {
+			return "", "", fault.New(fault.CodeInternal, true, err)
+		}
+	}
+	if creatorID == "" {
+		id, err := r.ids.New(domain.IDCanonicalCreator)
+		if err != nil {
+			return "", "", fault.New(fault.CodeInternal, true, err)
+		}
+		creatorID, name = id.String(), item.Name
+		if _, err := tx.ExecContext(ctx, "INSERT INTO canonical_creators (creator_id, name, created_at) VALUES (?, ?, ?)", creatorID, name, now); err != nil {
+			return "", "", fault.New(fault.CodeInternal, true, err)
+		}
+	}
+	var bindingID string
+	err = tx.QueryRowContext(ctx, `SELECT binding_id FROM creator_bindings
+WHERE source_id=? AND source_key=? AND creator_id=? AND status IN ('active', 'orphaned')
+ORDER BY CASE status WHEN 'active' THEN 0 ELSE 1 END, created_at LIMIT 1`, sourceID, item.SourceKey, creatorID).Scan(&bindingID)
+	if errors.Is(err, sql.ErrNoRows) {
+		id, idErr := r.ids.New(domain.IDCreatorBinding)
+		if idErr != nil {
+			return "", "", fault.New(fault.CodeInternal, true, idErr)
+		}
+		bindingID = id.String()
+		_, err = tx.ExecContext(ctx, `INSERT INTO creator_bindings
+(binding_id, source_id, provider_id, external_id, source_key, creator_id, identity_version,
+ status, last_seen_generation, created_at, updated_at)
+VALUES (?, ?, ?, ?, ?, ?, 1, 'active', ?, ?, ?)`, bindingID, sourceID, item.ProviderID,
+			item.ExternalID, item.SourceKey, creatorID, generation, now, now)
+	} else if err == nil {
+		_, err = tx.ExecContext(ctx, `UPDATE creator_bindings SET provider_id=?, external_id=?, status='active',
+last_seen_generation=?, updated_at=? WHERE binding_id=?`, item.ProviderID, item.ExternalID, generation, now, bindingID)
+	}
+	if err != nil {
+		return "", "", fault.New(fault.CodeInternal, true, err)
+	}
+	return creatorID, name, nil
 }
 
 func (r *Resources) resolveMedia(ctx context.Context, tx *sql.Tx, sourceID, workID string, item DiscoveredMedia, generation, now int64) (string, int, error) {
@@ -551,14 +653,18 @@ occurrence_ordinal=?, status='active', last_seen_generation=?, updated_at=? WHER
 }
 
 func (r *Resources) bindingConflict(ctx context.Context, tx *sql.Tx, sourceID string, item DiscoveredWork, candidates int, now int64) error {
+	return r.bindingIssue(ctx, tx, sourceID, item.SourceKey, item.ProviderID, item.ExternalID, candidates, now)
+}
+
+func (r *Resources) bindingIssue(ctx context.Context, tx *sql.Tx, sourceID, sourceKey, providerID, externalID string, candidates int, now int64) error {
 	id, err := r.ids.New(domain.IDBindingIssue)
 	if err != nil {
 		return fault.New(fault.CodeInternal, true, err)
 	}
 	if _, err := tx.ExecContext(ctx, `INSERT INTO binding_issues
 (issue_id, source_id, source_key, provider_id, external_id, code, candidate_count, status, created_at)
-VALUES (?, ?, ?, ?, ?, ?, ?, 'open', ?)`, id.String(), sourceID, item.SourceKey, item.ProviderID,
-		item.ExternalID, string(fault.CodeBindingReviewRequired), candidates, now); err != nil {
+VALUES (?, ?, ?, ?, ?, ?, ?, 'open', ?)`, id.String(), sourceID, sourceKey, providerID,
+		externalID, string(fault.CodeBindingReviewRequired), candidates, now); err != nil {
 		return fault.New(fault.CodeInternal, true, err)
 	}
 	if err := tx.Commit(); err != nil {

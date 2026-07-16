@@ -131,7 +131,8 @@ func (s *Service) Execute(ctx context.Context, jobID string) error {
 				Digest: work.Media[index].Hash.Blob.Digest, Ordinal: index}
 		}
 		canonicalInput = append(canonicalInput, application.DiscoveredWork{SourceKey: work.SourceKey,
-			ProviderID: work.ProviderID, ExternalID: work.ExternalID, Title: work.Title, Media: mediaItems})
+			ProviderID: work.ProviderID, ExternalID: work.ExternalID, Title: work.Title,
+			Creator: creatorReference(work), Media: mediaItems})
 	}
 	canonical, err := s.resources.EnsureCanonical(ctx, source.ID, canonicalInput)
 	if err != nil {
@@ -153,11 +154,21 @@ func (s *Service) Execute(ctx context.Context, jobID string) error {
 		for _, item := range work.Media {
 			filenames = append(filenames, path.Base(item.RelativePath))
 		}
-		works = append(works, catalog.WorkFact{SourceID: source.ID, LibraryID: source.LibraryID,
+		workFact := catalog.WorkFact{SourceID: source.ID, LibraryID: source.LibraryID,
 			SourceKey: work.SourceKey, ProviderID: work.ProviderID, ExternalID: work.ExternalID,
 			SourceTitle: canonicalWork.Title, SourceTags: work.Tags,
 			Title: canonicalWork.Title, Creator: work.Creator, Tags: work.Tags,
-			Filenames: filenames, WorkID: canonicalWork.ID})
+			Filenames: filenames, WorkID: canonicalWork.ID}
+		if len(canonicalWork.Creators) > 0 {
+			creator := creatorReference(work)
+			workFact.Creator = canonicalWork.Creators[0].Name
+			workFact.CreatorID = canonicalWork.Creators[0].ID
+			workFact.CreatorSourceKey = creator.SourceKey
+			workFact.CreatorProviderID = creator.ProviderID
+			workFact.CreatorExternalID = creator.ExternalID
+			workFact.SourceCreatorName = work.Creator
+		}
+		works = append(works, workFact)
 		for _, item := range work.Media {
 			canonicalMedia := canonicalWork.Media[item.SourceKey]
 			mediaFacts = append(mediaFacts, catalog.MediaFact{
@@ -297,6 +308,21 @@ type discoveredWork struct {
 type discoveredMedia struct {
 	SourceKey, RuleKey, RelativePath, Kind, MIME string
 	Hash                                         media.HashResult
+}
+
+func creatorReference(work discoveredWork) application.DiscoveredCreator {
+	if work.Creator == "" {
+		return application.DiscoveredCreator{}
+	}
+	workReference := work.SourceKey
+	if work.ExternalID != "" {
+		workReference = "origin:" + work.ProviderID + ":" + work.ExternalID
+	}
+	return application.DiscoveredCreator{
+		SourceKey:  workReference + "/creator:primary:0",
+		ProviderID: work.ProviderID,
+		Name:       work.Creator,
+	}
 }
 
 func discover(ctx context.Context, root string, ir rules.RuleIR, parameters []byte) ([]discoveredWork, error) {
