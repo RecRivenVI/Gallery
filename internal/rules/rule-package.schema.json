@@ -21,15 +21,16 @@
   "properties": {
     "rule_set_id": {"type": "string", "pattern": "^rset_[0-9a-f-]{36}$"},
     "version": {"type": "string", "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+(?:[-+][0-9A-Za-z.-]+)?$"},
-    "schema_version": {"const": 1},
-    "normalization_algorithm_version": {"const": "gallery-canonical-json-v1"},
-    "compiler_requirement": {"type": "string", "const": "gallery-rule-compiler-v1"},
-    "cel_profile_version": {"const": "gallery-cel-v1"},
-    "parameter_schema": {"type": "object"},
+    "schema_version": {"const": 1, "default": 1},
+    "normalization_algorithm_version": {"const": "gallery-canonical-json-v1", "default": "gallery-canonical-json-v1"},
+    "compiler_requirement": {"type": "string", "const": "gallery-rule-compiler-v1", "default": "gallery-rule-compiler-v1"},
+    "cel_profile_version": {"const": "gallery-cel-v1", "default": "gallery-cel-v1"},
+    "parameter_schema": {"type": "object", "default": {"type": "object", "additionalProperties": false}},
     "provider_namespaces": {
       "type": "array",
       "items": {"type": "string", "minLength": 1, "maxLength": 128},
-      "uniqueItems": true
+      "uniqueItems": true,
+      "default": []
     },
     "primitives": {
       "type": "array",
@@ -46,7 +47,8 @@
           },
           "config": {"type": "object"}
         }
-      }
+      },
+      "default": []
     },
     "cel_expressions": {
       "type": "array",
@@ -60,13 +62,15 @@
           "purpose": {"type": "string", "enum": ["predicate", "scalar"]},
           "expression": {"type": "string", "maxLength": 4096}
         }
-      }
+      },
+      "default": []
     },
     "tests": {"type": "array", "minItems": 1, "maxItems": 10000},
     "extensions": {
       "type": "object",
       "propertyNames": {"pattern": "^[a-z0-9][a-z0-9-]{0,62}(?:\\.[a-z0-9][a-z0-9-]{0,62})+$"},
-      "additionalProperties": true
+      "additionalProperties": true,
+      "default": {}
     },
     "package_hash": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
     "semantic_hash": {"type": "string", "pattern": "^[0-9a-f]{64}$"}

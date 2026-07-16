@@ -33,14 +33,29 @@ type CompiledPackage struct {
 }
 
 type RuleIR struct {
-	CompilerVersion          string `json:"compilerVersion"`
-	PrimitiveRegistryVersion string `json:"primitiveRegistryVersion"`
-	WorkDirectoryGlob        string `json:"workDirectoryGlob"`
-	WorkTitle                string `json:"workTitle"`
-	WorkStableKey            string `json:"workStableKey"`
-	MediaGlob                string `json:"mediaGlob"`
-	MediaKind                string `json:"mediaKind"`
-	MediaMIME                string `json:"mediaMime"`
+	CompilerVersion          string         `json:"compilerVersion"`
+	PrimitiveRegistryVersion string         `json:"primitiveRegistryVersion"`
+	WorkDirectoryGlob        string         `json:"workDirectoryGlob"`
+	WorkTitle                string         `json:"workTitle"`
+	WorkStableKey            string         `json:"workStableKey"`
+	MetadataFile             string         `json:"metadataFile,omitempty"`
+	MediaGlob                string         `json:"mediaGlob"`
+	MediaKind                string         `json:"mediaKind"`
+	MediaMIME                string         `json:"mediaMime"`
+	Primitives               []IRPrimitive  `json:"primitives"`
+	CELExpressions           []IRExpression `json:"celExpressions"`
+}
+
+type IRPrimitive struct {
+	ID     string          `json:"id"`
+	Kind   string          `json:"kind"`
+	Config json.RawMessage `json:"config"`
+}
+
+type IRExpression struct {
+	ID         string `json:"id"`
+	Purpose    string `json:"purpose"`
+	Expression string `json:"expression"`
 }
 
 type rawPackage struct {
@@ -48,6 +63,7 @@ type rawPackage struct {
 	Version         string          `json:"version"`
 	ParameterSchema json.RawMessage `json:"parameter_schema"`
 	Primitives      []rawPrimitive  `json:"primitives"`
+	CELExpressions  []IRExpression  `json:"cel_expressions"`
 }
 
 type rawPrimitive struct {
@@ -57,22 +73,28 @@ type rawPrimitive struct {
 }
 
 type pathMatchConfig struct {
-	Scope     string `json:"scope"`
-	Glob      string `json:"glob"`
-	Title     string `json:"title"`
-	StableKey string `json:"stable_key"`
+	Scope        string `json:"scope"`
+	Glob         string `json:"glob"`
+	Title        string `json:"title"`
+	StableKey    string `json:"stable_key"`
+	MetadataFile string `json:"metadata_file,omitempty"`
 }
 
 type mediaClassifyConfig struct {
-	Glob string `json:"glob"`
-	Kind string `json:"kind"`
-	MIME string `json:"mime"`
+	Glob      string `json:"glob"`
+	Kind      string `json:"kind"`
+	MIME      string `json:"mime"`
+	Condition string `json:"condition,omitempty"`
 }
 
 func CompilePackage(input []byte) (CompiledPackage, error) {
 	validator, err := NewRulePackageValidator()
 	if err != nil {
 		return CompiledPackage{}, err
+	}
+	input, err = NormalizeWithSchema(input, RulePackageSchema())
+	if err != nil {
+		return CompiledPackage{}, fmt.Errorf("规则包规范化: %w", err)
 	}
 	if err := validator.ValidateJSON(input); err != nil {
 		return CompiledPackage{}, fmt.Errorf("规则包 Schema: %w", err)
@@ -109,7 +131,7 @@ func CompilePackage(input []byte) (CompiledPackage, error) {
 	if err := decoder.Decode(&parsed); err != nil {
 		return CompiledPackage{}, fmt.Errorf("解析规范规则包: %w", err)
 	}
-	ir, err := compilePrimitives(parsed.Primitives)
+	ir, err := compilePrimitives(parsed.Primitives, parsed.CELExpressions)
 	if err != nil {
 		return CompiledPackage{}, err
 	}
@@ -128,6 +150,10 @@ func CompilePackage(input []byte) (CompiledPackage, error) {
 func CompileBinding(rule CompiledPackage, parameters []byte) (RuleIR, string, []byte, error) {
 	if len(parameters) == 0 {
 		parameters = []byte("{}")
+	}
+	parameters, err := NormalizeWithSchema(parameters, rule.ParameterSQL)
+	if err != nil {
+		return RuleIR{}, "", nil, fmt.Errorf("规则参数规范化: %w", err)
 	}
 	validator, err := contractschema.Compile("rule-parameters.json", rule.ParameterSQL)
 	if err != nil {
@@ -184,32 +210,44 @@ func CanonicalJSON(input []byte) ([]byte, error) {
 	return output.Bytes(), nil
 }
 
-func compilePrimitives(primitives []rawPrimitive) (RuleIR, error) {
-	ir := RuleIR{CompilerVersion: CompilerVersion, PrimitiveRegistryVersion: PrimitiveRegistryVersion}
-	for _, primitive := range primitives {
+func compilePrimitives(primitives []rawPrimitive, expressions []IRExpression) (RuleIR, error) {
+	ir := RuleIR{CompilerVersion: CompilerVersion, PrimitiveRegistryVersion: PrimitiveRegistryVersion, CELExpressions: expressions}
+	for index, primitive := range primitives {
+		canonicalConfig, err := CanonicalJSON(primitive.Config)
+		if err != nil {
+			return RuleIR{}, withField(fmt.Sprintf("/primitives/%d/config", index), fmt.Errorf("原语 %s 配置无效: %w", primitive.ID, err))
+		}
+		ir.Primitives = append(ir.Primitives, IRPrimitive{ID: primitive.ID, Kind: primitive.Kind, Config: canonicalConfig})
 		switch primitive.Kind {
 		case "path_match":
 			var config pathMatchConfig
 			if err := strictDecode(primitive.Config, &config); err != nil {
-				return RuleIR{}, fmt.Errorf("path_match %s: %w", primitive.ID, err)
+				return RuleIR{}, withField(fmt.Sprintf("/primitives/%d/config", index), fmt.Errorf("path_match %s: %w", primitive.ID, err))
 			}
 			if config.Scope != "work_directory" || config.Glob == "" || config.Title != "directory_name" || config.StableKey != "relative_path" {
-				return RuleIR{}, fmt.Errorf("path_match %s 不属于 Walking Skeleton 支持的正式原语子集", primitive.ID)
+				return RuleIR{}, withField(fmt.Sprintf("/primitives/%d/config", index), fmt.Errorf("path_match %s 配置不受支持", primitive.ID))
 			}
-			ir.WorkDirectoryGlob, ir.WorkTitle, ir.WorkStableKey = config.Glob, config.Title, config.StableKey
+			ir.WorkDirectoryGlob, ir.WorkTitle, ir.WorkStableKey, ir.MetadataFile = config.Glob, config.Title, config.StableKey, config.MetadataFile
 		case "media_classify":
 			var config mediaClassifyConfig
 			if err := strictDecode(primitive.Config, &config); err != nil {
-				return RuleIR{}, fmt.Errorf("media_classify %s: %w", primitive.ID, err)
+				return RuleIR{}, withField(fmt.Sprintf("/primitives/%d/config", index), fmt.Errorf("media_classify %s: %w", primitive.ID, err))
 			}
 			if config.Glob == "" || config.Kind == "" || config.MIME == "" {
-				return RuleIR{}, fmt.Errorf("media_classify %s 缺少 glob/kind/mime", primitive.ID)
+				return RuleIR{}, withField(fmt.Sprintf("/primitives/%d/config", index), fmt.Errorf("media_classify %s 缺少 glob/kind/mime", primitive.ID))
 			}
 			if _, _, err := mime.ParseMediaType(config.MIME); err != nil {
-				return RuleIR{}, fmt.Errorf("media_classify %s MIME 无效: %w", primitive.ID, err)
+				return RuleIR{}, withField(fmt.Sprintf("/primitives/%d/config/mime", index), fmt.Errorf("media_classify %s MIME 无效: %w", primitive.ID, err))
 			}
 			ir.MediaGlob, ir.MediaKind, ir.MediaMIME = config.Glob, config.Kind, config.MIME
+		case "selector", "fallback", "stable_key", "media_order", "cover_candidate", "metadata_map", "condition":
+			if err := validateExtendedPrimitive(primitive); err != nil {
+				return RuleIR{}, withField(fmt.Sprintf("/primitives/%d/config", index), err)
+			}
 		}
+	}
+	if err := validateCELExpressions(expressions); err != nil {
+		return RuleIR{}, err
 	}
 	if err := validateIR(ir); err != nil {
 		return RuleIR{}, err
@@ -220,6 +258,60 @@ func compilePrimitives(primitives []rawPrimitive) (RuleIR, error) {
 func validateIR(ir RuleIR) error {
 	if ir.CompilerVersion != CompilerVersion || ir.PrimitiveRegistryVersion != PrimitiveRegistryVersion || ir.WorkDirectoryGlob == "" || ir.MediaGlob == "" {
 		return fmt.Errorf("规则缺少最小 work_directory/media_classify 执行计划")
+	}
+	return nil
+}
+
+func validateExtendedPrimitive(primitive rawPrimitive) error {
+	var config map[string]json.RawMessage
+	if err := strictDecode(primitive.Config, &config); err != nil {
+		return fmt.Errorf("%s %s: %w", primitive.Kind, primitive.ID, err)
+	}
+	if len(config) == 0 {
+		return fmt.Errorf("%s %s 配置为空", primitive.Kind, primitive.ID)
+	}
+	requireString := func(name string) error {
+		var value string
+		if raw, ok := config[name]; !ok || json.Unmarshal(raw, &value) != nil || value == "" {
+			return fmt.Errorf("%s %s 缺少 %s", primitive.Kind, primitive.ID, name)
+		}
+		return nil
+	}
+	switch primitive.Kind {
+	case "selector", "fallback":
+		if err := requireString("target"); err != nil {
+			return err
+		}
+		if _, pointer := config["pointer"]; !pointer {
+			if _, pointers := config["pointers"]; !pointers {
+				return fmt.Errorf("%s %s 缺少 pointer/pointers", primitive.Kind, primitive.ID)
+			}
+		}
+	case "stable_key":
+		if err := requireString("target"); err != nil {
+			return err
+		}
+	case "media_order":
+		if err := requireString("by"); err != nil {
+			return err
+		}
+		if err := requireString("direction"); err != nil {
+			return err
+		}
+	case "cover_candidate":
+		if err := requireString("glob"); err != nil {
+			return err
+		}
+	case "metadata_map":
+		if _, ok := config["fields"]; !ok {
+			return fmt.Errorf("metadata_map %s 缺少 fields", primitive.ID)
+		}
+	case "condition":
+		for _, name := range []string{"scope", "expression", "effect"} {
+			if err := requireString(name); err != nil {
+				return err
+			}
+		}
 	}
 	return nil
 }

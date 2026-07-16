@@ -221,6 +221,94 @@ paths:
           $ref: "#/components/responses/ForbiddenError"
         "404":
           $ref: "#/components/responses/NotFoundError"
+  /api/v1/rules/validate:
+    post:
+      operationId: validateRulePackage
+      summary: 实例化默认值、规范化并校验规则包
+      parameters:
+        - $ref: "#/components/parameters/CSRFHeader"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/RuleValidateRequest"
+      responses:
+        "200":
+          description: 规则包规范化和身份结果
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/RuleValidationResult"
+        "400": {$ref: "#/components/responses/ValidationError"}
+        "401": {$ref: "#/components/responses/UnauthenticatedError"}
+        "403": {$ref: "#/components/responses/ForbiddenError"}
+  /api/v1/rules/compile:
+    post:
+      operationId: compileRulePackage
+      summary: 编译冻结参数的 Rule IR
+      parameters:
+        - $ref: "#/components/parameters/CSRFHeader"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/RuleCompileRequest"
+      responses:
+        "200":
+          description: 编译结果和缓存命中状态
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/RuleCompileResult"
+        "400": {$ref: "#/components/responses/ValidationError"}
+        "401": {$ref: "#/components/responses/UnauthenticatedError"}
+        "403": {$ref: "#/components/responses/ForbiddenError"}
+  /api/v1/rules/dry-run:
+    post:
+      operationId: dryRunRulePackage
+      summary: 对显式合成输入执行规则并返回脱敏 Trace
+      parameters:
+        - $ref: "#/components/parameters/CSRFHeader"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/RuleDryRunRequest"
+      responses:
+        "200":
+          description: Dry Run 结果
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/RuleDryRunResult"
+        "400": {$ref: "#/components/responses/ValidationError"}
+        "401": {$ref: "#/components/responses/UnauthenticatedError"}
+        "403": {$ref: "#/components/responses/ForbiddenError"}
+  /api/v1/rules/impact:
+    post:
+      operationId: analyzeRuleImpact
+      summary: 静态比较两个规则包的重扫、投影、搜索和派生影响
+      parameters:
+        - $ref: "#/components/parameters/CSRFHeader"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/RuleImpactRequest"
+      responses:
+        "200":
+          description: RuleImpact
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/RuleImpactResult"
+        "400": {$ref: "#/components/responses/ValidationError"}
+        "401": {$ref: "#/components/responses/UnauthenticatedError"}
+        "403": {$ref: "#/components/responses/ForbiddenError"}
   /api/v1/rule-versions:
     post:
       operationId: createRuleVersion
@@ -726,6 +814,10 @@ components:
         - CURSOR_INVALID
         - CURSOR_EXPIRED
         - RULE_SCHEMA_INVALID
+        - RULE_COMPILE_ERROR
+        - RULE_CEL_LIMIT
+        - RULE_DRY_RUN_FAILED
+        - RULE_IMPACT_FAILED
         - RULE_EVAL_ERROR
         - CATALOG_PUBLICATION_MISSING
         - CONTENT_CHANGED_DURING_HASH
@@ -946,6 +1038,96 @@ components:
         createdAt:
           type: string
           format: date-time
+    RuleValidateRequest:
+      type: object
+      additionalProperties: false
+      required: [package]
+      properties:
+        package: {type: object, additionalProperties: true}
+    RuleValidationResult:
+      type: object
+      additionalProperties: false
+      required: [canonicalPackage, packageHash, semanticHash]
+      properties:
+        canonicalPackage: {type: object, additionalProperties: true}
+        packageHash: {$ref: "#/components/schemas/SHA256Digest"}
+        semanticHash: {$ref: "#/components/schemas/SHA256Digest"}
+    RuleCompileRequest:
+      type: object
+      additionalProperties: false
+      required: [package, parameters]
+      properties:
+        package: {type: object, additionalProperties: true}
+        parameters: {type: object, additionalProperties: true}
+    RuleCompileResult:
+      allOf:
+        - $ref: "#/components/schemas/RuleValidationResult"
+        - type: object
+          additionalProperties: false
+          required: [ruleIrHash, canonicalParameters, ruleIr, cacheHit]
+          properties:
+            ruleIrHash: {$ref: "#/components/schemas/SHA256Digest"}
+            canonicalParameters: {type: object, additionalProperties: true}
+            ruleIr: {type: object, additionalProperties: true}
+            cacheHit: {type: boolean}
+    RuleDryRunRequest:
+      type: object
+      additionalProperties: false
+      required: [package, parameters, sample]
+      properties:
+        package: {type: object, additionalProperties: true}
+        parameters: {type: object, additionalProperties: true}
+        sample:
+          $ref: "#/components/schemas/RuleDryRunSample"
+    RuleDryRunSample:
+      type: object
+      additionalProperties: false
+      required: [path, files, metadata]
+      properties:
+        path: {type: string, minLength: 1, maxLength: 4096}
+        files:
+          type: array
+          maxItems: 10000
+          items:
+            type: object
+            additionalProperties: false
+            required: [path, size]
+            properties:
+              path: {type: string, minLength: 1, maxLength: 4096}
+              size: {type: integer, minimum: 0}
+              metadata: {}
+        metadata: {}
+    RuleDryRunResult:
+      type: object
+      additionalProperties: false
+      required: [work, trace, issues]
+      properties:
+        work: {type: object, additionalProperties: true}
+        trace:
+          type: array
+          items: {type: object, additionalProperties: true}
+        issues:
+          type: array
+          items: {type: object, additionalProperties: true}
+    RuleImpactRequest:
+      type: object
+      additionalProperties: false
+      required: [before, after]
+      properties:
+        before: {type: object, additionalProperties: true}
+        after: {type: object, additionalProperties: true}
+    RuleImpactResult:
+      type: object
+      additionalProperties: false
+      required: [fields, actions, fullRescan, reproject, rebuildSearch, rebuildDerived, bindingReview]
+      properties:
+        fields: {type: array, items: {type: string}, uniqueItems: true}
+        actions: {type: array, items: {type: string}, uniqueItems: true}
+        fullRescan: {type: boolean}
+        reproject: {type: boolean}
+        rebuildSearch: {type: boolean}
+        rebuildDerived: {type: boolean}
+        bindingReview: {type: boolean}
     RuleVersionCreateRequest:
       type: object
       additionalProperties: false

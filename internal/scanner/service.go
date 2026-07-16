@@ -2,11 +2,13 @@ package scanner
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io/fs"
 	"os"
 	"path"
+	"path/filepath"
 	"sort"
 	"sync"
 
@@ -15,6 +17,7 @@ import (
 	"github.com/RecRivenVI/gallery/internal/contract/fault"
 	"github.com/RecRivenVI/gallery/internal/jobs"
 	"github.com/RecRivenVI/gallery/internal/media"
+	"github.com/RecRivenVI/gallery/internal/rules"
 )
 
 const IssueProcessInterrupted = "PROCESS_INTERRUPTED"
@@ -83,7 +86,7 @@ func (s *Service) Execute(ctx context.Context, jobID string) error {
 	if err != nil {
 		return s.fail(ctx, job.ID, err)
 	}
-	discovered, err := discover(source.RootPath, binding.IR.WorkDirectoryGlob, binding.IR.MediaGlob, binding.IR.MediaKind, binding.IR.MediaMIME)
+	discovered, err := discover(ctx, source.RootPath, binding.IR, binding.Parameters)
 	if err != nil {
 		return s.fail(ctx, job.ID, err)
 	}
@@ -255,50 +258,91 @@ type discoveredMedia struct {
 	Hash                                media.HashResult
 }
 
-func discover(root, workGlob, mediaGlob, kind, mime string) ([]discoveredWork, error) {
-	entries, err := os.ReadDir(root)
+func discover(ctx context.Context, root string, ir rules.RuleIR, parameters []byte) ([]discoveredWork, error) {
+	lifecycle, err := rules.NewLifecycle()
 	if err != nil {
-		return nil, fault.New(fault.CodeSourceUnavailable, true, err)
+		return nil, fault.New(fault.CodeRuleEval, false, err)
 	}
 	var result []discoveredWork
-	for _, entry := range entries {
-		if entry.Type()&fs.ModeSymlink != 0 || !entry.IsDir() {
-			continue
+	err = filepath.WalkDir(root, func(onDisk string, entry fs.DirEntry, walkErr error) error {
+		if walkErr != nil {
+			return walkErr
 		}
-		matches, matchErr := path.Match(workGlob, entry.Name())
-		if matchErr != nil {
-			return nil, fault.New(fault.CodeRuleEval, false, matchErr)
+		if entry.Type()&fs.ModeSymlink != 0 {
+			if entry.IsDir() {
+				return filepath.SkipDir
+			}
+			return nil
 		}
-		if !matches {
-			continue
+		if !entry.IsDir() || onDisk == root {
+			return nil
 		}
-		workKey := entry.Name()
-		children, readErr := os.ReadDir(pathOnDisk(root, workKey))
-		if readErr != nil {
-			return nil, fault.New(fault.CodeSourceReadFailed, true, readErr)
+		relativeOS, err := filepath.Rel(root, onDisk)
+		if err != nil {
+			return err
 		}
-		work := discoveredWork{SourceKey: workKey, Title: entry.Name()}
+		relative := filepath.ToSlash(relativeOS)
+		matched, err := path.Match(ir.WorkDirectoryGlob, relative)
+		if err != nil {
+			return err
+		}
+		if !matched {
+			return nil
+		}
+		children, err := os.ReadDir(onDisk)
+		if err != nil {
+			return err
+		}
+		sample := rules.DryRunInput{Path: relative, Metadata: map[string]any{}, Files: []rules.DryRunFile{}}
+		if ir.MetadataFile != "" {
+			metadataPath := filepath.Join(onDisk, filepath.FromSlash(ir.MetadataFile))
+			info, statErr := os.Stat(metadataPath)
+			if statErr != nil || info.Size() > int64(rules.CELProfileV1.InputJSONBytes) {
+				return fmt.Errorf("metadata 不可用或超限")
+			}
+			content, readErr := os.ReadFile(metadataPath)
+			if readErr != nil {
+				return readErr
+			}
+			if err := json.Unmarshal(content, &sample.Metadata); err != nil {
+				return fmt.Errorf("metadata 损坏: %w", err)
+			}
+		}
 		for _, child := range children {
-			if child.Type()&fs.ModeSymlink != 0 || child.IsDir() {
+			if child.IsDir() || child.Type()&fs.ModeSymlink != 0 || child.Name() == ir.MetadataFile {
 				continue
 			}
-			matched, matchErr := path.Match(mediaGlob, child.Name())
-			if matchErr != nil {
-				return nil, fault.New(fault.CodeRuleEval, false, matchErr)
+			info, err := child.Info()
+			if err != nil {
+				return err
 			}
-			if !matched {
-				continue
-			}
-			relative := path.Join(workKey, child.Name())
-			if _, pathErr := media.ValidateRelativePath(relative); pathErr != nil {
-				return nil, pathErr
-			}
-			work.Media = append(work.Media, discoveredMedia{SourceKey: relative, RelativePath: relative, Kind: kind, MIME: mime})
+			sample.Files = append(sample.Files, rules.DryRunFile{Path: child.Name(), Size: info.Size()})
 		}
-		sort.Slice(work.Media, func(i, j int) bool { return work.Media[i].SourceKey < work.Media[j].SourceKey })
+		evaluated, err := lifecycle.EvaluateIR(ctx, ir, parameters, sample)
+		if err != nil {
+			return err
+		}
+		if evaluated.Work.Ignored {
+			return filepath.SkipDir
+		}
+		work := discoveredWork{SourceKey: evaluated.Work.StableKey, Title: evaluated.Work.Title}
+		for _, item := range evaluated.Work.Media {
+			mediaRelative := path.Join(relative, item.Path)
+			if _, err := media.ValidateRelativePath(mediaRelative); err != nil {
+				return err
+			}
+			work.Media = append(work.Media, discoveredMedia{SourceKey: path.Join(work.SourceKey, item.StableKey), RelativePath: mediaRelative, Kind: item.Kind, MIME: item.MIME})
+		}
 		if len(work.Media) > 0 {
 			result = append(result, work)
 		}
+		return filepath.SkipDir
+	})
+	if err != nil {
+		if errors.Is(err, fs.ErrNotExist) {
+			return nil, fault.New(fault.CodeSourceUnavailable, true, err)
+		}
+		return nil, fault.New(fault.CodeRuleEval, false, err)
 	}
 	sort.Slice(result, func(i, j int) bool { return result[i].SourceKey < result[j].SourceKey })
 	return result, nil
