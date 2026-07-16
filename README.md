@@ -2,7 +2,7 @@
 
 Gallery（画廊，代码代号 `gallery`）是面向个人及可信局域网的本地优先、只读媒体目录产品。它是独立净室项目，不兼容或迁移任何旧 Gallery 实现。
 
-> 当前状态：阶段 0 与 Walking Skeleton 已完成自动化和真实进程验收；下一步进入 Architecture Proof Slice。当前仍没有可供普通用户安装的产品版本，物理 Schema 和完整 API 尚未冻结。
+> 当前状态：Architecture Proof Slice 已完成正确性验收，正式实现已证明规则、双 revision 查询、Overlay 重投影、Catalog 重建、媒体缓存生命周期和强杀恢复路径。当前仍没有可供普通用户安装的产品版本；物理 Schema 和完整 API 因百万级参考性能、完整排序/过滤语义及平台门禁尚未冻结。
 
 ## 当前可运行能力
 
@@ -16,10 +16,16 @@ Gallery（画廊，代码代号 `gallery`）是面向个人及可信局域网的
 - 原子发布带 nonce/ownership 的运行 descriptor，并在正常停止时按 ownership 清理；
 - `galleryctl health` 只使用公开的 `pkg/galleryapi` 生成客户端，不访问数据库、应用服务或后端 `internal` 包；
 - OpenAPI、错误信封、WebSocket 信封、签名游标、规则包 JSON Schema 与 CEL Profile v1 均可执行校验。
+- 规则 API 提供 Schema 感知规范化、默认值物化、三类 hash、validate/compile/Dry Run/Trace/Impact、参数校验和编译缓存；扫描器只执行版本化 Rule IR，不含平台特例；
+- Work 查询使用同一 publication 内的 FTS5、CJK bigram/拉丁与文件名 trigram、原文复核、自然排序 v1、稳定 tie-break、签名 keyset cursor 和持久租约；
+- 标题 Override、ManualTag、HiddenState、CustomCover 写入 control 后由持久 Overlay Job 发布新 projection；Favorite/Progress 作为实时状态不改变分页成员或顺序；
+- Catalog 删除重建会通过稳定来源引用恢复 Canonical Work/Creator/Media、Binding、Overlay、Favorite、Progress 和媒体 URL；冲突与手动解绑不会被静默覆盖；
+- ContentBlob、FileLocation 和逻辑 Media 分离；DerivedAsset 使用完整 key、受校验 manifest、singleflight、原子发布、读取 lease 和 GC，旧 publication 同样受游标与 Blob 读取 lease 保护；
+- 八个独立子进程强杀点覆盖扫描、publication、Overlay、DerivedAsset 和完整哈希，重启 reconciliation 保持旧快照可读并且不写 Source。
 
-上述能力只代表 Walking Skeleton 的单作品、单媒体纵向证明。完整 FTS/分页/Overlay、Catalog 删除重建、强杀矩阵、多平台门禁、Web/PWA 和正式发行仍未交付。
+上述能力代表合成 Source 上的 Architecture Proof 正确性切片，不代表百万/千万正式性能、真实媒体规模、多平台支持、Web/PWA 或发行就绪。当前冻结结论和剩余门禁见 [v1 实施计划](Documents/指南/01-v1实施计划.md) 与 [验证记录](Documents/证据/验证记录.md)。
 
-## Walking Skeleton API 流程
+## 当前 API 流程
 
 从空 AppDirs 启动后，正式客户端按以下顺序使用 `/api/v1`；绝对 Source 路径只出现在创建请求和 control 私有事实中，不进入资源响应：
 
@@ -27,11 +33,11 @@ Gallery（画廊，代码代号 `gallery`）是面向个人及可信局域网的
 2. `POST /personal/pairing-attempts`，再 `POST /personal/pair` 建立 HttpOnly Session；
 3. `POST /libraries`、`POST /sources`；
 4. `POST /rule-versions`、`POST /source-rule-bindings`；
-5. 连接 `/ws/v1`，然后 `POST /sources/{sourceId}/scan-jobs`；
+5. 可先调用 `/rules/validate`、`/rules/compile`、`/rules/dry-run` 和 `/rules/impact`，再连接 `/ws/v1` 并 `POST /sources/{sourceId}/scan-jobs`；
 6. 通过 `GET /jobs/{jobId}` 取得事实状态，通过 WS 接收提示事件；
-7. `GET /query-publications/current`、`GET /works`、`GET /works/{workId}/media`；
+7. `GET /query-publications/current`，通过 `GET /works` 的服务端过滤、搜索、排序和 cursor 分页读取固定快照，再读取 `/works/{workId}/media`；
 8. 对 `/media/{mediaId}/content` 执行 HEAD、GET 或单区间 Range GET；
-9. 服务重启后复用未吊销 Session，并重新读取 Job、publication 和媒体 snapshot。
+9. 通过 `GET/PUT /works/{workId}/overlay` 写入并观察 pending/published/failed；服务重启后复用未吊销 Session，并重新读取 Job、publication 和媒体 snapshot。
 
 仓库内的完整生成客户端验收见 `internal/bootstrap` 与 `internal/transport/httpapi` 测试；合成输入位于 `tests/fixtures/walking-skeleton`。
 
