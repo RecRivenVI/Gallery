@@ -41,13 +41,18 @@ type Server struct {
 	catalog *catalog.Store
 	scanner *scanner.Service
 	hub     *realtime.Hub
+	rules   *rules.Lifecycle
 }
 
 func New(mode config.Mode, store *storage.Store, clock ports.Clock, personal *auth.Personal, resources *application.Resources, jobStore *jobs.Store, catalogStore *catalog.Store, scannerService *scanner.Service, hub *realtime.Hub, logger *slog.Logger) http.Handler {
 	if hub == nil {
 		hub = realtime.NewHub(clock)
 	}
-	server := &Server{mode: mode, store: store, clock: clock, auth: personal, data: resources, jobs: jobStore, catalog: catalogStore, scanner: scannerService, hub: hub, logger: logger}
+	ruleLifecycle, err := rules.NewLifecycle()
+	if err != nil {
+		panic(fmt.Sprintf("初始化规则生命周期: %v", err))
+	}
+	server := &Server{mode: mode, store: store, clock: clock, auth: personal, data: resources, jobs: jobStore, catalog: catalogStore, scanner: scannerService, hub: hub, logger: logger, rules: ruleLifecycle}
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /api/v1/health", server.health)
 	mux.HandleFunc("GET /api/v1/bootstrap", server.bootstrap)
@@ -59,6 +64,10 @@ func New(mode config.Mode, store *storage.Store, clock ports.Clock, personal *au
 	mux.HandleFunc("GET /api/v1/libraries/{libraryId}", server.getLibrary)
 	mux.HandleFunc("POST /api/v1/sources", server.createSource)
 	mux.HandleFunc("GET /api/v1/sources/{sourceId}", server.getSource)
+	mux.HandleFunc("POST /api/v1/rules/validate", server.validateRulePackage)
+	mux.HandleFunc("POST /api/v1/rules/compile", server.compileRulePackage)
+	mux.HandleFunc("POST /api/v1/rules/dry-run", server.dryRunRulePackage)
+	mux.HandleFunc("POST /api/v1/rules/impact", server.analyzeRuleImpact)
 	mux.HandleFunc("POST /api/v1/rule-versions", server.createRuleVersion)
 	mux.HandleFunc("GET /api/v1/rule-versions/{semanticHash}", server.getRuleVersion)
 	mux.HandleFunc("POST /api/v1/source-rule-bindings", server.createSourceRuleBinding)
@@ -83,6 +92,123 @@ func New(mode config.Mode, store *storage.Store, clock ports.Clock, personal *au
 		return realtime.Principal{SessionID: session.ID, Capabilities: append([]string(nil), session.Capabilities...)}, nil
 	}, personal.IsActive))
 	return requestLog(logger, hostGuard(mux))
+}
+
+func (s *Server) validateRulePackage(w http.ResponseWriter, r *http.Request) {
+	session, err := s.requireCapability(r, "rules.write")
+	if err != nil {
+		s.writeRequestError(w, err)
+		return
+	}
+	if err := auth.ValidateMutation(r, session.CSRFToken); err != nil {
+		s.writeRequestError(w, err)
+		return
+	}
+	var request struct {
+		Package json.RawMessage `json:"package"`
+	}
+	if err := decodeJSON(r, &request); err != nil || len(request.Package) == 0 {
+		s.writeRequestError(w, fault.WithField(fault.CodeRuleSchemaInvalid, "package", err))
+		return
+	}
+	result, err := s.rules.Validate(request.Package)
+	if err != nil {
+		s.writeRequestError(w, ruleRequestFault(fault.CodeRuleSchemaInvalid, "package", err))
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"canonicalPackage": json.RawMessage(result.CanonicalJSON), "packageHash": result.PackageHash, "semanticHash": result.SemanticHash})
+}
+
+func (s *Server) compileRulePackage(w http.ResponseWriter, r *http.Request) {
+	session, err := s.requireCapability(r, "rules.write")
+	if err != nil {
+		s.writeRequestError(w, err)
+		return
+	}
+	if err := auth.ValidateMutation(r, session.CSRFToken); err != nil {
+		s.writeRequestError(w, err)
+		return
+	}
+	var request struct {
+		Package    json.RawMessage `json:"package"`
+		Parameters json.RawMessage `json:"parameters"`
+	}
+	if err := decodeJSON(r, &request); err != nil {
+		s.writeRequestError(w, fault.WithField(fault.CodeRuleCompile, "body", err))
+		return
+	}
+	result, err := s.rules.Compile(request.Package, request.Parameters)
+	if err != nil {
+		s.writeRequestError(w, ruleRequestFault(fault.CodeRuleCompile, "package", err))
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"canonicalPackage": json.RawMessage(result.CanonicalJSON), "packageHash": result.PackageHash, "semanticHash": result.SemanticHash,
+		"ruleIrHash": result.RuleIRHash, "canonicalParameters": json.RawMessage(result.CanonicalParameters), "ruleIr": result.IR, "cacheHit": result.CacheHit,
+	})
+}
+
+func (s *Server) dryRunRulePackage(w http.ResponseWriter, r *http.Request) {
+	session, err := s.requireCapability(r, "rules.debug")
+	if err != nil {
+		s.writeRequestError(w, err)
+		return
+	}
+	if err := auth.ValidateMutation(r, session.CSRFToken); err != nil {
+		s.writeRequestError(w, err)
+		return
+	}
+	var request struct {
+		Package    json.RawMessage   `json:"package"`
+		Parameters json.RawMessage   `json:"parameters"`
+		Sample     rules.DryRunInput `json:"sample"`
+	}
+	if err := decodeJSON(r, &request); err != nil {
+		s.writeRequestError(w, fault.WithField(fault.CodeRuleDryRun, "body", err))
+		return
+	}
+	result, err := s.rules.DryRun(r.Context(), request.Package, request.Parameters, request.Sample)
+	if err != nil {
+		s.writeRequestError(w, ruleRequestFault(fault.CodeRuleDryRun, "sample", err))
+		return
+	}
+	writeJSON(w, http.StatusOK, result)
+}
+
+func (s *Server) analyzeRuleImpact(w http.ResponseWriter, r *http.Request) {
+	session, err := s.requireCapability(r, "rules.write")
+	if err != nil {
+		s.writeRequestError(w, err)
+		return
+	}
+	if err := auth.ValidateMutation(r, session.CSRFToken); err != nil {
+		s.writeRequestError(w, err)
+		return
+	}
+	var request struct {
+		Before json.RawMessage `json:"before"`
+		After  json.RawMessage `json:"after"`
+	}
+	if err := decodeJSON(r, &request); err != nil {
+		s.writeRequestError(w, fault.WithField(fault.CodeRuleImpact, "body", err))
+		return
+	}
+	result, err := s.rules.Impact(request.Before, request.After)
+	if err != nil {
+		s.writeRequestError(w, ruleRequestFault(fault.CodeRuleImpact, "after", err))
+		return
+	}
+	writeJSON(w, http.StatusOK, result)
+}
+
+func ruleRequestFault(code fault.Code, field string, err error) *fault.Error {
+	if strings.Contains(err.Error(), "CEL_") {
+		code = fault.CodeRuleCELLimit
+	}
+	if exact := rules.ErrorField(err); exact != "" {
+		field += exact
+	}
+	return fault.WithField(code, field, err)
 }
 
 func (s *Server) health(w http.ResponseWriter, r *http.Request) {

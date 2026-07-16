@@ -142,7 +142,11 @@ const (
 	PATHESCAPE                ErrorCode = "PATH_ESCAPE"
 	PROCESSINTERRUPTED        ErrorCode = "PROCESS_INTERRUPTED"
 	RANGEINVALID              ErrorCode = "RANGE_INVALID"
+	RULECELLIMIT              ErrorCode = "RULE_CEL_LIMIT"
+	RULECOMPILEERROR          ErrorCode = "RULE_COMPILE_ERROR"
+	RULEDRYRUNFAILED          ErrorCode = "RULE_DRY_RUN_FAILED"
 	RULEEVALERROR             ErrorCode = "RULE_EVAL_ERROR"
+	RULEIMPACTFAILED          ErrorCode = "RULE_IMPACT_FAILED"
 	RULEPARAMETERINVALID      ErrorCode = "RULE_PARAMETER_INVALID"
 	RULESCHEMAINVALID         ErrorCode = "RULE_SCHEMA_INVALID"
 	SCANALREADYRUNNING        ErrorCode = "SCAN_ALREADY_RUNNING"
@@ -207,7 +211,15 @@ func (e ErrorCode) Valid() bool {
 		return true
 	case RANGEINVALID:
 		return true
+	case RULECELLIMIT:
+		return true
+	case RULECOMPILEERROR:
+		return true
+	case RULEDRYRUNFAILED:
+		return true
 	case RULEEVALERROR:
+		return true
+	case RULEIMPACTFAILED:
 		return true
 	case RULEPARAMETERINVALID:
 		return true
@@ -544,6 +556,77 @@ type QueryPublication struct {
 // QueryPublicationId defines model for QueryPublicationId.
 type QueryPublicationId = string
 
+// RuleCompileRequest defines model for RuleCompileRequest.
+type RuleCompileRequest struct {
+	Package    map[string]interface{} `json:"package"`
+	Parameters map[string]interface{} `json:"parameters"`
+}
+
+// RuleCompileResult defines model for RuleCompileResult.
+type RuleCompileResult struct {
+	CacheHit            bool                   `json:"cacheHit"`
+	CanonicalPackage    map[string]interface{} `json:"canonicalPackage"`
+	CanonicalParameters map[string]interface{} `json:"canonicalParameters"`
+	PackageHash         SHA256Digest           `json:"packageHash"`
+	RuleIr              map[string]interface{} `json:"ruleIr"`
+	RuleIrHash          SHA256Digest           `json:"ruleIrHash"`
+	SemanticHash        SHA256Digest           `json:"semanticHash"`
+}
+
+// RuleDryRunRequest defines model for RuleDryRunRequest.
+type RuleDryRunRequest struct {
+	Package    map[string]interface{} `json:"package"`
+	Parameters map[string]interface{} `json:"parameters"`
+	Sample     RuleDryRunSample       `json:"sample"`
+}
+
+// RuleDryRunResult defines model for RuleDryRunResult.
+type RuleDryRunResult struct {
+	Issues []map[string]interface{} `json:"issues"`
+	Trace  []map[string]interface{} `json:"trace"`
+	Work   map[string]interface{}   `json:"work"`
+}
+
+// RuleDryRunSample defines model for RuleDryRunSample.
+type RuleDryRunSample struct {
+	Files []struct {
+		Metadata interface{} `json:"metadata,omitempty"`
+		Path     string      `json:"path"`
+		Size     int         `json:"size"`
+	} `json:"files"`
+	Metadata interface{} `json:"metadata"`
+	Path     string      `json:"path"`
+}
+
+// RuleImpactRequest defines model for RuleImpactRequest.
+type RuleImpactRequest struct {
+	After  map[string]interface{} `json:"after"`
+	Before map[string]interface{} `json:"before"`
+}
+
+// RuleImpactResult defines model for RuleImpactResult.
+type RuleImpactResult struct {
+	Actions        []string `json:"actions"`
+	BindingReview  bool     `json:"bindingReview"`
+	Fields         []string `json:"fields"`
+	FullRescan     bool     `json:"fullRescan"`
+	RebuildDerived bool     `json:"rebuildDerived"`
+	RebuildSearch  bool     `json:"rebuildSearch"`
+	Reproject      bool     `json:"reproject"`
+}
+
+// RuleValidateRequest defines model for RuleValidateRequest.
+type RuleValidateRequest struct {
+	Package map[string]interface{} `json:"package"`
+}
+
+// RuleValidationResult defines model for RuleValidationResult.
+type RuleValidationResult struct {
+	CanonicalPackage map[string]interface{} `json:"canonicalPackage"`
+	PackageHash      SHA256Digest           `json:"packageHash"`
+	SemanticHash     SHA256Digest           `json:"semanticHash"`
+}
+
 // RuleVersion defines model for RuleVersion.
 type RuleVersion struct {
 	CreatedAt    time.Time    `json:"createdAt"`
@@ -699,6 +782,26 @@ type CreateRuleVersionParams struct {
 	XGalleryCSRF CSRFHeader `json:"X-Gallery-CSRF"`
 }
 
+// CompileRulePackageParams defines parameters for CompileRulePackage.
+type CompileRulePackageParams struct {
+	XGalleryCSRF CSRFHeader `json:"X-Gallery-CSRF"`
+}
+
+// DryRunRulePackageParams defines parameters for DryRunRulePackage.
+type DryRunRulePackageParams struct {
+	XGalleryCSRF CSRFHeader `json:"X-Gallery-CSRF"`
+}
+
+// AnalyzeRuleImpactParams defines parameters for AnalyzeRuleImpact.
+type AnalyzeRuleImpactParams struct {
+	XGalleryCSRF CSRFHeader `json:"X-Gallery-CSRF"`
+}
+
+// ValidateRulePackageParams defines parameters for ValidateRulePackage.
+type ValidateRulePackageParams struct {
+	XGalleryCSRF CSRFHeader `json:"X-Gallery-CSRF"`
+}
+
 // RevokeSessionParams defines parameters for RevokeSession.
 type RevokeSessionParams struct {
 	XGalleryCSRF CSRFHeader `json:"X-Gallery-CSRF"`
@@ -727,6 +830,18 @@ type ExchangePairingCredentialJSONRequestBody = PairingExchangeRequest
 
 // CreateRuleVersionJSONRequestBody defines body for CreateRuleVersion for application/json ContentType.
 type CreateRuleVersionJSONRequestBody = RuleVersionCreateRequest
+
+// CompileRulePackageJSONRequestBody defines body for CompileRulePackage for application/json ContentType.
+type CompileRulePackageJSONRequestBody = RuleCompileRequest
+
+// DryRunRulePackageJSONRequestBody defines body for DryRunRulePackage for application/json ContentType.
+type DryRunRulePackageJSONRequestBody = RuleDryRunRequest
+
+// AnalyzeRuleImpactJSONRequestBody defines body for AnalyzeRuleImpact for application/json ContentType.
+type AnalyzeRuleImpactJSONRequestBody = RuleImpactRequest
+
+// ValidateRulePackageJSONRequestBody defines body for ValidateRulePackage for application/json ContentType.
+type ValidateRulePackageJSONRequestBody = RuleValidateRequest
 
 // CreateSourceRuleBindingJSONRequestBody defines body for CreateSourceRuleBinding for application/json ContentType.
 type CreateSourceRuleBindingJSONRequestBody = SourceRuleBindingCreateRequest
@@ -851,6 +966,26 @@ type ClientInterface interface {
 
 	// GetRuleVersion request
 	GetRuleVersion(ctx context.Context, semanticHash SHA256Digest, reqEditors ...RequestEditorFn) (*http.Response, error)
+
+	// CompileRulePackageWithBody request with any body
+	CompileRulePackageWithBody(ctx context.Context, params *CompileRulePackageParams, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*http.Response, error)
+
+	CompileRulePackage(ctx context.Context, params *CompileRulePackageParams, body CompileRulePackageJSONRequestBody, reqEditors ...RequestEditorFn) (*http.Response, error)
+
+	// DryRunRulePackageWithBody request with any body
+	DryRunRulePackageWithBody(ctx context.Context, params *DryRunRulePackageParams, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*http.Response, error)
+
+	DryRunRulePackage(ctx context.Context, params *DryRunRulePackageParams, body DryRunRulePackageJSONRequestBody, reqEditors ...RequestEditorFn) (*http.Response, error)
+
+	// AnalyzeRuleImpactWithBody request with any body
+	AnalyzeRuleImpactWithBody(ctx context.Context, params *AnalyzeRuleImpactParams, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*http.Response, error)
+
+	AnalyzeRuleImpact(ctx context.Context, params *AnalyzeRuleImpactParams, body AnalyzeRuleImpactJSONRequestBody, reqEditors ...RequestEditorFn) (*http.Response, error)
+
+	// ValidateRulePackageWithBody request with any body
+	ValidateRulePackageWithBody(ctx context.Context, params *ValidateRulePackageParams, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*http.Response, error)
+
+	ValidateRulePackage(ctx context.Context, params *ValidateRulePackageParams, body ValidateRulePackageJSONRequestBody, reqEditors ...RequestEditorFn) (*http.Response, error)
 
 	// ListSessions request
 	ListSessions(ctx context.Context, reqEditors ...RequestEditorFn) (*http.Response, error)
@@ -1069,6 +1204,102 @@ func (c *Client) CreateRuleVersion(ctx context.Context, params *CreateRuleVersio
 
 func (c *Client) GetRuleVersion(ctx context.Context, semanticHash SHA256Digest, reqEditors ...RequestEditorFn) (*http.Response, error) {
 	req, err := NewGetRuleVersionRequest(c.Server, semanticHash)
+	if err != nil {
+		return nil, err
+	}
+	req = req.WithContext(ctx)
+	if err := c.applyEditors(ctx, req, reqEditors); err != nil {
+		return nil, err
+	}
+	return c.Client.Do(req)
+}
+
+func (c *Client) CompileRulePackageWithBody(ctx context.Context, params *CompileRulePackageParams, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewCompileRulePackageRequestWithBody(c.Server, params, contentType, body)
+	if err != nil {
+		return nil, err
+	}
+	req = req.WithContext(ctx)
+	if err := c.applyEditors(ctx, req, reqEditors); err != nil {
+		return nil, err
+	}
+	return c.Client.Do(req)
+}
+
+func (c *Client) CompileRulePackage(ctx context.Context, params *CompileRulePackageParams, body CompileRulePackageJSONRequestBody, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewCompileRulePackageRequest(c.Server, params, body)
+	if err != nil {
+		return nil, err
+	}
+	req = req.WithContext(ctx)
+	if err := c.applyEditors(ctx, req, reqEditors); err != nil {
+		return nil, err
+	}
+	return c.Client.Do(req)
+}
+
+func (c *Client) DryRunRulePackageWithBody(ctx context.Context, params *DryRunRulePackageParams, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewDryRunRulePackageRequestWithBody(c.Server, params, contentType, body)
+	if err != nil {
+		return nil, err
+	}
+	req = req.WithContext(ctx)
+	if err := c.applyEditors(ctx, req, reqEditors); err != nil {
+		return nil, err
+	}
+	return c.Client.Do(req)
+}
+
+func (c *Client) DryRunRulePackage(ctx context.Context, params *DryRunRulePackageParams, body DryRunRulePackageJSONRequestBody, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewDryRunRulePackageRequest(c.Server, params, body)
+	if err != nil {
+		return nil, err
+	}
+	req = req.WithContext(ctx)
+	if err := c.applyEditors(ctx, req, reqEditors); err != nil {
+		return nil, err
+	}
+	return c.Client.Do(req)
+}
+
+func (c *Client) AnalyzeRuleImpactWithBody(ctx context.Context, params *AnalyzeRuleImpactParams, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewAnalyzeRuleImpactRequestWithBody(c.Server, params, contentType, body)
+	if err != nil {
+		return nil, err
+	}
+	req = req.WithContext(ctx)
+	if err := c.applyEditors(ctx, req, reqEditors); err != nil {
+		return nil, err
+	}
+	return c.Client.Do(req)
+}
+
+func (c *Client) AnalyzeRuleImpact(ctx context.Context, params *AnalyzeRuleImpactParams, body AnalyzeRuleImpactJSONRequestBody, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewAnalyzeRuleImpactRequest(c.Server, params, body)
+	if err != nil {
+		return nil, err
+	}
+	req = req.WithContext(ctx)
+	if err := c.applyEditors(ctx, req, reqEditors); err != nil {
+		return nil, err
+	}
+	return c.Client.Do(req)
+}
+
+func (c *Client) ValidateRulePackageWithBody(ctx context.Context, params *ValidateRulePackageParams, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewValidateRulePackageRequestWithBody(c.Server, params, contentType, body)
+	if err != nil {
+		return nil, err
+	}
+	req = req.WithContext(ctx)
+	if err := c.applyEditors(ctx, req, reqEditors); err != nil {
+		return nil, err
+	}
+	return c.Client.Do(req)
+}
+
+func (c *Client) ValidateRulePackage(ctx context.Context, params *ValidateRulePackageParams, body ValidateRulePackageJSONRequestBody, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewValidateRulePackageRequest(c.Server, params, body)
 	if err != nil {
 		return nil, err
 	}
@@ -1759,6 +1990,218 @@ func NewGetRuleVersionRequest(server string, semanticHash SHA256Digest) (*http.R
 	return req, nil
 }
 
+// NewCompileRulePackageRequest calls the generic CompileRulePackage builder with application/json body
+func NewCompileRulePackageRequest(server string, params *CompileRulePackageParams, body CompileRulePackageJSONRequestBody) (*http.Request, error) {
+	var bodyReader io.Reader
+	buf, err := json.Marshal(body)
+	if err != nil {
+		return nil, err
+	}
+	bodyReader = bytes.NewReader(buf)
+	return NewCompileRulePackageRequestWithBody(server, params, "application/json", bodyReader)
+}
+
+// NewCompileRulePackageRequestWithBody generates requests for CompileRulePackage with any type of body
+func NewCompileRulePackageRequestWithBody(server string, params *CompileRulePackageParams, contentType string, body io.Reader) (*http.Request, error) {
+	var err error
+
+	serverURL, err := url.Parse(server)
+	if err != nil {
+		return nil, err
+	}
+
+	operationPath := fmt.Sprintf("/api/v1/rules/compile")
+	if operationPath[0] == '/' {
+		operationPath = "." + operationPath
+	}
+
+	queryURL, err := serverURL.Parse(operationPath)
+	if err != nil {
+		return nil, err
+	}
+
+	req, err := http.NewRequest(http.MethodPost, queryURL.String(), body)
+	if err != nil {
+		return nil, err
+	}
+
+	req.Header.Add("Content-Type", contentType)
+
+	if params != nil {
+
+		var headerParam0 string
+
+		headerParam0, err = runtime.StyleParamWithOptions("simple", false, "X-Gallery-CSRF", params.XGalleryCSRF, runtime.StyleParamOptions{ParamLocation: runtime.ParamLocationHeader, Type: "string", Format: ""})
+		if err != nil {
+			return nil, err
+		}
+
+		req.Header.Set("X-Gallery-CSRF", headerParam0)
+
+	}
+
+	return req, nil
+}
+
+// NewDryRunRulePackageRequest calls the generic DryRunRulePackage builder with application/json body
+func NewDryRunRulePackageRequest(server string, params *DryRunRulePackageParams, body DryRunRulePackageJSONRequestBody) (*http.Request, error) {
+	var bodyReader io.Reader
+	buf, err := json.Marshal(body)
+	if err != nil {
+		return nil, err
+	}
+	bodyReader = bytes.NewReader(buf)
+	return NewDryRunRulePackageRequestWithBody(server, params, "application/json", bodyReader)
+}
+
+// NewDryRunRulePackageRequestWithBody generates requests for DryRunRulePackage with any type of body
+func NewDryRunRulePackageRequestWithBody(server string, params *DryRunRulePackageParams, contentType string, body io.Reader) (*http.Request, error) {
+	var err error
+
+	serverURL, err := url.Parse(server)
+	if err != nil {
+		return nil, err
+	}
+
+	operationPath := fmt.Sprintf("/api/v1/rules/dry-run")
+	if operationPath[0] == '/' {
+		operationPath = "." + operationPath
+	}
+
+	queryURL, err := serverURL.Parse(operationPath)
+	if err != nil {
+		return nil, err
+	}
+
+	req, err := http.NewRequest(http.MethodPost, queryURL.String(), body)
+	if err != nil {
+		return nil, err
+	}
+
+	req.Header.Add("Content-Type", contentType)
+
+	if params != nil {
+
+		var headerParam0 string
+
+		headerParam0, err = runtime.StyleParamWithOptions("simple", false, "X-Gallery-CSRF", params.XGalleryCSRF, runtime.StyleParamOptions{ParamLocation: runtime.ParamLocationHeader, Type: "string", Format: ""})
+		if err != nil {
+			return nil, err
+		}
+
+		req.Header.Set("X-Gallery-CSRF", headerParam0)
+
+	}
+
+	return req, nil
+}
+
+// NewAnalyzeRuleImpactRequest calls the generic AnalyzeRuleImpact builder with application/json body
+func NewAnalyzeRuleImpactRequest(server string, params *AnalyzeRuleImpactParams, body AnalyzeRuleImpactJSONRequestBody) (*http.Request, error) {
+	var bodyReader io.Reader
+	buf, err := json.Marshal(body)
+	if err != nil {
+		return nil, err
+	}
+	bodyReader = bytes.NewReader(buf)
+	return NewAnalyzeRuleImpactRequestWithBody(server, params, "application/json", bodyReader)
+}
+
+// NewAnalyzeRuleImpactRequestWithBody generates requests for AnalyzeRuleImpact with any type of body
+func NewAnalyzeRuleImpactRequestWithBody(server string, params *AnalyzeRuleImpactParams, contentType string, body io.Reader) (*http.Request, error) {
+	var err error
+
+	serverURL, err := url.Parse(server)
+	if err != nil {
+		return nil, err
+	}
+
+	operationPath := fmt.Sprintf("/api/v1/rules/impact")
+	if operationPath[0] == '/' {
+		operationPath = "." + operationPath
+	}
+
+	queryURL, err := serverURL.Parse(operationPath)
+	if err != nil {
+		return nil, err
+	}
+
+	req, err := http.NewRequest(http.MethodPost, queryURL.String(), body)
+	if err != nil {
+		return nil, err
+	}
+
+	req.Header.Add("Content-Type", contentType)
+
+	if params != nil {
+
+		var headerParam0 string
+
+		headerParam0, err = runtime.StyleParamWithOptions("simple", false, "X-Gallery-CSRF", params.XGalleryCSRF, runtime.StyleParamOptions{ParamLocation: runtime.ParamLocationHeader, Type: "string", Format: ""})
+		if err != nil {
+			return nil, err
+		}
+
+		req.Header.Set("X-Gallery-CSRF", headerParam0)
+
+	}
+
+	return req, nil
+}
+
+// NewValidateRulePackageRequest calls the generic ValidateRulePackage builder with application/json body
+func NewValidateRulePackageRequest(server string, params *ValidateRulePackageParams, body ValidateRulePackageJSONRequestBody) (*http.Request, error) {
+	var bodyReader io.Reader
+	buf, err := json.Marshal(body)
+	if err != nil {
+		return nil, err
+	}
+	bodyReader = bytes.NewReader(buf)
+	return NewValidateRulePackageRequestWithBody(server, params, "application/json", bodyReader)
+}
+
+// NewValidateRulePackageRequestWithBody generates requests for ValidateRulePackage with any type of body
+func NewValidateRulePackageRequestWithBody(server string, params *ValidateRulePackageParams, contentType string, body io.Reader) (*http.Request, error) {
+	var err error
+
+	serverURL, err := url.Parse(server)
+	if err != nil {
+		return nil, err
+	}
+
+	operationPath := fmt.Sprintf("/api/v1/rules/validate")
+	if operationPath[0] == '/' {
+		operationPath = "." + operationPath
+	}
+
+	queryURL, err := serverURL.Parse(operationPath)
+	if err != nil {
+		return nil, err
+	}
+
+	req, err := http.NewRequest(http.MethodPost, queryURL.String(), body)
+	if err != nil {
+		return nil, err
+	}
+
+	req.Header.Add("Content-Type", contentType)
+
+	if params != nil {
+
+		var headerParam0 string
+
+		headerParam0, err = runtime.StyleParamWithOptions("simple", false, "X-Gallery-CSRF", params.XGalleryCSRF, runtime.StyleParamOptions{ParamLocation: runtime.ParamLocationHeader, Type: "string", Format: ""})
+		if err != nil {
+			return nil, err
+		}
+
+		req.Header.Set("X-Gallery-CSRF", headerParam0)
+
+	}
+
+	return req, nil
+}
+
 // NewListSessionsRequest generates requests for ListSessions
 func NewListSessionsRequest(server string) (*http.Request, error) {
 	var err error
@@ -2237,6 +2680,26 @@ type ClientWithResponsesInterface interface {
 	// GetRuleVersionWithResponse request
 	GetRuleVersionWithResponse(ctx context.Context, semanticHash SHA256Digest, reqEditors ...RequestEditorFn) (*GetRuleVersionResponse, error)
 
+	// CompileRulePackageWithBodyWithResponse request with any body
+	CompileRulePackageWithBodyWithResponse(ctx context.Context, params *CompileRulePackageParams, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*CompileRulePackageResponse, error)
+
+	CompileRulePackageWithResponse(ctx context.Context, params *CompileRulePackageParams, body CompileRulePackageJSONRequestBody, reqEditors ...RequestEditorFn) (*CompileRulePackageResponse, error)
+
+	// DryRunRulePackageWithBodyWithResponse request with any body
+	DryRunRulePackageWithBodyWithResponse(ctx context.Context, params *DryRunRulePackageParams, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*DryRunRulePackageResponse, error)
+
+	DryRunRulePackageWithResponse(ctx context.Context, params *DryRunRulePackageParams, body DryRunRulePackageJSONRequestBody, reqEditors ...RequestEditorFn) (*DryRunRulePackageResponse, error)
+
+	// AnalyzeRuleImpactWithBodyWithResponse request with any body
+	AnalyzeRuleImpactWithBodyWithResponse(ctx context.Context, params *AnalyzeRuleImpactParams, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*AnalyzeRuleImpactResponse, error)
+
+	AnalyzeRuleImpactWithResponse(ctx context.Context, params *AnalyzeRuleImpactParams, body AnalyzeRuleImpactJSONRequestBody, reqEditors ...RequestEditorFn) (*AnalyzeRuleImpactResponse, error)
+
+	// ValidateRulePackageWithBodyWithResponse request with any body
+	ValidateRulePackageWithBodyWithResponse(ctx context.Context, params *ValidateRulePackageParams, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*ValidateRulePackageResponse, error)
+
+	ValidateRulePackageWithResponse(ctx context.Context, params *ValidateRulePackageParams, body ValidateRulePackageJSONRequestBody, reqEditors ...RequestEditorFn) (*ValidateRulePackageResponse, error)
+
 	// ListSessionsWithResponse request
 	ListSessionsWithResponse(ctx context.Context, reqEditors ...RequestEditorFn) (*ListSessionsResponse, error)
 
@@ -2693,6 +3156,138 @@ func (r GetRuleVersionResponse) StatusCode() int {
 
 // ContentType is a convenience method to retrieve the Content-Type value from the HTTP response headers
 func (r GetRuleVersionResponse) ContentType() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Header.Get("Content-Type")
+	}
+	return ""
+}
+
+type CompileRulePackageResponse struct {
+	Body         []byte
+	HTTPResponse *http.Response
+	JSON200      *RuleCompileResult
+	JSON400      *ValidationError
+	JSON401      *UnauthenticatedError
+	JSON403      *ForbiddenError
+}
+
+// Status returns HTTPResponse.Status
+func (r CompileRulePackageResponse) Status() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Status
+	}
+	return http.StatusText(0)
+}
+
+// StatusCode returns HTTPResponse.StatusCode
+func (r CompileRulePackageResponse) StatusCode() int {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.StatusCode
+	}
+	return 0
+}
+
+// ContentType is a convenience method to retrieve the Content-Type value from the HTTP response headers
+func (r CompileRulePackageResponse) ContentType() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Header.Get("Content-Type")
+	}
+	return ""
+}
+
+type DryRunRulePackageResponse struct {
+	Body         []byte
+	HTTPResponse *http.Response
+	JSON200      *RuleDryRunResult
+	JSON400      *ValidationError
+	JSON401      *UnauthenticatedError
+	JSON403      *ForbiddenError
+}
+
+// Status returns HTTPResponse.Status
+func (r DryRunRulePackageResponse) Status() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Status
+	}
+	return http.StatusText(0)
+}
+
+// StatusCode returns HTTPResponse.StatusCode
+func (r DryRunRulePackageResponse) StatusCode() int {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.StatusCode
+	}
+	return 0
+}
+
+// ContentType is a convenience method to retrieve the Content-Type value from the HTTP response headers
+func (r DryRunRulePackageResponse) ContentType() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Header.Get("Content-Type")
+	}
+	return ""
+}
+
+type AnalyzeRuleImpactResponse struct {
+	Body         []byte
+	HTTPResponse *http.Response
+	JSON200      *RuleImpactResult
+	JSON400      *ValidationError
+	JSON401      *UnauthenticatedError
+	JSON403      *ForbiddenError
+}
+
+// Status returns HTTPResponse.Status
+func (r AnalyzeRuleImpactResponse) Status() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Status
+	}
+	return http.StatusText(0)
+}
+
+// StatusCode returns HTTPResponse.StatusCode
+func (r AnalyzeRuleImpactResponse) StatusCode() int {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.StatusCode
+	}
+	return 0
+}
+
+// ContentType is a convenience method to retrieve the Content-Type value from the HTTP response headers
+func (r AnalyzeRuleImpactResponse) ContentType() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Header.Get("Content-Type")
+	}
+	return ""
+}
+
+type ValidateRulePackageResponse struct {
+	Body         []byte
+	HTTPResponse *http.Response
+	JSON200      *RuleValidationResult
+	JSON400      *ValidationError
+	JSON401      *UnauthenticatedError
+	JSON403      *ForbiddenError
+}
+
+// Status returns HTTPResponse.Status
+func (r ValidateRulePackageResponse) Status() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Status
+	}
+	return http.StatusText(0)
+}
+
+// StatusCode returns HTTPResponse.StatusCode
+func (r ValidateRulePackageResponse) StatusCode() int {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.StatusCode
+	}
+	return 0
+}
+
+// ContentType is a convenience method to retrieve the Content-Type value from the HTTP response headers
+func (r ValidateRulePackageResponse) ContentType() string {
 	if r.HTTPResponse != nil {
 		return r.HTTPResponse.Header.Get("Content-Type")
 	}
@@ -3172,6 +3767,74 @@ func (c *ClientWithResponses) GetRuleVersionWithResponse(ctx context.Context, se
 		return nil, err
 	}
 	return ParseGetRuleVersionResponse(rsp)
+}
+
+// CompileRulePackageWithBodyWithResponse request with arbitrary body returning *CompileRulePackageResponse
+func (c *ClientWithResponses) CompileRulePackageWithBodyWithResponse(ctx context.Context, params *CompileRulePackageParams, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*CompileRulePackageResponse, error) {
+	rsp, err := c.CompileRulePackageWithBody(ctx, params, contentType, body, reqEditors...)
+	if err != nil {
+		return nil, err
+	}
+	return ParseCompileRulePackageResponse(rsp)
+}
+
+func (c *ClientWithResponses) CompileRulePackageWithResponse(ctx context.Context, params *CompileRulePackageParams, body CompileRulePackageJSONRequestBody, reqEditors ...RequestEditorFn) (*CompileRulePackageResponse, error) {
+	rsp, err := c.CompileRulePackage(ctx, params, body, reqEditors...)
+	if err != nil {
+		return nil, err
+	}
+	return ParseCompileRulePackageResponse(rsp)
+}
+
+// DryRunRulePackageWithBodyWithResponse request with arbitrary body returning *DryRunRulePackageResponse
+func (c *ClientWithResponses) DryRunRulePackageWithBodyWithResponse(ctx context.Context, params *DryRunRulePackageParams, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*DryRunRulePackageResponse, error) {
+	rsp, err := c.DryRunRulePackageWithBody(ctx, params, contentType, body, reqEditors...)
+	if err != nil {
+		return nil, err
+	}
+	return ParseDryRunRulePackageResponse(rsp)
+}
+
+func (c *ClientWithResponses) DryRunRulePackageWithResponse(ctx context.Context, params *DryRunRulePackageParams, body DryRunRulePackageJSONRequestBody, reqEditors ...RequestEditorFn) (*DryRunRulePackageResponse, error) {
+	rsp, err := c.DryRunRulePackage(ctx, params, body, reqEditors...)
+	if err != nil {
+		return nil, err
+	}
+	return ParseDryRunRulePackageResponse(rsp)
+}
+
+// AnalyzeRuleImpactWithBodyWithResponse request with arbitrary body returning *AnalyzeRuleImpactResponse
+func (c *ClientWithResponses) AnalyzeRuleImpactWithBodyWithResponse(ctx context.Context, params *AnalyzeRuleImpactParams, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*AnalyzeRuleImpactResponse, error) {
+	rsp, err := c.AnalyzeRuleImpactWithBody(ctx, params, contentType, body, reqEditors...)
+	if err != nil {
+		return nil, err
+	}
+	return ParseAnalyzeRuleImpactResponse(rsp)
+}
+
+func (c *ClientWithResponses) AnalyzeRuleImpactWithResponse(ctx context.Context, params *AnalyzeRuleImpactParams, body AnalyzeRuleImpactJSONRequestBody, reqEditors ...RequestEditorFn) (*AnalyzeRuleImpactResponse, error) {
+	rsp, err := c.AnalyzeRuleImpact(ctx, params, body, reqEditors...)
+	if err != nil {
+		return nil, err
+	}
+	return ParseAnalyzeRuleImpactResponse(rsp)
+}
+
+// ValidateRulePackageWithBodyWithResponse request with arbitrary body returning *ValidateRulePackageResponse
+func (c *ClientWithResponses) ValidateRulePackageWithBodyWithResponse(ctx context.Context, params *ValidateRulePackageParams, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*ValidateRulePackageResponse, error) {
+	rsp, err := c.ValidateRulePackageWithBody(ctx, params, contentType, body, reqEditors...)
+	if err != nil {
+		return nil, err
+	}
+	return ParseValidateRulePackageResponse(rsp)
+}
+
+func (c *ClientWithResponses) ValidateRulePackageWithResponse(ctx context.Context, params *ValidateRulePackageParams, body ValidateRulePackageJSONRequestBody, reqEditors ...RequestEditorFn) (*ValidateRulePackageResponse, error) {
+	rsp, err := c.ValidateRulePackage(ctx, params, body, reqEditors...)
+	if err != nil {
+		return nil, err
+	}
+	return ParseValidateRulePackageResponse(rsp)
 }
 
 // ListSessionsWithResponse request returning *ListSessionsResponse
@@ -3871,6 +4534,194 @@ func ParseGetRuleVersionResponse(rsp *http.Response) (*GetRuleVersionResponse, e
 			return nil, err
 		}
 		response.JSON404 = &dest
+
+	}
+
+	return response, nil
+}
+
+// ParseCompileRulePackageResponse parses an HTTP response from a CompileRulePackageWithResponse call
+func ParseCompileRulePackageResponse(rsp *http.Response) (*CompileRulePackageResponse, error) {
+	bodyBytes, err := io.ReadAll(rsp.Body)
+	defer func() { _ = rsp.Body.Close() }()
+	if err != nil {
+		return nil, err
+	}
+
+	response := &CompileRulePackageResponse{
+		Body:         bodyBytes,
+		HTTPResponse: rsp,
+	}
+
+	switch {
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 200:
+		var dest RuleCompileResult
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON200 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 400:
+		var dest ValidationError
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON400 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 401:
+		var dest UnauthenticatedError
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON401 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 403:
+		var dest ForbiddenError
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON403 = &dest
+
+	}
+
+	return response, nil
+}
+
+// ParseDryRunRulePackageResponse parses an HTTP response from a DryRunRulePackageWithResponse call
+func ParseDryRunRulePackageResponse(rsp *http.Response) (*DryRunRulePackageResponse, error) {
+	bodyBytes, err := io.ReadAll(rsp.Body)
+	defer func() { _ = rsp.Body.Close() }()
+	if err != nil {
+		return nil, err
+	}
+
+	response := &DryRunRulePackageResponse{
+		Body:         bodyBytes,
+		HTTPResponse: rsp,
+	}
+
+	switch {
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 200:
+		var dest RuleDryRunResult
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON200 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 400:
+		var dest ValidationError
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON400 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 401:
+		var dest UnauthenticatedError
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON401 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 403:
+		var dest ForbiddenError
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON403 = &dest
+
+	}
+
+	return response, nil
+}
+
+// ParseAnalyzeRuleImpactResponse parses an HTTP response from a AnalyzeRuleImpactWithResponse call
+func ParseAnalyzeRuleImpactResponse(rsp *http.Response) (*AnalyzeRuleImpactResponse, error) {
+	bodyBytes, err := io.ReadAll(rsp.Body)
+	defer func() { _ = rsp.Body.Close() }()
+	if err != nil {
+		return nil, err
+	}
+
+	response := &AnalyzeRuleImpactResponse{
+		Body:         bodyBytes,
+		HTTPResponse: rsp,
+	}
+
+	switch {
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 200:
+		var dest RuleImpactResult
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON200 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 400:
+		var dest ValidationError
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON400 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 401:
+		var dest UnauthenticatedError
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON401 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 403:
+		var dest ForbiddenError
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON403 = &dest
+
+	}
+
+	return response, nil
+}
+
+// ParseValidateRulePackageResponse parses an HTTP response from a ValidateRulePackageWithResponse call
+func ParseValidateRulePackageResponse(rsp *http.Response) (*ValidateRulePackageResponse, error) {
+	bodyBytes, err := io.ReadAll(rsp.Body)
+	defer func() { _ = rsp.Body.Close() }()
+	if err != nil {
+		return nil, err
+	}
+
+	response := &ValidateRulePackageResponse{
+		Body:         bodyBytes,
+		HTTPResponse: rsp,
+	}
+
+	switch {
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 200:
+		var dest RuleValidationResult
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON200 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 400:
+		var dest ValidationError
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON400 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 401:
+		var dest UnauthenticatedError
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON401 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 403:
+		var dest ForbiddenError
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON403 = &dest
 
 	}
 

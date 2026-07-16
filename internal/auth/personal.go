@@ -35,6 +35,7 @@ var PersonalOwnerCapabilities = []string{
 	"media.read",
 	"rules.read",
 	"rules.write",
+	"rules.debug",
 	"scan.run",
 }
 
