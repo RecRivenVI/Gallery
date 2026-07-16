@@ -94,6 +94,9 @@ func TestWalkingSkeletonPersistsAcrossRealGallerydRestart(t *testing.T) {
 	if err := os.WriteFile(mediaPath, fixture, 0o400); err != nil {
 		t.Fatal(err)
 	}
+	if err := os.WriteFile(filepath.Join(work, "metadata.json"), []byte(`{"creator":{"name":"Bootstrap Creator"}}`), 0o400); err != nil {
+		t.Fatal(err)
+	}
 	before := sha256.Sum256(mustReadFile(t, mediaPath))
 	dirs := appdirs.UnderRoot(filepath.Join(root, "app"))
 	cfg := config.Config{Mode: config.ModePersonal, Listen: "127.0.0.1:0", AppDirs: dirs, SourceRoots: []string{source}}

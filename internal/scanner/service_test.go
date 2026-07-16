@@ -171,6 +171,11 @@ func TestCatalogDeleteRebuildPreservesCanonicalOverlayAndMediaURL(t *testing.T) 
 		t.Fatalf("首次媒体投影失败: %+v %v", mediaItems, err)
 	}
 	mediaID := mediaItems[0].ID
+	var oldCreatorID string
+	if err := store.Control.SQL().QueryRowContext(ctx, `SELECT creator_id FROM creator_bindings
+WHERE source_id=? AND status='active'`, source.ID).Scan(&oldCreatorID); err != nil {
+		t.Fatalf("首次扫描未建立 CreatorBinding: %v", err)
+	}
 	stableMediaURL := "/api/v1/media/" + mediaID + "/content"
 	fixedClock := clock.Fixed{Time: time.Date(2026, 7, 16, 0, 0, 0, 0, time.UTC)}
 	overlayService, err := overlay.New(ctx, store.Control.SQL(), jobStore, catalogStore, fixedClock, nil)
@@ -237,11 +242,26 @@ func TestCatalogDeleteRebuildPreservesCanonicalOverlayAndMediaURL(t *testing.T) 
 	if err != nil || !state.Favorite || state.Progress != 0.6 || state.ProjectionStatus != "published" || state.PublishedQueryPublicationID != newPublication.ID {
 		t.Fatalf("Catalog 重建后用户事实/投影状态漂移: %+v %v", state, err)
 	}
-	var workCount, mediaCount int
+	var workCount, creatorCount, mediaCount int
 	_ = reopened.Control.SQL().QueryRowContext(ctx, "SELECT count(*) FROM canonical_works").Scan(&workCount)
+	_ = reopened.Control.SQL().QueryRowContext(ctx, "SELECT count(*) FROM canonical_creators").Scan(&creatorCount)
 	_ = reopened.Control.SQL().QueryRowContext(ctx, "SELECT count(*) FROM canonical_media").Scan(&mediaCount)
-	if workCount != 1 || mediaCount != 1 {
-		t.Fatalf("重建重复创建 Canonical 实体: works=%d media=%d", workCount, mediaCount)
+	if workCount != 1 || creatorCount != 1 || mediaCount != 1 {
+		t.Fatalf("重建重复创建 Canonical 实体: works=%d creators=%d media=%d", workCount, creatorCount, mediaCount)
+	}
+	var creatorID string
+	if err := reopened.Control.SQL().QueryRowContext(ctx, `SELECT creator_id FROM creator_bindings
+WHERE source_id=? AND status='active'`, source.ID).Scan(&creatorID); err != nil {
+		t.Fatalf("CreatorBinding 未恢复: %v", err)
+	}
+	if creatorID != oldCreatorID {
+		t.Fatalf("Catalog 重建后 CanonicalCreator 身份漂移: old=%s new=%s", oldCreatorID, creatorID)
+	}
+	var projectedCreatorID string
+	if err := reopened.Catalog.SQL().QueryRowContext(ctx, `SELECT creator_id FROM work_creator_relations
+WHERE catalog_revision_id=? AND overlay_revision_id=? AND work_id=?`, newPublication.CatalogRevisionID,
+		newPublication.OverlayRevisionID, workID).Scan(&projectedCreatorID); err != nil || projectedCreatorID != creatorID {
+		t.Fatalf("CreatorProjection/关系未以稳定 ID 恢复: control=%s catalog=%s err=%v", creatorID, projectedCreatorID, err)
 	}
 	afterSource := sha256.Sum256(mustRead(t, filepath.Join(source.RootPath, "work-one", "media.bin")))
 	if beforeSource != afterSource {
@@ -344,6 +364,9 @@ func setup(t *testing.T, fixture []byte) (*application.Resources, *jobs.Store, *
 		t.Fatal(err)
 	}
 	if err := os.WriteFile(filepath.Join(sourceRoot, "work-one", "media.bin"), fixture, 0o400); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(sourceRoot, "work-one", "metadata.json"), []byte(`{"creator":{"name":"Synthetic Creator"}}`), 0o400); err != nil {
 		t.Fatal(err)
 	}
 	source, err := resources.CreateSource(context.Background(), library.ID, "Synthetic", sourceRoot)

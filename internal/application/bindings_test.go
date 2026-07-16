@@ -48,21 +48,26 @@ func TestStableBindingRenameOrphanAndManualSplit(t *testing.T) {
 	}
 	digest := "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
 	firstInput := application.DiscoveredWork{SourceKey: "old/path", ProviderID: "example", ExternalID: "post-42", Title: "标题",
-		Media: []application.DiscoveredMedia{{SourceKey: "old/path/a.jpg", RuleKey: "a.jpg", Algorithm: "sha256-v1", Digest: digest, Ordinal: 0}}}
+		Creator: application.DiscoveredCreator{SourceKey: "creator/source-7", ProviderID: "example", ExternalID: "creator-7", Name: "创作者"},
+		Media:   []application.DiscoveredMedia{{SourceKey: "old/path/a.jpg", RuleKey: "a.jpg", Algorithm: "sha256-v1", Digest: digest, Ordinal: 0}}}
 	first, err := resources.EnsureCanonical(ctx, source.ID, []application.DiscoveredWork{firstInput})
 	if err != nil {
 		t.Fatal(err)
 	}
 	firstWork, firstMedia := first[firstInput.SourceKey], first[firstInput.SourceKey].Media[firstInput.Media[0].SourceKey]
+	firstCreator := firstWork.Creators[0]
 
 	renamedInput := application.DiscoveredWork{SourceKey: "renamed/path", ProviderID: "example", ExternalID: "post-42", Title: "扫描标题变化",
-		Media: []application.DiscoveredMedia{{SourceKey: "renamed/path/renamed.jpg", RuleKey: "renamed.jpg", Algorithm: "sha256-v1", Digest: digest, Ordinal: 0}}}
+		Creator: application.DiscoveredCreator{SourceKey: "creator/renamed-alias", ProviderID: "example", ExternalID: "creator-7", Name: "扫描创作者变化"},
+		Media:   []application.DiscoveredMedia{{SourceKey: "renamed/path/renamed.jpg", RuleKey: "renamed.jpg", Algorithm: "sha256-v1", Digest: digest, Ordinal: 0}}}
 	renamed, err := resources.EnsureCanonical(ctx, source.ID, []application.DiscoveredWork{renamedInput})
 	if err != nil {
 		t.Fatal(err)
 	}
 	if renamed[renamedInput.SourceKey].ID != firstWork.ID || renamed[renamedInput.SourceKey].Title != firstWork.Title ||
-		renamed[renamedInput.SourceKey].Media[renamedInput.Media[0].SourceKey].ID != firstMedia.ID {
+		renamed[renamedInput.SourceKey].Media[renamedInput.Media[0].SourceKey].ID != firstMedia.ID ||
+		len(renamed[renamedInput.SourceKey].Creators) != 1 || renamed[renamedInput.SourceKey].Creators[0].ID != firstCreator.ID ||
+		renamed[renamedInput.SourceKey].Creators[0].Name != firstCreator.Name {
 		t.Fatalf("改名后 Canonical 身份漂移: first=%+v renamed=%+v", first, renamed)
 	}
 	var oldStatus, newStatus string

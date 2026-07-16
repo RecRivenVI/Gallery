@@ -24,6 +24,7 @@ const (
 	IDCatalogRevision   IDKind = "crev"
 	IDOverlayRevision   IDKind = "orev"
 	IDWorkBinding       IDKind = "wbind"
+	IDCreatorBinding    IDKind = "cbind"
 	IDMediaBinding      IDKind = "mbind"
 	IDBindingIssue      IDKind = "biss"
 )
@@ -32,7 +33,7 @@ var validIDKinds = map[IDKind]struct{}{
 	IDLibrary: {}, IDSource: {}, IDCanonicalWork: {}, IDCanonicalCreator: {},
 	IDCanonicalMedia: {}, IDSourceRuleBinding: {}, IDRuleSet: {}, IDJob: {},
 	IDQueryPublication: {}, IDSession: {},
-	IDCatalogRevision: {}, IDOverlayRevision: {}, IDWorkBinding: {}, IDMediaBinding: {}, IDBindingIssue: {},
+	IDCatalogRevision: {}, IDOverlayRevision: {}, IDWorkBinding: {}, IDCreatorBinding: {}, IDMediaBinding: {}, IDBindingIssue: {},
 }
 
 // ID 是带类型前缀的 UUIDv7。零值不是合法领域 ID。

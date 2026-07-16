@@ -8,7 +8,8 @@
   "parameter_schema": {"type": "object", "additionalProperties": false},
   "provider_namespaces": [],
   "primitives": [
-    {"id": "work", "kind": "path_match", "config": {"scope": "work_directory", "glob": "*", "title": "directory_name", "stable_key": "relative_path"}},
+    {"id": "work", "kind": "path_match", "config": {"scope": "work_directory", "glob": "*", "title": "directory_name", "stable_key": "relative_path", "metadata_file": "metadata.json"}},
+    {"id": "creator", "kind": "metadata_map", "config": {"fields": {"creator": ["/creator/name"]}}},
     {"id": "media", "kind": "media_classify", "config": {"glob": "*.bin", "kind": "image", "mime": "application/octet-stream"}}
   ],
   "cel_expressions": [],
