@@ -47,7 +47,7 @@ func TestGeneratedClientHealthBootstrapAndAnonymousWS(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	server := httptest.NewServer(httpapi.New(config.ModePersonal, store, fixedClock, personal, resources, logger))
+	server := httptest.NewServer(httpapi.New(config.ModePersonal, store, fixedClock, personal, resources, nil, nil, nil, logger))
 	defer server.Close()
 
 	client, err := api.NewClientWithResponses(server.URL)
@@ -111,7 +111,7 @@ func TestPersonalPairingIsSingleUseAndRevocationInvalidatesREST(t *testing.T) {
 		t.Fatal(err)
 	}
 	server := httptest.NewServer(httpapi.New(
-		config.ModePersonal, store, fixedClock, personal, resources,
+		config.ModePersonal, store, fixedClock, personal, resources, nil, nil, nil,
 		slog.New(slog.NewJSONHandler(io.Discard, nil)),
 	))
 	defer server.Close()

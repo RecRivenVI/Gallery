@@ -21,12 +21,15 @@ const (
 	IDJob               IDKind = "job"
 	IDQueryPublication  IDKind = "qpub"
 	IDSession           IDKind = "ses"
+	IDCatalogRevision   IDKind = "crev"
+	IDOverlayRevision   IDKind = "orev"
 )
 
 var validIDKinds = map[IDKind]struct{}{
 	IDLibrary: {}, IDSource: {}, IDCanonicalWork: {}, IDCanonicalCreator: {},
 	IDCanonicalMedia: {}, IDSourceRuleBinding: {}, IDRuleSet: {}, IDJob: {},
 	IDQueryPublication: {}, IDSession: {},
+	IDCatalogRevision: {}, IDOverlayRevision: {},
 }
 
 // ID 是带类型前缀的 UUIDv7。零值不是合法领域 ID。

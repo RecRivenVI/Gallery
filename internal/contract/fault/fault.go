@@ -34,6 +34,12 @@ const (
 	CodeRuleParameterInvalid     Code = "RULE_PARAMETER_INVALID"
 	CodeJobStateConflict         Code = "JOB_STATE_CONFLICT"
 	CodeScanAlreadyRunning       Code = "SCAN_ALREADY_RUNNING"
+	CodeSourceUnavailable        Code = "SOURCE_UNAVAILABLE"
+	CodeSourceReadFailed         Code = "SOURCE_READ_FAILED"
+	CodeContentDisappeared       Code = "CONTENT_DISAPPEARED"
+	CodePathEscape               Code = "PATH_ESCAPE"
+	CodeCatalogCandidateInvalid  Code = "CATALOG_CANDIDATE_INVALID"
+	CodeProcessInterrupted       Code = "PROCESS_INTERRUPTED"
 )
 
 // Error 在进程内保留 cause，但对外序列化时只应暴露稳定字段。

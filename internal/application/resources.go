@@ -55,6 +55,24 @@ type SourceRuleBinding struct {
 	CreatedAt    time.Time
 }
 
+type CanonicalWork struct {
+	ID    string
+	Title string
+	Media map[string]CanonicalMedia
+}
+
+type CanonicalMedia struct {
+	ID      string
+	WorkID  string
+	Ordinal int
+}
+
+type DiscoveredWork struct {
+	SourceKey string
+	Title     string
+	MediaKeys []string
+}
+
 type Resources struct {
 	control *sql.DB
 	dirs    appdirs.Dirs
@@ -292,6 +310,71 @@ func (r *Resources) BindingForSource(ctx context.Context, sourceID string) (Sour
 	}
 	return r.GetSourceRuleBinding(ctx, id)
 }
+
+func (r *Resources) EnsureCanonical(ctx context.Context, sourceID string, discovered []DiscoveredWork) (map[string]CanonicalWork, error) {
+	tx, err := r.control.BeginTx(ctx, nil)
+	if err != nil {
+		return nil, fault.New(fault.CodeInternal, true, err)
+	}
+	defer tx.Rollback()
+	now := r.clock.Now().Unix()
+	result := make(map[string]CanonicalWork, len(discovered))
+	for _, item := range discovered {
+		var workID, title string
+		err := tx.QueryRowContext(ctx, `SELECT b.work_id, w.title FROM work_bindings b
+JOIN canonical_works w ON w.work_id = b.work_id WHERE b.source_id = ? AND b.source_key = ?`, sourceID, item.SourceKey).Scan(&workID, &title)
+		if errors.Is(err, sql.ErrNoRows) {
+			id, idErr := r.ids.New(domain.IDCanonicalWork)
+			if idErr != nil {
+				return nil, fault.New(fault.CodeInternal, true, idErr)
+			}
+			workID, title = id.String(), item.Title
+			if _, err := tx.ExecContext(ctx, "INSERT INTO canonical_works (work_id, title, created_at) VALUES (?, ?, ?)", workID, title, now); err != nil {
+				return nil, fault.New(fault.CodeInternal, true, err)
+			}
+			if _, err := tx.ExecContext(ctx, `INSERT INTO work_bindings
+(source_id, source_key, work_id, identity_version, created_at) VALUES (?, ?, ?, 1, ?)`, sourceID, item.SourceKey, workID, now); err != nil {
+				return nil, fault.New(fault.CodeInternal, true, err)
+			}
+		} else if err != nil {
+			return nil, fault.New(fault.CodeInternal, true, err)
+		}
+		work := CanonicalWork{ID: workID, Title: title, Media: make(map[string]CanonicalMedia, len(item.MediaKeys))}
+		for ordinal, mediaKey := range item.MediaKeys {
+			var mediaID, mediaWorkID string
+			err := tx.QueryRowContext(ctx, `SELECT media_id, work_id FROM media_bindings
+WHERE source_id = ? AND source_key = ?`, sourceID, mediaKey).Scan(&mediaID, &mediaWorkID)
+			if errors.Is(err, sql.ErrNoRows) {
+				id, idErr := r.ids.New(domain.IDCanonicalMedia)
+				if idErr != nil {
+					return nil, fault.New(fault.CodeInternal, true, idErr)
+				}
+				mediaID, mediaWorkID = id.String(), workID
+				if _, err := tx.ExecContext(ctx, `INSERT INTO canonical_media
+(media_id, work_id, role, ordinal, created_at) VALUES (?, ?, 'content', ?, ?)`, mediaID, workID, ordinal, now); err != nil {
+					return nil, fault.New(fault.CodeInternal, true, err)
+				}
+				if _, err := tx.ExecContext(ctx, `INSERT INTO media_bindings
+(source_id, source_key, media_id, work_id, identity_version, created_at) VALUES (?, ?, ?, ?, 1, ?)`, sourceID, mediaKey, mediaID, workID, now); err != nil {
+					return nil, fault.New(fault.CodeInternal, true, err)
+				}
+			} else if err != nil {
+				return nil, fault.New(fault.CodeInternal, true, err)
+			}
+			if mediaWorkID != workID {
+				return nil, fault.New(fault.CodeConflict, false, nil)
+			}
+			work.Media[mediaKey] = CanonicalMedia{ID: mediaID, WorkID: workID, Ordinal: ordinal}
+		}
+		result[item.SourceKey] = work
+	}
+	if err := tx.Commit(); err != nil {
+		return nil, fault.New(fault.CodeInternal, true, err)
+	}
+	return result, nil
+}
+
+func (r *Resources) ControlWatermark() int64 { return r.clock.Now().UTC().UnixNano() }
 
 func (r *Resources) sourceRoots(ctx context.Context) ([]string, error) {
 	rows, err := r.control.QueryContext(ctx, "SELECT root_path FROM sources ORDER BY source_id")
