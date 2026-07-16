@@ -318,6 +318,10 @@ func seedRecoveryRoot(t *testing.T, root string) (catalog.Publication, string) {
 	if err := os.WriteFile(sourcePath, []byte("real process killpoint fixture"), 0o400); err != nil {
 		t.Fatal(err)
 	}
+	if err := os.WriteFile(filepath.Join(sourceRoot, "work-one", "metadata.json"),
+		[]byte(`{"creator":{"name":"Recovery Creator"}}`), 0o400); err != nil {
+		t.Fatal(err)
+	}
 	source, err := resources.CreateSource(ctx, library.ID, "synthetic", sourceRoot)
 	if err != nil {
 		t.Fatal(err)
@@ -466,7 +470,9 @@ func blockAtKillpoint(t *testing.T, root string) {
 	if err := os.WriteFile(filepath.Join(root, "kill.ready"), []byte("ready"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	select {}
+	for {
+		time.Sleep(time.Second)
+	}
 }
 
 func writeMarker(t *testing.T, root, jobID string) {

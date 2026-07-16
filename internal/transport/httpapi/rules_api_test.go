@@ -57,7 +57,12 @@ func TestRuleLifecycleIsAvailableThroughAuthenticatedAPI(t *testing.T) {
 	changed := cloneMap(t, packageValue)
 	changed["version"] = "0.2.0"
 	primitives := changed["primitives"].([]any)
-	primitives[1].(map[string]any)["config"].(map[string]any)["glob"] = "*.jpg"
+	for _, raw := range primitives {
+		primitive := raw.(map[string]any)
+		if primitive["id"] == "media" {
+			primitive["config"].(map[string]any)["glob"] = "*.jpg"
+		}
+	}
 	impact := postRuleJSON(t, client, server.URL, csrf, "/api/v1/rules/impact", map[string]any{"before": packageValue, "after": changed})
 	if impact["fullRescan"] != true || impact["reproject"] != true {
 		t.Fatalf("Impact 响应错误: %+v", impact)
