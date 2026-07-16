@@ -18,7 +18,6 @@ import (
 	"github.com/RecRivenVI/gallery/internal/auth"
 	"github.com/RecRivenVI/gallery/internal/catalog"
 	"github.com/RecRivenVI/gallery/internal/config"
-	"github.com/RecRivenVI/gallery/internal/contract/api"
 	"github.com/RecRivenVI/gallery/internal/contract/fault"
 	"github.com/RecRivenVI/gallery/internal/contract/query"
 	"github.com/RecRivenVI/gallery/internal/contract/realtime"
@@ -28,6 +27,7 @@ import (
 	"github.com/RecRivenVI/gallery/internal/rules"
 	"github.com/RecRivenVI/gallery/internal/scanner"
 	"github.com/RecRivenVI/gallery/internal/storage"
+	api "github.com/RecRivenVI/gallery/pkg/galleryapi"
 )
 
 type Server struct {
@@ -40,10 +40,14 @@ type Server struct {
 	jobs    *jobs.Store
 	catalog *catalog.Store
 	scanner *scanner.Service
+	hub     *realtime.Hub
 }
 
-func New(mode config.Mode, store *storage.Store, clock ports.Clock, personal *auth.Personal, resources *application.Resources, jobStore *jobs.Store, catalogStore *catalog.Store, scannerService *scanner.Service, logger *slog.Logger) http.Handler {
-	server := &Server{mode: mode, store: store, clock: clock, auth: personal, data: resources, jobs: jobStore, catalog: catalogStore, scanner: scannerService, logger: logger}
+func New(mode config.Mode, store *storage.Store, clock ports.Clock, personal *auth.Personal, resources *application.Resources, jobStore *jobs.Store, catalogStore *catalog.Store, scannerService *scanner.Service, hub *realtime.Hub, logger *slog.Logger) http.Handler {
+	if hub == nil {
+		hub = realtime.NewHub(clock)
+	}
+	server := &Server{mode: mode, store: store, clock: clock, auth: personal, data: resources, jobs: jobStore, catalog: catalogStore, scanner: scannerService, hub: hub, logger: logger}
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /api/v1/health", server.health)
 	mux.HandleFunc("GET /api/v1/bootstrap", server.bootstrap)
@@ -68,10 +72,16 @@ func New(mode config.Mode, store *storage.Store, clock ports.Clock, personal *au
 	mux.HandleFunc("GET /api/v1/media/{mediaId}", server.getMedia)
 	mux.HandleFunc("GET /api/v1/media/{mediaId}/content", server.mediaContent)
 	mux.HandleFunc("HEAD /api/v1/media/{mediaId}/content", server.mediaContent)
-	mux.Handle("/ws/v1", realtime.NewHandler(clock, func(r *http.Request) bool {
-		_, err := server.authenticate(r)
-		return err == nil
-	}))
+	mux.Handle("/ws/v1", hub.Handler(func(r *http.Request) (realtime.Principal, error) {
+		if err := auth.ValidateOrigin(r); err != nil {
+			return realtime.Principal{}, err
+		}
+		session, err := server.authenticate(r)
+		if err != nil {
+			return realtime.Principal{}, err
+		}
+		return realtime.Principal{SessionID: session.ID, Capabilities: append([]string(nil), session.Capabilities...)}, nil
+	}, personal.IsActive))
 	return requestLog(logger, hostGuard(mux))
 }
 
@@ -188,6 +198,7 @@ func (s *Server) revokeSession(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)
+	s.hub.RevokeSession(r.PathValue("sessionId"))
 }
 
 func (s *Server) createLibrary(w http.ResponseWriter, r *http.Request) {

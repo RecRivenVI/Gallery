@@ -4,12 +4,13 @@ import (
 	"bytes"
 	"testing"
 
-	"github.com/RecRivenVI/gallery/internal/contract/api"
+	contractapi "github.com/RecRivenVI/gallery/internal/contract/api"
 	"github.com/RecRivenVI/gallery/internal/contract/fault"
+	api "github.com/RecRivenVI/gallery/pkg/galleryapi"
 )
 
 func TestGeneratedErrorEnumCoversCanonicalCodes(t *testing.T) {
-	if !bytes.Contains(api.OpenAPISpec(), []byte("openapi: 3.0.3")) {
+	if !bytes.Contains(contractapi.OpenAPISpec(), []byte("openapi: 3.0.3")) {
 		t.Fatal("OpenAPI 规范未嵌入")
 	}
 	for _, code := range fault.AllCodes() {

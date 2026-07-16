@@ -8,7 +8,7 @@ import (
 	"os"
 	"path/filepath"
 
-	"github.com/RecRivenVI/gallery/internal/version"
+	version "github.com/RecRivenVI/gallery/pkg/galleryversion"
 )
 
 type Descriptor struct {

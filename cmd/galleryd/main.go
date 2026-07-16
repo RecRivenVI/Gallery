@@ -13,7 +13,7 @@ import (
 	"github.com/RecRivenVI/gallery/internal/bootstrap"
 	"github.com/RecRivenVI/gallery/internal/config"
 	"github.com/RecRivenVI/gallery/internal/observability"
-	"github.com/RecRivenVI/gallery/internal/version"
+	version "github.com/RecRivenVI/gallery/pkg/galleryversion"
 )
 
 func main() {

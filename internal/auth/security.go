@@ -32,6 +32,17 @@ func ValidateHost(r *http.Request) error {
 }
 
 func ValidateMutation(r *http.Request, expectedCSRF string) error {
+	if err := ValidateOrigin(r); err != nil {
+		return err
+	}
+	provided := r.Header.Get(CSRFHeader)
+	if expectedCSRF == "" || subtle.ConstantTimeCompare([]byte(provided), []byte(expectedCSRF)) != 1 {
+		return fault.New(fault.CodeCSRFInvalid, false, nil)
+	}
+	return nil
+}
+
+func ValidateOrigin(r *http.Request) error {
 	if err := ValidateHost(r); err != nil {
 		return err
 	}
@@ -41,10 +52,6 @@ func ValidateMutation(r *http.Request, expectedCSRF string) error {
 	}
 	if r.Header.Get("Sec-Fetch-Site") != "same-origin" {
 		return fault.New(fault.CodeOriginRejected, false, nil)
-	}
-	provided := r.Header.Get(CSRFHeader)
-	if expectedCSRF == "" || subtle.ConstantTimeCompare([]byte(provided), []byte(expectedCSRF)) != 1 {
-		return fault.New(fault.CodeCSRFInvalid, false, nil)
 	}
 	return nil
 }
