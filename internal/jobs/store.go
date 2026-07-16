@@ -236,6 +236,42 @@ WHERE job_id = ? AND status IN (?, ?)`, StatusCancelled, now.Unix(), now.Unix(),
 	return s.Get(ctx, id)
 }
 
+func (s *Store) ListByStatuses(ctx context.Context, statuses ...Status) ([]Job, error) {
+	if len(statuses) == 0 {
+		return nil, nil
+	}
+	placeholders := make([]string, len(statuses))
+	args := make([]any, len(statuses))
+	for index, status := range statuses {
+		placeholders[index], args[index] = "?", status
+	}
+	rows, err := s.db.QueryContext(ctx, "SELECT job_id FROM jobs WHERE status IN ("+strings.Join(placeholders, ",")+") ORDER BY created_at, job_id", args...)
+	if err != nil {
+		return nil, fault.New(fault.CodeInternal, true, err)
+	}
+	defer rows.Close()
+	var ids []string
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			return nil, fault.New(fault.CodeInternal, true, err)
+		}
+		ids = append(ids, id)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fault.New(fault.CodeInternal, true, err)
+	}
+	result := make([]Job, 0, len(ids))
+	for _, id := range ids {
+		job, err := s.Get(ctx, id)
+		if err != nil {
+			return nil, err
+		}
+		result = append(result, job)
+	}
+	return result, nil
+}
+
 func (s *Store) transition(ctx context.Context, id string, from, to Status, stage, assignments string, values []any, now time.Time) (Job, error) {
 	query := "UPDATE jobs SET status = ?, stage = ?, " + assignments + " progress_sequence = progress_sequence + 1, updated_at = ? WHERE job_id = ? AND status = ?"
 	args := []any{to, stage}

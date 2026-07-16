@@ -323,6 +323,158 @@ paths:
           $ref: "#/components/responses/ForbiddenError"
         "404":
           $ref: "#/components/responses/NotFoundError"
+  /api/v1/sources/{sourceId}/scan-jobs:
+    post:
+      operationId: createScanJob
+      summary: 创建持久扫描 Job 并异步执行
+      parameters:
+        - name: sourceId
+          in: path
+          required: true
+          schema:
+            $ref: "#/components/schemas/SourceId"
+        - $ref: "#/components/parameters/CSRFHeader"
+      responses:
+        "202":
+          description: 扫描 Job 已排队
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Job"
+        "401":
+          $ref: "#/components/responses/UnauthenticatedError"
+        "403":
+          $ref: "#/components/responses/ForbiddenError"
+        "404":
+          $ref: "#/components/responses/NotFoundError"
+        "409":
+          $ref: "#/components/responses/ConflictError"
+  /api/v1/jobs/{jobId}:
+    get:
+      operationId: getJob
+      summary: 读取持久 Job snapshot
+      parameters:
+        - name: jobId
+          in: path
+          required: true
+          schema:
+            $ref: "#/components/schemas/JobId"
+      responses:
+        "200":
+          description: Job snapshot
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Job"
+        "401":
+          $ref: "#/components/responses/UnauthenticatedError"
+        "403":
+          $ref: "#/components/responses/ForbiddenError"
+        "404":
+          $ref: "#/components/responses/NotFoundError"
+  /api/v1/query-publications/current:
+    get:
+      operationId: getCurrentQueryPublication
+      summary: 读取当前合法 query publication
+      responses:
+        "200":
+          description: 当前 publication
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/QueryPublication"
+        "401":
+          $ref: "#/components/responses/UnauthenticatedError"
+        "403":
+          $ref: "#/components/responses/ForbiddenError"
+        "404":
+          $ref: "#/components/responses/NotFoundError"
+  /api/v1/works:
+    get:
+      operationId: listWorks
+      summary: 从当前 publication 查询 WorkProjection
+      responses:
+        "200":
+          description: 当前快照中的作品
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/WorkListResponse"
+        "401":
+          $ref: "#/components/responses/UnauthenticatedError"
+        "403":
+          $ref: "#/components/responses/ForbiddenError"
+        "404":
+          $ref: "#/components/responses/NotFoundError"
+  /api/v1/works/{workId}:
+    get:
+      operationId: getWork
+      summary: 读取当前 publication 中的作品
+      parameters:
+        - name: workId
+          in: path
+          required: true
+          schema:
+            $ref: "#/components/schemas/CanonicalWorkId"
+      responses:
+        "200":
+          description: WorkProjection
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/PublishedWork"
+        "401":
+          $ref: "#/components/responses/UnauthenticatedError"
+        "403":
+          $ref: "#/components/responses/ForbiddenError"
+        "404":
+          $ref: "#/components/responses/NotFoundError"
+  /api/v1/works/{workId}/media:
+    get:
+      operationId: listWorkMedia
+      summary: 查询当前 publication 中作品的媒体
+      parameters:
+        - name: workId
+          in: path
+          required: true
+          schema:
+            $ref: "#/components/schemas/CanonicalWorkId"
+      responses:
+        "200":
+          description: MediaProjection 列表
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/MediaListResponse"
+        "401":
+          $ref: "#/components/responses/UnauthenticatedError"
+        "403":
+          $ref: "#/components/responses/ForbiddenError"
+        "404":
+          $ref: "#/components/responses/NotFoundError"
+  /api/v1/media/{mediaId}:
+    get:
+      operationId: getMedia
+      summary: 读取稳定 Media ID 对应的当前 MediaProjection
+      parameters:
+        - name: mediaId
+          in: path
+          required: true
+          schema:
+            $ref: "#/components/schemas/CanonicalMediaId"
+      responses:
+        "200":
+          description: MediaProjection
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/PublishedMedia"
+        "401":
+          $ref: "#/components/responses/UnauthenticatedError"
+        "403":
+          $ref: "#/components/responses/ForbiddenError"
+        "404":
+          $ref: "#/components/responses/NotFoundError"
 components:
   securitySchemes:
     sessionCookie:
@@ -500,6 +652,160 @@ components:
         - PAIRING_EXPIRED
         - SOURCE_PATH_INVALID
         - RULE_PARAMETER_INVALID
+        - JOB_STATE_CONFLICT
+        - SCAN_ALREADY_RUNNING
+        - SOURCE_UNAVAILABLE
+        - SOURCE_READ_FAILED
+        - CONTENT_DISAPPEARED
+        - PATH_ESCAPE
+        - CATALOG_CANDIDATE_INVALID
+        - PROCESS_INTERRUPTED
+    Job:
+      type: object
+      additionalProperties: false
+      required: [id, type, sourceId, status, stage, progress, attempt, createdAt, updatedAt]
+      properties:
+        id:
+          $ref: "#/components/schemas/JobId"
+        type:
+          type: string
+          enum: [scan]
+        sourceId:
+          $ref: "#/components/schemas/SourceId"
+        status:
+          type: string
+          enum: [queued, running, publishing, completed, failed, cancelled, needs_repair]
+        stage:
+          type: string
+        progress:
+          type: object
+          additionalProperties: false
+          required: [current, total, sequence]
+          properties:
+            current:
+              type: integer
+              format: int64
+              minimum: 0
+            total:
+              type: integer
+              format: int64
+              minimum: 0
+            sequence:
+              type: integer
+              format: int64
+              minimum: 1
+        issueCode:
+          type: string
+          nullable: true
+        queryPublicationId:
+          allOf:
+            - $ref: "#/components/schemas/QueryPublicationId"
+          nullable: true
+        retryOf:
+          allOf:
+            - $ref: "#/components/schemas/JobId"
+          nullable: true
+        attempt:
+          type: integer
+          minimum: 1
+        createdAt:
+          type: string
+          format: date-time
+        startedAt:
+          type: string
+          format: date-time
+          nullable: true
+        finishedAt:
+          type: string
+          format: date-time
+          nullable: true
+        updatedAt:
+          type: string
+          format: date-time
+    QueryPublication:
+      type: object
+      additionalProperties: false
+      required: [id, catalogRevision, overlayProjectionRevision, jobId, controlWatermark, createdAt]
+      properties:
+        id:
+          $ref: "#/components/schemas/QueryPublicationId"
+        catalogRevision:
+          type: string
+        overlayProjectionRevision:
+          type: string
+        jobId:
+          $ref: "#/components/schemas/JobId"
+        controlWatermark:
+          type: integer
+          format: int64
+        createdAt:
+          type: string
+          format: date-time
+    PublishedWork:
+      type: object
+      additionalProperties: false
+      required: [id, title, mediaCount, queryPublicationId]
+      properties:
+        id:
+          $ref: "#/components/schemas/CanonicalWorkId"
+        title:
+          type: string
+        mediaCount:
+          type: integer
+          minimum: 0
+        queryPublicationId:
+          $ref: "#/components/schemas/QueryPublicationId"
+    WorkListResponse:
+      type: object
+      additionalProperties: false
+      required: [queryPublicationId, sortProtocolVersion, works]
+      properties:
+        queryPublicationId:
+          $ref: "#/components/schemas/QueryPublicationId"
+        sortProtocolVersion:
+          type: integer
+          enum: [1]
+        works:
+          type: array
+          items:
+            $ref: "#/components/schemas/PublishedWork"
+    PublishedMedia:
+      type: object
+      additionalProperties: false
+      required: [id, workId, kind, mimeType, sizeBytes, blob, available, ordinal, queryPublicationId]
+      properties:
+        id:
+          $ref: "#/components/schemas/CanonicalMediaId"
+        workId:
+          $ref: "#/components/schemas/CanonicalWorkId"
+        kind:
+          type: string
+        mimeType:
+          type: string
+        sizeBytes:
+          type: integer
+          format: int64
+          minimum: 0
+        blob:
+          $ref: "#/components/schemas/ContentBlobRef"
+        available:
+          type: boolean
+        ordinal:
+          type: integer
+          minimum: 0
+        queryPublicationId:
+          $ref: "#/components/schemas/QueryPublicationId"
+    MediaListResponse:
+      type: object
+      additionalProperties: false
+      required: [queryPublicationId, media]
+      properties:
+        queryPublicationId:
+          $ref: "#/components/schemas/QueryPublicationId"
+        media:
+          type: array
+          items:
+            $ref: "#/components/schemas/PublishedMedia"
     LibraryCreateRequest:
       type: object
       additionalProperties: false

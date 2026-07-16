@@ -13,27 +13,33 @@ import (
 
 	"github.com/RecRivenVI/gallery/internal/application"
 	"github.com/RecRivenVI/gallery/internal/auth"
+	"github.com/RecRivenVI/gallery/internal/catalog"
 	"github.com/RecRivenVI/gallery/internal/config"
 	"github.com/RecRivenVI/gallery/internal/contract/api"
 	"github.com/RecRivenVI/gallery/internal/contract/fault"
 	"github.com/RecRivenVI/gallery/internal/contract/query"
 	"github.com/RecRivenVI/gallery/internal/contract/realtime"
+	"github.com/RecRivenVI/gallery/internal/jobs"
 	"github.com/RecRivenVI/gallery/internal/ports"
 	"github.com/RecRivenVI/gallery/internal/rules"
+	"github.com/RecRivenVI/gallery/internal/scanner"
 	"github.com/RecRivenVI/gallery/internal/storage"
 )
 
 type Server struct {
-	mode   config.Mode
-	store  *storage.Store
-	clock  ports.Clock
-	logger *slog.Logger
-	auth   *auth.Personal
-	data   *application.Resources
+	mode    config.Mode
+	store   *storage.Store
+	clock   ports.Clock
+	logger  *slog.Logger
+	auth    *auth.Personal
+	data    *application.Resources
+	jobs    *jobs.Store
+	catalog *catalog.Store
+	scanner *scanner.Service
 }
 
-func New(mode config.Mode, store *storage.Store, clock ports.Clock, personal *auth.Personal, resources *application.Resources, logger *slog.Logger) http.Handler {
-	server := &Server{mode: mode, store: store, clock: clock, auth: personal, data: resources, logger: logger}
+func New(mode config.Mode, store *storage.Store, clock ports.Clock, personal *auth.Personal, resources *application.Resources, jobStore *jobs.Store, catalogStore *catalog.Store, scannerService *scanner.Service, logger *slog.Logger) http.Handler {
+	server := &Server{mode: mode, store: store, clock: clock, auth: personal, data: resources, jobs: jobStore, catalog: catalogStore, scanner: scannerService, logger: logger}
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /api/v1/health", server.health)
 	mux.HandleFunc("GET /api/v1/bootstrap", server.bootstrap)
@@ -49,6 +55,13 @@ func New(mode config.Mode, store *storage.Store, clock ports.Clock, personal *au
 	mux.HandleFunc("GET /api/v1/rule-versions/{semanticHash}", server.getRuleVersion)
 	mux.HandleFunc("POST /api/v1/source-rule-bindings", server.createSourceRuleBinding)
 	mux.HandleFunc("GET /api/v1/source-rule-bindings/{bindingId}", server.getSourceRuleBinding)
+	mux.HandleFunc("POST /api/v1/sources/{sourceId}/scan-jobs", server.createScanJob)
+	mux.HandleFunc("GET /api/v1/jobs/{jobId}", server.getJob)
+	mux.HandleFunc("GET /api/v1/query-publications/current", server.getCurrentQueryPublication)
+	mux.HandleFunc("GET /api/v1/works", server.listWorks)
+	mux.HandleFunc("GET /api/v1/works/{workId}", server.getWork)
+	mux.HandleFunc("GET /api/v1/works/{workId}/media", server.listWorkMedia)
+	mux.HandleFunc("GET /api/v1/media/{mediaId}", server.getMedia)
 	mux.Handle("/ws/v1", realtime.NewHandler(clock, func(r *http.Request) bool {
 		_, err := server.authenticate(r)
 		return err == nil
@@ -322,6 +335,111 @@ func (s *Server) getSourceRuleBinding(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, sourceRuleBindingDTO(result))
 }
 
+func (s *Server) createScanJob(w http.ResponseWriter, r *http.Request) {
+	session, err := s.requireCapability(r, "scan.run")
+	if err != nil {
+		s.writeRequestError(w, err)
+		return
+	}
+	if err := auth.ValidateMutation(r, session.CSRFToken); err != nil {
+		s.writeRequestError(w, err)
+		return
+	}
+	job, err := s.scanner.CreateScan(r.Context(), r.PathValue("sourceId"), session.PrincipalID)
+	if err != nil {
+		s.writeRequestError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusAccepted, jobDTO(job))
+	s.scanner.Start(job.ID)
+}
+
+func (s *Server) getJob(w http.ResponseWriter, r *http.Request) {
+	if _, err := s.requireCapability(r, "library.read"); err != nil {
+		s.writeRequestError(w, err)
+		return
+	}
+	job, err := s.jobs.Get(r.Context(), r.PathValue("jobId"))
+	if err != nil {
+		s.writeRequestError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, jobDTO(job))
+}
+
+func (s *Server) getCurrentQueryPublication(w http.ResponseWriter, r *http.Request) {
+	if _, err := s.requireCapability(r, "library.read"); err != nil {
+		s.writeRequestError(w, err)
+		return
+	}
+	publication, err := s.catalog.Current(r.Context())
+	if err != nil {
+		s.writeRequestError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, publicationDTO(publication))
+}
+
+func (s *Server) listWorks(w http.ResponseWriter, r *http.Request) {
+	if _, err := s.requireCapability(r, "library.read"); err != nil {
+		s.writeRequestError(w, err)
+		return
+	}
+	publication, works, err := s.catalog.ListWorks(r.Context())
+	if err != nil {
+		s.writeRequestError(w, err)
+		return
+	}
+	items := make([]api.PublishedWork, 0, len(works))
+	for _, work := range works {
+		items = append(items, workDTO(publication, work))
+	}
+	writeJSON(w, http.StatusOK, api.WorkListResponse{QueryPublicationId: publication.ID, SortProtocolVersion: api.WorkListResponseSortProtocolVersion(query.SortProtocolVersion), Works: items})
+}
+
+func (s *Server) getWork(w http.ResponseWriter, r *http.Request) {
+	if _, err := s.requireCapability(r, "library.read"); err != nil {
+		s.writeRequestError(w, err)
+		return
+	}
+	publication, work, err := s.catalog.GetWork(r.Context(), r.PathValue("workId"))
+	if err != nil {
+		s.writeRequestError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, workDTO(publication, work))
+}
+
+func (s *Server) listWorkMedia(w http.ResponseWriter, r *http.Request) {
+	if _, err := s.requireCapability(r, "media.read"); err != nil {
+		s.writeRequestError(w, err)
+		return
+	}
+	publication, items, err := s.catalog.ListMediaForWork(r.Context(), r.PathValue("workId"))
+	if err != nil {
+		s.writeRequestError(w, err)
+		return
+	}
+	mediaItems := make([]api.PublishedMedia, 0, len(items))
+	for _, item := range items {
+		mediaItems = append(mediaItems, mediaDTO(publication, item))
+	}
+	writeJSON(w, http.StatusOK, api.MediaListResponse{QueryPublicationId: publication.ID, Media: mediaItems})
+}
+
+func (s *Server) getMedia(w http.ResponseWriter, r *http.Request) {
+	if _, err := s.requireCapability(r, "media.read"); err != nil {
+		s.writeRequestError(w, err)
+		return
+	}
+	publication, item, err := s.catalog.GetMedia(r.Context(), r.PathValue("mediaId"))
+	if err != nil {
+		s.writeRequestError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, mediaDTO(publication, item))
+}
+
 func (s *Server) writeRequestError(w http.ResponseWriter, err error) {
 	writeFault(w, asFault(err), statusForFault(err))
 }
@@ -344,6 +462,39 @@ func sourceRuleBindingDTO(value application.SourceRuleBinding) api.SourceRuleBin
 	decoder.UseNumber()
 	_ = decoder.Decode(&parameters)
 	return api.SourceRuleBinding{Id: value.ID, SourceId: value.SourceID, SemanticHash: value.SemanticHash, Parameters: parameters, Priority: value.Priority, RuleIrHash: value.RuleIRHash, CreatedAt: value.CreatedAt}
+}
+
+func jobDTO(value jobs.Job) api.Job {
+	result := api.Job{
+		Id: value.ID, Type: api.JobType(value.Type), SourceId: value.SourceID, Status: api.JobStatus(value.Status),
+		Stage: value.Stage, Attempt: value.Attempt, CreatedAt: value.CreatedAt, StartedAt: value.StartedAt,
+		FinishedAt: value.FinishedAt, UpdatedAt: value.UpdatedAt,
+	}
+	result.Progress.Current, result.Progress.Total, result.Progress.Sequence = value.ProgressCurrent, value.ProgressTotal, int64(value.ProgressSequence)
+	if value.IssueCode != "" {
+		result.IssueCode = &value.IssueCode
+	}
+	if value.PublicationID != "" {
+		publication := api.QueryPublicationId(value.PublicationID)
+		result.QueryPublicationId = &publication
+	}
+	if value.RetryOf != "" {
+		retry := api.JobId(value.RetryOf)
+		result.RetryOf = &retry
+	}
+	return result
+}
+
+func publicationDTO(value catalog.Publication) api.QueryPublication {
+	return api.QueryPublication{Id: value.ID, CatalogRevision: value.CatalogRevisionID, OverlayProjectionRevision: value.OverlayRevisionID, JobId: value.JobID, ControlWatermark: value.ControlWatermark, CreatedAt: value.CreatedAt}
+}
+
+func workDTO(publication catalog.Publication, value catalog.Work) api.PublishedWork {
+	return api.PublishedWork{Id: value.ID, Title: value.Title, MediaCount: value.MediaCount, QueryPublicationId: publication.ID}
+}
+
+func mediaDTO(publication catalog.Publication, value catalog.Media) api.PublishedMedia {
+	return api.PublishedMedia{Id: value.ID, WorkId: value.WorkID, Kind: value.Kind, MimeType: value.MIME, SizeBytes: value.Size, Blob: api.ContentBlobRef{Algorithm: api.ContentBlobRefAlgorithm(value.Algorithm), Digest: value.Digest}, Available: value.LocationStatus == "present", Ordinal: value.Ordinal, QueryPublicationId: publication.ID}
 }
 
 func (s *Server) authenticate(r *http.Request) (auth.Session, error) {
@@ -437,6 +588,8 @@ func statusForFault(err error) int {
 	case fault.CodeNotFound:
 		return http.StatusNotFound
 	case fault.CodeConflict:
+		return http.StatusConflict
+	case fault.CodeJobStateConflict, fault.CodeScanAlreadyRunning, fault.CodeCatalogCandidateInvalid:
 		return http.StatusConflict
 	case fault.CodeAppDirsOverlap, fault.CodeSourceRootsOverlap:
 		return http.StatusConflict

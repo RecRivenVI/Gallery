@@ -10,11 +10,14 @@ import (
 
 	"github.com/RecRivenVI/gallery/internal/application"
 	"github.com/RecRivenVI/gallery/internal/auth"
+	"github.com/RecRivenVI/gallery/internal/catalog"
 	"github.com/RecRivenVI/gallery/internal/config"
+	"github.com/RecRivenVI/gallery/internal/jobs"
 	"github.com/RecRivenVI/gallery/internal/platform/clock"
 	"github.com/RecRivenVI/gallery/internal/platform/descriptor"
 	"github.com/RecRivenVI/gallery/internal/platform/filesystem"
 	"github.com/RecRivenVI/gallery/internal/platform/identity"
+	"github.com/RecRivenVI/gallery/internal/scanner"
 	"github.com/RecRivenVI/gallery/internal/storage"
 	"github.com/RecRivenVI/gallery/internal/transport/httpapi"
 )
@@ -61,7 +64,22 @@ func Run(ctx context.Context, cfg config.Config, logger *slog.Logger) error {
 	if err != nil {
 		return err
 	}
-	handler := httpapi.New(cfg.Mode, store, systemClock, personal, resources, logger)
+	jobStore, err := jobs.NewStore(store.Control.SQL(), systemClock, identity.NewGenerator(systemClock))
+	if err != nil {
+		return err
+	}
+	catalogStore, err := catalog.NewStore(store.Catalog.SQL(), systemClock, identity.NewGenerator(systemClock))
+	if err != nil {
+		return err
+	}
+	scannerService, err := scanner.New(ctx, resources, jobStore, catalogStore, nil)
+	if err != nil {
+		return err
+	}
+	if err := scannerService.Reconcile(ctx); err != nil {
+		return err
+	}
+	handler := httpapi.New(cfg.Mode, store, systemClock, personal, resources, jobStore, catalogStore, scannerService, logger)
 	server := &http.Server{
 		Handler: handler, ReadHeaderTimeout: 10 * time.Second, IdleTimeout: 60 * time.Second,
 	}
@@ -76,6 +94,7 @@ func Run(ctx context.Context, cfg config.Config, logger *slog.Logger) error {
 		if err := server.Shutdown(shutdownContext); err != nil {
 			return err
 		}
+		scannerService.Wait()
 		logger.Info("galleryd_stopped")
 		return nil
 	case err := <-serveError:
