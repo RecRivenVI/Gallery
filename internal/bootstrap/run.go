@@ -14,6 +14,7 @@ import (
 	"github.com/RecRivenVI/gallery/internal/config"
 	"github.com/RecRivenVI/gallery/internal/contract/realtime"
 	"github.com/RecRivenVI/gallery/internal/jobs"
+	"github.com/RecRivenVI/gallery/internal/overlay"
 	"github.com/RecRivenVI/gallery/internal/platform/clock"
 	"github.com/RecRivenVI/gallery/internal/platform/descriptor"
 	"github.com/RecRivenVI/gallery/internal/platform/filesystem"
@@ -81,7 +82,14 @@ func Run(ctx context.Context, cfg config.Config, logger *slog.Logger) error {
 	if err := scannerService.Reconcile(ctx); err != nil {
 		return err
 	}
-	handler := httpapi.New(cfg.Mode, store, systemClock, personal, resources, jobStore, catalogStore, scannerService, hub, logger)
+	overlayService, err := overlay.New(ctx, store.Control.SQL(), jobStore, catalogStore, systemClock, hub)
+	if err != nil {
+		return err
+	}
+	if err := overlayService.Reconcile(ctx); err != nil {
+		return err
+	}
+	handler := httpapi.New(cfg.Mode, store, systemClock, personal, resources, jobStore, catalogStore, scannerService, overlayService, hub, logger)
 	server := &http.Server{
 		Handler: handler, ReadHeaderTimeout: 10 * time.Second, IdleTimeout: 60 * time.Second,
 	}
@@ -97,6 +105,7 @@ func Run(ctx context.Context, cfg config.Config, logger *slog.Logger) error {
 			return err
 		}
 		scannerService.Wait()
+		overlayService.Wait()
 		logger.Info("galleryd_stopped")
 		return nil
 	case err := <-serveError:

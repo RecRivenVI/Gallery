@@ -129,7 +129,9 @@ func seedPublication(t *testing.T, store *storage.Store, suffix string, works []
 	if _, err := store.Catalog.SQL().ExecContext(ctx, "INSERT INTO catalog_revisions VALUES (?, ?, 'src_test', 'published', 1, 1)", cat, job); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := store.Catalog.SQL().ExecContext(ctx, "INSERT INTO overlay_projection_revisions VALUES (?, ?, 1, 'published', 1, 1)", ov, cat); err != nil {
+	if _, err := store.Catalog.SQL().ExecContext(ctx, `INSERT INTO overlay_projection_revisions
+(overlay_revision_id, catalog_revision_id, control_watermark, status, created_at, published_at)
+VALUES (?, ?, 1, 'published', 1, 1)`, ov, cat); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := store.Catalog.SQL().ExecContext(ctx, "INSERT INTO query_publications VALUES (?, ?, ?, ?, 1, 1)", pub, cat, ov, job); err != nil {

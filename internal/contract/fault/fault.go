@@ -21,6 +21,8 @@ const (
 	CodeCursorInvalid            Code = "CURSOR_INVALID"
 	CodeCursorExpired            Code = "CURSOR_EXPIRED"
 	CodeQueryTooShort            Code = "QUERY_TOO_SHORT"
+	CodeOverlayFactInvalid       Code = "OVERLAY_FACT_INVALID"
+	CodeOverlayProjectionFailed  Code = "OVERLAY_PROJECTION_FAILED"
 	CodeRuleSchemaInvalid        Code = "RULE_SCHEMA_INVALID"
 	CodeRuleCompile              Code = "RULE_COMPILE_ERROR"
 	CodeRuleCELLimit             Code = "RULE_CEL_LIMIT"

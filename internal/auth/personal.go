@@ -33,6 +33,7 @@ var PersonalOwnerCapabilities = []string{
 	"library.read",
 	"library.write",
 	"media.read",
+	"overlays.write",
 	"rules.read",
 	"rules.write",
 	"rules.debug",

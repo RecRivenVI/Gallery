@@ -30,7 +30,7 @@ func openTestStore(t *testing.T) (*Store, appdirs.Dirs) {
 
 func TestIndependentWALMigrationsAndBackup(t *testing.T) {
 	store, dirs := openTestStore(t)
-	wantVersions := map[Role]int{RoleControl: 6, RoleCatalog: 3}
+	wantVersions := map[Role]int{RoleControl: 7, RoleCatalog: 4}
 	for _, database := range []*Database{store.Control, store.Catalog} {
 		var version int
 		if err := database.db.QueryRow("PRAGMA user_version").Scan(&version); err != nil {
@@ -133,9 +133,70 @@ WHERE w.work_id='wrk_old'`).Scan(&title, &normalized); err != nil {
 	}
 	if _, err := upgraded.db.ExecContext(ctx, `
 INSERT INTO catalog_revisions VALUES ('cat_new', 'job_new', 'src_new', 'published', 3, 4);
-INSERT INTO overlay_projection_revisions VALUES ('ovr_new', 'cat_new', 0, 'published', 3, 4);
+INSERT INTO overlay_projection_revisions
+(overlay_revision_id, catalog_revision_id, control_watermark, status, created_at, published_at)
+VALUES ('ovr_new', 'cat_new', 0, 'published', 3, 4);
 INSERT INTO query_publications VALUES ('qpub_bad', 'cat_old', 'ovr_new', 'job_bad', 0, 4)`); err == nil {
 		t.Fatal("schema 接受了不合法的 catalog/overlay revision 组合")
+	}
+}
+
+func TestOverlayMigrationUpgradesPopulatedV6Control(t *testing.T) {
+	ctx := context.Background()
+	path := filepath.Join(t.TempDir(), "control.db")
+	db, err := sql.Open("sqlite", "file:"+filepath.ToSlash(path)+"?_pragma=foreign_keys(ON)")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.ExecContext(ctx, `CREATE TABLE gallery_schema_migrations (
+version INTEGER PRIMARY KEY NOT NULL, name TEXT NOT NULL, sha256 TEXT NOT NULL,
+applied_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))) STRICT`); err != nil {
+		t.Fatal(err)
+	}
+	sub, err := fs.Sub(migrationFiles, "migrations/control")
+	if err != nil {
+		t.Fatal(err)
+	}
+	migrations, err := readMigrations(sub)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, item := range migrations[:6] {
+		if err := applyMigration(ctx, db, item); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, err := db.ExecContext(ctx, `INSERT INTO jobs
+(job_id, job_type, source_id, created_by, status, stage, created_at, updated_at)
+VALUES ('job_existing', 'scan', NULL, 'owner', 'completed', 'completed', 1, 2)`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.ExecContext(ctx, `INSERT INTO canonical_works
+(work_id, title, created_at) VALUES ('wrk_existing', '既有作品', 1)`); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	upgraded, err := openDatabase(ctx, RoleControl, path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer upgraded.Close()
+	var jobType string
+	var target sql.NullInt64
+	if err := upgraded.db.QueryRowContext(ctx, `SELECT job_type, target_watermark
+FROM jobs WHERE job_id='job_existing'`).Scan(&jobType, &target); err != nil {
+		t.Fatal(err)
+	}
+	if jobType != "scan" || target.Valid {
+		t.Fatalf("既有 Job 升级错误: type=%s target=%v", jobType, target)
+	}
+	if _, err := upgraded.db.ExecContext(ctx, `INSERT INTO work_overlays
+(work_id, fact_watermark, projection_status, updated_at)
+VALUES ('wrk_existing', 1, 'published', 2)`); err != nil {
+		t.Fatalf("升级后 Overlay 表不可写: %v", err)
 	}
 }
 
