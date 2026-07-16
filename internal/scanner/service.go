@@ -124,11 +124,14 @@ func (s *Service) Execute(ctx context.Context, jobID string) error {
 	}
 	canonicalInput := make([]application.DiscoveredWork, 0, len(discovered))
 	for _, work := range discovered {
-		mediaKeys := make([]string, len(work.Media))
+		mediaItems := make([]application.DiscoveredMedia, len(work.Media))
 		for index := range work.Media {
-			mediaKeys[index] = work.Media[index].SourceKey
+			mediaItems[index] = application.DiscoveredMedia{SourceKey: work.Media[index].SourceKey,
+				RuleKey: work.Media[index].RuleKey, Algorithm: work.Media[index].Hash.Blob.Algorithm,
+				Digest: work.Media[index].Hash.Blob.Digest, Ordinal: index}
 		}
-		canonicalInput = append(canonicalInput, application.DiscoveredWork{SourceKey: work.SourceKey, Title: work.Title, MediaKeys: mediaKeys})
+		canonicalInput = append(canonicalInput, application.DiscoveredWork{SourceKey: work.SourceKey,
+			ProviderID: work.ProviderID, ExternalID: work.ExternalID, Title: work.Title, Media: mediaItems})
 	}
 	canonical, err := s.resources.EnsureCanonical(ctx, source.ID, canonicalInput)
 	if err != nil {
@@ -151,13 +154,14 @@ func (s *Service) Execute(ctx context.Context, jobID string) error {
 			filenames = append(filenames, path.Base(item.RelativePath))
 		}
 		works = append(works, catalog.WorkFact{SourceID: source.ID, LibraryID: source.LibraryID,
-			SourceKey: work.SourceKey, SourceTitle: canonicalWork.Title, SourceTags: work.Tags,
+			SourceKey: work.SourceKey, ProviderID: work.ProviderID, ExternalID: work.ExternalID,
+			SourceTitle: canonicalWork.Title, SourceTags: work.Tags,
 			Title: canonicalWork.Title, Creator: work.Creator, Tags: work.Tags,
 			Filenames: filenames, WorkID: canonicalWork.ID})
 		for _, item := range work.Media {
 			canonicalMedia := canonicalWork.Media[item.SourceKey]
 			mediaFacts = append(mediaFacts, catalog.MediaFact{
-				SourceID: source.ID, SourceKey: item.SourceKey, WorkSourceKey: work.SourceKey,
+				SourceID: source.ID, SourceKey: item.SourceKey, WorkSourceKey: work.SourceKey, RuleKey: item.RuleKey,
 				RelativePath: item.Hash.RelativePath, Kind: item.Kind, MIME: item.MIME, Size: item.Hash.Size,
 				Algorithm: item.Hash.Blob.Algorithm, Digest: item.Hash.Blob.Digest, LocationKey: item.Hash.LocationKey,
 				MediaID: canonicalMedia.ID, WorkID: canonicalWork.ID, Ordinal: canonicalMedia.Ordinal,
@@ -192,6 +196,9 @@ func (s *Service) Execute(ctx context.Context, jobID string) error {
 		_ = s.catalog.AbortCandidate(ctx, job.ID)
 		return s.fail(ctx, job.ID, err)
 	}
+	if err := s.resources.MarkOverlaySnapshotPublished(ctx, publication.ControlWatermark, publication.ID); err != nil {
+		return err
+	}
 	s.notifier.PublicationPublished(publication)
 	job, err = s.jobs.Complete(ctx, job.ID, publication.ID)
 	if err != nil {
@@ -212,6 +219,9 @@ func (s *Service) Reconcile(ctx context.Context) error {
 		}
 		publication, publicationErr := s.catalog.PublicationForJob(ctx, job.ID)
 		if publicationErr == nil && (job.Status == jobs.StatusRunning || job.Status == jobs.StatusPublishing) {
+			if markErr := s.resources.MarkOverlaySnapshotPublished(ctx, publication.ControlWatermark, publication.ID); markErr != nil {
+				return markErr
+			}
 			recovered, recoverErr := s.jobs.RecoverCompleted(ctx, job.ID, publication.ID)
 			if recoverErr != nil {
 				return recoverErr
@@ -276,13 +286,13 @@ func isNotFound(err error) bool {
 }
 
 type discoveredWork struct {
-	SourceKey, Title, Creator string
-	Tags                      []string
-	Media                     []discoveredMedia
+	SourceKey, ProviderID, ExternalID, Title, Creator string
+	Tags                                              []string
+	Media                                             []discoveredMedia
 }
 type discoveredMedia struct {
-	SourceKey, RelativePath, Kind, MIME string
-	Hash                                media.HashResult
+	SourceKey, RuleKey, RelativePath, Kind, MIME string
+	Hash                                         media.HashResult
 }
 
 func discover(ctx context.Context, root string, ir rules.RuleIR, parameters []byte) ([]discoveredWork, error) {
@@ -352,13 +362,15 @@ func discover(ctx context.Context, root string, ir rules.RuleIR, parameters []by
 		if evaluated.Work.Ignored {
 			return filepath.SkipDir
 		}
-		work := discoveredWork{SourceKey: evaluated.Work.StableKey, Title: evaluated.Work.Title, Creator: evaluated.Work.Creator, Tags: evaluated.Work.Tags}
+		work := discoveredWork{SourceKey: evaluated.Work.StableKey, ProviderID: evaluated.Work.ProviderID, ExternalID: evaluated.Work.ExternalID,
+			Title: evaluated.Work.Title, Creator: evaluated.Work.Creator, Tags: evaluated.Work.Tags}
 		for _, item := range evaluated.Work.Media {
 			mediaRelative := path.Join(relative, item.Path)
 			if _, err := media.ValidateRelativePath(mediaRelative); err != nil {
 				return err
 			}
-			work.Media = append(work.Media, discoveredMedia{SourceKey: path.Join(work.SourceKey, item.StableKey), RelativePath: mediaRelative, Kind: item.Kind, MIME: item.MIME})
+			work.Media = append(work.Media, discoveredMedia{SourceKey: path.Join(work.SourceKey, item.StableKey),
+				RuleKey: item.StableKey, RelativePath: mediaRelative, Kind: item.Kind, MIME: item.MIME})
 		}
 		if len(work.Media) > 0 {
 			result = append(result, work)

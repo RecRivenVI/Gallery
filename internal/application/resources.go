@@ -75,9 +75,20 @@ type QueryOverlay struct {
 }
 
 type DiscoveredWork struct {
+	SourceKey  string
+	ProviderID string
+	ExternalID string
+	Title      string
+	MediaKeys  []string
+	Media      []DiscoveredMedia
+}
+
+type DiscoveredMedia struct {
 	SourceKey string
-	Title     string
-	MediaKeys []string
+	RuleKey   string
+	Algorithm string
+	Digest    string
+	Ordinal   int
 }
 
 type Resources struct {
@@ -324,61 +335,300 @@ func (r *Resources) EnsureCanonical(ctx context.Context, sourceID string, discov
 		return nil, fault.New(fault.CodeInternal, true, err)
 	}
 	defer tx.Rollback()
-	now := r.clock.Now().Unix()
+	var generation int64
+	if err := tx.QueryRowContext(ctx, `UPDATE gallery_binding_sequence SET generation=generation+1
+WHERE singleton=1 RETURNING generation`).Scan(&generation); err != nil {
+		return nil, fault.New(fault.CodeInternal, true, err)
+	}
+	now := r.clock.Now().UTC().Unix()
 	result := make(map[string]CanonicalWork, len(discovered))
+	seenSourceKeys := make(map[string]struct{}, len(discovered))
+	seenExternal := make(map[string]string)
 	for _, item := range discovered {
-		var workID, title string
-		err := tx.QueryRowContext(ctx, `SELECT b.work_id, w.title FROM work_bindings b
-JOIN canonical_works w ON w.work_id = b.work_id WHERE b.source_id = ? AND b.source_key = ?`, sourceID, item.SourceKey).Scan(&workID, &title)
-		if errors.Is(err, sql.ErrNoRows) {
-			id, idErr := r.ids.New(domain.IDCanonicalWork)
-			if idErr != nil {
-				return nil, fault.New(fault.CodeInternal, true, idErr)
-			}
-			workID, title = id.String(), item.Title
-			if _, err := tx.ExecContext(ctx, "INSERT INTO canonical_works (work_id, title, created_at) VALUES (?, ?, ?)", workID, title, now); err != nil {
-				return nil, fault.New(fault.CodeInternal, true, err)
-			}
-			if _, err := tx.ExecContext(ctx, `INSERT INTO work_bindings
-(source_id, source_key, work_id, identity_version, created_at) VALUES (?, ?, ?, 1, ?)`, sourceID, item.SourceKey, workID, now); err != nil {
-				return nil, fault.New(fault.CodeInternal, true, err)
-			}
-		} else if err != nil {
-			return nil, fault.New(fault.CodeInternal, true, err)
+		if item.SourceKey == "" || item.Title == "" || len([]rune(item.SourceKey)) > 4096 || containsControl(item.SourceKey) {
+			return nil, fault.WithField(fault.CodeValidation, "sourceKey", nil)
 		}
-		work := CanonicalWork{ID: workID, Title: title, Media: make(map[string]CanonicalMedia, len(item.MediaKeys))}
-		for ordinal, mediaKey := range item.MediaKeys {
-			var mediaID, mediaWorkID string
-			err := tx.QueryRowContext(ctx, `SELECT media_id, work_id FROM media_bindings
-WHERE source_id = ? AND source_key = ?`, sourceID, mediaKey).Scan(&mediaID, &mediaWorkID)
-			if errors.Is(err, sql.ErrNoRows) {
-				id, idErr := r.ids.New(domain.IDCanonicalMedia)
-				if idErr != nil {
-					return nil, fault.New(fault.CodeInternal, true, idErr)
-				}
-				mediaID, mediaWorkID = id.String(), workID
-				if _, err := tx.ExecContext(ctx, `INSERT INTO canonical_media
-(media_id, work_id, role, ordinal, created_at) VALUES (?, ?, 'content', ?, ?)`, mediaID, workID, ordinal, now); err != nil {
-					return nil, fault.New(fault.CodeInternal, true, err)
-				}
-				if _, err := tx.ExecContext(ctx, `INSERT INTO media_bindings
-(source_id, source_key, media_id, work_id, identity_version, created_at) VALUES (?, ?, ?, ?, 1, ?)`, sourceID, mediaKey, mediaID, workID, now); err != nil {
-					return nil, fault.New(fault.CodeInternal, true, err)
-				}
-			} else if err != nil {
-				return nil, fault.New(fault.CodeInternal, true, err)
+		if len([]rune(item.ProviderID)) > 128 || len([]rune(item.ExternalID)) > 512 ||
+			containsControl(item.ProviderID) || containsControl(item.ExternalID) {
+			return nil, fault.WithField(fault.CodeValidation, "externalId", nil)
+		}
+		if _, duplicate := seenSourceKeys[item.SourceKey]; duplicate {
+			return nil, r.bindingConflict(ctx, tx, sourceID, item, 2, now)
+		}
+		seenSourceKeys[item.SourceKey] = struct{}{}
+		if item.ExternalID != "" {
+			key := item.ProviderID + "\x00" + item.ExternalID
+			if previous, duplicate := seenExternal[key]; duplicate && previous != item.SourceKey {
+				return nil, r.bindingConflict(ctx, tx, sourceID, item, 2, now)
 			}
-			if mediaWorkID != workID {
-				return nil, fault.New(fault.CodeConflict, false, nil)
+			seenExternal[key] = item.SourceKey
+		}
+		workID, title, err := r.resolveWork(ctx, tx, sourceID, item, generation, now)
+		if err != nil {
+			return nil, err
+		}
+		mediaItems := item.Media
+		if len(mediaItems) == 0 {
+			mediaItems = make([]DiscoveredMedia, len(item.MediaKeys))
+			for ordinal, sourceKey := range item.MediaKeys {
+				mediaItems[ordinal] = DiscoveredMedia{SourceKey: sourceKey, RuleKey: sourceKey, Ordinal: ordinal}
 			}
-			work.Media[mediaKey] = CanonicalMedia{ID: mediaID, WorkID: workID, Ordinal: ordinal}
+		}
+		work := CanonicalWork{ID: workID, Title: title, Media: make(map[string]CanonicalMedia, len(mediaItems))}
+		for ordinal := range mediaItems {
+			mediaItem := mediaItems[ordinal]
+			if mediaItem.Ordinal < 0 {
+				mediaItem.Ordinal = ordinal
+			}
+			mediaID, canonicalOrdinal, err := r.resolveMedia(ctx, tx, sourceID, workID, mediaItem, generation, now)
+			if err != nil {
+				return nil, err
+			}
+			work.Media[mediaItem.SourceKey] = CanonicalMedia{ID: mediaID, WorkID: workID, Ordinal: canonicalOrdinal}
 		}
 		result[item.SourceKey] = work
+	}
+	if _, err := tx.ExecContext(ctx, `UPDATE work_bindings SET status='orphaned', updated_at=?
+WHERE source_id=? AND status='active' AND last_seen_generation<>?`, now, sourceID, generation); err != nil {
+		return nil, fault.New(fault.CodeInternal, true, err)
+	}
+	if _, err := tx.ExecContext(ctx, `UPDATE media_bindings SET status='orphaned', updated_at=?
+WHERE source_id=? AND status='active' AND last_seen_generation<>?`, now, sourceID, generation); err != nil {
+		return nil, fault.New(fault.CodeInternal, true, err)
+	}
+	if _, err := tx.ExecContext(ctx, `UPDATE binding_issues SET status='resolved', resolved_at=?
+WHERE source_id=? AND status='open'`, now, sourceID); err != nil {
+		return nil, fault.New(fault.CodeInternal, true, err)
 	}
 	if err := tx.Commit(); err != nil {
 		return nil, fault.New(fault.CodeInternal, true, err)
 	}
 	return result, nil
+}
+
+func (r *Resources) resolveWork(ctx context.Context, tx *sql.Tx, sourceID string, item DiscoveredWork, generation, now int64) (string, string, error) {
+	blocked, err := stringSet(ctx, tx, `SELECT work_id FROM work_bindings
+WHERE source_id=? AND source_key=? AND status='manual_unbound'`, sourceID, item.SourceKey)
+	if err != nil {
+		return "", "", err
+	}
+	candidates, err := stringSet(ctx, tx, `SELECT DISTINCT work_id FROM work_bindings
+WHERE source_id=? AND source_key=? AND status IN ('active', 'orphaned')`, sourceID, item.SourceKey)
+	if err != nil {
+		return "", "", err
+	}
+	removeSet(candidates, blocked)
+	if len(candidates) == 0 && item.ExternalID != "" {
+		candidates, err = stringSet(ctx, tx, `SELECT DISTINCT work_id FROM work_bindings
+WHERE source_id=? AND provider_id=? AND external_id=? AND status IN ('active', 'orphaned')`,
+			sourceID, item.ProviderID, item.ExternalID)
+		if err != nil {
+			return "", "", err
+		}
+		removeSet(candidates, blocked)
+	}
+	if len(candidates) > 1 {
+		return "", "", r.bindingConflict(ctx, tx, sourceID, item, len(candidates), now)
+	}
+	var workID, title string
+	for workID = range candidates {
+		if err := tx.QueryRowContext(ctx, "SELECT title FROM canonical_works WHERE work_id=?", workID).Scan(&title); err != nil {
+			return "", "", fault.New(fault.CodeInternal, true, err)
+		}
+	}
+	if workID == "" {
+		id, err := r.ids.New(domain.IDCanonicalWork)
+		if err != nil {
+			return "", "", fault.New(fault.CodeInternal, true, err)
+		}
+		workID, title = id.String(), item.Title
+		if _, err := tx.ExecContext(ctx, "INSERT INTO canonical_works (work_id, title, created_at) VALUES (?, ?, ?)", workID, title, now); err != nil {
+			return "", "", fault.New(fault.CodeInternal, true, err)
+		}
+	}
+	var bindingID string
+	err = tx.QueryRowContext(ctx, `SELECT binding_id FROM work_bindings
+WHERE source_id=? AND source_key=? AND work_id=? AND status IN ('active', 'orphaned')
+ORDER BY CASE status WHEN 'active' THEN 0 ELSE 1 END, created_at LIMIT 1`, sourceID, item.SourceKey, workID).Scan(&bindingID)
+	if errors.Is(err, sql.ErrNoRows) {
+		id, idErr := r.ids.New(domain.IDWorkBinding)
+		if idErr != nil {
+			return "", "", fault.New(fault.CodeInternal, true, idErr)
+		}
+		bindingID = id.String()
+		_, err = tx.ExecContext(ctx, `INSERT INTO work_bindings
+(binding_id, source_id, provider_id, external_id, source_key, work_id, identity_version,
+ status, last_seen_generation, created_at, updated_at)
+VALUES (?, ?, ?, ?, ?, ?, 1, 'active', ?, ?, ?)`, bindingID, sourceID, item.ProviderID,
+			item.ExternalID, item.SourceKey, workID, generation, now, now)
+	} else if err == nil {
+		_, err = tx.ExecContext(ctx, `UPDATE work_bindings SET provider_id=?, external_id=?, status='active',
+last_seen_generation=?, updated_at=? WHERE binding_id=?`, item.ProviderID, item.ExternalID, generation, now, bindingID)
+	}
+	if err != nil {
+		return "", "", fault.New(fault.CodeInternal, true, err)
+	}
+	return workID, title, nil
+}
+
+func (r *Resources) resolveMedia(ctx context.Context, tx *sql.Tx, sourceID, workID string, item DiscoveredMedia, generation, now int64) (string, int, error) {
+	if item.SourceKey == "" {
+		return "", 0, fault.WithField(fault.CodeValidation, "media.sourceKey", nil)
+	}
+	blocked, err := stringSet(ctx, tx, `SELECT media_id FROM media_bindings
+WHERE source_id=? AND source_key=? AND status='manual_unbound'`, sourceID, item.SourceKey)
+	if err != nil {
+		return "", 0, err
+	}
+	candidates, err := stringSet(ctx, tx, `SELECT DISTINCT media_id FROM media_bindings
+WHERE source_id=? AND work_id=? AND source_key=? AND status IN ('active', 'orphaned')`, sourceID, workID, item.SourceKey)
+	if err != nil {
+		return "", 0, err
+	}
+	removeSet(candidates, blocked)
+	if len(candidates) == 0 && item.RuleKey != "" {
+		candidates, err = stringSet(ctx, tx, `SELECT DISTINCT media_id FROM media_bindings
+WHERE source_id=? AND work_id=? AND rule_key=? AND status IN ('active', 'orphaned')`, sourceID, workID, item.RuleKey)
+		if err != nil {
+			return "", 0, err
+		}
+		removeSet(candidates, blocked)
+	}
+	if len(candidates) == 0 && item.Digest != "" {
+		candidates, err = stringSet(ctx, tx, `SELECT DISTINCT media_id FROM media_bindings
+WHERE source_id=? AND work_id=? AND algorithm=? AND digest=? AND occurrence_ordinal=?
+AND status IN ('active', 'orphaned')`, sourceID, workID, item.Algorithm, item.Digest, item.Ordinal)
+		if err != nil {
+			return "", 0, err
+		}
+		removeSet(candidates, blocked)
+	}
+	if len(candidates) > 1 {
+		return "", 0, fault.New(fault.CodeBindingReviewRequired, false, nil)
+	}
+	var mediaID string
+	canonicalOrdinal := item.Ordinal
+	for mediaID = range candidates {
+		if err := tx.QueryRowContext(ctx, "SELECT ordinal FROM canonical_media WHERE media_id=? AND work_id=?", mediaID, workID).Scan(&canonicalOrdinal); err != nil {
+			return "", 0, fault.New(fault.CodeInternal, true, err)
+		}
+	}
+	if mediaID == "" {
+		id, err := r.ids.New(domain.IDCanonicalMedia)
+		if err != nil {
+			return "", 0, fault.New(fault.CodeInternal, true, err)
+		}
+		mediaID = id.String()
+		if _, err := tx.ExecContext(ctx, `INSERT INTO canonical_media
+(media_id, work_id, role, ordinal, created_at) VALUES (?, ?, 'content', ?, ?)`, mediaID, workID, item.Ordinal, now); err != nil {
+			return "", 0, fault.New(fault.CodeInternal, true, err)
+		}
+	}
+	var bindingID string
+	err = tx.QueryRowContext(ctx, `SELECT binding_id FROM media_bindings
+WHERE source_id=? AND source_key=? AND media_id=? AND status IN ('active', 'orphaned')
+ORDER BY CASE status WHEN 'active' THEN 0 ELSE 1 END, created_at LIMIT 1`, sourceID, item.SourceKey, mediaID).Scan(&bindingID)
+	if errors.Is(err, sql.ErrNoRows) {
+		id, idErr := r.ids.New(domain.IDMediaBinding)
+		if idErr != nil {
+			return "", 0, fault.New(fault.CodeInternal, true, idErr)
+		}
+		bindingID = id.String()
+		_, err = tx.ExecContext(ctx, `INSERT INTO media_bindings
+(binding_id, source_id, source_key, rule_key, media_id, work_id, algorithm, digest,
+ occurrence_ordinal, identity_version, status, last_seen_generation, created_at, updated_at)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 1, 'active', ?, ?, ?)`, bindingID, sourceID, item.SourceKey,
+			item.RuleKey, mediaID, workID, item.Algorithm, item.Digest, item.Ordinal, generation, now, now)
+	} else if err == nil {
+		_, err = tx.ExecContext(ctx, `UPDATE media_bindings SET rule_key=?, algorithm=?, digest=?,
+occurrence_ordinal=?, status='active', last_seen_generation=?, updated_at=? WHERE binding_id=?`,
+			item.RuleKey, item.Algorithm, item.Digest, item.Ordinal, generation, now, bindingID)
+	}
+	if err != nil {
+		return "", 0, fault.New(fault.CodeInternal, true, err)
+	}
+	return mediaID, canonicalOrdinal, nil
+}
+
+func (r *Resources) bindingConflict(ctx context.Context, tx *sql.Tx, sourceID string, item DiscoveredWork, candidates int, now int64) error {
+	id, err := r.ids.New(domain.IDBindingIssue)
+	if err != nil {
+		return fault.New(fault.CodeInternal, true, err)
+	}
+	if _, err := tx.ExecContext(ctx, `INSERT INTO binding_issues
+(issue_id, source_id, source_key, provider_id, external_id, code, candidate_count, status, created_at)
+VALUES (?, ?, ?, ?, ?, ?, ?, 'open', ?)`, id.String(), sourceID, item.SourceKey, item.ProviderID,
+		item.ExternalID, string(fault.CodeBindingReviewRequired), candidates, now); err != nil {
+		return fault.New(fault.CodeInternal, true, err)
+	}
+	if err := tx.Commit(); err != nil {
+		return fault.New(fault.CodeInternal, true, err)
+	}
+	return fault.WithField(fault.CodeBindingReviewRequired, "sourceKey", nil)
+}
+
+func (r *Resources) ManualUnbindWork(ctx context.Context, sourceID, sourceKey string) (string, error) {
+	tx, err := r.control.BeginTx(ctx, nil)
+	if err != nil {
+		return "", fault.New(fault.CodeInternal, true, err)
+	}
+	defer tx.Rollback()
+	var workID string
+	if err := tx.QueryRowContext(ctx, `SELECT work_id FROM work_bindings
+WHERE source_id=? AND source_key=? AND status='active'`, sourceID, sourceKey).Scan(&workID); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return "", fault.New(fault.CodeNotFound, false, nil)
+		}
+		return "", fault.New(fault.CodeInternal, true, err)
+	}
+	now := r.clock.Now().UTC().Unix()
+	if _, err := tx.ExecContext(ctx, `UPDATE work_bindings SET status='manual_unbound', updated_at=?
+WHERE source_id=? AND source_key=? AND status='active'`, now, sourceID, sourceKey); err != nil {
+		return "", fault.New(fault.CodeInternal, true, err)
+	}
+	if _, err := tx.ExecContext(ctx, `UPDATE media_bindings SET status='manual_unbound', updated_at=?
+WHERE source_id=? AND work_id=? AND status='active'`, now, sourceID, workID); err != nil {
+		return "", fault.New(fault.CodeInternal, true, err)
+	}
+	if err := tx.Commit(); err != nil {
+		return "", fault.New(fault.CodeInternal, true, err)
+	}
+	return workID, nil
+}
+
+func stringSet(ctx context.Context, tx *sql.Tx, query string, args ...any) (map[string]struct{}, error) {
+	rows, err := tx.QueryContext(ctx, query, args...)
+	if err != nil {
+		return nil, fault.New(fault.CodeInternal, true, err)
+	}
+	defer rows.Close()
+	result := make(map[string]struct{})
+	for rows.Next() {
+		var value string
+		if err := rows.Scan(&value); err != nil {
+			return nil, fault.New(fault.CodeInternal, true, err)
+		}
+		result[value] = struct{}{}
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fault.New(fault.CodeInternal, true, err)
+	}
+	return result, nil
+}
+
+func removeSet(target, removed map[string]struct{}) {
+	for value := range removed {
+		delete(target, value)
+	}
+}
+
+func containsControl(value string) bool {
+	for _, char := range value {
+		if char < 0x20 || char == 0x7f {
+			return true
+		}
+	}
+	return false
 }
 
 // QueryOverlaySnapshot 从同一个 control.db 读事务取得 watermark 与事实，避免把
@@ -430,6 +680,19 @@ FROM work_overlays WHERE query_watermark<=? ORDER BY work_id`, watermark)
 		return nil, 0, fault.New(fault.CodeInternal, true, err)
 	}
 	return result, watermark, nil
+}
+
+func (r *Resources) MarkOverlaySnapshotPublished(ctx context.Context, watermark int64, publicationID string) error {
+	if watermark < 0 || publicationID == "" {
+		return fault.New(fault.CodeValidation, false, nil)
+	}
+	_, err := r.control.ExecContext(ctx, `UPDATE work_overlays SET projection_status='published',
+projected_watermark=query_watermark, published_query_publication_id=?, issue_code=NULL, updated_at=?
+WHERE query_watermark<=?`, publicationID, r.clock.Now().UTC().Unix(), watermark)
+	if err != nil {
+		return fault.New(fault.CodeInternal, true, err)
+	}
+	return nil
 }
 
 func (r *Resources) TempRoot() string { return r.dirs.Temp }

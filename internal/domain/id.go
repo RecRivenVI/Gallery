@@ -23,13 +23,16 @@ const (
 	IDSession           IDKind = "ses"
 	IDCatalogRevision   IDKind = "crev"
 	IDOverlayRevision   IDKind = "orev"
+	IDWorkBinding       IDKind = "wbind"
+	IDMediaBinding      IDKind = "mbind"
+	IDBindingIssue      IDKind = "biss"
 )
 
 var validIDKinds = map[IDKind]struct{}{
 	IDLibrary: {}, IDSource: {}, IDCanonicalWork: {}, IDCanonicalCreator: {},
 	IDCanonicalMedia: {}, IDSourceRuleBinding: {}, IDRuleSet: {}, IDJob: {},
 	IDQueryPublication: {}, IDSession: {},
-	IDCatalogRevision: {}, IDOverlayRevision: {},
+	IDCatalogRevision: {}, IDOverlayRevision: {}, IDWorkBinding: {}, IDMediaBinding: {}, IDBindingIssue: {},
 }
 
 // ID 是带类型前缀的 UUIDv7。零值不是合法领域 ID。

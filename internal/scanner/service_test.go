@@ -14,6 +14,7 @@ import (
 	"github.com/RecRivenVI/gallery/internal/contract/fault"
 	"github.com/RecRivenVI/gallery/internal/domain"
 	"github.com/RecRivenVI/gallery/internal/jobs"
+	"github.com/RecRivenVI/gallery/internal/overlay"
 	"github.com/RecRivenVI/gallery/internal/platform/appdirs"
 	"github.com/RecRivenVI/gallery/internal/platform/clock"
 	"github.com/RecRivenVI/gallery/internal/platform/filesystem"
@@ -146,6 +147,105 @@ func TestReconciliationRepairsBothCrossDatabaseStates(t *testing.T) {
 	repair, err := jobStore.Get(context.Background(), missingJob.ID)
 	if err != nil || repair.Status != jobs.StatusNeedsRepair || repair.IssueCode != string(fault.CodeCatalogPublicationAbsent) {
 		t.Fatalf("缺 publication 的 completed Job 未标 needs_repair: %+v %v", repair, err)
+	}
+}
+
+func TestCatalogDeleteRebuildPreservesCanonicalOverlayAndMediaURL(t *testing.T) {
+	fixture := []byte("catalog rebuild stable media")
+	_, jobStore, catalogStore, service, source, store := setup(t, fixture)
+	ctx := context.Background()
+	firstJob, err := service.CreateScan(ctx, source.ID, "personal-owner")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := service.Execute(ctx, firstJob.ID); err != nil {
+		t.Fatal(err)
+	}
+	_, works, err := catalogStore.ListWorks(ctx)
+	if err != nil || len(works) != 1 {
+		t.Fatalf("首次扫描失败: %+v %v", works, err)
+	}
+	workID := works[0].ID
+	_, mediaItems, err := catalogStore.ListMediaForWork(ctx, workID)
+	if err != nil || len(mediaItems) != 1 {
+		t.Fatalf("首次媒体投影失败: %+v %v", mediaItems, err)
+	}
+	mediaID := mediaItems[0].ID
+	stableMediaURL := "/api/v1/media/" + mediaID + "/content"
+	fixedClock := clock.Fixed{Time: time.Date(2026, 7, 16, 0, 0, 0, 0, time.UTC)}
+	overlayService, err := overlay.New(ctx, store.Control.SQL(), jobStore, catalogStore, fixedClock, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	changed, err := overlayService.Put(ctx, workID, "personal-owner", overlay.Input{TitleOverride: "重建后标题", Favorite: true, Progress: 0.6})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := overlayService.Execute(ctx, changed.ProjectionJobID); err != nil {
+		t.Fatal(err)
+	}
+	oldPublication, err := catalogStore.Current(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	controlPath := filepath.Join(filepath.Dir(source.RootPath), "app", "data", "control.db")
+	catalogPath := filepath.Join(filepath.Dir(source.RootPath), "app", "data", "catalog.db")
+	beforeSource := sha256.Sum256(mustRead(t, filepath.Join(source.RootPath, "work-one", "media.bin")))
+	if err := store.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(controlPath); err != nil {
+		t.Fatalf("control.db 意外缺失: %v", err)
+	}
+	for _, path := range []string{catalogPath, catalogPath + "-wal", catalogPath + "-shm"} {
+		if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
+			t.Fatal(err)
+		}
+	}
+
+	dirs := appdirs.UnderRoot(filepath.Join(filepath.Dir(source.RootPath), "app"))
+	reopened, err := storage.Open(ctx, dirs)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer reopened.Close()
+	generator := identity.NewGenerator(fixedClock)
+	rebuiltResources, _ := application.NewResources(reopened.Control.SQL(), dirs, filesystem.OS{}, fixedClock, generator)
+	rebuiltJobs, _ := jobs.NewStore(reopened.Control.SQL(), fixedClock, generator)
+	rebuiltCatalog, _ := catalog.NewStore(reopened.Catalog.SQL(), fixedClock, generator)
+	rebuiltScanner, _ := scanner.New(ctx, rebuiltResources, rebuiltJobs, rebuiltCatalog, nil)
+	rebuildJob, err := rebuiltScanner.CreateScan(ctx, source.ID, "personal-owner")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := rebuiltScanner.Execute(ctx, rebuildJob.ID); err != nil {
+		t.Fatal(err)
+	}
+	newPublication, rebuiltWorks, err := rebuiltCatalog.ListWorks(ctx)
+	if err != nil || len(rebuiltWorks) != 1 || rebuiltWorks[0].ID != workID || rebuiltWorks[0].Title != "重建后标题" {
+		t.Fatalf("Catalog 重建后 Work/Overlay 漂移: pub=%+v works=%+v err=%v", newPublication, rebuiltWorks, err)
+	}
+	_, rebuiltMedia, err := rebuiltCatalog.ListMediaForWork(ctx, workID)
+	if err != nil || len(rebuiltMedia) != 1 || rebuiltMedia[0].ID != mediaID || "/api/v1/media/"+rebuiltMedia[0].ID+"/content" != stableMediaURL {
+		t.Fatalf("Catalog 重建后媒体 URL 身份漂移: %+v %v", rebuiltMedia, err)
+	}
+	if newPublication.ID == oldPublication.ID || newPublication.CatalogRevisionID == oldPublication.CatalogRevisionID {
+		t.Fatal("Catalog 重建复用了已删除的 revision/publication 身份")
+	}
+	rebuiltOverlay, _ := overlay.New(ctx, reopened.Control.SQL(), rebuiltJobs, rebuiltCatalog, fixedClock, nil)
+	state, err := rebuiltOverlay.Get(ctx, workID)
+	if err != nil || !state.Favorite || state.Progress != 0.6 || state.ProjectionStatus != "published" || state.PublishedQueryPublicationID != newPublication.ID {
+		t.Fatalf("Catalog 重建后用户事实/投影状态漂移: %+v %v", state, err)
+	}
+	var workCount, mediaCount int
+	_ = reopened.Control.SQL().QueryRowContext(ctx, "SELECT count(*) FROM canonical_works").Scan(&workCount)
+	_ = reopened.Control.SQL().QueryRowContext(ctx, "SELECT count(*) FROM canonical_media").Scan(&mediaCount)
+	if workCount != 1 || mediaCount != 1 {
+		t.Fatalf("重建重复创建 Canonical 实体: works=%d media=%d", workCount, mediaCount)
+	}
+	afterSource := sha256.Sum256(mustRead(t, filepath.Join(source.RootPath, "work-one", "media.bin")))
+	if beforeSource != afterSource {
+		t.Fatal("Catalog 重建修改了 Source")
 	}
 }
 
