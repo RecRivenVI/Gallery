@@ -137,6 +137,8 @@ const (
 	MIGRATIONFAILED           ErrorCode = "MIGRATION_FAILED"
 	NOTFOUND                  ErrorCode = "NOT_FOUND"
 	ORIGINREJECTED            ErrorCode = "ORIGIN_REJECTED"
+	OVERLAYFACTINVALID        ErrorCode = "OVERLAY_FACT_INVALID"
+	OVERLAYPROJECTIONFAILED   ErrorCode = "OVERLAY_PROJECTION_FAILED"
 	PAIRINGEXPIRED            ErrorCode = "PAIRING_EXPIRED"
 	PAIRINGINVALID            ErrorCode = "PAIRING_INVALID"
 	PATHESCAPE                ErrorCode = "PATH_ESCAPE"
@@ -201,6 +203,10 @@ func (e ErrorCode) Valid() bool {
 	case NOTFOUND:
 		return true
 	case ORIGINREJECTED:
+		return true
+	case OVERLAYFACTINVALID:
+		return true
+	case OVERLAYPROJECTIONFAILED:
 		return true
 	case PAIRINGEXPIRED:
 		return true
@@ -309,31 +315,31 @@ func (e HealthResponseStatus) Valid() bool {
 
 // Defines values for JobStatus.
 const (
-	Cancelled   JobStatus = "cancelled"
-	Completed   JobStatus = "completed"
-	Failed      JobStatus = "failed"
-	NeedsRepair JobStatus = "needs_repair"
-	Publishing  JobStatus = "publishing"
-	Queued      JobStatus = "queued"
-	Running     JobStatus = "running"
+	JobStatusCancelled   JobStatus = "cancelled"
+	JobStatusCompleted   JobStatus = "completed"
+	JobStatusFailed      JobStatus = "failed"
+	JobStatusNeedsRepair JobStatus = "needs_repair"
+	JobStatusPublishing  JobStatus = "publishing"
+	JobStatusQueued      JobStatus = "queued"
+	JobStatusRunning     JobStatus = "running"
 )
 
 // Valid indicates whether the value is a known member of the JobStatus enum.
 func (e JobStatus) Valid() bool {
 	switch e {
-	case Cancelled:
+	case JobStatusCancelled:
 		return true
-	case Completed:
+	case JobStatusCompleted:
 		return true
-	case Failed:
+	case JobStatusFailed:
 		return true
-	case NeedsRepair:
+	case JobStatusNeedsRepair:
 		return true
-	case Publishing:
+	case JobStatusPublishing:
 		return true
-	case Queued:
+	case JobStatusQueued:
 		return true
-	case Running:
+	case JobStatusRunning:
 		return true
 	default:
 		return false
@@ -342,12 +348,15 @@ func (e JobStatus) Valid() bool {
 
 // Defines values for JobType.
 const (
-	Scan JobType = "scan"
+	OverlayProjection JobType = "overlay_projection"
+	Scan              JobType = "scan"
 )
 
 // Valid indicates whether the value is a known member of the JobType enum.
 func (e JobType) Valid() bool {
 	switch e {
+	case OverlayProjection:
+		return true
 	case Scan:
 		return true
 	default:
@@ -364,6 +373,27 @@ const (
 func (e WorkListResponseSortProtocolVersion) Valid() bool {
 	switch e {
 	case WorkListResponseSortProtocolVersionN1:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for WorkOverlayStateProjectionStatus.
+const (
+	WorkOverlayStateProjectionStatusFailed    WorkOverlayStateProjectionStatus = "failed"
+	WorkOverlayStateProjectionStatusPending   WorkOverlayStateProjectionStatus = "pending"
+	WorkOverlayStateProjectionStatusPublished WorkOverlayStateProjectionStatus = "published"
+)
+
+// Valid indicates whether the value is a known member of the WorkOverlayStateProjectionStatus enum.
+func (e WorkOverlayStateProjectionStatus) Valid() bool {
+	switch e {
+	case WorkOverlayStateProjectionStatusFailed:
+		return true
+	case WorkOverlayStateProjectionStatusPending:
+		return true
+	case WorkOverlayStateProjectionStatusPublished:
 		return true
 	default:
 		return false
@@ -494,7 +524,7 @@ type Job struct {
 	} `json:"progress"`
 	QueryPublicationId *QueryPublicationId `json:"queryPublicationId,omitempty"`
 	RetryOf            *JobId              `json:"retryOf,omitempty"`
-	SourceId           SourceId            `json:"sourceId"`
+	SourceId           *SourceId           `json:"sourceId,omitempty"`
 	Stage              string              `json:"stage"`
 	StartedAt          *time.Time          `json:"startedAt,omitempty"`
 	Status             JobStatus           `json:"status"`
@@ -743,6 +773,37 @@ type WorkListResponse struct {
 // WorkListResponseSortProtocolVersion defines model for WorkListResponse.SortProtocolVersion.
 type WorkListResponseSortProtocolVersion int
 
+// WorkOverlayPutRequest defines model for WorkOverlayPutRequest.
+type WorkOverlayPutRequest struct {
+	CustomCoverMediaId *CanonicalMediaId `json:"customCoverMediaId,omitempty"`
+	Favorite           bool              `json:"favorite"`
+	Hidden             bool              `json:"hidden"`
+	ManualTags         []string          `json:"manualTags"`
+	Progress           float32           `json:"progress"`
+	TitleOverride      string            `json:"titleOverride"`
+}
+
+// WorkOverlayState defines model for WorkOverlayState.
+type WorkOverlayState struct {
+	CustomCoverMediaId          *CanonicalMediaId                `json:"customCoverMediaId,omitempty"`
+	FactWatermark               int64                            `json:"factWatermark"`
+	Favorite                    bool                             `json:"favorite"`
+	Hidden                      bool                             `json:"hidden"`
+	IssueCode                   *string                          `json:"issueCode,omitempty"`
+	ManualTags                  []string                         `json:"manualTags"`
+	Progress                    float32                          `json:"progress"`
+	ProjectedWatermark          int64                            `json:"projectedWatermark"`
+	ProjectionJobId             *JobId                           `json:"projectionJobId,omitempty"`
+	ProjectionStatus            WorkOverlayStateProjectionStatus `json:"projectionStatus"`
+	PublishedQueryPublicationId *QueryPublicationId              `json:"publishedQueryPublicationId,omitempty"`
+	QueryWatermark              int64                            `json:"queryWatermark"`
+	TitleOverride               string                           `json:"titleOverride"`
+	WorkId                      CanonicalWorkId                  `json:"workId"`
+}
+
+// WorkOverlayStateProjectionStatus defines model for WorkOverlayState.ProjectionStatus.
+type WorkOverlayStateProjectionStatus string
+
 // CSRFHeader defines model for CSRFHeader.
 type CSRFHeader = string
 
@@ -863,6 +924,11 @@ type ListWorksParams struct {
 // ListWorksParamsSortDirection defines parameters for ListWorks.
 type ListWorksParamsSortDirection string
 
+// PutWorkOverlayParams defines parameters for PutWorkOverlay.
+type PutWorkOverlayParams struct {
+	XGalleryCSRF CSRFHeader `json:"X-Gallery-CSRF"`
+}
+
 // CreateLibraryJSONRequestBody defines body for CreateLibrary for application/json ContentType.
 type CreateLibraryJSONRequestBody = LibraryCreateRequest
 
@@ -889,6 +955,9 @@ type CreateSourceRuleBindingJSONRequestBody = SourceRuleBindingCreateRequest
 
 // CreateSourceJSONRequestBody defines body for CreateSource for application/json ContentType.
 type CreateSourceJSONRequestBody = SourceCreateRequest
+
+// PutWorkOverlayJSONRequestBody defines body for PutWorkOverlay for application/json ContentType.
+type PutWorkOverlayJSONRequestBody = WorkOverlayPutRequest
 
 // RequestEditorFn  is the function signature for the RequestEditor callback function
 type RequestEditorFn func(ctx context.Context, req *http.Request) error
@@ -1061,6 +1130,14 @@ type ClientInterface interface {
 
 	// ListWorkMedia request
 	ListWorkMedia(ctx context.Context, workId CanonicalWorkId, reqEditors ...RequestEditorFn) (*http.Response, error)
+
+	// GetWorkOverlay request
+	GetWorkOverlay(ctx context.Context, workId CanonicalWorkId, reqEditors ...RequestEditorFn) (*http.Response, error)
+
+	// PutWorkOverlayWithBody request with any body
+	PutWorkOverlayWithBody(ctx context.Context, workId CanonicalWorkId, params *PutWorkOverlayParams, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*http.Response, error)
+
+	PutWorkOverlay(ctx context.Context, workId CanonicalWorkId, params *PutWorkOverlayParams, body PutWorkOverlayJSONRequestBody, reqEditors ...RequestEditorFn) (*http.Response, error)
 }
 
 func (c *Client) GetBootstrap(ctx context.Context, reqEditors ...RequestEditorFn) (*http.Response, error) {
@@ -1485,6 +1562,42 @@ func (c *Client) GetWork(ctx context.Context, workId CanonicalWorkId, reqEditors
 
 func (c *Client) ListWorkMedia(ctx context.Context, workId CanonicalWorkId, reqEditors ...RequestEditorFn) (*http.Response, error) {
 	req, err := NewListWorkMediaRequest(c.Server, workId)
+	if err != nil {
+		return nil, err
+	}
+	req = req.WithContext(ctx)
+	if err := c.applyEditors(ctx, req, reqEditors); err != nil {
+		return nil, err
+	}
+	return c.Client.Do(req)
+}
+
+func (c *Client) GetWorkOverlay(ctx context.Context, workId CanonicalWorkId, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewGetWorkOverlayRequest(c.Server, workId)
+	if err != nil {
+		return nil, err
+	}
+	req = req.WithContext(ctx)
+	if err := c.applyEditors(ctx, req, reqEditors); err != nil {
+		return nil, err
+	}
+	return c.Client.Do(req)
+}
+
+func (c *Client) PutWorkOverlayWithBody(ctx context.Context, workId CanonicalWorkId, params *PutWorkOverlayParams, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewPutWorkOverlayRequestWithBody(c.Server, workId, params, contentType, body)
+	if err != nil {
+		return nil, err
+	}
+	req = req.WithContext(ctx)
+	if err := c.applyEditors(ctx, req, reqEditors); err != nil {
+		return nil, err
+	}
+	return c.Client.Do(req)
+}
+
+func (c *Client) PutWorkOverlay(ctx context.Context, workId CanonicalWorkId, params *PutWorkOverlayParams, body PutWorkOverlayJSONRequestBody, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewPutWorkOverlayRequest(c.Server, workId, params, body)
 	if err != nil {
 		return nil, err
 	}
@@ -2744,6 +2857,100 @@ func NewListWorkMediaRequest(server string, workId CanonicalWorkId) (*http.Reque
 	return req, nil
 }
 
+// NewGetWorkOverlayRequest generates requests for GetWorkOverlay
+func NewGetWorkOverlayRequest(server string, workId CanonicalWorkId) (*http.Request, error) {
+	var err error
+
+	var pathParam0 string
+
+	pathParam0, err = runtime.StyleParamWithOptions("simple", false, "workId", workId, runtime.StyleParamOptions{ParamLocation: runtime.ParamLocationPath, Type: "string", Format: ""})
+	if err != nil {
+		return nil, err
+	}
+
+	serverURL, err := url.Parse(server)
+	if err != nil {
+		return nil, err
+	}
+
+	operationPath := fmt.Sprintf("/api/v1/works/%s/overlay", pathParam0)
+	if operationPath[0] == '/' {
+		operationPath = "." + operationPath
+	}
+
+	queryURL, err := serverURL.Parse(operationPath)
+	if err != nil {
+		return nil, err
+	}
+
+	req, err := http.NewRequest(http.MethodGet, queryURL.String(), nil)
+	if err != nil {
+		return nil, err
+	}
+
+	return req, nil
+}
+
+// NewPutWorkOverlayRequest calls the generic PutWorkOverlay builder with application/json body
+func NewPutWorkOverlayRequest(server string, workId CanonicalWorkId, params *PutWorkOverlayParams, body PutWorkOverlayJSONRequestBody) (*http.Request, error) {
+	var bodyReader io.Reader
+	buf, err := json.Marshal(body)
+	if err != nil {
+		return nil, err
+	}
+	bodyReader = bytes.NewReader(buf)
+	return NewPutWorkOverlayRequestWithBody(server, workId, params, "application/json", bodyReader)
+}
+
+// NewPutWorkOverlayRequestWithBody generates requests for PutWorkOverlay with any type of body
+func NewPutWorkOverlayRequestWithBody(server string, workId CanonicalWorkId, params *PutWorkOverlayParams, contentType string, body io.Reader) (*http.Request, error) {
+	var err error
+
+	var pathParam0 string
+
+	pathParam0, err = runtime.StyleParamWithOptions("simple", false, "workId", workId, runtime.StyleParamOptions{ParamLocation: runtime.ParamLocationPath, Type: "string", Format: ""})
+	if err != nil {
+		return nil, err
+	}
+
+	serverURL, err := url.Parse(server)
+	if err != nil {
+		return nil, err
+	}
+
+	operationPath := fmt.Sprintf("/api/v1/works/%s/overlay", pathParam0)
+	if operationPath[0] == '/' {
+		operationPath = "." + operationPath
+	}
+
+	queryURL, err := serverURL.Parse(operationPath)
+	if err != nil {
+		return nil, err
+	}
+
+	req, err := http.NewRequest(http.MethodPut, queryURL.String(), body)
+	if err != nil {
+		return nil, err
+	}
+
+	req.Header.Add("Content-Type", contentType)
+
+	if params != nil {
+
+		var headerParam0 string
+
+		headerParam0, err = runtime.StyleParamWithOptions("simple", false, "X-Gallery-CSRF", params.XGalleryCSRF, runtime.StyleParamOptions{ParamLocation: runtime.ParamLocationHeader, Type: "string", Format: ""})
+		if err != nil {
+			return nil, err
+		}
+
+		req.Header.Set("X-Gallery-CSRF", headerParam0)
+
+	}
+
+	return req, nil
+}
+
 func (c *Client) applyEditors(ctx context.Context, req *http.Request, additionalEditors []RequestEditorFn) error {
 	for _, r := range c.RequestEditors {
 		if err := r(ctx, req); err != nil {
@@ -2885,6 +3092,14 @@ type ClientWithResponsesInterface interface {
 
 	// ListWorkMediaWithResponse request
 	ListWorkMediaWithResponse(ctx context.Context, workId CanonicalWorkId, reqEditors ...RequestEditorFn) (*ListWorkMediaResponse, error)
+
+	// GetWorkOverlayWithResponse request
+	GetWorkOverlayWithResponse(ctx context.Context, workId CanonicalWorkId, reqEditors ...RequestEditorFn) (*GetWorkOverlayResponse, error)
+
+	// PutWorkOverlayWithBodyWithResponse request with any body
+	PutWorkOverlayWithBodyWithResponse(ctx context.Context, workId CanonicalWorkId, params *PutWorkOverlayParams, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*PutWorkOverlayResponse, error)
+
+	PutWorkOverlayWithResponse(ctx context.Context, workId CanonicalWorkId, params *PutWorkOverlayParams, body PutWorkOverlayJSONRequestBody, reqEditors ...RequestEditorFn) (*PutWorkOverlayResponse, error)
 }
 
 type GetBootstrapResponse struct {
@@ -3782,6 +3997,73 @@ func (r ListWorkMediaResponse) ContentType() string {
 	return ""
 }
 
+type GetWorkOverlayResponse struct {
+	Body         []byte
+	HTTPResponse *http.Response
+	JSON200      *WorkOverlayState
+	JSON401      *UnauthenticatedError
+	JSON403      *ForbiddenError
+	JSON404      *NotFoundError
+}
+
+// Status returns HTTPResponse.Status
+func (r GetWorkOverlayResponse) Status() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Status
+	}
+	return http.StatusText(0)
+}
+
+// StatusCode returns HTTPResponse.StatusCode
+func (r GetWorkOverlayResponse) StatusCode() int {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.StatusCode
+	}
+	return 0
+}
+
+// ContentType is a convenience method to retrieve the Content-Type value from the HTTP response headers
+func (r GetWorkOverlayResponse) ContentType() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Header.Get("Content-Type")
+	}
+	return ""
+}
+
+type PutWorkOverlayResponse struct {
+	Body         []byte
+	HTTPResponse *http.Response
+	JSON200      *WorkOverlayState
+	JSON400      *ValidationError
+	JSON401      *UnauthenticatedError
+	JSON403      *ForbiddenError
+	JSON404      *NotFoundError
+}
+
+// Status returns HTTPResponse.Status
+func (r PutWorkOverlayResponse) Status() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Status
+	}
+	return http.StatusText(0)
+}
+
+// StatusCode returns HTTPResponse.StatusCode
+func (r PutWorkOverlayResponse) StatusCode() int {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.StatusCode
+	}
+	return 0
+}
+
+// ContentType is a convenience method to retrieve the Content-Type value from the HTTP response headers
+func (r PutWorkOverlayResponse) ContentType() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Header.Get("Content-Type")
+	}
+	return ""
+}
+
 // GetBootstrapWithResponse request returning *GetBootstrapResponse
 func (c *ClientWithResponses) GetBootstrapWithResponse(ctx context.Context, reqEditors ...RequestEditorFn) (*GetBootstrapResponse, error) {
 	rsp, err := c.GetBootstrap(ctx, reqEditors...)
@@ -4095,6 +4377,32 @@ func (c *ClientWithResponses) ListWorkMediaWithResponse(ctx context.Context, wor
 		return nil, err
 	}
 	return ParseListWorkMediaResponse(rsp)
+}
+
+// GetWorkOverlayWithResponse request returning *GetWorkOverlayResponse
+func (c *ClientWithResponses) GetWorkOverlayWithResponse(ctx context.Context, workId CanonicalWorkId, reqEditors ...RequestEditorFn) (*GetWorkOverlayResponse, error) {
+	rsp, err := c.GetWorkOverlay(ctx, workId, reqEditors...)
+	if err != nil {
+		return nil, err
+	}
+	return ParseGetWorkOverlayResponse(rsp)
+}
+
+// PutWorkOverlayWithBodyWithResponse request with arbitrary body returning *PutWorkOverlayResponse
+func (c *ClientWithResponses) PutWorkOverlayWithBodyWithResponse(ctx context.Context, workId CanonicalWorkId, params *PutWorkOverlayParams, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*PutWorkOverlayResponse, error) {
+	rsp, err := c.PutWorkOverlayWithBody(ctx, workId, params, contentType, body, reqEditors...)
+	if err != nil {
+		return nil, err
+	}
+	return ParsePutWorkOverlayResponse(rsp)
+}
+
+func (c *ClientWithResponses) PutWorkOverlayWithResponse(ctx context.Context, workId CanonicalWorkId, params *PutWorkOverlayParams, body PutWorkOverlayJSONRequestBody, reqEditors ...RequestEditorFn) (*PutWorkOverlayResponse, error) {
+	rsp, err := c.PutWorkOverlay(ctx, workId, params, body, reqEditors...)
+	if err != nil {
+		return nil, err
+	}
+	return ParsePutWorkOverlayResponse(rsp)
 }
 
 // ParseGetBootstrapResponse parses an HTTP response from a GetBootstrapWithResponse call
@@ -5355,6 +5663,107 @@ func ParseListWorkMediaResponse(rsp *http.Response) (*ListWorkMediaResponse, err
 			return nil, err
 		}
 		response.JSON200 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 401:
+		var dest UnauthenticatedError
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON401 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 403:
+		var dest ForbiddenError
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON403 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 404:
+		var dest NotFoundError
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON404 = &dest
+
+	}
+
+	return response, nil
+}
+
+// ParseGetWorkOverlayResponse parses an HTTP response from a GetWorkOverlayWithResponse call
+func ParseGetWorkOverlayResponse(rsp *http.Response) (*GetWorkOverlayResponse, error) {
+	bodyBytes, err := io.ReadAll(rsp.Body)
+	defer func() { _ = rsp.Body.Close() }()
+	if err != nil {
+		return nil, err
+	}
+
+	response := &GetWorkOverlayResponse{
+		Body:         bodyBytes,
+		HTTPResponse: rsp,
+	}
+
+	switch {
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 200:
+		var dest WorkOverlayState
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON200 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 401:
+		var dest UnauthenticatedError
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON401 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 403:
+		var dest ForbiddenError
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON403 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 404:
+		var dest NotFoundError
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON404 = &dest
+
+	}
+
+	return response, nil
+}
+
+// ParsePutWorkOverlayResponse parses an HTTP response from a PutWorkOverlayWithResponse call
+func ParsePutWorkOverlayResponse(rsp *http.Response) (*PutWorkOverlayResponse, error) {
+	bodyBytes, err := io.ReadAll(rsp.Body)
+	defer func() { _ = rsp.Body.Close() }()
+	if err != nil {
+		return nil, err
+	}
+
+	response := &PutWorkOverlayResponse{
+		Body:         bodyBytes,
+		HTTPResponse: rsp,
+	}
+
+	switch {
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 200:
+		var dest WorkOverlayState
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON200 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 400:
+		var dest ValidationError
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON400 = &dest
 
 	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 401:
 		var dest UnauthenticatedError

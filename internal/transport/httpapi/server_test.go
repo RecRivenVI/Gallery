@@ -24,6 +24,7 @@ import (
 	"github.com/RecRivenVI/gallery/internal/contract/fault"
 	"github.com/RecRivenVI/gallery/internal/contract/realtime"
 	"github.com/RecRivenVI/gallery/internal/jobs"
+	"github.com/RecRivenVI/gallery/internal/overlay"
 	"github.com/RecRivenVI/gallery/internal/platform/appdirs"
 	"github.com/RecRivenVI/gallery/internal/platform/clock"
 	"github.com/RecRivenVI/gallery/internal/platform/filesystem"
@@ -56,7 +57,7 @@ func TestGeneratedClientHealthBootstrapAndAnonymousWS(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	server := httptest.NewServer(httpapi.New(config.ModePersonal, store, fixedClock, personal, resources, nil, nil, nil, nil, logger))
+	server := httptest.NewServer(httpapi.New(config.ModePersonal, store, fixedClock, personal, resources, nil, nil, nil, nil, nil, logger))
 	defer server.Close()
 
 	client, err := api.NewClientWithResponses(server.URL)
@@ -138,8 +139,12 @@ func TestPersonalPairingIsSingleUseAndRevocationInvalidatesREST(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	overlayService, err := overlay.New(context.Background(), store.Control.SQL(), jobStore, catalogStore, fixedClock, hub)
+	if err != nil {
+		t.Fatal(err)
+	}
 	server := httptest.NewServer(httpapi.New(
-		config.ModePersonal, store, fixedClock, personal, resources, jobStore, catalogStore, scannerService, hub,
+		config.ModePersonal, store, fixedClock, personal, resources, jobStore, catalogStore, scannerService, overlayService, hub,
 		slog.New(slog.NewJSONHandler(io.Discard, nil)),
 	))
 	defer server.Close()
@@ -256,6 +261,44 @@ func TestPersonalPairingIsSingleUseAndRevocationInvalidatesREST(t *testing.T) {
 		t.Fatalf("公开 Media 查询失败: %v status=%d", err, mediaResponse.StatusCode())
 	}
 	mediaID := mediaResponse.JSON200.Media[0].Id
+	overlayResponse, err := client.PutWorkOverlayWithResponse(context.Background(), worksResponse.JSON200.Works[0].Id,
+		&api.PutWorkOverlayParams{XGalleryCSRF: exchange.JSON201.CsrfToken}, api.WorkOverlayPutRequest{
+			TitleOverride: "HTTP 覆盖标题", ManualTags: []string{"HTTP 标签"}, Hidden: false,
+			Favorite: true, Progress: 0.4,
+		}, mutation)
+	if err != nil || overlayResponse.JSON200 == nil || overlayResponse.JSON200.ProjectionJobId == nil ||
+		string(overlayResponse.JSON200.ProjectionStatus) != "pending" {
+		t.Fatalf("Overlay 同步写入失败: %v status=%d body=%s", err, overlayResponse.StatusCode(), overlayResponse.Body)
+	}
+	overlayJob := waitForJob(t, client, *overlayResponse.JSON200.ProjectionJobId)
+	if string(overlayJob.Status) != "completed" || overlayJob.SourceId != nil || overlayJob.QueryPublicationId == nil {
+		t.Fatalf("Overlay projection Job 未完成或伪造 Source: %+v", overlayJob)
+	}
+	overlaySequence := waitForWebSocketJobCompleted(t, websocketConnection, overlayJob.Id)
+	searchText, tag := "覆盖标题", "HTTP 标签"
+	searched, err := client.ListWorksWithResponse(context.Background(), &api.ListWorksParams{Q: &searchText, Tag: &tag})
+	if err != nil || searched.JSON200 == nil || len(searched.JSON200.Works) != 1 || searched.JSON200.Works[0].Title != "HTTP 覆盖标题" {
+		t.Fatalf("Overlay publication 未切换查询结果: %v status=%d body=%s", err, searched.StatusCode(), searched.Body)
+	}
+	state, err := client.GetWorkOverlayWithResponse(context.Background(), worksResponse.JSON200.Works[0].Id)
+	if err != nil || state.JSON200 == nil || string(state.JSON200.ProjectionStatus) != "published" || !state.JSON200.Favorite {
+		t.Fatalf("Overlay live/projection 状态错误: %v status=%d body=%s", err, state.StatusCode(), state.Body)
+	}
+	rescan, err := client.CreateScanJobWithResponse(context.Background(), sourceResponse.JSON201.Id, &api.CreateScanJobParams{
+		XGalleryCSRF: exchange.JSON201.CsrfToken,
+	}, mutation)
+	if err != nil || rescan.JSON202 == nil {
+		t.Fatalf("Overlay 后重扫创建失败: %v status=%d", err, rescan.StatusCode())
+	}
+	assertScanEvents(t, websocketConnection, overlaySequence, rescan.JSON202.Id)
+	rescannedJob := waitForJob(t, client, rescan.JSON202.Id)
+	if string(rescannedJob.Status) != "completed" {
+		t.Fatalf("Overlay 后重扫失败: %+v", rescannedJob)
+	}
+	rescanned, err := client.ListWorksWithResponse(context.Background(), &api.ListWorksParams{Q: &searchText, Tag: &tag})
+	if err != nil || rescanned.JSON200 == nil || len(rescanned.JSON200.Works) != 1 || rescanned.JSON200.CatalogRevision == searched.JSON200.CatalogRevision {
+		t.Fatalf("新 Catalog 未携带 control Overlay 快照: %v status=%d body=%s", err, rescanned.StatusCode(), rescanned.Body)
+	}
 	headResponse, err := client.HeadMediaContentWithResponse(context.Background(), mediaID, &api.HeadMediaContentParams{})
 	if err != nil || headResponse.StatusCode() != http.StatusOK || headResponse.HTTPResponse.Header.Get("Accept-Ranges") != "bytes" || headResponse.HTTPResponse.Header.Get("Content-Length") != fmt.Sprint(len(mediaContent)) {
 		t.Fatalf("媒体 HEAD 错误: %v status=%d headers=%v", err, headResponse.StatusCode(), headResponse.HTTPResponse.Header)
@@ -401,6 +444,21 @@ func assertScanEvents(t *testing.T, connection *websocket.Conn, previous uint64,
 		}
 		if envelope.Scope.JobID == jobID {
 			seen[envelope.EventType] = true
+		}
+	}
+}
+
+func waitForWebSocketJobCompleted(t *testing.T, connection *websocket.Conn, jobID string) uint64 {
+	t.Helper()
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	for {
+		var envelope realtime.Envelope
+		if err := wsjson.Read(ctx, connection, &envelope); err != nil {
+			t.Fatalf("等待 Overlay 事件: %v", err)
+		}
+		if envelope.Scope.JobID == jobID && envelope.EventType == realtime.EventJobCompleted {
+			return envelope.Sequence
 		}
 	}
 }

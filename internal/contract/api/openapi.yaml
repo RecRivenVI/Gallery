@@ -530,6 +530,60 @@ paths:
           $ref: "#/components/responses/ForbiddenError"
         "404":
           $ref: "#/components/responses/NotFoundError"
+  /api/v1/works/{workId}/overlay:
+    get:
+      operationId: getWorkOverlay
+      summary: 读取 control 中的用户事实及异步查询投影状态
+      parameters:
+        - name: workId
+          in: path
+          required: true
+          schema:
+            $ref: "#/components/schemas/CanonicalWorkId"
+      responses:
+        "200":
+          description: Overlay live state 与 projection 状态
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/WorkOverlayState"
+        "401":
+          $ref: "#/components/responses/UnauthenticatedError"
+        "403":
+          $ref: "#/components/responses/ForbiddenError"
+        "404":
+          $ref: "#/components/responses/NotFoundError"
+    put:
+      operationId: putWorkOverlay
+      summary: 同步替换 Overlay fact，并在查询语义变化时排队异步 projection
+      parameters:
+        - name: workId
+          in: path
+          required: true
+          schema:
+            $ref: "#/components/schemas/CanonicalWorkId"
+        - $ref: "#/components/parameters/CSRFHeader"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/WorkOverlayPutRequest"
+      responses:
+        "200":
+          description: fact 已同步持久化；projectionStatus 表明查询投影进度
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/WorkOverlayState"
+        "400":
+          $ref: "#/components/responses/ValidationError"
+        "401":
+          $ref: "#/components/responses/UnauthenticatedError"
+        "403":
+          $ref: "#/components/responses/ForbiddenError"
+        "404":
+          $ref: "#/components/responses/NotFoundError"
   /api/v1/works/{workId}/media:
     get:
       operationId: listWorkMedia
@@ -827,6 +881,8 @@ components:
         - CURSOR_INVALID
         - CURSOR_EXPIRED
         - QUERY_TOO_SHORT
+        - OVERLAY_FACT_INVALID
+        - OVERLAY_PROJECTION_FAILED
         - RULE_SCHEMA_INVALID
         - RULE_COMPILE_ERROR
         - RULE_CEL_LIMIT
@@ -855,13 +911,13 @@ components:
     Job:
       type: object
       additionalProperties: false
-      required: [id, type, sourceId, status, stage, progress, attempt, createdAt, updatedAt]
+      required: [id, type, status, stage, progress, attempt, createdAt, updatedAt]
       properties:
         id:
           $ref: "#/components/schemas/JobId"
         type:
           type: string
-          enum: [scan]
+          enum: [scan, overlay_projection]
         sourceId:
           $ref: "#/components/schemas/SourceId"
         status:
@@ -933,6 +989,56 @@ components:
         createdAt:
           type: string
           format: date-time
+    WorkOverlayPutRequest:
+      type: object
+      additionalProperties: false
+      required: [titleOverride, manualTags, hidden, favorite, progress]
+      properties:
+        titleOverride:
+          type: string
+          maxLength: 4096
+        manualTags:
+          type: array
+          maxItems: 200
+          items: {type: string, minLength: 1, maxLength: 512}
+        hidden:
+          type: boolean
+        customCoverMediaId:
+          $ref: "#/components/schemas/CanonicalMediaId"
+        favorite:
+          type: boolean
+        progress:
+          type: number
+          minimum: 0
+          maximum: 1
+    WorkOverlayState:
+      type: object
+      additionalProperties: false
+      required: [workId, titleOverride, manualTags, hidden, favorite, progress, factWatermark,
+        queryWatermark, projectedWatermark, projectionStatus]
+      properties:
+        workId:
+          $ref: "#/components/schemas/CanonicalWorkId"
+        titleOverride: {type: string}
+        manualTags:
+          type: array
+          items: {type: string}
+        hidden: {type: boolean}
+        customCoverMediaId:
+          $ref: "#/components/schemas/CanonicalMediaId"
+        favorite: {type: boolean}
+        progress: {type: number}
+        factWatermark: {type: integer, format: int64, minimum: 0}
+        queryWatermark: {type: integer, format: int64, minimum: 0}
+        projectedWatermark: {type: integer, format: int64, minimum: 0}
+        projectionStatus:
+          type: string
+          enum: [pending, published, failed]
+        projectionJobId:
+          $ref: "#/components/schemas/JobId"
+        publishedQueryPublicationId:
+          $ref: "#/components/schemas/QueryPublicationId"
+        issueCode: {type: string}
     PublishedWork:
       type: object
       additionalProperties: false

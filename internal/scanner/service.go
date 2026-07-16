@@ -134,7 +134,11 @@ func (s *Service) Execute(ctx context.Context, jobID string) error {
 	if err != nil {
 		return s.fail(ctx, job.ID, err)
 	}
-	candidate, err := s.catalog.BeginCandidate(ctx, job.ID, source.ID, s.resources.ControlWatermark())
+	overlays, controlWatermark, err := s.resources.QueryOverlaySnapshot(ctx, nil)
+	if err != nil {
+		return s.fail(ctx, job.ID, err)
+	}
+	candidate, err := s.catalog.BeginCandidate(ctx, job.ID, source.ID, controlWatermark)
 	if err != nil {
 		return s.fail(ctx, job.ID, err)
 	}
@@ -146,7 +150,10 @@ func (s *Service) Execute(ctx context.Context, jobID string) error {
 		for _, item := range work.Media {
 			filenames = append(filenames, path.Base(item.RelativePath))
 		}
-		works = append(works, catalog.WorkFact{SourceID: source.ID, LibraryID: source.LibraryID, SourceKey: work.SourceKey, Title: canonicalWork.Title, Creator: work.Creator, Tags: work.Tags, Filenames: filenames, WorkID: canonicalWork.ID})
+		works = append(works, catalog.WorkFact{SourceID: source.ID, LibraryID: source.LibraryID,
+			SourceKey: work.SourceKey, SourceTitle: canonicalWork.Title, SourceTags: work.Tags,
+			Title: canonicalWork.Title, Creator: work.Creator, Tags: work.Tags,
+			Filenames: filenames, WorkID: canonicalWork.ID})
 		for _, item := range work.Media {
 			canonicalMedia := canonicalWork.Media[item.SourceKey]
 			mediaFacts = append(mediaFacts, catalog.MediaFact{
@@ -158,6 +165,15 @@ func (s *Service) Execute(ctx context.Context, jobID string) error {
 		}
 	}
 	if err := s.catalog.Stage(ctx, candidate, works, mediaFacts); err != nil {
+		_ = s.catalog.AbortCandidate(ctx, job.ID)
+		return s.fail(ctx, job.ID, err)
+	}
+	overlayFacts := make(map[string]catalog.OverlayFact, len(overlays))
+	for workID, value := range overlays {
+		overlayFacts[workID] = catalog.OverlayFact{TitleOverride: value.TitleOverride, ManualTags: value.ManualTags,
+			Hidden: value.Hidden, CustomCoverMediaID: value.CustomCoverMediaID}
+	}
+	if err := s.catalog.ApplyCatalogCandidateOverlays(ctx, candidate, overlayFacts); err != nil {
 		_ = s.catalog.AbortCandidate(ctx, job.ID)
 		return s.fail(ctx, job.ID, err)
 	}
@@ -191,6 +207,9 @@ func (s *Service) Reconcile(ctx context.Context) error {
 		return err
 	}
 	for _, job := range nonterminal {
+		if job.Type != "scan" {
+			continue
+		}
 		publication, publicationErr := s.catalog.PublicationForJob(ctx, job.ID)
 		if publicationErr == nil && (job.Status == jobs.StatusRunning || job.Status == jobs.StatusPublishing) {
 			recovered, recoverErr := s.jobs.RecoverCompleted(ctx, job.ID, publication.ID)
@@ -215,6 +234,9 @@ func (s *Service) Reconcile(ctx context.Context) error {
 		return err
 	}
 	for _, job := range completed {
+		if job.Type != "scan" {
+			continue
+		}
 		if _, publicationErr := s.catalog.PublicationForJob(ctx, job.ID); isNotFound(publicationErr) {
 			repaired, repairErr := s.jobs.MarkNeedsRepair(ctx, job.ID, string(fault.CodeCatalogPublicationAbsent))
 			if repairErr != nil {
