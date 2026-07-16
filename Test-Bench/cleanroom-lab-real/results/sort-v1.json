@@ -1,0 +1,77 @@
+{
+  "schema_version": 1,
+  "sort_protocol_version": 1,
+  "nulls": "last",
+  "tie_break": "ORDER BY sort_key, work_id",
+  "reading_order_default": false,
+  "items": [
+    {
+      "label": "file1",
+      "work_id": "w00",
+      "is_null": false,
+      "key_hex": "01660169016c016500000000013100000001"
+    },
+    {
+      "label": "Ｆｉｌｅ１",
+      "work_id": "w01",
+      "is_null": false,
+      "key_hex": "01660169016c016500000000013100000001"
+    },
+    {
+      "label": "file2",
+      "work_id": "w02",
+      "is_null": false,
+      "key_hex": "01660169016c016500000000013200000001"
+    },
+    {
+      "label": "file10",
+      "work_id": "w10",
+      "is_null": false,
+      "key_hex": "01660169016c01650000000002313000000002"
+    },
+    {
+      "label": "あべ",
+      "work_id": "w-ja",
+      "is_null": false,
+      "key_hex": "01e3818201e381b9"
+    },
+    {
+      "label": "安部",
+      "work_id": "w-zh-1",
+      "is_null": false,
+      "key_hex": "01e5ae8901e983a8"
+    },
+    {
+      "label": "阿部",
+      "work_id": "w-zh-2",
+      "is_null": false,
+      "key_hex": "01e998bf01e983a8"
+    },
+    {
+      "label": "😀2",
+      "work_id": "w-e2",
+      "is_null": false,
+      "key_hex": "01f09f988000000000013200000001"
+    },
+    {
+      "label": "😀10",
+      "work_id": "w-e10",
+      "is_null": false,
+      "key_hex": "01f09f98800000000002313000000002"
+    },
+    {
+      "label": "",
+      "work_id": "w-null",
+      "is_null": true,
+      "key_hex": ""
+    }
+  ],
+  "checks": {
+    "case_fold_equivalent": true,
+    "emoji_natural_order": true,
+    "natural_2_before_10": true,
+    "nfkc_fullwidth_equivalent": true,
+    "nulls_last": true,
+    "stable_id_breaks_equal_keys": true
+  }
+}

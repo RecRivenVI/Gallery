@@ -1,0 +1,68 @@
+{
+  "schema_version": 1,
+  "observations": [
+    {
+      "operation": "original",
+      "logical_media_id": "media-a-1",
+      "same_path": true,
+      "same_file_id": true,
+      "same_quick_hash": true,
+      "same_content_blob": true
+    },
+    {
+      "operation": "same-volume-rename",
+      "logical_media_id": "media-a-1",
+      "same_path": false,
+      "same_file_id": true,
+      "same_quick_hash": true,
+      "same_content_blob": true
+    },
+    {
+      "operation": "same-volume-move",
+      "logical_media_id": "media-a-1",
+      "same_path": false,
+      "same_file_id": true,
+      "same_quick_hash": true,
+      "same_content_blob": true
+    },
+    {
+      "operation": "copy-to-second-work",
+      "logical_media_id": "media-b-1",
+      "same_path": false,
+      "same_file_id": false,
+      "same_quick_hash": true,
+      "same_content_blob": true
+    },
+    {
+      "operation": "duplicate-occurrence-same-work",
+      "logical_media_id": "media-b-2",
+      "same_path": false,
+      "same_file_id": false,
+      "same_quick_hash": true,
+      "same_content_blob": true
+    },
+    {
+      "operation": "hardlink",
+      "logical_media_id": "media-b-3",
+      "same_path": false,
+      "same_file_id": true,
+      "same_quick_hash": true,
+      "same_content_blob": true
+    },
+    {
+      "operation": "symlink",
+      "logical_media_id": "media-b-4",
+      "same_path": false,
+      "same_file_id": true,
+      "same_quick_hash": true,
+      "same_content_blob": true
+    }
+  ],
+  "quick_collision_proved": true,
+  "same_blob_two_works": true,
+  "duplicate_media_same_work": true,
+  "hardlink_supported": true,
+  "symlink_supported": true,
+  "cross_volume_actually_run": false,
+  "file_identity_provider": "unix-device-inode"
+}

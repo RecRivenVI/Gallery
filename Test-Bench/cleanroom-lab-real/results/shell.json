@@ -1,0 +1,11 @@
+{
+  "schema_version": 1,
+  "BackendIndependent": true,
+  "DynamicPort": true,
+  "HealthReachable": true,
+  "SecondInstanceRejected": true,
+  "RestartReconnect": true,
+  "DescriptorAtomic": true,
+  "FirstPort": 1045,
+  "SecondPort": 1047
+}

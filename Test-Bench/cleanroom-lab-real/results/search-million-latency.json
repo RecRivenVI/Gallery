@@ -1,0 +1,93 @@
+{
+  "SchemaVersion": 1,
+  "Metrics": [
+    {
+      "Engine": "fts5",
+      "Query": "星空",
+      "Kind": "broad-cjk",
+      "Runs": 30,
+      "Limit": 200,
+      "Verified": 200,
+      "P50US": 512,
+      "P95US": 1044,
+      "Hits": 200
+    },
+    {
+      "Engine": "bleve",
+      "Query": "星空",
+      "Kind": "broad-cjk",
+      "Runs": 30,
+      "Limit": 200,
+      "Verified": 333333,
+      "P50US": 16564,
+      "P95US": 17981,
+      "Hits": 333333
+    },
+    {
+      "Engine": "fts5",
+      "Query": "mid",
+      "Kind": "broad-filename",
+      "Runs": 30,
+      "Limit": 200,
+      "Verified": 200,
+      "P50US": 502,
+      "P95US": 1007,
+      "Hits": 200
+    },
+    {
+      "Engine": "bleve",
+      "Query": "mid",
+      "Kind": "broad-filename",
+      "Runs": 30,
+      "Limit": 200,
+      "Verified": 0,
+      "P50US": 0,
+      "P95US": 0,
+      "Hits": 0
+    },
+    {
+      "Engine": "fts5",
+      "Query": "星空机械 作品 00000120",
+      "Kind": "selective-cjk",
+      "Runs": 30,
+      "Limit": 200,
+      "Verified": 1,
+      "P50US": 502,
+      "P95US": 725,
+      "Hits": 1
+    },
+    {
+      "Engine": "bleve",
+      "Query": "星空机械 作品 00000120",
+      "Kind": "selective-cjk",
+      "Runs": 30,
+      "Limit": 200,
+      "Verified": 333333,
+      "P50US": 37187,
+      "P95US": 39033,
+      "Hits": 333333
+    },
+    {
+      "Engine": "fts5",
+      "Query": "abc_mid_xyz_00000123",
+      "Kind": "selective-filename",
+      "Runs": 30,
+      "Limit": 200,
+      "Verified": 1,
+      "P50US": 999,
+      "P95US": 1665,
+      "Hits": 1
+    },
+    {
+      "Engine": "bleve",
+      "Query": "abc_mid_xyz_00000123",
+      "Kind": "selective-filename",
+      "Runs": 30,
+      "Limit": 200,
+      "Verified": 1,
+      "P50US": 0,
+      "P95US": 0,
+      "Hits": 1
+    }
+  ]
+}

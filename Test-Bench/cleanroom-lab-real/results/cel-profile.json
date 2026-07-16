@@ -1,0 +1,57 @@
+{
+  "SchemaVersion": 1,
+  "ProfileVersion": 1,
+  "MaxExpressionBytes": 4096,
+  "MaxRuntimeCost": 10000,
+  "Checks": [
+    {
+      "ID": "cover-name",
+      "Expression": "filename.startsWith(\"cover.\")",
+      "Compiled": true,
+      "Evaluated": true,
+      "Result": true,
+      "ErrorCode": ""
+    },
+    {
+      "ID": "tag-exists",
+      "Expression": "meta.tags.exists(t, t == \"R-18\")",
+      "Compiled": true,
+      "Evaluated": true,
+      "Result": true,
+      "ErrorCode": ""
+    },
+    {
+      "ID": "attachment-predicate",
+      "Expression": "meta.attachments.exists(a, a.name == \"cover\" \u0026\u0026 a.type == \"image\")",
+      "Compiled": true,
+      "Evaluated": true,
+      "Result": true,
+      "ErrorCode": ""
+    },
+    {
+      "ID": "service-conditional",
+      "Expression": "meta.service == \"fanbox\" ? filename.startsWith(\"cover.\") : true",
+      "Compiled": true,
+      "Evaluated": true,
+      "Result": true,
+      "ErrorCode": ""
+    },
+    {
+      "ID": "invalid-function",
+      "Expression": "meta.shell(\"cmd\")",
+      "Compiled": false,
+      "Evaluated": false,
+      "Result": false,
+      "ErrorCode": "COMPILE_ERROR"
+    }
+  ],
+  "ForbiddenCapabilities": [
+    "file-io",
+    "network",
+    "process",
+    "clock",
+    "random",
+    "reflection",
+    "custom-host-functions"
+  ]
+}

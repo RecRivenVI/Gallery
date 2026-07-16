@@ -1,0 +1,15 @@
+{
+  "schema_version": 1,
+  "OS": "windows",
+  "Arch": "amd64",
+  "CaseDistinct": false,
+  "NFCNFDistinct": true,
+  "Hardlink": true,
+  "Symlink": true,
+  "LongPath": true,
+  "TimestampDeltaNS": 89,
+  "FFMPEGFound": true,
+  "FFprobeFound": true,
+  "PathSeparator": "\\",
+  "RuntimeExecuted": true
+}
