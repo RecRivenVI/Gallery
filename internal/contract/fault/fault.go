@@ -32,6 +32,8 @@ const (
 	CodePairingExpired           Code = "PAIRING_EXPIRED"
 	CodeSourcePathInvalid        Code = "SOURCE_PATH_INVALID"
 	CodeRuleParameterInvalid     Code = "RULE_PARAMETER_INVALID"
+	CodeJobStateConflict         Code = "JOB_STATE_CONFLICT"
+	CodeScanAlreadyRunning       Code = "SCAN_ALREADY_RUNNING"
 )
 
 // Error 在进程内保留 cause，但对外序列化时只应暴露稳定字段。
