@@ -141,6 +141,7 @@ const (
 	PAIRINGINVALID            ErrorCode = "PAIRING_INVALID"
 	PATHESCAPE                ErrorCode = "PATH_ESCAPE"
 	PROCESSINTERRUPTED        ErrorCode = "PROCESS_INTERRUPTED"
+	QUERYTOOSHORT             ErrorCode = "QUERY_TOO_SHORT"
 	RANGEINVALID              ErrorCode = "RANGE_INVALID"
 	RULECELLIMIT              ErrorCode = "RULE_CEL_LIMIT"
 	RULECOMPILEERROR          ErrorCode = "RULE_COMPILE_ERROR"
@@ -208,6 +209,8 @@ func (e ErrorCode) Valid() bool {
 	case PATHESCAPE:
 		return true
 	case PROCESSINTERRUPTED:
+		return true
+	case QUERYTOOSHORT:
 		return true
 	case RANGEINVALID:
 		return true
@@ -361,6 +364,24 @@ const (
 func (e WorkListResponseSortProtocolVersion) Valid() bool {
 	switch e {
 	case WorkListResponseSortProtocolVersionN1:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for ListWorksParamsSortDirection.
+const (
+	Asc  ListWorksParamsSortDirection = "asc"
+	Desc ListWorksParamsSortDirection = "desc"
+)
+
+// Valid indicates whether the value is a known member of the ListWorksParamsSortDirection enum.
+func (e ListWorksParamsSortDirection) Valid() bool {
+	switch e {
+	case Asc:
+		return true
+	case Desc:
 		return true
 	default:
 		return false
@@ -537,9 +558,11 @@ type PublishedMedia struct {
 
 // PublishedWork defines model for PublishedWork.
 type PublishedWork struct {
+	Creator            string             `json:"creator"`
 	Id                 CanonicalWorkId    `json:"id"`
 	MediaCount         int                `json:"mediaCount"`
 	QueryPublicationId QueryPublicationId `json:"queryPublicationId"`
+	Tags               []string           `json:"tags"`
 	Title              string             `json:"title"`
 }
 
@@ -709,9 +732,12 @@ type SourceRuleBindingId = string
 
 // WorkListResponse defines model for WorkListResponse.
 type WorkListResponse struct {
-	QueryPublicationId  QueryPublicationId                  `json:"queryPublicationId"`
-	SortProtocolVersion WorkListResponseSortProtocolVersion `json:"sortProtocolVersion"`
-	Works               []PublishedWork                     `json:"works"`
+	CatalogRevision           string                              `json:"catalogRevision"`
+	NextCursor                *string                             `json:"nextCursor,omitempty"`
+	OverlayProjectionRevision string                              `json:"overlayProjectionRevision"`
+	QueryPublicationId        QueryPublicationId                  `json:"queryPublicationId"`
+	SortProtocolVersion       WorkListResponseSortProtocolVersion `json:"sortProtocolVersion"`
+	Works                     []PublishedWork                     `json:"works"`
 }
 
 // WorkListResponseSortProtocolVersion defines model for WorkListResponse.SortProtocolVersion.
@@ -821,6 +847,21 @@ type CreateSourceParams struct {
 type CreateScanJobParams struct {
 	XGalleryCSRF CSRFHeader `json:"X-Gallery-CSRF"`
 }
+
+// ListWorksParams defines parameters for ListWorks.
+type ListWorksParams struct {
+	Q                  *string                       `form:"q,omitempty" json:"q,omitempty"`
+	Tag                *string                       `form:"tag,omitempty" json:"tag,omitempty"`
+	LibraryId          *LibraryId                    `form:"libraryId,omitempty" json:"libraryId,omitempty"`
+	SourceId           *SourceId                     `form:"sourceId,omitempty" json:"sourceId,omitempty"`
+	SortDirection      *ListWorksParamsSortDirection `form:"sortDirection,omitempty" json:"sortDirection,omitempty"`
+	Limit              *int                          `form:"limit,omitempty" json:"limit,omitempty"`
+	Cursor             *string                       `form:"cursor,omitempty" json:"cursor,omitempty"`
+	QueryPublicationId *QueryPublicationId           `form:"queryPublicationId,omitempty" json:"queryPublicationId,omitempty"`
+}
+
+// ListWorksParamsSortDirection defines parameters for ListWorks.
+type ListWorksParamsSortDirection string
 
 // CreateLibraryJSONRequestBody defines body for CreateLibrary for application/json ContentType.
 type CreateLibraryJSONRequestBody = LibraryCreateRequest
@@ -1013,7 +1054,7 @@ type ClientInterface interface {
 	CreateScanJob(ctx context.Context, sourceId SourceId, params *CreateScanJobParams, reqEditors ...RequestEditorFn) (*http.Response, error)
 
 	// ListWorks request
-	ListWorks(ctx context.Context, reqEditors ...RequestEditorFn) (*http.Response, error)
+	ListWorks(ctx context.Context, params *ListWorksParams, reqEditors ...RequestEditorFn) (*http.Response, error)
 
 	// GetWork request
 	GetWork(ctx context.Context, workId CanonicalWorkId, reqEditors ...RequestEditorFn) (*http.Response, error)
@@ -1418,8 +1459,8 @@ func (c *Client) CreateScanJob(ctx context.Context, sourceId SourceId, params *C
 	return c.Client.Do(req)
 }
 
-func (c *Client) ListWorks(ctx context.Context, reqEditors ...RequestEditorFn) (*http.Response, error) {
-	req, err := NewListWorksRequest(c.Server)
+func (c *Client) ListWorks(ctx context.Context, params *ListWorksParams, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewListWorksRequest(c.Server, params)
 	if err != nil {
 		return nil, err
 	}
@@ -2498,7 +2539,7 @@ func NewCreateScanJobRequest(server string, sourceId SourceId, params *CreateSca
 }
 
 // NewListWorksRequest generates requests for ListWorks
-func NewListWorksRequest(server string) (*http.Request, error) {
+func NewListWorksRequest(server string, params *ListWorksParams) (*http.Request, error) {
 	var err error
 
 	serverURL, err := url.Parse(server)
@@ -2514,6 +2555,117 @@ func NewListWorksRequest(server string) (*http.Request, error) {
 	queryURL, err := serverURL.Parse(operationPath)
 	if err != nil {
 		return nil, err
+	}
+
+	if params != nil {
+		// queryValues collects non-styled parameters (passthrough, JSON)
+		// that are safe to round-trip through url.Values.Encode().
+		queryValues := queryURL.Query()
+		// rawQueryFragments collects pre-encoded query fragments from
+		// styled parameters, preserving literal commas as delimiters
+		// per the OpenAPI spec (e.g. "color=blue,black,brown").
+		var rawQueryFragments []string
+
+		if params.Q != nil {
+
+			if queryFrag, err := runtime.StyleParamWithOptions("form", true, "q", *params.Q, runtime.StyleParamOptions{ParamLocation: runtime.ParamLocationQuery, Type: "string", Format: ""}); err != nil {
+				return nil, err
+			} else {
+				for _, qp := range strings.Split(queryFrag, "&") {
+					rawQueryFragments = append(rawQueryFragments, qp)
+				}
+			}
+
+		}
+
+		if params.Tag != nil {
+
+			if queryFrag, err := runtime.StyleParamWithOptions("form", true, "tag", *params.Tag, runtime.StyleParamOptions{ParamLocation: runtime.ParamLocationQuery, Type: "string", Format: ""}); err != nil {
+				return nil, err
+			} else {
+				for _, qp := range strings.Split(queryFrag, "&") {
+					rawQueryFragments = append(rawQueryFragments, qp)
+				}
+			}
+
+		}
+
+		if params.LibraryId != nil {
+
+			if queryFrag, err := runtime.StyleParamWithOptions("form", true, "libraryId", *params.LibraryId, runtime.StyleParamOptions{ParamLocation: runtime.ParamLocationQuery, Type: "string", Format: ""}); err != nil {
+				return nil, err
+			} else {
+				for _, qp := range strings.Split(queryFrag, "&") {
+					rawQueryFragments = append(rawQueryFragments, qp)
+				}
+			}
+
+		}
+
+		if params.SourceId != nil {
+
+			if queryFrag, err := runtime.StyleParamWithOptions("form", true, "sourceId", *params.SourceId, runtime.StyleParamOptions{ParamLocation: runtime.ParamLocationQuery, Type: "string", Format: ""}); err != nil {
+				return nil, err
+			} else {
+				for _, qp := range strings.Split(queryFrag, "&") {
+					rawQueryFragments = append(rawQueryFragments, qp)
+				}
+			}
+
+		}
+
+		if params.SortDirection != nil {
+
+			if queryFrag, err := runtime.StyleParamWithOptions("form", true, "sortDirection", *params.SortDirection, runtime.StyleParamOptions{ParamLocation: runtime.ParamLocationQuery, Type: "string", Format: ""}); err != nil {
+				return nil, err
+			} else {
+				for _, qp := range strings.Split(queryFrag, "&") {
+					rawQueryFragments = append(rawQueryFragments, qp)
+				}
+			}
+
+		}
+
+		if params.Limit != nil {
+
+			if queryFrag, err := runtime.StyleParamWithOptions("form", true, "limit", *params.Limit, runtime.StyleParamOptions{ParamLocation: runtime.ParamLocationQuery, Type: "integer", Format: ""}); err != nil {
+				return nil, err
+			} else {
+				for _, qp := range strings.Split(queryFrag, "&") {
+					rawQueryFragments = append(rawQueryFragments, qp)
+				}
+			}
+
+		}
+
+		if params.Cursor != nil {
+
+			if queryFrag, err := runtime.StyleParamWithOptions("form", true, "cursor", *params.Cursor, runtime.StyleParamOptions{ParamLocation: runtime.ParamLocationQuery, Type: "string", Format: ""}); err != nil {
+				return nil, err
+			} else {
+				for _, qp := range strings.Split(queryFrag, "&") {
+					rawQueryFragments = append(rawQueryFragments, qp)
+				}
+			}
+
+		}
+
+		if params.QueryPublicationId != nil {
+
+			if queryFrag, err := runtime.StyleParamWithOptions("form", true, "queryPublicationId", *params.QueryPublicationId, runtime.StyleParamOptions{ParamLocation: runtime.ParamLocationQuery, Type: "string", Format: ""}); err != nil {
+				return nil, err
+			} else {
+				for _, qp := range strings.Split(queryFrag, "&") {
+					rawQueryFragments = append(rawQueryFragments, qp)
+				}
+			}
+
+		}
+
+		if encoded := queryValues.Encode(); encoded != "" {
+			rawQueryFragments = append(rawQueryFragments, encoded)
+		}
+		queryURL.RawQuery = strings.Join(rawQueryFragments, "&")
 	}
 
 	req, err := http.NewRequest(http.MethodGet, queryURL.String(), nil)
@@ -2726,7 +2878,7 @@ type ClientWithResponsesInterface interface {
 	CreateScanJobWithResponse(ctx context.Context, sourceId SourceId, params *CreateScanJobParams, reqEditors ...RequestEditorFn) (*CreateScanJobResponse, error)
 
 	// ListWorksWithResponse request
-	ListWorksWithResponse(ctx context.Context, reqEditors ...RequestEditorFn) (*ListWorksResponse, error)
+	ListWorksWithResponse(ctx context.Context, params *ListWorksParams, reqEditors ...RequestEditorFn) (*ListWorksResponse, error)
 
 	// GetWorkWithResponse request
 	GetWorkWithResponse(ctx context.Context, workId CanonicalWorkId, reqEditors ...RequestEditorFn) (*GetWorkResponse, error)
@@ -3533,9 +3685,11 @@ type ListWorksResponse struct {
 	Body         []byte
 	HTTPResponse *http.Response
 	JSON200      *WorkListResponse
+	JSON400      *ValidationError
 	JSON401      *UnauthenticatedError
 	JSON403      *ForbiddenError
 	JSON404      *NotFoundError
+	JSON409      *ConflictError
 }
 
 // Status returns HTTPResponse.Status
@@ -3917,8 +4071,8 @@ func (c *ClientWithResponses) CreateScanJobWithResponse(ctx context.Context, sou
 }
 
 // ListWorksWithResponse request returning *ListWorksResponse
-func (c *ClientWithResponses) ListWorksWithResponse(ctx context.Context, reqEditors ...RequestEditorFn) (*ListWorksResponse, error) {
-	rsp, err := c.ListWorks(ctx, reqEditors...)
+func (c *ClientWithResponses) ListWorksWithResponse(ctx context.Context, params *ListWorksParams, reqEditors ...RequestEditorFn) (*ListWorksResponse, error) {
+	rsp, err := c.ListWorks(ctx, params, reqEditors...)
 	if err != nil {
 		return nil, err
 	}
@@ -5094,6 +5248,13 @@ func ParseListWorksResponse(rsp *http.Response) (*ListWorksResponse, error) {
 		}
 		response.JSON200 = &dest
 
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 400:
+		var dest ValidationError
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON400 = &dest
+
 	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 401:
 		var dest UnauthenticatedError
 		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
@@ -5114,6 +5275,13 @@ func ParseListWorksResponse(rsp *http.Response) (*ListWorksResponse, error) {
 			return nil, err
 		}
 		response.JSON404 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 409:
+		var dest ConflictError
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON409 = &dest
 
 	}
 

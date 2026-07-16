@@ -30,7 +30,7 @@ func openTestStore(t *testing.T) (*Store, appdirs.Dirs) {
 
 func TestIndependentWALMigrationsAndBackup(t *testing.T) {
 	store, dirs := openTestStore(t)
-	wantVersions := map[Role]int{RoleControl: 5, RoleCatalog: 2}
+	wantVersions := map[Role]int{RoleControl: 6, RoleCatalog: 3}
 	for _, database := range []*Database{store.Control, store.Catalog} {
 		var version int
 		if err := database.db.QueryRow("PRAGMA user_version").Scan(&version); err != nil {
@@ -74,6 +74,68 @@ func TestMigrationChecksumDetectsHistoryRewrite(t *testing.T) {
 	var structured *fault.Error
 	if !errors.As(err, &structured) || structured.Code != fault.CodeMigrationFailed {
 		t.Fatalf("migration 篡改错误 = %v", err)
+	}
+}
+
+func TestQuerySnapshotMigrationUpgradesPopulatedV2Catalog(t *testing.T) {
+	ctx := context.Background()
+	path := filepath.Join(t.TempDir(), "catalog.db")
+	db, err := sql.Open("sqlite", "file:"+filepath.ToSlash(path)+"?_pragma=foreign_keys(ON)")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.ExecContext(ctx, `CREATE TABLE gallery_schema_migrations (
+version INTEGER PRIMARY KEY NOT NULL, name TEXT NOT NULL, sha256 TEXT NOT NULL,
+applied_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))) STRICT`); err != nil {
+		t.Fatal(err)
+	}
+	sub, err := fs.Sub(migrationFiles, "migrations/catalog")
+	if err != nil {
+		t.Fatal(err)
+	}
+	migrations, err := readMigrations(sub)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, item := range migrations[:2] {
+		if err := applyMigration(ctx, db, item); err != nil {
+			t.Fatal(err)
+		}
+	}
+	_, err = db.ExecContext(ctx, `
+INSERT INTO catalog_revisions VALUES ('cat_old', 'job_old', 'src_old', 'published', 1, 2);
+INSERT INTO overlay_projection_revisions VALUES ('ovr_old', 'cat_old', 0, 'published', 1, 2);
+INSERT INTO query_publications VALUES ('qpub_old', 'cat_old', 'ovr_old', 'job_old', 0, 2);
+INSERT INTO active_query_publication VALUES (1, 'qpub_old');
+INSERT INTO source_works VALUES ('cat_old', 'src_old', 'work-key', '旧标题');
+INSERT INTO work_projections VALUES ('cat_old', 'ovr_old', 'wrk_old', 'src_old', 'work-key', '旧标题');`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	upgraded, err := openDatabase(ctx, RoleCatalog, path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer upgraded.Close()
+	var title, normalized string
+	if err := upgraded.db.QueryRowContext(ctx, `SELECT w.title, s.normalized_original_text
+FROM work_projections w JOIN work_search s
+ON s.catalog_revision_id=w.catalog_revision_id AND s.overlay_revision_id=w.overlay_revision_id AND s.work_id=w.work_id
+WHERE w.work_id='wrk_old'`).Scan(&title, &normalized); err != nil {
+		t.Fatal(err)
+	}
+	if title != "旧标题" || normalized == "" {
+		t.Fatalf("升级未保留并索引既有 projection: title=%q normalized=%q", title, normalized)
+	}
+	if _, err := upgraded.db.ExecContext(ctx, `
+INSERT INTO catalog_revisions VALUES ('cat_new', 'job_new', 'src_new', 'published', 3, 4);
+INSERT INTO overlay_projection_revisions VALUES ('ovr_new', 'cat_new', 0, 'published', 3, 4);
+INSERT INTO query_publications VALUES ('qpub_bad', 'cat_old', 'ovr_new', 'job_bad', 0, 4)`); err == nil {
+		t.Fatal("schema 接受了不合法的 catalog/overlay revision 组合")
 	}
 }
 

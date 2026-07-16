@@ -480,7 +480,16 @@ paths:
   /api/v1/works:
     get:
       operationId: listWorks
-      summary: 从当前 publication 查询 WorkProjection
+      summary: 在合法双 revision publication 上搜索、过滤、排序和快照分页
+      parameters:
+        - {name: q, in: query, required: false, schema: {type: string, maxLength: 4096}}
+        - {name: tag, in: query, required: false, schema: {type: string, maxLength: 512}}
+        - {name: libraryId, in: query, required: false, schema: {$ref: "#/components/schemas/LibraryId"}}
+        - {name: sourceId, in: query, required: false, schema: {$ref: "#/components/schemas/SourceId"}}
+        - {name: sortDirection, in: query, required: false, schema: {type: string, enum: [asc, desc], default: asc}}
+        - {name: limit, in: query, required: false, schema: {type: integer, minimum: 1, maximum: 200, default: 50}}
+        - {name: cursor, in: query, required: false, schema: {type: string, maxLength: 16384}}
+        - {name: queryPublicationId, in: query, required: false, schema: {$ref: "#/components/schemas/QueryPublicationId"}}
       responses:
         "200":
           description: 当前快照中的作品
@@ -488,12 +497,16 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/WorkListResponse"
+        "400":
+          $ref: "#/components/responses/ValidationError"
         "401":
           $ref: "#/components/responses/UnauthenticatedError"
         "403":
           $ref: "#/components/responses/ForbiddenError"
         "404":
           $ref: "#/components/responses/NotFoundError"
+        "409":
+          $ref: "#/components/responses/ConflictError"
   /api/v1/works/{workId}:
     get:
       operationId: getWork
@@ -813,6 +826,7 @@ components:
         - BACKUP_FAILED
         - CURSOR_INVALID
         - CURSOR_EXPIRED
+        - QUERY_TOO_SHORT
         - RULE_SCHEMA_INVALID
         - RULE_COMPILE_ERROR
         - RULE_CEL_LIMIT
@@ -922,12 +936,17 @@ components:
     PublishedWork:
       type: object
       additionalProperties: false
-      required: [id, title, mediaCount, queryPublicationId]
+      required: [id, title, creator, tags, mediaCount, queryPublicationId]
       properties:
         id:
           $ref: "#/components/schemas/CanonicalWorkId"
         title:
           type: string
+        creator:
+          type: string
+        tags:
+          type: array
+          items: {type: string}
         mediaCount:
           type: integer
           minimum: 0
@@ -936,13 +955,19 @@ components:
     WorkListResponse:
       type: object
       additionalProperties: false
-      required: [queryPublicationId, sortProtocolVersion, works]
+      required: [queryPublicationId, catalogRevision, overlayProjectionRevision, sortProtocolVersion, works]
       properties:
         queryPublicationId:
           $ref: "#/components/schemas/QueryPublicationId"
         sortProtocolVersion:
           type: integer
           enum: [1]
+        catalogRevision:
+          type: string
+        overlayProjectionRevision:
+          type: string
+        nextCursor:
+          type: string
         works:
           type: array
           items:

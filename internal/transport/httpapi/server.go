@@ -2,6 +2,7 @@ package httpapi
 
 import (
 	"bytes"
+	"context"
 	"crypto/rand"
 	"encoding/hex"
 	"encoding/json"
@@ -19,11 +20,12 @@ import (
 	"github.com/RecRivenVI/gallery/internal/catalog"
 	"github.com/RecRivenVI/gallery/internal/config"
 	"github.com/RecRivenVI/gallery/internal/contract/fault"
-	"github.com/RecRivenVI/gallery/internal/contract/query"
+	contractquery "github.com/RecRivenVI/gallery/internal/contract/query"
 	"github.com/RecRivenVI/gallery/internal/contract/realtime"
 	"github.com/RecRivenVI/gallery/internal/jobs"
 	"github.com/RecRivenVI/gallery/internal/media"
 	"github.com/RecRivenVI/gallery/internal/ports"
+	queryservice "github.com/RecRivenVI/gallery/internal/query"
 	"github.com/RecRivenVI/gallery/internal/rules"
 	"github.com/RecRivenVI/gallery/internal/scanner"
 	"github.com/RecRivenVI/gallery/internal/storage"
@@ -42,6 +44,7 @@ type Server struct {
 	scanner *scanner.Service
 	hub     *realtime.Hub
 	rules   *rules.Lifecycle
+	query   *queryservice.Service
 }
 
 func New(mode config.Mode, store *storage.Store, clock ports.Clock, personal *auth.Personal, resources *application.Resources, jobStore *jobs.Store, catalogStore *catalog.Store, scannerService *scanner.Service, hub *realtime.Hub, logger *slog.Logger) http.Handler {
@@ -52,7 +55,11 @@ func New(mode config.Mode, store *storage.Store, clock ports.Clock, personal *au
 	if err != nil {
 		panic(fmt.Sprintf("初始化规则生命周期: %v", err))
 	}
-	server := &Server{mode: mode, store: store, clock: clock, auth: personal, data: resources, jobs: jobStore, catalog: catalogStore, scanner: scannerService, hub: hub, logger: logger, rules: ruleLifecycle}
+	queryService, err := queryservice.NewService(context.Background(), store.Control.SQL(), store.Catalog.SQL(), clock, nil)
+	if err != nil {
+		panic(fmt.Sprintf("初始化查询服务: %v", err))
+	}
+	server := &Server{mode: mode, store: store, clock: clock, auth: personal, data: resources, jobs: jobStore, catalog: catalogStore, scanner: scannerService, hub: hub, logger: logger, rules: ruleLifecycle, query: queryService}
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /api/v1/health", server.health)
 	mux.HandleFunc("GET /api/v1/bootstrap", server.bootstrap)
@@ -234,7 +241,7 @@ func (s *Server) bootstrap(w http.ResponseWriter, r *http.Request) {
 		EffectiveCapabilities: []string{}, CsrfToken: s.auth.BootstrapCSRF(),
 		ApiVersion:               api.BootstrapResponseApiVersionV1,
 		WebsocketProtocolVersion: api.BootstrapResponseWebsocketProtocolVersion(realtime.ProtocolVersion),
-		SortProtocolVersion:      api.BootstrapResponseSortProtocolVersion(query.SortProtocolVersion),
+		SortProtocolVersion:      api.BootstrapResponseSortProtocolVersion(contractquery.SortProtocolVersion),
 		RuleSchemaVersion:        api.BootstrapResponseRuleSchemaVersion(rules.RuleSchemaVersion),
 	}
 	if session, err := s.authenticate(r); err == nil {
@@ -524,20 +531,46 @@ func (s *Server) getCurrentQueryPublication(w http.ResponseWriter, r *http.Reque
 }
 
 func (s *Server) listWorks(w http.ResponseWriter, r *http.Request) {
-	if _, err := s.requireCapability(r, "library.read"); err != nil {
-		s.writeRequestError(w, err)
-		return
-	}
-	publication, works, err := s.catalog.ListWorks(r.Context())
+	session, err := s.requireCapability(r, "library.read")
 	if err != nil {
 		s.writeRequestError(w, err)
 		return
 	}
-	items := make([]api.PublishedWork, 0, len(works))
-	for _, work := range works {
-		items = append(items, workDTO(publication, work))
+	limit := 0
+	if raw := r.URL.Query().Get("limit"); raw != "" {
+		limit, err = strconv.Atoi(raw)
+		if err != nil {
+			s.writeRequestError(w, fault.WithField(fault.CodeValidation, "limit", err))
+			return
+		}
 	}
-	writeJSON(w, http.StatusOK, api.WorkListResponse{QueryPublicationId: publication.ID, SortProtocolVersion: api.WorkListResponseSortProtocolVersion(query.SortProtocolVersion), Works: items})
+	result, err := s.query.Search(r.Context(), queryservice.Request{
+		Search: r.URL.Query().Get("q"), Tag: r.URL.Query().Get("tag"),
+		LibraryID: r.URL.Query().Get("libraryId"), SourceID: r.URL.Query().Get("sourceId"),
+		SortDirection: r.URL.Query().Get("sortDirection"), Limit: limit, Cursor: r.URL.Query().Get("cursor"),
+		QueryPublicationID: r.URL.Query().Get("queryPublicationId"),
+		AuthorizationScope: queryservice.AuthorizationScope(session.PrincipalID, session.Capabilities),
+	})
+	if err != nil {
+		s.writeRequestError(w, err)
+		return
+	}
+	items := make([]api.PublishedWork, 0, len(result.Items))
+	for _, work := range result.Items {
+		items = append(items, api.PublishedWork{
+			Id: work.ID, Title: work.Title, Creator: work.Creator, Tags: work.Tags,
+			MediaCount: work.MediaCount, QueryPublicationId: result.QueryPublicationID,
+		})
+	}
+	response := api.WorkListResponse{
+		QueryPublicationId: result.QueryPublicationID, CatalogRevision: result.CatalogRevision,
+		OverlayProjectionRevision: result.OverlayProjectionRevision,
+		SortProtocolVersion:       api.WorkListResponseSortProtocolVersion(result.SortProtocolVersion), Works: items,
+	}
+	if result.NextCursor != "" {
+		response.NextCursor = &result.NextCursor
+	}
+	writeJSON(w, http.StatusOK, response)
 }
 
 func (s *Server) getWork(w http.ResponseWriter, r *http.Request) {
@@ -704,7 +737,10 @@ func publicationDTO(value catalog.Publication) api.QueryPublication {
 }
 
 func workDTO(publication catalog.Publication, value catalog.Work) api.PublishedWork {
-	return api.PublishedWork{Id: value.ID, Title: value.Title, MediaCount: value.MediaCount, QueryPublicationId: publication.ID}
+	return api.PublishedWork{
+		Id: value.ID, Title: value.Title, Creator: value.Creator, Tags: value.Tags,
+		MediaCount: value.MediaCount, QueryPublicationId: publication.ID,
+	}
 }
 
 func mediaDTO(publication catalog.Publication, value catalog.Media) api.PublishedMedia {
@@ -793,7 +829,9 @@ func statusForFault(err error) int {
 	switch structured.Code {
 	case fault.CodeValidation:
 		return http.StatusBadRequest
-	case fault.CodeSourcePathInvalid, fault.CodeRuleSchemaInvalid, fault.CodeRuleParameterInvalid:
+	case fault.CodeSourcePathInvalid, fault.CodeCursorInvalid, fault.CodeCursorExpired, fault.CodeQueryTooShort,
+		fault.CodeRuleSchemaInvalid, fault.CodeRuleParameterInvalid, fault.CodeRuleCompile,
+		fault.CodeRuleCELLimit, fault.CodeRuleDryRun, fault.CodeRuleImpact, fault.CodeRuleEval:
 		return http.StatusBadRequest
 	case fault.CodeUnauthenticated, fault.CodePairingInvalid, fault.CodePairingExpired:
 		return http.StatusUnauthorized
