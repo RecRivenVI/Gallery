@@ -22,6 +22,7 @@ import (
 	"github.com/RecRivenVI/gallery/internal/contract/fault"
 	contractquery "github.com/RecRivenVI/gallery/internal/contract/query"
 	"github.com/RecRivenVI/gallery/internal/contract/realtime"
+	"github.com/RecRivenVI/gallery/internal/creators"
 	"github.com/RecRivenVI/gallery/internal/domain"
 	"github.com/RecRivenVI/gallery/internal/jobs"
 	"github.com/RecRivenVI/gallery/internal/media"
@@ -35,22 +36,23 @@ import (
 )
 
 type Server struct {
-	mode    config.Mode
-	store   *storage.Store
-	clock   ports.Clock
-	logger  *slog.Logger
-	auth    *auth.Personal
-	data    *application.Resources
-	jobs    *jobs.Store
-	catalog *catalog.Store
-	scanner *scanner.Service
-	hub     *realtime.Hub
-	rules   *rules.Lifecycle
-	query   *queryservice.Service
-	overlay *overlay.Service
+	mode     config.Mode
+	store    *storage.Store
+	clock    ports.Clock
+	logger   *slog.Logger
+	auth     *auth.Personal
+	data     *application.Resources
+	jobs     *jobs.Store
+	catalog  *catalog.Store
+	scanner  *scanner.Service
+	hub      *realtime.Hub
+	rules    *rules.Lifecycle
+	query    *queryservice.Service
+	overlay  *overlay.Service
+	creators *creators.Service
 }
 
-func New(mode config.Mode, store *storage.Store, clock ports.Clock, personal *auth.Personal, resources *application.Resources, jobStore *jobs.Store, catalogStore *catalog.Store, scannerService *scanner.Service, overlayService *overlay.Service, hub *realtime.Hub, logger *slog.Logger) http.Handler {
+func New(mode config.Mode, store *storage.Store, clock ports.Clock, personal *auth.Personal, resources *application.Resources, jobStore *jobs.Store, catalogStore *catalog.Store, scannerService *scanner.Service, overlayService *overlay.Service, creatorsService *creators.Service, hub *realtime.Hub, logger *slog.Logger) http.Handler {
 	if hub == nil {
 		hub = realtime.NewHub(clock)
 	}
@@ -62,7 +64,7 @@ func New(mode config.Mode, store *storage.Store, clock ports.Clock, personal *au
 	if err != nil {
 		panic(fmt.Sprintf("初始化查询服务: %v", err))
 	}
-	server := &Server{mode: mode, store: store, clock: clock, auth: personal, data: resources, jobs: jobStore, catalog: catalogStore, scanner: scannerService, hub: hub, logger: logger, rules: ruleLifecycle, query: queryService, overlay: overlayService}
+	server := &Server{mode: mode, store: store, clock: clock, auth: personal, data: resources, jobs: jobStore, catalog: catalogStore, scanner: scannerService, hub: hub, logger: logger, rules: ruleLifecycle, query: queryService, overlay: overlayService, creators: creatorsService}
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /api/v1/health", server.health)
 	mux.HandleFunc("GET /api/v1/bootstrap", server.bootstrap)
@@ -84,6 +86,11 @@ func New(mode config.Mode, store *storage.Store, clock ports.Clock, personal *au
 	mux.HandleFunc("GET /api/v1/source-rule-bindings/{bindingId}", server.getSourceRuleBinding)
 	mux.HandleFunc("POST /api/v1/sources/{sourceId}/scan-jobs", server.createScanJob)
 	mux.HandleFunc("GET /api/v1/jobs/{jobId}", server.getJob)
+	mux.HandleFunc("GET /api/v1/creators", server.listCreators)
+	mux.HandleFunc("GET /api/v1/creators/{creatorId}", server.getCreator)
+	mux.HandleFunc("GET /api/v1/creators/merges", server.listCreatorMerges)
+	mux.HandleFunc("POST /api/v1/creators/merges", server.mergeCreators)
+	mux.HandleFunc("DELETE /api/v1/creators/merges/{mergeId}", server.undoCreatorMerge)
 	mux.HandleFunc("GET /api/v1/query-publications/current", server.getCurrentQueryPublication)
 	mux.HandleFunc("GET /api/v1/works", server.listWorks)
 	mux.HandleFunc("GET /api/v1/works/{workId}", server.getWork)
@@ -522,6 +529,122 @@ func (s *Server) getJob(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, jobDTO(job))
 }
 
+func (s *Server) listCreators(w http.ResponseWriter, r *http.Request) {
+	if _, err := s.requireCapability(r, "library.read"); err != nil {
+		s.writeRequestError(w, err)
+		return
+	}
+	if s.creators == nil {
+		s.writeRequestError(w, fault.New(fault.CodeInternal, false, nil))
+		return
+	}
+	list, err := s.creators.List(r.Context())
+	if err != nil {
+		s.writeRequestError(w, err)
+		return
+	}
+	items := make([]api.Creator, 0, len(list))
+	for _, creator := range list {
+		items = append(items, creatorDTO(creator))
+	}
+	writeJSON(w, http.StatusOK, api.CreatorListResponse{Creators: items})
+}
+
+func (s *Server) getCreator(w http.ResponseWriter, r *http.Request) {
+	if _, err := s.requireCapability(r, "library.read"); err != nil {
+		s.writeRequestError(w, err)
+		return
+	}
+	if s.creators == nil {
+		s.writeRequestError(w, fault.New(fault.CodeInternal, false, nil))
+		return
+	}
+	creator, bindings, err := s.creators.Get(r.Context(), r.PathValue("creatorId"))
+	if err != nil {
+		s.writeRequestError(w, err)
+		return
+	}
+	items := make([]api.CreatorSourceBinding, 0, len(bindings))
+	for _, binding := range bindings {
+		items = append(items, api.CreatorSourceBinding{
+			BindingId: binding.BindingID, SourceId: binding.SourceID, ProviderId: binding.ProviderID,
+			ExternalId: binding.ExternalID, SourceKey: binding.SourceKey,
+			Status: api.CreatorSourceBindingStatus(binding.Status),
+		})
+	}
+	writeJSON(w, http.StatusOK, api.CreatorDetail{Creator: creatorDTO(creator), SourceBindings: items})
+}
+
+func (s *Server) listCreatorMerges(w http.ResponseWriter, r *http.Request) {
+	if _, err := s.requireCapability(r, "library.read"); err != nil {
+		s.writeRequestError(w, err)
+		return
+	}
+	if s.creators == nil {
+		s.writeRequestError(w, fault.New(fault.CodeInternal, false, nil))
+		return
+	}
+	list, err := s.creators.ListMerges(r.Context())
+	if err != nil {
+		s.writeRequestError(w, err)
+		return
+	}
+	items := make([]api.CreatorMerge, 0, len(list))
+	for _, merge := range list {
+		items = append(items, creatorMergeDTO(merge, ""))
+	}
+	writeJSON(w, http.StatusOK, api.CreatorMergeListResponse{Merges: items})
+}
+
+func (s *Server) mergeCreators(w http.ResponseWriter, r *http.Request) {
+	session, err := s.requireCapability(r, "creators.write")
+	if err != nil {
+		s.writeRequestError(w, err)
+		return
+	}
+	if err := auth.ValidateMutation(r, session.CSRFToken); err != nil {
+		s.writeRequestError(w, err)
+		return
+	}
+	if s.creators == nil {
+		s.writeRequestError(w, fault.New(fault.CodeInternal, false, nil))
+		return
+	}
+	var request api.CreatorMergeRequest
+	if err := decodeJSON(r, &request); err != nil {
+		s.writeRequestError(w, fault.WithField(fault.CodeValidation, "body", err))
+		return
+	}
+	result, err := s.creators.Merge(r.Context(), session.PrincipalID, request.TargetCreatorId, request.AbsorbedCreatorIds)
+	if err != nil {
+		s.writeRequestError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusCreated, creatorMergeDTO(result.Merge, result.ProjectionJobID))
+}
+
+func (s *Server) undoCreatorMerge(w http.ResponseWriter, r *http.Request) {
+	session, err := s.requireCapability(r, "creators.write")
+	if err != nil {
+		s.writeRequestError(w, err)
+		return
+	}
+	if err := auth.ValidateMutation(r, session.CSRFToken); err != nil {
+		s.writeRequestError(w, err)
+		return
+	}
+	if s.creators == nil {
+		s.writeRequestError(w, fault.New(fault.CodeInternal, false, nil))
+		return
+	}
+	result, err := s.creators.Undo(r.Context(), session.PrincipalID, r.PathValue("mergeId"))
+	if err != nil {
+		s.writeRequestError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, creatorMergeDTO(result.Merge, result.ProjectionJobID))
+}
+
 func (s *Server) getCurrentQueryPublication(w http.ResponseWriter, r *http.Request) {
 	if _, err := s.requireCapability(r, "library.read"); err != nil {
 		s.writeRequestError(w, err)
@@ -824,6 +947,35 @@ func overlayDTO(value overlay.State) api.WorkOverlayState {
 	}
 	if value.IssueCode != "" {
 		result.IssueCode = &value.IssueCode
+	}
+	return result
+}
+
+func creatorDTO(value creators.Creator) api.Creator {
+	result := api.Creator{
+		Id: value.ID, Name: value.Name, EffectiveId: value.EffectiveID,
+		SourceCount: value.SourceCount, CreatedAt: value.CreatedAt,
+	}
+	if value.MergedInto != "" {
+		merged := api.CanonicalCreatorId(value.MergedInto)
+		result.MergedInto = &merged
+	}
+	return result
+}
+
+func creatorMergeDTO(value creators.MergeRecord, projectionJobID string) api.CreatorMerge {
+	result := api.CreatorMerge{
+		Id: value.ID, TargetCreatorId: value.TargetID,
+		AbsorbedCreatorIds: append([]string(nil), value.AbsorbedIDs...),
+		Status:             api.CreatorMergeStatus(value.Status), CreatedBy: value.CreatedBy, CreatedAt: value.CreatedAt,
+	}
+	if value.UndoneAt != nil {
+		undone := *value.UndoneAt
+		result.UndoneAt = &undone
+	}
+	if projectionJobID != "" {
+		jobID := api.JobId(projectionJobID)
+		result.ProjectionJobId = &jobID
 	}
 	return result
 }
