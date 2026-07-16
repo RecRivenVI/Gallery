@@ -2,18 +2,38 @@
 
 Gallery（画廊，代码代号 `gallery`）是面向个人及可信局域网的本地优先、只读媒体目录产品。它是独立净室项目，不兼容或迁移任何旧 Gallery 实现。
 
-> 当前状态：阶段 0 契约骨架已进入正式实现和自动化验证；尚未完成 Walking Skeleton，也没有可供普通用户安装的产品版本。
+> 当前状态：阶段 0 与 Walking Skeleton 已完成自动化和真实进程验收；下一步进入 Architecture Proof Slice。当前仍没有可供普通用户安装的产品版本，物理 Schema 和完整 API 尚未冻结。
 
 ## 当前可运行能力
 
-- `galleryd` 在 loopback 启动，创建彼此独立的 `control.db` / `catalog.db`，运行 WAL 与内嵌 migration；
-- 在任何写入和数据库初始化前检查 AppDirs、Source 真实路径与双向重叠；
-- 提供 `/api/v1/health`、匿名非管理员的 `/api/v1/bootstrap`，以及拒绝匿名升级的 `/ws/v1`；
+- `galleryd` 在 loopback 启动，创建彼此独立的 WAL `control.db` / `catalog.db`，并在启动时执行迁移和跨库 reconciliation；
+- Personal 模式提供短时单次配对、服务端 HttpOnly Session、available/effective capability、Session 列表和吊销；
+- 可通过正式 API 创建 Library、严格只读 Source、规范化/编译 RuleVersion 和 SourceRuleBinding；
+- 持久 Scan Job 通过冻结 Rule IR 识别合成作品/媒体，完成全文件 SHA-256、Canonical Binding、Catalog staging 和短事务 query publication；
+- REST 可查询 Job、当前 publication、Work 和 Media；媒体内容支持稳定 Media ID、HEAD、完整 GET、单区间 Range、显式 ETag 和条件请求；
+- `/ws/v1` 推送 Job、query publication 和 Session 吊销事件；断线后的事实恢复仍使用 REST snapshot；
+- 在任何写入和数据库初始化前检查 AppDirs 与启动参数 Source；运行中登记 Source 时再次检查真实路径、AppDirs 和已登记 Source 的双向重叠；
 - 原子发布带 nonce/ownership 的运行 descriptor，并在正常停止时按 ownership 清理；
-- `galleryctl health` 只使用生成的 OpenAPI 客户端，不访问数据库或内部服务；
+- `galleryctl health` 只使用公开的 `pkg/galleryapi` 生成客户端，不访问数据库、应用服务或后端 `internal` 包；
 - OpenAPI、错误信封、WebSocket 信封、签名游标、规则包 JSON Schema 与 CEL Profile v1 均可执行校验。
 
-上述能力只代表阶段 0 工程基础，不代表 Library、扫描、Catalog publication、配对、媒体读取或 Web UI 已交付。
+上述能力只代表 Walking Skeleton 的单作品、单媒体纵向证明。完整 FTS/分页/Overlay、Catalog 删除重建、强杀矩阵、多平台门禁、Web/PWA 和正式发行仍未交付。
+
+## Walking Skeleton API 流程
+
+从空 AppDirs 启动后，正式客户端按以下顺序使用 `/api/v1`；绝对 Source 路径只出现在创建请求和 control 私有事实中，不进入资源响应：
+
+1. `GET /bootstrap`，取得匿名 CSRF 和 available/effective capability；
+2. `POST /personal/pairing-attempts`，再 `POST /personal/pair` 建立 HttpOnly Session；
+3. `POST /libraries`、`POST /sources`；
+4. `POST /rule-versions`、`POST /source-rule-bindings`；
+5. 连接 `/ws/v1`，然后 `POST /sources/{sourceId}/scan-jobs`；
+6. 通过 `GET /jobs/{jobId}` 取得事实状态，通过 WS 接收提示事件；
+7. `GET /query-publications/current`、`GET /works`、`GET /works/{workId}/media`；
+8. 对 `/media/{mediaId}/content` 执行 HEAD、GET 或单区间 Range GET；
+9. 服务重启后复用未吊销 Session，并重新读取 Job、publication 和媒体 snapshot。
+
+仓库内的完整生成客户端验收见 `internal/bootstrap` 与 `internal/transport/httpapi` 测试；合成输入位于 `tests/fixtures/walking-skeleton`。
 
 ## 开发环境
 
@@ -33,8 +53,8 @@ $env:GALLERY_GO = "C:\path\to\go.exe"
 完整本地门禁：
 
 ```powershell
-./scripts/Check.ps1
-./scripts/Check.ps1 -Race  # 需要当前平台支持 Go race detector
+./Check.ps1
+./Check.ps1 -Race  # 需要当前平台支持 Go race detector
 ```
 
 也可直接运行：
@@ -46,7 +66,7 @@ go vet ./...
 go build ./cmd/...
 ```
 
-## 阶段 0 工程选型
+## 当前工程选型
 
 | 主题 | 当前选择 | 理由 |
 | --- | --- | --- |
