@@ -87,13 +87,13 @@ func (e BootstrapResponseSortProtocolVersion) Valid() bool {
 
 // Defines values for BootstrapResponseWebsocketProtocolVersion.
 const (
-	N1 BootstrapResponseWebsocketProtocolVersion = 1
+	BootstrapResponseWebsocketProtocolVersionN1 BootstrapResponseWebsocketProtocolVersion = 1
 )
 
 // Valid indicates whether the value is a known member of the BootstrapResponseWebsocketProtocolVersion enum.
 func (e BootstrapResponseWebsocketProtocolVersion) Valid() bool {
 	switch e {
-	case N1:
+	case BootstrapResponseWebsocketProtocolVersionN1:
 		return true
 	default:
 		return false
@@ -119,10 +119,12 @@ func (e ContentBlobRefAlgorithm) Valid() bool {
 const (
 	APPDIRSSOURCEOVERLAP      ErrorCode = "APPDIRS_SOURCE_OVERLAP"
 	BACKUPFAILED              ErrorCode = "BACKUP_FAILED"
+	CATALOGCANDIDATEINVALID   ErrorCode = "CATALOG_CANDIDATE_INVALID"
 	CATALOGPUBLICATIONMISSING ErrorCode = "CATALOG_PUBLICATION_MISSING"
 	CONFIGINVALID             ErrorCode = "CONFIG_INVALID"
 	CONFLICT                  ErrorCode = "CONFLICT"
 	CONTENTCHANGEDDURINGHASH  ErrorCode = "CONTENT_CHANGED_DURING_HASH"
+	CONTENTDISAPPEARED        ErrorCode = "CONTENT_DISAPPEARED"
 	CSRFINVALID               ErrorCode = "CSRF_INVALID"
 	CURSOREXPIRED             ErrorCode = "CURSOR_EXPIRED"
 	CURSORINVALID             ErrorCode = "CURSOR_INVALID"
@@ -130,17 +132,23 @@ const (
 	FORBIDDEN                 ErrorCode = "FORBIDDEN"
 	HOSTREJECTED              ErrorCode = "HOST_REJECTED"
 	INTERNALERROR             ErrorCode = "INTERNAL_ERROR"
+	JOBSTATECONFLICT          ErrorCode = "JOB_STATE_CONFLICT"
 	MEDIAOFFLINE              ErrorCode = "MEDIA_OFFLINE"
 	MIGRATIONFAILED           ErrorCode = "MIGRATION_FAILED"
 	NOTFOUND                  ErrorCode = "NOT_FOUND"
 	ORIGINREJECTED            ErrorCode = "ORIGIN_REJECTED"
 	PAIRINGEXPIRED            ErrorCode = "PAIRING_EXPIRED"
 	PAIRINGINVALID            ErrorCode = "PAIRING_INVALID"
+	PATHESCAPE                ErrorCode = "PATH_ESCAPE"
+	PROCESSINTERRUPTED        ErrorCode = "PROCESS_INTERRUPTED"
 	RULEEVALERROR             ErrorCode = "RULE_EVAL_ERROR"
 	RULEPARAMETERINVALID      ErrorCode = "RULE_PARAMETER_INVALID"
 	RULESCHEMAINVALID         ErrorCode = "RULE_SCHEMA_INVALID"
+	SCANALREADYRUNNING        ErrorCode = "SCAN_ALREADY_RUNNING"
 	SOURCEPATHINVALID         ErrorCode = "SOURCE_PATH_INVALID"
+	SOURCEREADFAILED          ErrorCode = "SOURCE_READ_FAILED"
 	SOURCEROOTSOVERLAP        ErrorCode = "SOURCE_ROOTS_OVERLAP"
+	SOURCEUNAVAILABLE         ErrorCode = "SOURCE_UNAVAILABLE"
 	UNAUTHENTICATED           ErrorCode = "UNAUTHENTICATED"
 	VALIDATIONERROR           ErrorCode = "VALIDATION_ERROR"
 )
@@ -152,6 +160,8 @@ func (e ErrorCode) Valid() bool {
 		return true
 	case BACKUPFAILED:
 		return true
+	case CATALOGCANDIDATEINVALID:
+		return true
 	case CATALOGPUBLICATIONMISSING:
 		return true
 	case CONFIGINVALID:
@@ -159,6 +169,8 @@ func (e ErrorCode) Valid() bool {
 	case CONFLICT:
 		return true
 	case CONTENTCHANGEDDURINGHASH:
+		return true
+	case CONTENTDISAPPEARED:
 		return true
 	case CSRFINVALID:
 		return true
@@ -174,6 +186,8 @@ func (e ErrorCode) Valid() bool {
 		return true
 	case INTERNALERROR:
 		return true
+	case JOBSTATECONFLICT:
+		return true
 	case MEDIAOFFLINE:
 		return true
 	case MIGRATIONFAILED:
@@ -186,15 +200,25 @@ func (e ErrorCode) Valid() bool {
 		return true
 	case PAIRINGINVALID:
 		return true
+	case PATHESCAPE:
+		return true
+	case PROCESSINTERRUPTED:
+		return true
 	case RULEEVALERROR:
 		return true
 	case RULEPARAMETERINVALID:
 		return true
 	case RULESCHEMAINVALID:
 		return true
+	case SCANALREADYRUNNING:
+		return true
 	case SOURCEPATHINVALID:
 		return true
+	case SOURCEREADFAILED:
+		return true
 	case SOURCEROOTSOVERLAP:
+		return true
+	case SOURCEUNAVAILABLE:
 		return true
 	case UNAUTHENTICATED:
 		return true
@@ -259,6 +283,69 @@ const (
 func (e HealthResponseStatus) Valid() bool {
 	switch e {
 	case Ok:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for JobStatus.
+const (
+	Cancelled   JobStatus = "cancelled"
+	Completed   JobStatus = "completed"
+	Failed      JobStatus = "failed"
+	NeedsRepair JobStatus = "needs_repair"
+	Publishing  JobStatus = "publishing"
+	Queued      JobStatus = "queued"
+	Running     JobStatus = "running"
+)
+
+// Valid indicates whether the value is a known member of the JobStatus enum.
+func (e JobStatus) Valid() bool {
+	switch e {
+	case Cancelled:
+		return true
+	case Completed:
+		return true
+	case Failed:
+		return true
+	case NeedsRepair:
+		return true
+	case Publishing:
+		return true
+	case Queued:
+		return true
+	case Running:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for JobType.
+const (
+	Scan JobType = "scan"
+)
+
+// Valid indicates whether the value is a known member of the JobType enum.
+func (e JobType) Valid() bool {
+	switch e {
+	case Scan:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for WorkListResponseSortProtocolVersion.
+const (
+	WorkListResponseSortProtocolVersionN1 WorkListResponseSortProtocolVersion = 1
+)
+
+// Valid indicates whether the value is a known member of the WorkListResponseSortProtocolVersion enum.
+func (e WorkListResponseSortProtocolVersion) Valid() bool {
+	switch e {
+	case WorkListResponseSortProtocolVersionN1:
 		return true
 	default:
 		return false
@@ -357,6 +444,34 @@ type HealthResponseDatabasesControl string
 // HealthResponseStatus defines model for HealthResponse.Status.
 type HealthResponseStatus string
 
+// Job defines model for Job.
+type Job struct {
+	Attempt    int        `json:"attempt"`
+	CreatedAt  time.Time  `json:"createdAt"`
+	FinishedAt *time.Time `json:"finishedAt,omitempty"`
+	Id         JobId      `json:"id"`
+	IssueCode  *string    `json:"issueCode,omitempty"`
+	Progress   struct {
+		Current  int64 `json:"current"`
+		Sequence int64 `json:"sequence"`
+		Total    int64 `json:"total"`
+	} `json:"progress"`
+	QueryPublicationId *QueryPublicationId `json:"queryPublicationId,omitempty"`
+	RetryOf            *JobId              `json:"retryOf,omitempty"`
+	SourceId           SourceId            `json:"sourceId"`
+	Stage              string              `json:"stage"`
+	StartedAt          *time.Time          `json:"startedAt,omitempty"`
+	Status             JobStatus           `json:"status"`
+	Type               JobType             `json:"type"`
+	UpdatedAt          time.Time           `json:"updatedAt"`
+}
+
+// JobStatus defines model for Job.Status.
+type JobStatus string
+
+// JobType defines model for Job.Type.
+type JobType string
+
 // JobId defines model for JobId.
 type JobId = string
 
@@ -375,6 +490,12 @@ type LibraryCreateRequest struct {
 // LibraryId defines model for LibraryId.
 type LibraryId = string
 
+// MediaListResponse defines model for MediaListResponse.
+type MediaListResponse struct {
+	Media              []PublishedMedia   `json:"media"`
+	QueryPublicationId QueryPublicationId `json:"queryPublicationId"`
+}
+
 // PairingAttemptResponse defines model for PairingAttemptResponse.
 type PairingAttemptResponse struct {
 	Credential string    `json:"credential"`
@@ -384,6 +505,37 @@ type PairingAttemptResponse struct {
 // PairingExchangeRequest defines model for PairingExchangeRequest.
 type PairingExchangeRequest struct {
 	Credential string `json:"credential"`
+}
+
+// PublishedMedia defines model for PublishedMedia.
+type PublishedMedia struct {
+	Available          bool               `json:"available"`
+	Blob               ContentBlobRef     `json:"blob"`
+	Id                 CanonicalMediaId   `json:"id"`
+	Kind               string             `json:"kind"`
+	MimeType           string             `json:"mimeType"`
+	Ordinal            int                `json:"ordinal"`
+	QueryPublicationId QueryPublicationId `json:"queryPublicationId"`
+	SizeBytes          int64              `json:"sizeBytes"`
+	WorkId             CanonicalWorkId    `json:"workId"`
+}
+
+// PublishedWork defines model for PublishedWork.
+type PublishedWork struct {
+	Id                 CanonicalWorkId    `json:"id"`
+	MediaCount         int                `json:"mediaCount"`
+	QueryPublicationId QueryPublicationId `json:"queryPublicationId"`
+	Title              string             `json:"title"`
+}
+
+// QueryPublication defines model for QueryPublication.
+type QueryPublication struct {
+	CatalogRevision           string             `json:"catalogRevision"`
+	ControlWatermark          int64              `json:"controlWatermark"`
+	CreatedAt                 time.Time          `json:"createdAt"`
+	Id                        QueryPublicationId `json:"id"`
+	JobId                     JobId              `json:"jobId"`
+	OverlayProjectionRevision string             `json:"overlayProjectionRevision"`
 }
 
 // QueryPublicationId defines model for QueryPublicationId.
@@ -469,6 +621,16 @@ type SourceRuleBindingCreateRequest struct {
 // SourceRuleBindingId defines model for SourceRuleBindingId.
 type SourceRuleBindingId = string
 
+// WorkListResponse defines model for WorkListResponse.
+type WorkListResponse struct {
+	QueryPublicationId  QueryPublicationId                  `json:"queryPublicationId"`
+	SortProtocolVersion WorkListResponseSortProtocolVersion `json:"sortProtocolVersion"`
+	Works               []PublishedWork                     `json:"works"`
+}
+
+// WorkListResponseSortProtocolVersion defines model for WorkListResponse.SortProtocolVersion.
+type WorkListResponseSortProtocolVersion int
+
 // CSRFHeader defines model for CSRFHeader.
 type CSRFHeader = string
 
@@ -528,6 +690,11 @@ type CreateSourceRuleBindingParams struct {
 
 // CreateSourceParams defines parameters for CreateSource.
 type CreateSourceParams struct {
+	XGalleryCSRF CSRFHeader `json:"X-Gallery-CSRF"`
+}
+
+// CreateScanJobParams defines parameters for CreateScanJob.
+type CreateScanJobParams struct {
 	XGalleryCSRF CSRFHeader `json:"X-Gallery-CSRF"`
 }
 
@@ -625,6 +792,9 @@ type ClientInterface interface {
 	// GetHealth request
 	GetHealth(ctx context.Context, reqEditors ...RequestEditorFn) (*http.Response, error)
 
+	// GetJob request
+	GetJob(ctx context.Context, jobId JobId, reqEditors ...RequestEditorFn) (*http.Response, error)
+
 	// CreateLibraryWithBody request with any body
 	CreateLibraryWithBody(ctx context.Context, params *CreateLibraryParams, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*http.Response, error)
 
@@ -633,6 +803,9 @@ type ClientInterface interface {
 	// GetLibrary request
 	GetLibrary(ctx context.Context, libraryId LibraryId, reqEditors ...RequestEditorFn) (*http.Response, error)
 
+	// GetMedia request
+	GetMedia(ctx context.Context, mediaId CanonicalMediaId, reqEditors ...RequestEditorFn) (*http.Response, error)
+
 	// ExchangePairingCredentialWithBody request with any body
 	ExchangePairingCredentialWithBody(ctx context.Context, params *ExchangePairingCredentialParams, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*http.Response, error)
 
@@ -640,6 +813,9 @@ type ClientInterface interface {
 
 	// CreatePairingAttempt request
 	CreatePairingAttempt(ctx context.Context, params *CreatePairingAttemptParams, reqEditors ...RequestEditorFn) (*http.Response, error)
+
+	// GetCurrentQueryPublication request
+	GetCurrentQueryPublication(ctx context.Context, reqEditors ...RequestEditorFn) (*http.Response, error)
 
 	// CreateRuleVersionWithBody request with any body
 	CreateRuleVersionWithBody(ctx context.Context, params *CreateRuleVersionParams, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*http.Response, error)
@@ -670,6 +846,18 @@ type ClientInterface interface {
 
 	// GetSource request
 	GetSource(ctx context.Context, sourceId SourceId, reqEditors ...RequestEditorFn) (*http.Response, error)
+
+	// CreateScanJob request
+	CreateScanJob(ctx context.Context, sourceId SourceId, params *CreateScanJobParams, reqEditors ...RequestEditorFn) (*http.Response, error)
+
+	// ListWorks request
+	ListWorks(ctx context.Context, reqEditors ...RequestEditorFn) (*http.Response, error)
+
+	// GetWork request
+	GetWork(ctx context.Context, workId CanonicalWorkId, reqEditors ...RequestEditorFn) (*http.Response, error)
+
+	// ListWorkMedia request
+	ListWorkMedia(ctx context.Context, workId CanonicalWorkId, reqEditors ...RequestEditorFn) (*http.Response, error)
 }
 
 func (c *Client) GetBootstrap(ctx context.Context, reqEditors ...RequestEditorFn) (*http.Response, error) {
@@ -686,6 +874,18 @@ func (c *Client) GetBootstrap(ctx context.Context, reqEditors ...RequestEditorFn
 
 func (c *Client) GetHealth(ctx context.Context, reqEditors ...RequestEditorFn) (*http.Response, error) {
 	req, err := NewGetHealthRequest(c.Server)
+	if err != nil {
+		return nil, err
+	}
+	req = req.WithContext(ctx)
+	if err := c.applyEditors(ctx, req, reqEditors); err != nil {
+		return nil, err
+	}
+	return c.Client.Do(req)
+}
+
+func (c *Client) GetJob(ctx context.Context, jobId JobId, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewGetJobRequest(c.Server, jobId)
 	if err != nil {
 		return nil, err
 	}
@@ -732,6 +932,18 @@ func (c *Client) GetLibrary(ctx context.Context, libraryId LibraryId, reqEditors
 	return c.Client.Do(req)
 }
 
+func (c *Client) GetMedia(ctx context.Context, mediaId CanonicalMediaId, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewGetMediaRequest(c.Server, mediaId)
+	if err != nil {
+		return nil, err
+	}
+	req = req.WithContext(ctx)
+	if err := c.applyEditors(ctx, req, reqEditors); err != nil {
+		return nil, err
+	}
+	return c.Client.Do(req)
+}
+
 func (c *Client) ExchangePairingCredentialWithBody(ctx context.Context, params *ExchangePairingCredentialParams, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*http.Response, error) {
 	req, err := NewExchangePairingCredentialRequestWithBody(c.Server, params, contentType, body)
 	if err != nil {
@@ -758,6 +970,18 @@ func (c *Client) ExchangePairingCredential(ctx context.Context, params *Exchange
 
 func (c *Client) CreatePairingAttempt(ctx context.Context, params *CreatePairingAttemptParams, reqEditors ...RequestEditorFn) (*http.Response, error) {
 	req, err := NewCreatePairingAttemptRequest(c.Server, params)
+	if err != nil {
+		return nil, err
+	}
+	req = req.WithContext(ctx)
+	if err := c.applyEditors(ctx, req, reqEditors); err != nil {
+		return nil, err
+	}
+	return c.Client.Do(req)
+}
+
+func (c *Client) GetCurrentQueryPublication(ctx context.Context, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewGetCurrentQueryPublicationRequest(c.Server)
 	if err != nil {
 		return nil, err
 	}
@@ -900,6 +1124,54 @@ func (c *Client) GetSource(ctx context.Context, sourceId SourceId, reqEditors ..
 	return c.Client.Do(req)
 }
 
+func (c *Client) CreateScanJob(ctx context.Context, sourceId SourceId, params *CreateScanJobParams, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewCreateScanJobRequest(c.Server, sourceId, params)
+	if err != nil {
+		return nil, err
+	}
+	req = req.WithContext(ctx)
+	if err := c.applyEditors(ctx, req, reqEditors); err != nil {
+		return nil, err
+	}
+	return c.Client.Do(req)
+}
+
+func (c *Client) ListWorks(ctx context.Context, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewListWorksRequest(c.Server)
+	if err != nil {
+		return nil, err
+	}
+	req = req.WithContext(ctx)
+	if err := c.applyEditors(ctx, req, reqEditors); err != nil {
+		return nil, err
+	}
+	return c.Client.Do(req)
+}
+
+func (c *Client) GetWork(ctx context.Context, workId CanonicalWorkId, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewGetWorkRequest(c.Server, workId)
+	if err != nil {
+		return nil, err
+	}
+	req = req.WithContext(ctx)
+	if err := c.applyEditors(ctx, req, reqEditors); err != nil {
+		return nil, err
+	}
+	return c.Client.Do(req)
+}
+
+func (c *Client) ListWorkMedia(ctx context.Context, workId CanonicalWorkId, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewListWorkMediaRequest(c.Server, workId)
+	if err != nil {
+		return nil, err
+	}
+	req = req.WithContext(ctx)
+	if err := c.applyEditors(ctx, req, reqEditors); err != nil {
+		return nil, err
+	}
+	return c.Client.Do(req)
+}
+
 // NewGetBootstrapRequest generates requests for GetBootstrap
 func NewGetBootstrapRequest(server string) (*http.Request, error) {
 	var err error
@@ -937,6 +1209,40 @@ func NewGetHealthRequest(server string) (*http.Request, error) {
 	}
 
 	operationPath := fmt.Sprintf("/api/v1/health")
+	if operationPath[0] == '/' {
+		operationPath = "." + operationPath
+	}
+
+	queryURL, err := serverURL.Parse(operationPath)
+	if err != nil {
+		return nil, err
+	}
+
+	req, err := http.NewRequest(http.MethodGet, queryURL.String(), nil)
+	if err != nil {
+		return nil, err
+	}
+
+	return req, nil
+}
+
+// NewGetJobRequest generates requests for GetJob
+func NewGetJobRequest(server string, jobId JobId) (*http.Request, error) {
+	var err error
+
+	var pathParam0 string
+
+	pathParam0, err = runtime.StyleParamWithOptions("simple", false, "jobId", jobId, runtime.StyleParamOptions{ParamLocation: runtime.ParamLocationPath, Type: "string", Format: ""})
+	if err != nil {
+		return nil, err
+	}
+
+	serverURL, err := url.Parse(server)
+	if err != nil {
+		return nil, err
+	}
+
+	operationPath := fmt.Sprintf("/api/v1/jobs/%s", pathParam0)
 	if operationPath[0] == '/' {
 		operationPath = "." + operationPath
 	}
@@ -1024,6 +1330,40 @@ func NewGetLibraryRequest(server string, libraryId LibraryId) (*http.Request, er
 	}
 
 	operationPath := fmt.Sprintf("/api/v1/libraries/%s", pathParam0)
+	if operationPath[0] == '/' {
+		operationPath = "." + operationPath
+	}
+
+	queryURL, err := serverURL.Parse(operationPath)
+	if err != nil {
+		return nil, err
+	}
+
+	req, err := http.NewRequest(http.MethodGet, queryURL.String(), nil)
+	if err != nil {
+		return nil, err
+	}
+
+	return req, nil
+}
+
+// NewGetMediaRequest generates requests for GetMedia
+func NewGetMediaRequest(server string, mediaId CanonicalMediaId) (*http.Request, error) {
+	var err error
+
+	var pathParam0 string
+
+	pathParam0, err = runtime.StyleParamWithOptions("simple", false, "mediaId", mediaId, runtime.StyleParamOptions{ParamLocation: runtime.ParamLocationPath, Type: "string", Format: ""})
+	if err != nil {
+		return nil, err
+	}
+
+	serverURL, err := url.Parse(server)
+	if err != nil {
+		return nil, err
+	}
+
+	operationPath := fmt.Sprintf("/api/v1/media/%s", pathParam0)
 	if operationPath[0] == '/' {
 		operationPath = "." + operationPath
 	}
@@ -1129,6 +1469,33 @@ func NewCreatePairingAttemptRequest(server string, params *CreatePairingAttemptP
 
 		req.Header.Set("X-Gallery-CSRF", headerParam0)
 
+	}
+
+	return req, nil
+}
+
+// NewGetCurrentQueryPublicationRequest generates requests for GetCurrentQueryPublication
+func NewGetCurrentQueryPublicationRequest(server string) (*http.Request, error) {
+	var err error
+
+	serverURL, err := url.Parse(server)
+	if err != nil {
+		return nil, err
+	}
+
+	operationPath := fmt.Sprintf("/api/v1/query-publications/current")
+	if operationPath[0] == '/' {
+		operationPath = "." + operationPath
+	}
+
+	queryURL, err := serverURL.Parse(operationPath)
+	if err != nil {
+		return nil, err
+	}
+
+	req, err := http.NewRequest(http.MethodGet, queryURL.String(), nil)
+	if err != nil {
+		return nil, err
 	}
 
 	return req, nil
@@ -1469,6 +1836,148 @@ func NewGetSourceRequest(server string, sourceId SourceId) (*http.Request, error
 	return req, nil
 }
 
+// NewCreateScanJobRequest generates requests for CreateScanJob
+func NewCreateScanJobRequest(server string, sourceId SourceId, params *CreateScanJobParams) (*http.Request, error) {
+	var err error
+
+	var pathParam0 string
+
+	pathParam0, err = runtime.StyleParamWithOptions("simple", false, "sourceId", sourceId, runtime.StyleParamOptions{ParamLocation: runtime.ParamLocationPath, Type: "string", Format: ""})
+	if err != nil {
+		return nil, err
+	}
+
+	serverURL, err := url.Parse(server)
+	if err != nil {
+		return nil, err
+	}
+
+	operationPath := fmt.Sprintf("/api/v1/sources/%s/scan-jobs", pathParam0)
+	if operationPath[0] == '/' {
+		operationPath = "." + operationPath
+	}
+
+	queryURL, err := serverURL.Parse(operationPath)
+	if err != nil {
+		return nil, err
+	}
+
+	req, err := http.NewRequest(http.MethodPost, queryURL.String(), nil)
+	if err != nil {
+		return nil, err
+	}
+
+	if params != nil {
+
+		var headerParam0 string
+
+		headerParam0, err = runtime.StyleParamWithOptions("simple", false, "X-Gallery-CSRF", params.XGalleryCSRF, runtime.StyleParamOptions{ParamLocation: runtime.ParamLocationHeader, Type: "string", Format: ""})
+		if err != nil {
+			return nil, err
+		}
+
+		req.Header.Set("X-Gallery-CSRF", headerParam0)
+
+	}
+
+	return req, nil
+}
+
+// NewListWorksRequest generates requests for ListWorks
+func NewListWorksRequest(server string) (*http.Request, error) {
+	var err error
+
+	serverURL, err := url.Parse(server)
+	if err != nil {
+		return nil, err
+	}
+
+	operationPath := fmt.Sprintf("/api/v1/works")
+	if operationPath[0] == '/' {
+		operationPath = "." + operationPath
+	}
+
+	queryURL, err := serverURL.Parse(operationPath)
+	if err != nil {
+		return nil, err
+	}
+
+	req, err := http.NewRequest(http.MethodGet, queryURL.String(), nil)
+	if err != nil {
+		return nil, err
+	}
+
+	return req, nil
+}
+
+// NewGetWorkRequest generates requests for GetWork
+func NewGetWorkRequest(server string, workId CanonicalWorkId) (*http.Request, error) {
+	var err error
+
+	var pathParam0 string
+
+	pathParam0, err = runtime.StyleParamWithOptions("simple", false, "workId", workId, runtime.StyleParamOptions{ParamLocation: runtime.ParamLocationPath, Type: "string", Format: ""})
+	if err != nil {
+		return nil, err
+	}
+
+	serverURL, err := url.Parse(server)
+	if err != nil {
+		return nil, err
+	}
+
+	operationPath := fmt.Sprintf("/api/v1/works/%s", pathParam0)
+	if operationPath[0] == '/' {
+		operationPath = "." + operationPath
+	}
+
+	queryURL, err := serverURL.Parse(operationPath)
+	if err != nil {
+		return nil, err
+	}
+
+	req, err := http.NewRequest(http.MethodGet, queryURL.String(), nil)
+	if err != nil {
+		return nil, err
+	}
+
+	return req, nil
+}
+
+// NewListWorkMediaRequest generates requests for ListWorkMedia
+func NewListWorkMediaRequest(server string, workId CanonicalWorkId) (*http.Request, error) {
+	var err error
+
+	var pathParam0 string
+
+	pathParam0, err = runtime.StyleParamWithOptions("simple", false, "workId", workId, runtime.StyleParamOptions{ParamLocation: runtime.ParamLocationPath, Type: "string", Format: ""})
+	if err != nil {
+		return nil, err
+	}
+
+	serverURL, err := url.Parse(server)
+	if err != nil {
+		return nil, err
+	}
+
+	operationPath := fmt.Sprintf("/api/v1/works/%s/media", pathParam0)
+	if operationPath[0] == '/' {
+		operationPath = "." + operationPath
+	}
+
+	queryURL, err := serverURL.Parse(operationPath)
+	if err != nil {
+		return nil, err
+	}
+
+	req, err := http.NewRequest(http.MethodGet, queryURL.String(), nil)
+	if err != nil {
+		return nil, err
+	}
+
+	return req, nil
+}
+
 func (c *Client) applyEditors(ctx context.Context, req *http.Request, additionalEditors []RequestEditorFn) error {
 	for _, r := range c.RequestEditors {
 		if err := r(ctx, req); err != nil {
@@ -1518,6 +2027,9 @@ type ClientWithResponsesInterface interface {
 	// GetHealthWithResponse request
 	GetHealthWithResponse(ctx context.Context, reqEditors ...RequestEditorFn) (*GetHealthResponse, error)
 
+	// GetJobWithResponse request
+	GetJobWithResponse(ctx context.Context, jobId JobId, reqEditors ...RequestEditorFn) (*GetJobResponse, error)
+
 	// CreateLibraryWithBodyWithResponse request with any body
 	CreateLibraryWithBodyWithResponse(ctx context.Context, params *CreateLibraryParams, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*CreateLibraryResponse, error)
 
@@ -1526,6 +2038,9 @@ type ClientWithResponsesInterface interface {
 	// GetLibraryWithResponse request
 	GetLibraryWithResponse(ctx context.Context, libraryId LibraryId, reqEditors ...RequestEditorFn) (*GetLibraryResponse, error)
 
+	// GetMediaWithResponse request
+	GetMediaWithResponse(ctx context.Context, mediaId CanonicalMediaId, reqEditors ...RequestEditorFn) (*GetMediaResponse, error)
+
 	// ExchangePairingCredentialWithBodyWithResponse request with any body
 	ExchangePairingCredentialWithBodyWithResponse(ctx context.Context, params *ExchangePairingCredentialParams, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*ExchangePairingCredentialResponse, error)
 
@@ -1533,6 +2048,9 @@ type ClientWithResponsesInterface interface {
 
 	// CreatePairingAttemptWithResponse request
 	CreatePairingAttemptWithResponse(ctx context.Context, params *CreatePairingAttemptParams, reqEditors ...RequestEditorFn) (*CreatePairingAttemptResponse, error)
+
+	// GetCurrentQueryPublicationWithResponse request
+	GetCurrentQueryPublicationWithResponse(ctx context.Context, reqEditors ...RequestEditorFn) (*GetCurrentQueryPublicationResponse, error)
 
 	// CreateRuleVersionWithBodyWithResponse request with any body
 	CreateRuleVersionWithBodyWithResponse(ctx context.Context, params *CreateRuleVersionParams, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*CreateRuleVersionResponse, error)
@@ -1563,6 +2081,18 @@ type ClientWithResponsesInterface interface {
 
 	// GetSourceWithResponse request
 	GetSourceWithResponse(ctx context.Context, sourceId SourceId, reqEditors ...RequestEditorFn) (*GetSourceResponse, error)
+
+	// CreateScanJobWithResponse request
+	CreateScanJobWithResponse(ctx context.Context, sourceId SourceId, params *CreateScanJobParams, reqEditors ...RequestEditorFn) (*CreateScanJobResponse, error)
+
+	// ListWorksWithResponse request
+	ListWorksWithResponse(ctx context.Context, reqEditors ...RequestEditorFn) (*ListWorksResponse, error)
+
+	// GetWorkWithResponse request
+	GetWorkWithResponse(ctx context.Context, workId CanonicalWorkId, reqEditors ...RequestEditorFn) (*GetWorkResponse, error)
+
+	// ListWorkMediaWithResponse request
+	ListWorkMediaWithResponse(ctx context.Context, workId CanonicalWorkId, reqEditors ...RequestEditorFn) (*ListWorkMediaResponse, error)
 }
 
 type GetBootstrapResponse struct {
@@ -1621,6 +2151,39 @@ func (r GetHealthResponse) StatusCode() int {
 
 // ContentType is a convenience method to retrieve the Content-Type value from the HTTP response headers
 func (r GetHealthResponse) ContentType() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Header.Get("Content-Type")
+	}
+	return ""
+}
+
+type GetJobResponse struct {
+	Body         []byte
+	HTTPResponse *http.Response
+	JSON200      *Job
+	JSON401      *UnauthenticatedError
+	JSON403      *ForbiddenError
+	JSON404      *NotFoundError
+}
+
+// Status returns HTTPResponse.Status
+func (r GetJobResponse) Status() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Status
+	}
+	return http.StatusText(0)
+}
+
+// StatusCode returns HTTPResponse.StatusCode
+func (r GetJobResponse) StatusCode() int {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.StatusCode
+	}
+	return 0
+}
+
+// ContentType is a convenience method to retrieve the Content-Type value from the HTTP response headers
+func (r GetJobResponse) ContentType() string {
 	if r.HTTPResponse != nil {
 		return r.HTTPResponse.Header.Get("Content-Type")
 	}
@@ -1693,6 +2256,39 @@ func (r GetLibraryResponse) ContentType() string {
 	return ""
 }
 
+type GetMediaResponse struct {
+	Body         []byte
+	HTTPResponse *http.Response
+	JSON200      *PublishedMedia
+	JSON401      *UnauthenticatedError
+	JSON403      *ForbiddenError
+	JSON404      *NotFoundError
+}
+
+// Status returns HTTPResponse.Status
+func (r GetMediaResponse) Status() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Status
+	}
+	return http.StatusText(0)
+}
+
+// StatusCode returns HTTPResponse.StatusCode
+func (r GetMediaResponse) StatusCode() int {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.StatusCode
+	}
+	return 0
+}
+
+// ContentType is a convenience method to retrieve the Content-Type value from the HTTP response headers
+func (r GetMediaResponse) ContentType() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Header.Get("Content-Type")
+	}
+	return ""
+}
+
 type ExchangePairingCredentialResponse struct {
 	Body         []byte
 	HTTPResponse *http.Response
@@ -1750,6 +2346,39 @@ func (r CreatePairingAttemptResponse) StatusCode() int {
 
 // ContentType is a convenience method to retrieve the Content-Type value from the HTTP response headers
 func (r CreatePairingAttemptResponse) ContentType() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Header.Get("Content-Type")
+	}
+	return ""
+}
+
+type GetCurrentQueryPublicationResponse struct {
+	Body         []byte
+	HTTPResponse *http.Response
+	JSON200      *QueryPublication
+	JSON401      *UnauthenticatedError
+	JSON403      *ForbiddenError
+	JSON404      *NotFoundError
+}
+
+// Status returns HTTPResponse.Status
+func (r GetCurrentQueryPublicationResponse) Status() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Status
+	}
+	return http.StatusText(0)
+}
+
+// StatusCode returns HTTPResponse.StatusCode
+func (r GetCurrentQueryPublicationResponse) StatusCode() int {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.StatusCode
+	}
+	return 0
+}
+
+// ContentType is a convenience method to retrieve the Content-Type value from the HTTP response headers
+func (r GetCurrentQueryPublicationResponse) ContentType() string {
 	if r.HTTPResponse != nil {
 		return r.HTTPResponse.Header.Get("Content-Type")
 	}
@@ -2024,6 +2653,139 @@ func (r GetSourceResponse) ContentType() string {
 	return ""
 }
 
+type CreateScanJobResponse struct {
+	Body         []byte
+	HTTPResponse *http.Response
+	JSON202      *Job
+	JSON401      *UnauthenticatedError
+	JSON403      *ForbiddenError
+	JSON404      *NotFoundError
+	JSON409      *ConflictError
+}
+
+// Status returns HTTPResponse.Status
+func (r CreateScanJobResponse) Status() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Status
+	}
+	return http.StatusText(0)
+}
+
+// StatusCode returns HTTPResponse.StatusCode
+func (r CreateScanJobResponse) StatusCode() int {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.StatusCode
+	}
+	return 0
+}
+
+// ContentType is a convenience method to retrieve the Content-Type value from the HTTP response headers
+func (r CreateScanJobResponse) ContentType() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Header.Get("Content-Type")
+	}
+	return ""
+}
+
+type ListWorksResponse struct {
+	Body         []byte
+	HTTPResponse *http.Response
+	JSON200      *WorkListResponse
+	JSON401      *UnauthenticatedError
+	JSON403      *ForbiddenError
+	JSON404      *NotFoundError
+}
+
+// Status returns HTTPResponse.Status
+func (r ListWorksResponse) Status() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Status
+	}
+	return http.StatusText(0)
+}
+
+// StatusCode returns HTTPResponse.StatusCode
+func (r ListWorksResponse) StatusCode() int {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.StatusCode
+	}
+	return 0
+}
+
+// ContentType is a convenience method to retrieve the Content-Type value from the HTTP response headers
+func (r ListWorksResponse) ContentType() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Header.Get("Content-Type")
+	}
+	return ""
+}
+
+type GetWorkResponse struct {
+	Body         []byte
+	HTTPResponse *http.Response
+	JSON200      *PublishedWork
+	JSON401      *UnauthenticatedError
+	JSON403      *ForbiddenError
+	JSON404      *NotFoundError
+}
+
+// Status returns HTTPResponse.Status
+func (r GetWorkResponse) Status() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Status
+	}
+	return http.StatusText(0)
+}
+
+// StatusCode returns HTTPResponse.StatusCode
+func (r GetWorkResponse) StatusCode() int {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.StatusCode
+	}
+	return 0
+}
+
+// ContentType is a convenience method to retrieve the Content-Type value from the HTTP response headers
+func (r GetWorkResponse) ContentType() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Header.Get("Content-Type")
+	}
+	return ""
+}
+
+type ListWorkMediaResponse struct {
+	Body         []byte
+	HTTPResponse *http.Response
+	JSON200      *MediaListResponse
+	JSON401      *UnauthenticatedError
+	JSON403      *ForbiddenError
+	JSON404      *NotFoundError
+}
+
+// Status returns HTTPResponse.Status
+func (r ListWorkMediaResponse) Status() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Status
+	}
+	return http.StatusText(0)
+}
+
+// StatusCode returns HTTPResponse.StatusCode
+func (r ListWorkMediaResponse) StatusCode() int {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.StatusCode
+	}
+	return 0
+}
+
+// ContentType is a convenience method to retrieve the Content-Type value from the HTTP response headers
+func (r ListWorkMediaResponse) ContentType() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Header.Get("Content-Type")
+	}
+	return ""
+}
+
 // GetBootstrapWithResponse request returning *GetBootstrapResponse
 func (c *ClientWithResponses) GetBootstrapWithResponse(ctx context.Context, reqEditors ...RequestEditorFn) (*GetBootstrapResponse, error) {
 	rsp, err := c.GetBootstrap(ctx, reqEditors...)
@@ -2040,6 +2802,15 @@ func (c *ClientWithResponses) GetHealthWithResponse(ctx context.Context, reqEdit
 		return nil, err
 	}
 	return ParseGetHealthResponse(rsp)
+}
+
+// GetJobWithResponse request returning *GetJobResponse
+func (c *ClientWithResponses) GetJobWithResponse(ctx context.Context, jobId JobId, reqEditors ...RequestEditorFn) (*GetJobResponse, error) {
+	rsp, err := c.GetJob(ctx, jobId, reqEditors...)
+	if err != nil {
+		return nil, err
+	}
+	return ParseGetJobResponse(rsp)
 }
 
 // CreateLibraryWithBodyWithResponse request with arbitrary body returning *CreateLibraryResponse
@@ -2068,6 +2839,15 @@ func (c *ClientWithResponses) GetLibraryWithResponse(ctx context.Context, librar
 	return ParseGetLibraryResponse(rsp)
 }
 
+// GetMediaWithResponse request returning *GetMediaResponse
+func (c *ClientWithResponses) GetMediaWithResponse(ctx context.Context, mediaId CanonicalMediaId, reqEditors ...RequestEditorFn) (*GetMediaResponse, error) {
+	rsp, err := c.GetMedia(ctx, mediaId, reqEditors...)
+	if err != nil {
+		return nil, err
+	}
+	return ParseGetMediaResponse(rsp)
+}
+
 // ExchangePairingCredentialWithBodyWithResponse request with arbitrary body returning *ExchangePairingCredentialResponse
 func (c *ClientWithResponses) ExchangePairingCredentialWithBodyWithResponse(ctx context.Context, params *ExchangePairingCredentialParams, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*ExchangePairingCredentialResponse, error) {
 	rsp, err := c.ExchangePairingCredentialWithBody(ctx, params, contentType, body, reqEditors...)
@@ -2092,6 +2872,15 @@ func (c *ClientWithResponses) CreatePairingAttemptWithResponse(ctx context.Conte
 		return nil, err
 	}
 	return ParseCreatePairingAttemptResponse(rsp)
+}
+
+// GetCurrentQueryPublicationWithResponse request returning *GetCurrentQueryPublicationResponse
+func (c *ClientWithResponses) GetCurrentQueryPublicationWithResponse(ctx context.Context, reqEditors ...RequestEditorFn) (*GetCurrentQueryPublicationResponse, error) {
+	rsp, err := c.GetCurrentQueryPublication(ctx, reqEditors...)
+	if err != nil {
+		return nil, err
+	}
+	return ParseGetCurrentQueryPublicationResponse(rsp)
 }
 
 // CreateRuleVersionWithBodyWithResponse request with arbitrary body returning *CreateRuleVersionResponse
@@ -2190,6 +2979,42 @@ func (c *ClientWithResponses) GetSourceWithResponse(ctx context.Context, sourceI
 	return ParseGetSourceResponse(rsp)
 }
 
+// CreateScanJobWithResponse request returning *CreateScanJobResponse
+func (c *ClientWithResponses) CreateScanJobWithResponse(ctx context.Context, sourceId SourceId, params *CreateScanJobParams, reqEditors ...RequestEditorFn) (*CreateScanJobResponse, error) {
+	rsp, err := c.CreateScanJob(ctx, sourceId, params, reqEditors...)
+	if err != nil {
+		return nil, err
+	}
+	return ParseCreateScanJobResponse(rsp)
+}
+
+// ListWorksWithResponse request returning *ListWorksResponse
+func (c *ClientWithResponses) ListWorksWithResponse(ctx context.Context, reqEditors ...RequestEditorFn) (*ListWorksResponse, error) {
+	rsp, err := c.ListWorks(ctx, reqEditors...)
+	if err != nil {
+		return nil, err
+	}
+	return ParseListWorksResponse(rsp)
+}
+
+// GetWorkWithResponse request returning *GetWorkResponse
+func (c *ClientWithResponses) GetWorkWithResponse(ctx context.Context, workId CanonicalWorkId, reqEditors ...RequestEditorFn) (*GetWorkResponse, error) {
+	rsp, err := c.GetWork(ctx, workId, reqEditors...)
+	if err != nil {
+		return nil, err
+	}
+	return ParseGetWorkResponse(rsp)
+}
+
+// ListWorkMediaWithResponse request returning *ListWorkMediaResponse
+func (c *ClientWithResponses) ListWorkMediaWithResponse(ctx context.Context, workId CanonicalWorkId, reqEditors ...RequestEditorFn) (*ListWorkMediaResponse, error) {
+	rsp, err := c.ListWorkMedia(ctx, workId, reqEditors...)
+	if err != nil {
+		return nil, err
+	}
+	return ParseListWorkMediaResponse(rsp)
+}
+
 // ParseGetBootstrapResponse parses an HTTP response from a GetBootstrapWithResponse call
 func ParseGetBootstrapResponse(rsp *http.Response) (*GetBootstrapResponse, error) {
 	bodyBytes, err := io.ReadAll(rsp.Body)
@@ -2250,6 +3075,53 @@ func ParseGetHealthResponse(rsp *http.Response) (*GetHealthResponse, error) {
 			return nil, err
 		}
 		response.JSON500 = &dest
+
+	}
+
+	return response, nil
+}
+
+// ParseGetJobResponse parses an HTTP response from a GetJobWithResponse call
+func ParseGetJobResponse(rsp *http.Response) (*GetJobResponse, error) {
+	bodyBytes, err := io.ReadAll(rsp.Body)
+	defer func() { _ = rsp.Body.Close() }()
+	if err != nil {
+		return nil, err
+	}
+
+	response := &GetJobResponse{
+		Body:         bodyBytes,
+		HTTPResponse: rsp,
+	}
+
+	switch {
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 200:
+		var dest Job
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON200 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 401:
+		var dest UnauthenticatedError
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON401 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 403:
+		var dest ForbiddenError
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON403 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 404:
+		var dest NotFoundError
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON404 = &dest
 
 	}
 
@@ -2350,6 +3222,53 @@ func ParseGetLibraryResponse(rsp *http.Response) (*GetLibraryResponse, error) {
 	return response, nil
 }
 
+// ParseGetMediaResponse parses an HTTP response from a GetMediaWithResponse call
+func ParseGetMediaResponse(rsp *http.Response) (*GetMediaResponse, error) {
+	bodyBytes, err := io.ReadAll(rsp.Body)
+	defer func() { _ = rsp.Body.Close() }()
+	if err != nil {
+		return nil, err
+	}
+
+	response := &GetMediaResponse{
+		Body:         bodyBytes,
+		HTTPResponse: rsp,
+	}
+
+	switch {
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 200:
+		var dest PublishedMedia
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON200 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 401:
+		var dest UnauthenticatedError
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON401 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 403:
+		var dest ForbiddenError
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON403 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 404:
+		var dest NotFoundError
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON404 = &dest
+
+	}
+
+	return response, nil
+}
+
 // ParseExchangePairingCredentialResponse parses an HTTP response from a ExchangePairingCredentialWithResponse call
 func ParseExchangePairingCredentialResponse(rsp *http.Response) (*ExchangePairingCredentialResponse, error) {
 	bodyBytes, err := io.ReadAll(rsp.Body)
@@ -2417,6 +3336,53 @@ func ParseCreatePairingAttemptResponse(rsp *http.Response) (*CreatePairingAttemp
 			return nil, err
 		}
 		response.JSON403 = &dest
+
+	}
+
+	return response, nil
+}
+
+// ParseGetCurrentQueryPublicationResponse parses an HTTP response from a GetCurrentQueryPublicationWithResponse call
+func ParseGetCurrentQueryPublicationResponse(rsp *http.Response) (*GetCurrentQueryPublicationResponse, error) {
+	bodyBytes, err := io.ReadAll(rsp.Body)
+	defer func() { _ = rsp.Body.Close() }()
+	if err != nil {
+		return nil, err
+	}
+
+	response := &GetCurrentQueryPublicationResponse{
+		Body:         bodyBytes,
+		HTTPResponse: rsp,
+	}
+
+	switch {
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 200:
+		var dest QueryPublication
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON200 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 401:
+		var dest UnauthenticatedError
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON401 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 403:
+		var dest ForbiddenError
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON403 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 404:
+		var dest NotFoundError
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON404 = &dest
 
 	}
 
@@ -2784,6 +3750,201 @@ func ParseGetSourceResponse(rsp *http.Response) (*GetSourceResponse, error) {
 	switch {
 	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 200:
 		var dest Source
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON200 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 401:
+		var dest UnauthenticatedError
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON401 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 403:
+		var dest ForbiddenError
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON403 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 404:
+		var dest NotFoundError
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON404 = &dest
+
+	}
+
+	return response, nil
+}
+
+// ParseCreateScanJobResponse parses an HTTP response from a CreateScanJobWithResponse call
+func ParseCreateScanJobResponse(rsp *http.Response) (*CreateScanJobResponse, error) {
+	bodyBytes, err := io.ReadAll(rsp.Body)
+	defer func() { _ = rsp.Body.Close() }()
+	if err != nil {
+		return nil, err
+	}
+
+	response := &CreateScanJobResponse{
+		Body:         bodyBytes,
+		HTTPResponse: rsp,
+	}
+
+	switch {
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 202:
+		var dest Job
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON202 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 401:
+		var dest UnauthenticatedError
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON401 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 403:
+		var dest ForbiddenError
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON403 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 404:
+		var dest NotFoundError
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON404 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 409:
+		var dest ConflictError
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON409 = &dest
+
+	}
+
+	return response, nil
+}
+
+// ParseListWorksResponse parses an HTTP response from a ListWorksWithResponse call
+func ParseListWorksResponse(rsp *http.Response) (*ListWorksResponse, error) {
+	bodyBytes, err := io.ReadAll(rsp.Body)
+	defer func() { _ = rsp.Body.Close() }()
+	if err != nil {
+		return nil, err
+	}
+
+	response := &ListWorksResponse{
+		Body:         bodyBytes,
+		HTTPResponse: rsp,
+	}
+
+	switch {
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 200:
+		var dest WorkListResponse
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON200 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 401:
+		var dest UnauthenticatedError
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON401 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 403:
+		var dest ForbiddenError
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON403 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 404:
+		var dest NotFoundError
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON404 = &dest
+
+	}
+
+	return response, nil
+}
+
+// ParseGetWorkResponse parses an HTTP response from a GetWorkWithResponse call
+func ParseGetWorkResponse(rsp *http.Response) (*GetWorkResponse, error) {
+	bodyBytes, err := io.ReadAll(rsp.Body)
+	defer func() { _ = rsp.Body.Close() }()
+	if err != nil {
+		return nil, err
+	}
+
+	response := &GetWorkResponse{
+		Body:         bodyBytes,
+		HTTPResponse: rsp,
+	}
+
+	switch {
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 200:
+		var dest PublishedWork
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON200 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 401:
+		var dest UnauthenticatedError
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON401 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 403:
+		var dest ForbiddenError
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON403 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 404:
+		var dest NotFoundError
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON404 = &dest
+
+	}
+
+	return response, nil
+}
+
+// ParseListWorkMediaResponse parses an HTTP response from a ListWorkMediaWithResponse call
+func ParseListWorkMediaResponse(rsp *http.Response) (*ListWorkMediaResponse, error) {
+	bodyBytes, err := io.ReadAll(rsp.Body)
+	defer func() { _ = rsp.Body.Close() }()
+	if err != nil {
+		return nil, err
+	}
+
+	response := &ListWorkMediaResponse{
+		Body:         bodyBytes,
+		HTTPResponse: rsp,
+	}
+
+	switch {
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 200:
+		var dest MediaListResponse
 		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
 			return nil, err
 		}
