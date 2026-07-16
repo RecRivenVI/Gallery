@@ -103,6 +103,14 @@ type Media struct {
 	RelativePath   string
 }
 
+type GCResult struct {
+	ExpiredQueryLeases int
+	ExpiredBlobLeases  int
+	Publications       int
+	OverlayRevisions   int
+	CatalogRevisions   int
+}
+
 type Store struct {
 	db    *sql.DB
 	clock ports.Clock
@@ -609,6 +617,115 @@ func (s *Store) AbortCandidate(ctx context.Context, jobID string) error {
 		return fault.New(fault.CodeInternal, true, err)
 	}
 	return nil
+}
+
+// GarbageCollect 回收超过保留期且未被活动 publication、游标租约或 Blob
+// 读取租约保护的查询快照。FTS5 表不受外键级联管理，必须与对应 Overlay
+// revision 在同一事务中显式删除。
+func (s *Store) GarbageCollect(ctx context.Context, retention time.Duration) (GCResult, error) {
+	if retention < 0 {
+		return GCResult{}, fault.New(fault.CodeValidation, false, nil)
+	}
+	now := s.clock.Now().UTC().Unix()
+	cutoff := s.clock.Now().UTC().Add(-retention).Unix()
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return GCResult{}, fault.New(fault.CodeInternal, true, err)
+	}
+	defer tx.Rollback()
+
+	var result GCResult
+	if result.ExpiredQueryLeases, err = deleteCount(ctx, tx,
+		"DELETE FROM query_publication_leases WHERE expires_at<=?", now); err != nil {
+		return GCResult{}, fault.New(fault.CodeInternal, true, err)
+	}
+	if result.ExpiredBlobLeases, err = deleteCount(ctx, tx,
+		"DELETE FROM blob_read_leases WHERE expires_at<=?", now); err != nil {
+		return GCResult{}, fault.New(fault.CodeInternal, true, err)
+	}
+
+	type snapshot struct{ publication, catalog, overlay string }
+	rows, err := tx.QueryContext(ctx, `SELECT q.query_publication_id, q.catalog_revision_id, q.overlay_revision_id
+FROM query_publications q
+LEFT JOIN active_query_publication a ON a.query_publication_id=q.query_publication_id
+WHERE a.query_publication_id IS NULL AND q.created_at<=?
+AND NOT EXISTS (
+  SELECT 1 FROM query_publication_leases l
+  WHERE l.query_publication_id=q.query_publication_id AND l.expires_at>?
+)
+AND NOT EXISTS (
+  SELECT 1 FROM content_blobs b JOIN blob_read_leases l
+    ON l.blob_algorithm=b.algorithm AND l.blob_digest=b.digest
+  WHERE b.catalog_revision_id=q.catalog_revision_id AND l.expires_at>?
+)
+ORDER BY q.created_at, q.query_publication_id`, cutoff, now, now)
+	if err != nil {
+		return GCResult{}, fault.New(fault.CodeInternal, true, err)
+	}
+	var snapshots []snapshot
+	for rows.Next() {
+		var item snapshot
+		if err := rows.Scan(&item.publication, &item.catalog, &item.overlay); err != nil {
+			rows.Close()
+			return GCResult{}, fault.New(fault.CodeInternal, true, err)
+		}
+		snapshots = append(snapshots, item)
+	}
+	if err := rows.Close(); err != nil {
+		return GCResult{}, fault.New(fault.CodeInternal, true, err)
+	}
+
+	for _, item := range snapshots {
+		if _, err := tx.ExecContext(ctx, "DELETE FROM query_publications WHERE query_publication_id=?", item.publication); err != nil {
+			return GCResult{}, fault.New(fault.CodeInternal, true, err)
+		}
+		result.Publications++
+		var references int
+		if err := tx.QueryRowContext(ctx,
+			"SELECT count(*) FROM query_publications WHERE catalog_revision_id=? AND overlay_revision_id=?",
+			item.catalog, item.overlay).Scan(&references); err != nil {
+			return GCResult{}, fault.New(fault.CodeInternal, true, err)
+		}
+		if references == 0 {
+			if _, err := tx.ExecContext(ctx,
+				"DELETE FROM work_search WHERE catalog_revision_id=? AND overlay_revision_id=?",
+				item.catalog, item.overlay); err != nil {
+				return GCResult{}, fault.New(fault.CodeInternal, true, err)
+			}
+			count, err := deleteCount(ctx, tx,
+				"DELETE FROM overlay_projection_revisions WHERE catalog_revision_id=? AND overlay_revision_id=?",
+				item.catalog, item.overlay)
+			if err != nil {
+				return GCResult{}, fault.New(fault.CodeInternal, true, err)
+			}
+			result.OverlayRevisions += count
+		}
+	}
+
+	result.CatalogRevisions, err = deleteCount(ctx, tx, `DELETE FROM catalog_revisions
+WHERE status IN ('published', 'aborted') AND created_at<=?
+AND NOT EXISTS (SELECT 1 FROM query_publications q WHERE q.catalog_revision_id=catalog_revisions.catalog_revision_id)
+AND NOT EXISTS (
+  SELECT 1 FROM content_blobs b JOIN blob_read_leases l
+    ON l.blob_algorithm=b.algorithm AND l.blob_digest=b.digest
+  WHERE b.catalog_revision_id=catalog_revisions.catalog_revision_id AND l.expires_at>?
+)`, cutoff, now)
+	if err != nil {
+		return GCResult{}, fault.New(fault.CodeInternal, true, err)
+	}
+	if err := tx.Commit(); err != nil {
+		return GCResult{}, fault.New(fault.CodeInternal, true, err)
+	}
+	return result, nil
+}
+
+func deleteCount(ctx context.Context, tx *sql.Tx, query string, args ...any) (int, error) {
+	result, err := tx.ExecContext(ctx, query, args...)
+	if err != nil {
+		return 0, err
+	}
+	count, err := result.RowsAffected()
+	return int(count), err
 }
 
 func (s *Store) stageWorks(ctx context.Context, candidate Candidate, works []WorkFact) error {
