@@ -1,8 +1,8 @@
 openapi: 3.0.3
 info:
   title: Gallery API
-  version: 0.1.0-stage0
-  description: Gallery 阶段 0 正式契约骨架；尚未冻结完整 v1 资源面。
+  version: 0.2.0-walking-skeleton
+  description: Gallery Walking Skeleton 正式契约；尚未冻结完整 v1 资源面。
 servers:
   - url: http://127.0.0.1:{port}
     variables:
@@ -37,6 +37,92 @@ paths:
                 $ref: "#/components/schemas/BootstrapResponse"
         "500":
           $ref: "#/components/responses/InternalError"
+  /api/v1/personal/pairing-attempts:
+    post:
+      operationId: createPairingAttempt
+      summary: 创建短时、单次使用的 Personal 配对凭据
+      security: []
+      parameters:
+        - $ref: "#/components/parameters/CSRFHeader"
+      responses:
+        "201":
+          description: 配对凭据已创建；凭据只在本响应出现
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/PairingAttemptResponse"
+        "403":
+          $ref: "#/components/responses/ForbiddenError"
+  /api/v1/personal/pair:
+    post:
+      operationId: exchangePairingCredential
+      summary: 单次消费配对凭据并建立 HttpOnly Session
+      security: []
+      parameters:
+        - $ref: "#/components/parameters/CSRFHeader"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/PairingExchangeRequest"
+      responses:
+        "201":
+          description: Session 已建立
+          headers:
+            Set-Cookie:
+              schema:
+                type: string
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SessionEstablishedResponse"
+        "401":
+          $ref: "#/components/responses/UnauthenticatedError"
+        "403":
+          $ref: "#/components/responses/ForbiddenError"
+  /api/v1/sessions:
+    get:
+      operationId: listSessions
+      summary: 列出服务端 Session
+      responses:
+        "200":
+          description: Session 列表
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: false
+                required: [sessions]
+                properties:
+                  sessions:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/SessionSummary"
+        "401":
+          $ref: "#/components/responses/UnauthenticatedError"
+        "403":
+          $ref: "#/components/responses/ForbiddenError"
+  /api/v1/sessions/{sessionId}:
+    delete:
+      operationId: revokeSession
+      summary: 吊销指定 Session
+      parameters:
+        - name: sessionId
+          in: path
+          required: true
+          schema:
+            $ref: "#/components/schemas/SessionId"
+        - $ref: "#/components/parameters/CSRFHeader"
+      responses:
+        "204":
+          description: Session 已吊销
+        "401":
+          $ref: "#/components/responses/UnauthenticatedError"
+        "403":
+          $ref: "#/components/responses/ForbiddenError"
+        "404":
+          $ref: "#/components/responses/NotFoundError"
 components:
   securitySchemes:
     sessionCookie:
@@ -46,9 +132,36 @@ components:
     apiToken:
       type: http
       scheme: bearer
+  parameters:
+    CSRFHeader:
+      name: X-Gallery-CSRF
+      in: header
+      required: true
+      schema:
+        type: string
+        minLength: 32
+        maxLength: 256
   responses:
     InternalError:
       description: 内部失败；不返回堆栈、路径或数据库文本
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorEnvelope"
+    UnauthenticatedError:
+      description: Session 无效、过期或已吊销
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorEnvelope"
+    ForbiddenError:
+      description: capability、请求来源或 CSRF 校验失败
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorEnvelope"
+    NotFoundError:
+      description: 资源不存在或当前主体不可见
       content:
         application/json:
           schema:
@@ -82,7 +195,9 @@ components:
       required:
         - mode
         - authenticated
+        - availableCapabilities
         - effectiveCapabilities
+        - csrfToken
         - apiVersion
         - websocketProtocolVersion
         - sortProtocolVersion
@@ -93,6 +208,10 @@ components:
           enum: [personal, lan]
         authenticated:
           type: boolean
+        availableCapabilities:
+          type: array
+          items:
+            type: string
         principalId:
           type: string
           nullable: true
@@ -100,6 +219,10 @@ components:
           type: array
           items:
             type: string
+        csrfToken:
+          type: string
+          minLength: 32
+          maxLength: 256
         apiVersion:
           type: string
           enum: [v1]
@@ -158,6 +281,72 @@ components:
         - CATALOG_PUBLICATION_MISSING
         - CONTENT_CHANGED_DURING_HASH
         - MEDIA_OFFLINE
+        - HOST_REJECTED
+        - ORIGIN_REJECTED
+        - CSRF_INVALID
+        - PAIRING_INVALID
+        - PAIRING_EXPIRED
+    PairingAttemptResponse:
+      type: object
+      additionalProperties: false
+      required: [credential, expiresAt]
+      properties:
+        credential:
+          type: string
+          minLength: 32
+          maxLength: 256
+        expiresAt:
+          type: string
+          format: date-time
+    PairingExchangeRequest:
+      type: object
+      additionalProperties: false
+      required: [credential]
+      properties:
+        credential:
+          type: string
+          minLength: 32
+          maxLength: 256
+    SessionEstablishedResponse:
+      type: object
+      additionalProperties: false
+      required: [session, csrfToken, effectiveCapabilities]
+      properties:
+        session:
+          $ref: "#/components/schemas/SessionSummary"
+        csrfToken:
+          type: string
+          minLength: 32
+          maxLength: 256
+        effectiveCapabilities:
+          type: array
+          items:
+            type: string
+    SessionSummary:
+      type: object
+      additionalProperties: false
+      required: [id, principalId, createdAt, expiresAt, lastSeenAt, revoked]
+      properties:
+        id:
+          $ref: "#/components/schemas/SessionId"
+        principalId:
+          type: string
+          minLength: 1
+          maxLength: 128
+        createdAt:
+          type: string
+          format: date-time
+        expiresAt:
+          type: string
+          format: date-time
+        lastSeenAt:
+          type: string
+          format: date-time
+        revoked:
+          type: boolean
+    SessionId:
+      type: string
+      pattern: "^ses_[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
     LibraryId:
       type: string
       pattern: "^lib_[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"

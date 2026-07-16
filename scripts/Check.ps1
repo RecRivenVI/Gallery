@@ -20,11 +20,12 @@ $gofmt = Join-Path $goBin $gofmtName
 & $go mod tidy -diff
 if ($LASTEXITCODE -ne 0) { throw 'go.mod/go.sum 不是 tidy 状态' }
 
+$generatedPath = Join-Path $PSScriptRoot '..\internal\contract\api\openapi.gen.go'
+$generatedBefore = (Get-FileHash -LiteralPath $generatedPath -Algorithm SHA256).Hash
 & $go generate ./...
 if ($LASTEXITCODE -ne 0) { throw 'go generate 失败' }
-
-git diff --exit-code -- internal/contract/api/openapi.gen.go
-if ($LASTEXITCODE -ne 0) { throw 'OpenAPI 生成文件不是最新状态' }
+$generatedAfter = (Get-FileHash -LiteralPath $generatedPath -Algorithm SHA256).Hash
+if ($generatedBefore -ne $generatedAfter) { throw 'OpenAPI 生成文件不是最新状态' }
 
 $unformatted = & $gofmt -l cmd internal
 if ($LASTEXITCODE -ne 0) { throw 'gofmt 检查失败' }
