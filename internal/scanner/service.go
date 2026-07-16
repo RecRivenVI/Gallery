@@ -217,6 +217,10 @@ func (s *Service) Reconcile(ctx context.Context) error {
 		if job.Type != "scan" {
 			continue
 		}
+		if job.Status == jobs.StatusQueued {
+			s.Start(job.ID)
+			continue
+		}
 		publication, publicationErr := s.catalog.PublicationForJob(ctx, job.ID)
 		if publicationErr == nil && (job.Status == jobs.StatusRunning || job.Status == jobs.StatusPublishing) {
 			if markErr := s.resources.MarkOverlaySnapshotPublished(ctx, publication.ControlWatermark, publication.ID); markErr != nil {
