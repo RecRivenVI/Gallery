@@ -1,6 +1,7 @@
 package httpapi_test
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"io"
@@ -8,10 +9,12 @@ import (
 	"net/http"
 	"net/http/cookiejar"
 	"net/http/httptest"
+	"os"
 	"path/filepath"
 	"testing"
 	"time"
 
+	"github.com/RecRivenVI/gallery/internal/application"
 	"github.com/RecRivenVI/gallery/internal/auth"
 	"github.com/RecRivenVI/gallery/internal/config"
 	"github.com/RecRivenVI/gallery/internal/contract/api"
@@ -40,7 +43,11 @@ func TestGeneratedClientHealthBootstrapAndAnonymousWS(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	server := httptest.NewServer(httpapi.New(config.ModePersonal, store, fixedClock, personal, logger))
+	resources, err := application.NewResources(store.Control.SQL(), dirs, filesystem.OS{}, fixedClock, identity.NewGenerator(fixedClock))
+	if err != nil {
+		t.Fatal(err)
+	}
+	server := httptest.NewServer(httpapi.New(config.ModePersonal, store, fixedClock, personal, resources, logger))
 	defer server.Close()
 
 	client, err := api.NewClientWithResponses(server.URL)
@@ -99,8 +106,12 @@ func TestPersonalPairingIsSingleUseAndRevocationInvalidatesREST(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	resources, err := application.NewResources(store.Control.SQL(), dirs, filesystem.OS{}, fixedClock, identity.NewGenerator(fixedClock))
+	if err != nil {
+		t.Fatal(err)
+	}
 	server := httptest.NewServer(httpapi.New(
-		config.ModePersonal, store, fixedClock, personal,
+		config.ModePersonal, store, fixedClock, personal, resources,
 		slog.New(slog.NewJSONHandler(io.Discard, nil)),
 	))
 	defer server.Close()
@@ -140,6 +151,51 @@ func TestPersonalPairingIsSingleUseAndRevocationInvalidatesREST(t *testing.T) {
 	}, exchangeBody, requestEditor)
 	if err != nil || second.JSON401 == nil || second.JSON401.Error.Code != api.PAIRINGINVALID {
 		t.Fatalf("配对凭据被重复消费: %v status=%d", err, second.StatusCode())
+	}
+	mutation := sameOrigin(server.URL)
+	libraryResponse, err := client.CreateLibraryWithResponse(context.Background(), &api.CreateLibraryParams{
+		XGalleryCSRF: exchange.JSON201.CsrfToken,
+	}, api.LibraryCreateRequest{Name: "Walking Skeleton"}, mutation)
+	if err != nil || libraryResponse.JSON201 == nil {
+		t.Fatalf("通过公开 API 创建 Library 失败: %v status=%d", err, libraryResponse.StatusCode())
+	}
+	sourceRoot := filepath.Join(filepath.Dir(dirs.Data), "synthetic-source")
+	if err := os.MkdirAll(sourceRoot, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	sourceResponse, err := client.CreateSourceWithResponse(context.Background(), &api.CreateSourceParams{
+		XGalleryCSRF: exchange.JSON201.CsrfToken,
+	}, api.SourceCreateRequest{
+		LibraryId: libraryResponse.JSON201.Id, DisplayName: "Synthetic", RootPath: sourceRoot,
+	}, mutation)
+	if err != nil || sourceResponse.JSON201 == nil {
+		t.Fatalf("通过公开 API 创建 Source 失败: %v status=%d", err, sourceResponse.StatusCode())
+	}
+	if bytes.Contains(sourceResponse.Body, []byte(sourceRoot)) || bytes.Contains(sourceResponse.Body, []byte(`rootPath`)) {
+		t.Fatal("Source 响应泄露绝对路径")
+	}
+	ruleJSON, err := os.ReadFile(filepath.Join("..", "..", "rules", "testdata", "minimal-rule-package.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var rulePackage map[string]any
+	if err := json.Unmarshal(ruleJSON, &rulePackage); err != nil {
+		t.Fatal(err)
+	}
+	ruleResponse, err := client.CreateRuleVersionWithResponse(context.Background(), &api.CreateRuleVersionParams{
+		XGalleryCSRF: exchange.JSON201.CsrfToken,
+	}, api.RuleVersionCreateRequest{Package: rulePackage}, mutation)
+	if err != nil || ruleResponse.JSON201 == nil {
+		t.Fatalf("通过公开 API 创建 RuleVersion 失败: %v status=%d body=%s", err, ruleResponse.StatusCode(), ruleResponse.Body)
+	}
+	bindingResponse, err := client.CreateSourceRuleBindingWithResponse(context.Background(), &api.CreateSourceRuleBindingParams{
+		XGalleryCSRF: exchange.JSON201.CsrfToken,
+	}, api.SourceRuleBindingCreateRequest{
+		SourceId: sourceResponse.JSON201.Id, SemanticHash: ruleResponse.JSON201.SemanticHash,
+		Parameters: map[string]any{}, Priority: 0,
+	}, mutation)
+	if err != nil || bindingResponse.JSON201 == nil {
+		t.Fatalf("通过公开 API 创建 SourceRuleBinding 失败: %v status=%d body=%s", err, bindingResponse.StatusCode(), bindingResponse.Body)
 	}
 	sessions, err := client.ListSessionsWithResponse(context.Background())
 	if err != nil || sessions.JSON200 == nil || len(sessions.JSON200.Sessions) != 1 {

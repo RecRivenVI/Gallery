@@ -30,6 +30,8 @@ const (
 	CodeCSRFInvalid              Code = "CSRF_INVALID"
 	CodePairingInvalid           Code = "PAIRING_INVALID"
 	CodePairingExpired           Code = "PAIRING_EXPIRED"
+	CodeSourcePathInvalid        Code = "SOURCE_PATH_INVALID"
+	CodeRuleParameterInvalid     Code = "RULE_PARAMETER_INVALID"
 )
 
 // Error 在进程内保留 cause，但对外序列化时只应暴露稳定字段。
