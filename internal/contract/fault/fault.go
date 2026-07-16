@@ -24,6 +24,8 @@ const (
 	CodeOverlayFactInvalid       Code = "OVERLAY_FACT_INVALID"
 	CodeOverlayProjectionFailed  Code = "OVERLAY_PROJECTION_FAILED"
 	CodeBindingReviewRequired    Code = "BINDING_REVIEW_REQUIRED"
+	CodeDerivedAssetInvalid      Code = "DERIVED_ASSET_INVALID"
+	CodeDerivedAssetFailed       Code = "DERIVED_ASSET_FAILED"
 	CodeRuleSchemaInvalid        Code = "RULE_SCHEMA_INVALID"
 	CodeRuleCompile              Code = "RULE_COMPILE_ERROR"
 	CodeRuleCELLimit             Code = "RULE_CEL_LIMIT"

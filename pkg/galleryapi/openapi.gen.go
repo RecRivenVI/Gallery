@@ -130,6 +130,8 @@ const (
 	CURSOREXPIRED             ErrorCode = "CURSOR_EXPIRED"
 	CURSORINVALID             ErrorCode = "CURSOR_INVALID"
 	DATABASEOPENFAILED        ErrorCode = "DATABASE_OPEN_FAILED"
+	DERIVEDASSETFAILED        ErrorCode = "DERIVED_ASSET_FAILED"
+	DERIVEDASSETINVALID       ErrorCode = "DERIVED_ASSET_INVALID"
 	FORBIDDEN                 ErrorCode = "FORBIDDEN"
 	HOSTREJECTED              ErrorCode = "HOST_REJECTED"
 	INTERNALERROR             ErrorCode = "INTERNAL_ERROR"
@@ -190,6 +192,10 @@ func (e ErrorCode) Valid() bool {
 	case CURSORINVALID:
 		return true
 	case DATABASEOPENFAILED:
+		return true
+	case DERIVEDASSETFAILED:
+		return true
+	case DERIVEDASSETINVALID:
 		return true
 	case FORBIDDEN:
 		return true
