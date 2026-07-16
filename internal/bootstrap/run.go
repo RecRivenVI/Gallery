@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"time"
 
+	"github.com/RecRivenVI/gallery/internal/application"
 	"github.com/RecRivenVI/gallery/internal/auth"
 	"github.com/RecRivenVI/gallery/internal/config"
 	"github.com/RecRivenVI/gallery/internal/platform/clock"
@@ -56,7 +57,11 @@ func Run(ctx context.Context, cfg config.Config, logger *slog.Logger) error {
 	if err != nil {
 		return err
 	}
-	handler := httpapi.New(cfg.Mode, store, systemClock, personal, logger)
+	resources, err := application.NewResources(store.Control.SQL(), cfg.AppDirs, fileSystem, systemClock, identity.NewGenerator(systemClock))
+	if err != nil {
+		return err
+	}
+	handler := httpapi.New(cfg.Mode, store, systemClock, personal, resources, logger)
 	server := &http.Server{
 		Handler: handler, ReadHeaderTimeout: 10 * time.Second, IdleTimeout: 60 * time.Second,
 	}

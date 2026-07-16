@@ -8,8 +8,8 @@
   "parameter_schema": {"type": "object", "additionalProperties": false},
   "provider_namespaces": [],
   "primitives": [
-    {"id": "work", "kind": "path_match", "config": {"glob": "*"}},
-    {"id": "media", "kind": "media_classify", "config": {"extensions": [".jpg"]}}
+    {"id": "work", "kind": "path_match", "config": {"scope": "work_directory", "glob": "*", "title": "directory_name", "stable_key": "relative_path"}},
+    {"id": "media", "kind": "media_classify", "config": {"glob": "*.bin", "kind": "image", "mime": "application/octet-stream"}}
   ],
   "cel_expressions": [],
   "tests": [{"id": "one-work-one-media"}],

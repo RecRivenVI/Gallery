@@ -123,6 +123,206 @@ paths:
           $ref: "#/components/responses/ForbiddenError"
         "404":
           $ref: "#/components/responses/NotFoundError"
+  /api/v1/libraries:
+    post:
+      operationId: createLibrary
+      summary: 创建 Library
+      parameters:
+        - $ref: "#/components/parameters/CSRFHeader"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/LibraryCreateRequest"
+      responses:
+        "201":
+          description: Library 已创建
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Library"
+        "400":
+          $ref: "#/components/responses/ValidationError"
+        "401":
+          $ref: "#/components/responses/UnauthenticatedError"
+        "403":
+          $ref: "#/components/responses/ForbiddenError"
+  /api/v1/libraries/{libraryId}:
+    get:
+      operationId: getLibrary
+      summary: 读取 Library
+      parameters:
+        - name: libraryId
+          in: path
+          required: true
+          schema:
+            $ref: "#/components/schemas/LibraryId"
+      responses:
+        "200":
+          description: Library
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Library"
+        "401":
+          $ref: "#/components/responses/UnauthenticatedError"
+        "403":
+          $ref: "#/components/responses/ForbiddenError"
+        "404":
+          $ref: "#/components/responses/NotFoundError"
+  /api/v1/sources:
+    post:
+      operationId: createSource
+      summary: 注册严格只读 Source
+      parameters:
+        - $ref: "#/components/parameters/CSRFHeader"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/SourceCreateRequest"
+      responses:
+        "201":
+          description: Source 已注册
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Source"
+        "400":
+          $ref: "#/components/responses/ValidationError"
+        "401":
+          $ref: "#/components/responses/UnauthenticatedError"
+        "403":
+          $ref: "#/components/responses/ForbiddenError"
+        "409":
+          $ref: "#/components/responses/ConflictError"
+  /api/v1/sources/{sourceId}:
+    get:
+      operationId: getSource
+      summary: 读取不含绝对路径的 Source snapshot
+      parameters:
+        - name: sourceId
+          in: path
+          required: true
+          schema:
+            $ref: "#/components/schemas/SourceId"
+      responses:
+        "200":
+          description: Source
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Source"
+        "401":
+          $ref: "#/components/responses/UnauthenticatedError"
+        "403":
+          $ref: "#/components/responses/ForbiddenError"
+        "404":
+          $ref: "#/components/responses/NotFoundError"
+  /api/v1/rule-versions:
+    post:
+      operationId: createRuleVersion
+      summary: 校验、规范化并编译不可变 RuleVersion
+      parameters:
+        - $ref: "#/components/parameters/CSRFHeader"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/RuleVersionCreateRequest"
+      responses:
+        "201":
+          description: RuleVersion 已创建或按 semantic hash 复用
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/RuleVersion"
+        "400":
+          $ref: "#/components/responses/ValidationError"
+        "401":
+          $ref: "#/components/responses/UnauthenticatedError"
+        "403":
+          $ref: "#/components/responses/ForbiddenError"
+        "409":
+          $ref: "#/components/responses/ConflictError"
+  /api/v1/rule-versions/{semanticHash}:
+    get:
+      operationId: getRuleVersion
+      summary: 按运行语义身份读取 RuleVersion
+      parameters:
+        - name: semanticHash
+          in: path
+          required: true
+          schema:
+            $ref: "#/components/schemas/SHA256Digest"
+      responses:
+        "200":
+          description: RuleVersion
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/RuleVersion"
+        "401":
+          $ref: "#/components/responses/UnauthenticatedError"
+        "403":
+          $ref: "#/components/responses/ForbiddenError"
+        "404":
+          $ref: "#/components/responses/NotFoundError"
+  /api/v1/source-rule-bindings:
+    post:
+      operationId: createSourceRuleBinding
+      summary: 绑定并冻结 Source 的 RuleVersion、参数和 Rule IR
+      parameters:
+        - $ref: "#/components/parameters/CSRFHeader"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/SourceRuleBindingCreateRequest"
+      responses:
+        "201":
+          description: SourceRuleBinding 已创建
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SourceRuleBinding"
+        "400":
+          $ref: "#/components/responses/ValidationError"
+        "401":
+          $ref: "#/components/responses/UnauthenticatedError"
+        "403":
+          $ref: "#/components/responses/ForbiddenError"
+        "404":
+          $ref: "#/components/responses/NotFoundError"
+        "409":
+          $ref: "#/components/responses/ConflictError"
+  /api/v1/source-rule-bindings/{bindingId}:
+    get:
+      operationId: getSourceRuleBinding
+      summary: 读取 SourceRuleBinding
+      parameters:
+        - name: bindingId
+          in: path
+          required: true
+          schema:
+            $ref: "#/components/schemas/SourceRuleBindingId"
+      responses:
+        "200":
+          description: SourceRuleBinding
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SourceRuleBinding"
+        "401":
+          $ref: "#/components/responses/UnauthenticatedError"
+        "403":
+          $ref: "#/components/responses/ForbiddenError"
+        "404":
+          $ref: "#/components/responses/NotFoundError"
 components:
   securitySchemes:
     sessionCookie:
@@ -162,6 +362,18 @@ components:
             $ref: "#/components/schemas/ErrorEnvelope"
     NotFoundError:
       description: 资源不存在或当前主体不可见
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorEnvelope"
+    ValidationError:
+      description: 请求字段、路径或规则校验失败
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorEnvelope"
+    ConflictError:
+      description: 资源或同类操作冲突
       content:
         application/json:
           schema:
@@ -286,6 +498,129 @@ components:
         - CSRF_INVALID
         - PAIRING_INVALID
         - PAIRING_EXPIRED
+        - SOURCE_PATH_INVALID
+        - RULE_PARAMETER_INVALID
+    LibraryCreateRequest:
+      type: object
+      additionalProperties: false
+      required: [name]
+      properties:
+        name:
+          type: string
+          minLength: 1
+          maxLength: 256
+    Library:
+      type: object
+      additionalProperties: false
+      required: [id, name, createdAt]
+      properties:
+        id:
+          $ref: "#/components/schemas/LibraryId"
+        name:
+          type: string
+        createdAt:
+          type: string
+          format: date-time
+    SourceCreateRequest:
+      type: object
+      additionalProperties: false
+      required: [libraryId, displayName, rootPath]
+      properties:
+        libraryId:
+          $ref: "#/components/schemas/LibraryId"
+        displayName:
+          type: string
+          minLength: 1
+          maxLength: 256
+        rootPath:
+          type: string
+          minLength: 1
+          maxLength: 32768
+    Source:
+      type: object
+      additionalProperties: false
+      required: [id, libraryId, displayName, readOnly, available, createdAt]
+      properties:
+        id:
+          $ref: "#/components/schemas/SourceId"
+        libraryId:
+          $ref: "#/components/schemas/LibraryId"
+        displayName:
+          type: string
+        readOnly:
+          type: boolean
+        available:
+          type: boolean
+        createdAt:
+          type: string
+          format: date-time
+    RuleVersionCreateRequest:
+      type: object
+      additionalProperties: false
+      required: [package]
+      properties:
+        package:
+          type: object
+          additionalProperties: true
+    RuleVersion:
+      type: object
+      additionalProperties: false
+      required: [ruleSetId, version, packageHash, semanticHash, ruleIrHash, createdAt]
+      properties:
+        ruleSetId:
+          type: string
+          pattern: "^rset_[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+        version:
+          type: string
+        packageHash:
+          $ref: "#/components/schemas/SHA256Digest"
+        semanticHash:
+          $ref: "#/components/schemas/SHA256Digest"
+        ruleIrHash:
+          $ref: "#/components/schemas/SHA256Digest"
+        createdAt:
+          type: string
+          format: date-time
+    SourceRuleBindingCreateRequest:
+      type: object
+      additionalProperties: false
+      required: [sourceId, semanticHash, parameters, priority]
+      properties:
+        sourceId:
+          $ref: "#/components/schemas/SourceId"
+        semanticHash:
+          $ref: "#/components/schemas/SHA256Digest"
+        parameters:
+          type: object
+          additionalProperties: true
+        priority:
+          type: integer
+          minimum: 0
+          maximum: 10000
+    SourceRuleBinding:
+      type: object
+      additionalProperties: false
+      required: [id, sourceId, semanticHash, parameters, priority, ruleIrHash, createdAt]
+      properties:
+        id:
+          $ref: "#/components/schemas/SourceRuleBindingId"
+        sourceId:
+          $ref: "#/components/schemas/SourceId"
+        semanticHash:
+          $ref: "#/components/schemas/SHA256Digest"
+        parameters:
+          type: object
+          additionalProperties: true
+        priority:
+          type: integer
+        ruleIrHash:
+          $ref: "#/components/schemas/SHA256Digest"
+        createdAt:
+          type: string
+          format: date-time
+    SHA256Digest:
+      type: string
+      pattern: "^[0-9a-f]{64}$"
     PairingAttemptResponse:
       type: object
       additionalProperties: false
