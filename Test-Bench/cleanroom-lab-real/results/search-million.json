@@ -1,0 +1,89 @@
+{
+  "schema_version": 1,
+  "documents": 1000000,
+  "fts_build_ms": 28704,
+  "bleve_build_ms": 21087,
+  "fts_bytes": 299429888,
+  "bleve_bytes": 219255860,
+  "bleve_enabled": true,
+  "queries": [
+    {
+      "Query": "星空",
+      "Kind": "CJK-2",
+      "GroundTruth": 333333,
+      "Candidates": 333333,
+      "Verified": 333333,
+      "Recall": 1,
+      "FTSMS": 1,
+      "VerifyMS": 1335,
+      "FullScanMS": 247,
+      "BleveMS": 28,
+      "BleveHits": 333333
+    },
+    {
+      "Query": "机械",
+      "Kind": "CJK-2",
+      "GroundTruth": 166666,
+      "Candidates": 166666,
+      "Verified": 166666,
+      "Recall": 1,
+      "FTSMS": 1,
+      "VerifyMS": 854,
+      "FullScanMS": 198,
+      "BleveMS": 12,
+      "BleveHits": 166666
+    },
+    {
+      "Query": "機械",
+      "Kind": "Japanese-2",
+      "GroundTruth": 166667,
+      "Candidates": 166667,
+      "Verified": 166667,
+      "Recall": 1,
+      "FTSMS": 0,
+      "VerifyMS": 853,
+      "FullScanMS": 208,
+      "BleveMS": 16,
+      "BleveHits": 166667
+    },
+    {
+      "Query": "Mechanical",
+      "Kind": "English-word",
+      "GroundTruth": 166667,
+      "Candidates": 166667,
+      "Verified": 166667,
+      "Recall": 1,
+      "FTSMS": 2,
+      "VerifyMS": 950,
+      "FullScanMS": 200,
+      "BleveMS": 13,
+      "BleveHits": 166667
+    },
+    {
+      "Query": "mid",
+      "Kind": "filename-infix",
+      "GroundTruth": 166667,
+      "Candidates": 166667,
+      "Verified": 166667,
+      "Recall": 1,
+      "FTSMS": 0,
+      "VerifyMS": 829,
+      "FullScanMS": 208,
+      "BleveMS": 0,
+      "BleveHits": 0
+    },
+    {
+      "Query": "😀10",
+      "Kind": "emoji-natural-text",
+      "GroundTruth": 166666,
+      "Candidates": 166666,
+      "Verified": 166666,
+      "Recall": 1,
+      "FTSMS": 0,
+      "VerifyMS": 824,
+      "FullScanMS": 203,
+      "BleveMS": 14,
+      "BleveHits": 166666
+    }
+  ]
+}

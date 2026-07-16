@@ -1,0 +1,49 @@
+{
+  "SchemaVersion": 1,
+  "Metrics": [
+    {
+      "Engine": "fts5",
+      "Query": "星空",
+      "Kind": "broad-cjk",
+      "Runs": 30,
+      "Limit": 200,
+      "Verified": 200,
+      "P50US": 1000,
+      "P95US": 1848,
+      "Hits": 200
+    },
+    {
+      "Engine": "fts5",
+      "Query": "mid",
+      "Kind": "broad-filename",
+      "Runs": 30,
+      "Limit": 200,
+      "Verified": 200,
+      "P50US": 1000,
+      "P95US": 1504,
+      "Hits": 200
+    },
+    {
+      "Engine": "fts5",
+      "Query": "星空机械 作品 00000120",
+      "Kind": "selective-cjk",
+      "Runs": 30,
+      "Limit": 200,
+      "Verified": 1,
+      "P50US": 1000,
+      "P95US": 1838,
+      "Hits": 1
+    },
+    {
+      "Engine": "fts5",
+      "Query": "abc_mid_xyz_00000123",
+      "Kind": "selective-filename",
+      "Runs": 30,
+      "Limit": 200,
+      "Verified": 1,
+      "P50US": 1999,
+      "P95US": 2759,
+      "Hits": 1
+    }
+  ]
+}

@@ -1,0 +1,234 @@
+{
+  "schema_version": 1,
+  "generated_at": "2026-07-16T01:38:30Z",
+  "roots": [
+    {
+      "alias": "pixiv",
+      "metadata_evaluated": 3000,
+      "rules": [
+        {
+          "ID": "R01-media-extension",
+          "Primitive": "file.match",
+          "Need": "primitive",
+          "Matched": 3000,
+          "Evaluated": 3000
+        },
+        {
+          "ID": "R02-cover-basename",
+          "Primitive": "file.basename",
+          "Need": "primitive",
+          "Matched": 0,
+          "Evaluated": 3000
+        },
+        {
+          "ID": "R03-preview-hide",
+          "Primitive": "file.regex",
+          "Need": "primitive",
+          "Matched": 0,
+          "Evaluated": 3000
+        },
+        {
+          "ID": "R04-title-fallback",
+          "Primitive": "metadata.first",
+          "Need": "primitive",
+          "Matched": 3000,
+          "Evaluated": 3000
+        },
+        {
+          "ID": "R05-creator-fallback",
+          "Primitive": "metadata.first",
+          "Need": "primitive",
+          "Matched": 3000,
+          "Evaluated": 3000
+        },
+        {
+          "ID": "R06-attachment-array",
+          "Primitive": "metadata.array",
+          "Need": "primitive",
+          "Matched": 0,
+          "Evaluated": 3000
+        },
+        {
+          "ID": "R07-conditional-cover",
+          "Primitive": "when+array.filter",
+          "Need": "cel-profile",
+          "Matched": 0,
+          "Evaluated": 3000
+        },
+        {
+          "ID": "R08-date-normalize",
+          "Primitive": "time.parse",
+          "Need": "primitive",
+          "Matched": 3000,
+          "Evaluated": 3000
+        },
+        {
+          "ID": "R09-derived-preview",
+          "Primitive": "derive.policy",
+          "Need": "primitive",
+          "Matched": 3000,
+          "Evaluated": 3000
+        },
+        {
+          "ID": "R10-cross-record-dedupe",
+          "Primitive": "stateful.aggregate",
+          "Need": "plugin",
+          "Matched": 0,
+          "Evaluated": 3000
+        }
+      ]
+    },
+    {
+      "alias": "pawchive",
+      "metadata_evaluated": 2350,
+      "rules": [
+        {
+          "ID": "R01-media-extension",
+          "Primitive": "file.match",
+          "Need": "primitive",
+          "Matched": 2214,
+          "Evaluated": 2350
+        },
+        {
+          "ID": "R02-cover-basename",
+          "Primitive": "file.basename",
+          "Need": "primitive",
+          "Matched": 1906,
+          "Evaluated": 2350
+        },
+        {
+          "ID": "R03-preview-hide",
+          "Primitive": "file.regex",
+          "Need": "primitive",
+          "Matched": 0,
+          "Evaluated": 2350
+        },
+        {
+          "ID": "R04-title-fallback",
+          "Primitive": "metadata.first",
+          "Need": "primitive",
+          "Matched": 2350,
+          "Evaluated": 2350
+        },
+        {
+          "ID": "R05-creator-fallback",
+          "Primitive": "metadata.first",
+          "Need": "primitive",
+          "Matched": 2350,
+          "Evaluated": 2350
+        },
+        {
+          "ID": "R06-attachment-array",
+          "Primitive": "metadata.array",
+          "Need": "primitive",
+          "Matched": 2257,
+          "Evaluated": 2350
+        },
+        {
+          "ID": "R07-conditional-cover",
+          "Primitive": "when+array.filter",
+          "Need": "cel-profile",
+          "Matched": 2257,
+          "Evaluated": 2350
+        },
+        {
+          "ID": "R08-date-normalize",
+          "Primitive": "time.parse",
+          "Need": "primitive",
+          "Matched": 2350,
+          "Evaluated": 2350
+        },
+        {
+          "ID": "R09-derived-preview",
+          "Primitive": "derive.policy",
+          "Need": "primitive",
+          "Matched": 2214,
+          "Evaluated": 2350
+        },
+        {
+          "ID": "R10-cross-record-dedupe",
+          "Primitive": "stateful.aggregate",
+          "Need": "plugin",
+          "Matched": 0,
+          "Evaluated": 2350
+        }
+      ]
+    },
+    {
+      "alias": "gank",
+      "metadata_evaluated": 258,
+      "rules": [
+        {
+          "ID": "R01-media-extension",
+          "Primitive": "file.match",
+          "Need": "primitive",
+          "Matched": 253,
+          "Evaluated": 258
+        },
+        {
+          "ID": "R02-cover-basename",
+          "Primitive": "file.basename",
+          "Need": "primitive",
+          "Matched": 0,
+          "Evaluated": 258
+        },
+        {
+          "ID": "R03-preview-hide",
+          "Primitive": "file.regex",
+          "Need": "primitive",
+          "Matched": 0,
+          "Evaluated": 258
+        },
+        {
+          "ID": "R04-title-fallback",
+          "Primitive": "metadata.first",
+          "Need": "primitive",
+          "Matched": 258,
+          "Evaluated": 258
+        },
+        {
+          "ID": "R05-creator-fallback",
+          "Primitive": "metadata.first",
+          "Need": "primitive",
+          "Matched": 0,
+          "Evaluated": 258
+        },
+        {
+          "ID": "R06-attachment-array",
+          "Primitive": "metadata.array",
+          "Need": "primitive",
+          "Matched": 258,
+          "Evaluated": 258
+        },
+        {
+          "ID": "R07-conditional-cover",
+          "Primitive": "when+array.filter",
+          "Need": "cel-profile",
+          "Matched": 258,
+          "Evaluated": 258
+        },
+        {
+          "ID": "R08-date-normalize",
+          "Primitive": "time.parse",
+          "Need": "primitive",
+          "Matched": 258,
+          "Evaluated": 258
+        },
+        {
+          "ID": "R09-derived-preview",
+          "Primitive": "derive.policy",
+          "Need": "primitive",
+          "Matched": 253,
+          "Evaluated": 258
+        },
+        {
+          "ID": "R10-cross-record-dedupe",
+          "Primitive": "stateful.aggregate",
+          "Need": "plugin",
+          "Matched": 0,
+          "Evaluated": 258
+        }
+      ]
+    }
+  ]
+}

@@ -1,0 +1,15 @@
+{
+  "schema_version": 1,
+  "OS": "linux",
+  "Arch": "amd64",
+  "CaseDistinct": false,
+  "NFCNFDistinct": true,
+  "Hardlink": true,
+  "Symlink": true,
+  "LongPath": true,
+  "TimestampDeltaNS": 123456789,
+  "FFMPEGFound": false,
+  "FFprobeFound": false,
+  "PathSeparator": "/",
+  "RuntimeExecuted": true
+}

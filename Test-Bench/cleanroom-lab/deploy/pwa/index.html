@@ -1,0 +1,24 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width,initial-scale=1">
+    <meta name="theme-color" content="#111318">
+    <link rel="manifest" href="./manifest.webmanifest">
+    <title>Gallery PWA probe</title>
+  </head>
+  <body>
+    <main>
+      <h1>Gallery PWA probe</h1>
+      <p>该静态壳只验证安装清单、离线应用壳和同源 API 启动，不代表最终界面。</p>
+      <pre id="status">正在读取后端能力……</pre>
+    </main>
+    <script>
+      navigator.serviceWorker?.register('./sw.js');
+      fetch('/api/v1/public/bootstrap')
+        .then((response) => response.json())
+        .then((value) => { status.textContent = JSON.stringify(value, null, 2); })
+        .catch((error) => { status.textContent = `离线应用壳：${error.message}`; });
+    </script>
+  </body>
+</html>

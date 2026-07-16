@@ -1,0 +1,37 @@
+# Gallery 本地 AppDirs 与构建输出
+/.gallery/
+/bin/
+/build/
+/coverage/
+/dist/
+/tmp/
+
+# 本地数据库、日志和运行时文件
+*.db
+*.db-*
+*.sqlite
+*.sqlite-*
+*.log
+
+# Go / Node / IDE 生成物
+*.exe
+*.dll
+*.pdb
+*.node
+*.test
+*.out
+node_modules/
+.idea/
+.vscode/
+
+# Cleanroom 源码、说明与小型机器可读结果纳入基线；大型可重建产物不入库
+Test-Bench/**/bin/
+Test-Bench/**/obj/
+Test-Bench/**/build/bin/
+Test-Bench/**/build/windows/
+Test-Bench/**/frontend/dist/
+Test-Bench/**/results/**/*-fixtures/
+Test-Bench/**/results/**/bleve/
+Test-Bench/**/*.bolt
+Test-Bench/**/*.zap
+Test-Bench/**/*.bin
