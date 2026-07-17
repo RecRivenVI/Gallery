@@ -66,14 +66,20 @@ type nopNotifier struct{}
 func (nopNotifier) JobChanged(jobs.Job)                      {}
 func (nopNotifier) PublicationPublished(catalog.Publication) {}
 
+// Dispatcher 把 Job 交给中央有界调度器执行。未注入时 Service 回退到自管理 goroutine。
+type Dispatcher interface {
+	Submit(jobID string)
+}
+
 type Service struct {
-	context  context.Context
-	control  *sql.DB
-	jobs     *jobs.Store
-	catalog  *catalog.Store
-	clock    ports.Clock
-	notifier Notifier
-	wait     sync.WaitGroup
+	context    context.Context
+	control    *sql.DB
+	jobs       *jobs.Store
+	catalog    *catalog.Store
+	clock      ports.Clock
+	notifier   Notifier
+	wait       sync.WaitGroup
+	dispatcher Dispatcher
 
 	// faultInjector 只供同包恢复测试设置；生产路径始终为 nil。
 	faultInjector func(stage string) error
@@ -228,6 +234,10 @@ func (s *Service) Start(jobID string) {
 	if jobID == "" {
 		return
 	}
+	if s.dispatcher != nil {
+		s.dispatcher.Submit(jobID)
+		return
+	}
 	s.wait.Add(1)
 	go func() {
 		defer s.wait.Done()
@@ -236,6 +246,9 @@ func (s *Service) Start(jobID string) {
 }
 
 func (s *Service) Wait() { s.wait.Wait() }
+
+// SetDispatcher 注入中央调度器；注入后 Start 通过调度器领取执行并接受其 context 取消。
+func (s *Service) SetDispatcher(d Dispatcher) { s.dispatcher = d }
 
 func (s *Service) Execute(ctx context.Context, jobID string) error {
 	job, err := s.jobs.StartStage(ctx, jobID, "projecting")
