@@ -58,7 +58,11 @@
             "PATH_ESCAPE",
             "CATALOG_CANDIDATE_INVALID",
             "PROCESS_INTERRUPTED",
-            "RANGE_INVALID"
+            "RANGE_INVALID",
+            "RESTORE_FAILED",
+            "BACKUP_NOT_FOUND",
+            "BACKUP_CORRUPT",
+            "BACKUP_INCOMPATIBLE"
           ]
         },
         "retryable": {"type": "boolean"},

@@ -247,6 +247,36 @@ func (e ContentBlobRefAlgorithm) Valid() bool {
 	}
 }
 
+// Defines values for ControlBackupManifestDatabaseChecksumAlgorithm.
+const (
+	Sha256 ControlBackupManifestDatabaseChecksumAlgorithm = "sha256"
+)
+
+// Valid indicates whether the value is a known member of the ControlBackupManifestDatabaseChecksumAlgorithm enum.
+func (e ControlBackupManifestDatabaseChecksumAlgorithm) Valid() bool {
+	switch e {
+	case Sha256:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for ControlBackupManifestRole.
+const (
+	Control ControlBackupManifestRole = "control"
+)
+
+// Valid indicates whether the value is a known member of the ControlBackupManifestRole enum.
+func (e ControlBackupManifestRole) Valid() bool {
+	switch e {
+	case Control:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for CreatorMergeStatus.
 const (
 	Applied CreatorMergeStatus = "applied"
@@ -292,7 +322,10 @@ func (e CreatorSourceBindingStatus) Valid() bool {
 // Defines values for ErrorCode.
 const (
 	APPDIRSSOURCEOVERLAP      ErrorCode = "APPDIRS_SOURCE_OVERLAP"
+	BACKUPCORRUPT             ErrorCode = "BACKUP_CORRUPT"
 	BACKUPFAILED              ErrorCode = "BACKUP_FAILED"
+	BACKUPINCOMPATIBLE        ErrorCode = "BACKUP_INCOMPATIBLE"
+	BACKUPNOTFOUND            ErrorCode = "BACKUP_NOT_FOUND"
 	BINDINGREVIEWREQUIRED     ErrorCode = "BINDING_REVIEW_REQUIRED"
 	CATALOGCANDIDATEINVALID   ErrorCode = "CATALOG_CANDIDATE_INVALID"
 	CATALOGPUBLICATIONMISSING ErrorCode = "CATALOG_PUBLICATION_MISSING"
@@ -322,6 +355,7 @@ const (
 	PROCESSINTERRUPTED        ErrorCode = "PROCESS_INTERRUPTED"
 	QUERYTOOSHORT             ErrorCode = "QUERY_TOO_SHORT"
 	RANGEINVALID              ErrorCode = "RANGE_INVALID"
+	RESTOREFAILED             ErrorCode = "RESTORE_FAILED"
 	RULECELLIMIT              ErrorCode = "RULE_CEL_LIMIT"
 	RULECOMPILEERROR          ErrorCode = "RULE_COMPILE_ERROR"
 	RULEDRYRUNFAILED          ErrorCode = "RULE_DRY_RUN_FAILED"
@@ -343,7 +377,13 @@ func (e ErrorCode) Valid() bool {
 	switch e {
 	case APPDIRSSOURCEOVERLAP:
 		return true
+	case BACKUPCORRUPT:
+		return true
 	case BACKUPFAILED:
+		return true
+	case BACKUPINCOMPATIBLE:
+		return true
+	case BACKUPNOTFOUND:
 		return true
 	case BINDINGREVIEWREQUIRED:
 		return true
@@ -402,6 +442,8 @@ func (e ErrorCode) Valid() bool {
 	case QUERYTOOSHORT:
 		return true
 	case RANGEINVALID:
+		return true
+	case RESTOREFAILED:
 		return true
 	case RULECELLIMIT:
 		return true
@@ -531,6 +573,8 @@ func (e JobStatus) Valid() bool {
 
 // Defines values for JobType.
 const (
+	ControlBackup     JobType = "control_backup"
+	ControlRestore    JobType = "control_restore"
 	OverlayProjection JobType = "overlay_projection"
 	Scan              JobType = "scan"
 )
@@ -538,6 +582,10 @@ const (
 // Valid indicates whether the value is a known member of the JobType enum.
 func (e JobType) Valid() bool {
 	switch e {
+	case ControlBackup:
+		return true
+	case ControlRestore:
+		return true
 	case OverlayProjection:
 		return true
 	case Scan:
@@ -909,6 +957,42 @@ type ContentBlobRef struct {
 
 // ContentBlobRefAlgorithm defines model for ContentBlobRef.Algorithm.
 type ContentBlobRefAlgorithm string
+
+// ControlBackupListResponse defines model for ControlBackupListResponse.
+type ControlBackupListResponse struct {
+	Backups []ControlBackupManifest `json:"backups"`
+}
+
+// ControlBackupManifest defines model for ControlBackupManifest.
+type ControlBackupManifest struct {
+	AppVersion string    `json:"appVersion"`
+	BackupId   string    `json:"backupId"`
+	CreatedAt  time.Time `json:"createdAt"`
+	Database   struct {
+		Checksum          string                                         `json:"checksum"`
+		ChecksumAlgorithm ControlBackupManifestDatabaseChecksumAlgorithm `json:"checksumAlgorithm"`
+		FileName          string                                         `json:"fileName"`
+		SizeBytes         int64                                          `json:"sizeBytes"`
+	} `json:"database"`
+	ManifestVersion   int                       `json:"manifestVersion"`
+	MigrationChecksum string                    `json:"migrationChecksum"`
+	Notes             *string                   `json:"notes,omitempty"`
+	Role              ControlBackupManifestRole `json:"role"`
+	SchemaVersion     int64                     `json:"schemaVersion"`
+	Security          struct {
+		ApiTokens           string `json:"apiTokens"`
+		CredentialStoreRefs string `json:"credentialStoreRefs"`
+		Note                string `json:"note"`
+		PairingCredentials  string `json:"pairingCredentials"`
+		Sessions            string `json:"sessions"`
+	} `json:"security"`
+}
+
+// ControlBackupManifestDatabaseChecksumAlgorithm defines model for ControlBackupManifest.Database.ChecksumAlgorithm.
+type ControlBackupManifestDatabaseChecksumAlgorithm string
+
+// ControlBackupManifestRole defines model for ControlBackupManifest.Role.
+type ControlBackupManifestRole string
 
 // Creator defines model for Creator.
 type Creator struct {
@@ -1395,6 +1479,11 @@ type apiTokenContextKey string
 // sessionCookieContextKey is the context key for sessionCookie security scheme
 type sessionCookieContextKey string
 
+// CreateControlBackupParams defines parameters for CreateControlBackup.
+type CreateControlBackupParams struct {
+	XGalleryCSRF CSRFHeader `json:"X-Gallery-CSRF"`
+}
+
 // UnbindMediaParams defines parameters for UnbindMedia.
 type UnbindMediaParams struct {
 	XGalleryCSRF CSRFHeader `json:"X-Gallery-CSRF"`
@@ -1685,6 +1774,15 @@ func WithRequestEditorFn(fn RequestEditorFn) ClientOption {
 
 // The interface specification for the client above.
 type ClientInterface interface {
+	// ListControlBackups request
+	ListControlBackups(ctx context.Context, reqEditors ...RequestEditorFn) (*http.Response, error)
+
+	// CreateControlBackup request
+	CreateControlBackup(ctx context.Context, params *CreateControlBackupParams, reqEditors ...RequestEditorFn) (*http.Response, error)
+
+	// GetControlBackup request
+	GetControlBackup(ctx context.Context, backupId string, reqEditors ...RequestEditorFn) (*http.Response, error)
+
 	// UnbindMediaWithBody request with any body
 	UnbindMediaWithBody(ctx context.Context, params *UnbindMediaParams, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*http.Response, error)
 
@@ -1852,6 +1950,42 @@ type ClientInterface interface {
 	PutWorkOverlayWithBody(ctx context.Context, workId CanonicalWorkId, params *PutWorkOverlayParams, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*http.Response, error)
 
 	PutWorkOverlay(ctx context.Context, workId CanonicalWorkId, params *PutWorkOverlayParams, body PutWorkOverlayJSONRequestBody, reqEditors ...RequestEditorFn) (*http.Response, error)
+}
+
+func (c *Client) ListControlBackups(ctx context.Context, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewListControlBackupsRequest(c.Server)
+	if err != nil {
+		return nil, err
+	}
+	req = req.WithContext(ctx)
+	if err := c.applyEditors(ctx, req, reqEditors); err != nil {
+		return nil, err
+	}
+	return c.Client.Do(req)
+}
+
+func (c *Client) CreateControlBackup(ctx context.Context, params *CreateControlBackupParams, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewCreateControlBackupRequest(c.Server, params)
+	if err != nil {
+		return nil, err
+	}
+	req = req.WithContext(ctx)
+	if err := c.applyEditors(ctx, req, reqEditors); err != nil {
+		return nil, err
+	}
+	return c.Client.Do(req)
+}
+
+func (c *Client) GetControlBackup(ctx context.Context, backupId string, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewGetControlBackupRequest(c.Server, backupId)
+	if err != nil {
+		return nil, err
+	}
+	req = req.WithContext(ctx)
+	if err := c.applyEditors(ctx, req, reqEditors); err != nil {
+		return nil, err
+	}
+	return c.Client.Do(req)
 }
 
 func (c *Client) UnbindMediaWithBody(ctx context.Context, params *UnbindMediaParams, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*http.Response, error) {
@@ -2596,6 +2730,107 @@ func (c *Client) PutWorkOverlay(ctx context.Context, workId CanonicalWorkId, par
 		return nil, err
 	}
 	return c.Client.Do(req)
+}
+
+// NewListControlBackupsRequest generates requests for ListControlBackups
+func NewListControlBackupsRequest(server string) (*http.Request, error) {
+	var err error
+
+	serverURL, err := url.Parse(server)
+	if err != nil {
+		return nil, err
+	}
+
+	operationPath := fmt.Sprintf("/api/v1/admin/control-backups")
+	if operationPath[0] == '/' {
+		operationPath = "." + operationPath
+	}
+
+	queryURL, err := serverURL.Parse(operationPath)
+	if err != nil {
+		return nil, err
+	}
+
+	req, err := http.NewRequest(http.MethodGet, queryURL.String(), nil)
+	if err != nil {
+		return nil, err
+	}
+
+	return req, nil
+}
+
+// NewCreateControlBackupRequest generates requests for CreateControlBackup
+func NewCreateControlBackupRequest(server string, params *CreateControlBackupParams) (*http.Request, error) {
+	var err error
+
+	serverURL, err := url.Parse(server)
+	if err != nil {
+		return nil, err
+	}
+
+	operationPath := fmt.Sprintf("/api/v1/admin/control-backups")
+	if operationPath[0] == '/' {
+		operationPath = "." + operationPath
+	}
+
+	queryURL, err := serverURL.Parse(operationPath)
+	if err != nil {
+		return nil, err
+	}
+
+	req, err := http.NewRequest(http.MethodPost, queryURL.String(), nil)
+	if err != nil {
+		return nil, err
+	}
+
+	if params != nil {
+
+		var headerParam0 string
+
+		headerParam0, err = runtime.StyleParamWithOptions("simple", false, "X-Gallery-CSRF", params.XGalleryCSRF, runtime.StyleParamOptions{ParamLocation: runtime.ParamLocationHeader, Type: "string", Format: ""})
+		if err != nil {
+			return nil, err
+		}
+
+		req.Header.Set("X-Gallery-CSRF", headerParam0)
+
+	}
+
+	return req, nil
+}
+
+// NewGetControlBackupRequest generates requests for GetControlBackup
+func NewGetControlBackupRequest(server string, backupId string) (*http.Request, error) {
+	var err error
+
+	var pathParam0 string
+
+	pathParam0, err = runtime.StyleParamWithOptions("simple", false, "backupId", backupId, runtime.StyleParamOptions{ParamLocation: runtime.ParamLocationPath, Type: "string", Format: ""})
+	if err != nil {
+		return nil, err
+	}
+
+	serverURL, err := url.Parse(server)
+	if err != nil {
+		return nil, err
+	}
+
+	operationPath := fmt.Sprintf("/api/v1/admin/control-backups/%s", pathParam0)
+	if operationPath[0] == '/' {
+		operationPath = "." + operationPath
+	}
+
+	queryURL, err := serverURL.Parse(operationPath)
+	if err != nil {
+		return nil, err
+	}
+
+	req, err := http.NewRequest(http.MethodGet, queryURL.String(), nil)
+	if err != nil {
+		return nil, err
+	}
+
+	return req, nil
 }
 
 // NewUnbindMediaRequest calls the generic UnbindMedia builder with application/json body
@@ -4797,6 +5032,15 @@ func WithBaseURL(baseURL string) ClientOption {
 
 // ClientWithResponsesInterface is the interface specification for the client with responses above.
 type ClientWithResponsesInterface interface {
+	// ListControlBackupsWithResponse request
+	ListControlBackupsWithResponse(ctx context.Context, reqEditors ...RequestEditorFn) (*ListControlBackupsResponse, error)
+
+	// CreateControlBackupWithResponse request
+	CreateControlBackupWithResponse(ctx context.Context, params *CreateControlBackupParams, reqEditors ...RequestEditorFn) (*CreateControlBackupResponse, error)
+
+	// GetControlBackupWithResponse request
+	GetControlBackupWithResponse(ctx context.Context, backupId string, reqEditors ...RequestEditorFn) (*GetControlBackupResponse, error)
+
 	// UnbindMediaWithBodyWithResponse request with any body
 	UnbindMediaWithBodyWithResponse(ctx context.Context, params *UnbindMediaParams, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*UnbindMediaResponse, error)
 
@@ -4964,6 +5208,104 @@ type ClientWithResponsesInterface interface {
 	PutWorkOverlayWithBodyWithResponse(ctx context.Context, workId CanonicalWorkId, params *PutWorkOverlayParams, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*PutWorkOverlayResponse, error)
 
 	PutWorkOverlayWithResponse(ctx context.Context, workId CanonicalWorkId, params *PutWorkOverlayParams, body PutWorkOverlayJSONRequestBody, reqEditors ...RequestEditorFn) (*PutWorkOverlayResponse, error)
+}
+
+type ListControlBackupsResponse struct {
+	Body         []byte
+	HTTPResponse *http.Response
+	JSON200      *ControlBackupListResponse
+	JSON401      *UnauthenticatedError
+	JSON403      *ForbiddenError
+}
+
+// Status returns HTTPResponse.Status
+func (r ListControlBackupsResponse) Status() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Status
+	}
+	return http.StatusText(0)
+}
+
+// StatusCode returns HTTPResponse.StatusCode
+func (r ListControlBackupsResponse) StatusCode() int {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.StatusCode
+	}
+	return 0
+}
+
+// ContentType is a convenience method to retrieve the Content-Type value from the HTTP response headers
+func (r ListControlBackupsResponse) ContentType() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Header.Get("Content-Type")
+	}
+	return ""
+}
+
+type CreateControlBackupResponse struct {
+	Body         []byte
+	HTTPResponse *http.Response
+	JSON202      *Job
+	JSON401      *UnauthenticatedError
+	JSON403      *ForbiddenError
+	JSON409      *ConflictError
+}
+
+// Status returns HTTPResponse.Status
+func (r CreateControlBackupResponse) Status() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Status
+	}
+	return http.StatusText(0)
+}
+
+// StatusCode returns HTTPResponse.StatusCode
+func (r CreateControlBackupResponse) StatusCode() int {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.StatusCode
+	}
+	return 0
+}
+
+// ContentType is a convenience method to retrieve the Content-Type value from the HTTP response headers
+func (r CreateControlBackupResponse) ContentType() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Header.Get("Content-Type")
+	}
+	return ""
+}
+
+type GetControlBackupResponse struct {
+	Body         []byte
+	HTTPResponse *http.Response
+	JSON200      *ControlBackupManifest
+	JSON401      *UnauthenticatedError
+	JSON403      *ForbiddenError
+	JSON404      *NotFoundError
+}
+
+// Status returns HTTPResponse.Status
+func (r GetControlBackupResponse) Status() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Status
+	}
+	return http.StatusText(0)
+}
+
+// StatusCode returns HTTPResponse.StatusCode
+func (r GetControlBackupResponse) StatusCode() int {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.StatusCode
+	}
+	return 0
+}
+
+// ContentType is a convenience method to retrieve the Content-Type value from the HTTP response headers
+func (r GetControlBackupResponse) ContentType() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Header.Get("Content-Type")
+	}
+	return ""
 }
 
 type UnbindMediaResponse struct {
@@ -6436,6 +6778,33 @@ func (r PutWorkOverlayResponse) ContentType() string {
 	return ""
 }
 
+// ListControlBackupsWithResponse request returning *ListControlBackupsResponse
+func (c *ClientWithResponses) ListControlBackupsWithResponse(ctx context.Context, reqEditors ...RequestEditorFn) (*ListControlBackupsResponse, error) {
+	rsp, err := c.ListControlBackups(ctx, reqEditors...)
+	if err != nil {
+		return nil, err
+	}
+	return ParseListControlBackupsResponse(rsp)
+}
+
+// CreateControlBackupWithResponse request returning *CreateControlBackupResponse
+func (c *ClientWithResponses) CreateControlBackupWithResponse(ctx context.Context, params *CreateControlBackupParams, reqEditors ...RequestEditorFn) (*CreateControlBackupResponse, error) {
+	rsp, err := c.CreateControlBackup(ctx, params, reqEditors...)
+	if err != nil {
+		return nil, err
+	}
+	return ParseCreateControlBackupResponse(rsp)
+}
+
+// GetControlBackupWithResponse request returning *GetControlBackupResponse
+func (c *ClientWithResponses) GetControlBackupWithResponse(ctx context.Context, backupId string, reqEditors ...RequestEditorFn) (*GetControlBackupResponse, error) {
+	rsp, err := c.GetControlBackup(ctx, backupId, reqEditors...)
+	if err != nil {
+		return nil, err
+	}
+	return ParseGetControlBackupResponse(rsp)
+}
+
 // UnbindMediaWithBodyWithResponse request with arbitrary body returning *UnbindMediaResponse
 func (c *ClientWithResponses) UnbindMediaWithBodyWithResponse(ctx context.Context, params *UnbindMediaParams, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*UnbindMediaResponse, error) {
 	rsp, err := c.UnbindMediaWithBody(ctx, params, contentType, body, reqEditors...)
@@ -6974,6 +7343,140 @@ func (c *ClientWithResponses) PutWorkOverlayWithResponse(ctx context.Context, wo
 		return nil, err
 	}
 	return ParsePutWorkOverlayResponse(rsp)
+}
+
+// ParseListControlBackupsResponse parses an HTTP response from a ListControlBackupsWithResponse call
+func ParseListControlBackupsResponse(rsp *http.Response) (*ListControlBackupsResponse, error) {
+	bodyBytes, err := io.ReadAll(rsp.Body)
+	defer func() { _ = rsp.Body.Close() }()
+	if err != nil {
+		return nil, err
+	}
+
+	response := &ListControlBackupsResponse{
+		Body:         bodyBytes,
+		HTTPResponse: rsp,
+	}
+
+	switch {
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 200:
+		var dest ControlBackupListResponse
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON200 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 401:
+		var dest UnauthenticatedError
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON401 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 403:
+		var dest ForbiddenError
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON403 = &dest
+
+	}
+
+	return response, nil
+}
+
+// ParseCreateControlBackupResponse parses an HTTP response from a CreateControlBackupWithResponse call
+func ParseCreateControlBackupResponse(rsp *http.Response) (*CreateControlBackupResponse, error) {
+	bodyBytes, err := io.ReadAll(rsp.Body)
+	defer func() { _ = rsp.Body.Close() }()
+	if err != nil {
+		return nil, err
+	}
+
+	response := &CreateControlBackupResponse{
+		Body:         bodyBytes,
+		HTTPResponse: rsp,
+	}
+
+	switch {
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 202:
+		var dest Job
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON202 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 401:
+		var dest UnauthenticatedError
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON401 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 403:
+		var dest ForbiddenError
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON403 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 409:
+		var dest ConflictError
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON409 = &dest
+
+	}
+
+	return response, nil
+}
+
+// ParseGetControlBackupResponse parses an HTTP response from a GetControlBackupWithResponse call
+func ParseGetControlBackupResponse(rsp *http.Response) (*GetControlBackupResponse, error) {
+	bodyBytes, err := io.ReadAll(rsp.Body)
+	defer func() { _ = rsp.Body.Close() }()
+	if err != nil {
+		return nil, err
+	}
+
+	response := &GetControlBackupResponse{
+		Body:         bodyBytes,
+		HTTPResponse: rsp,
+	}
+
+	switch {
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 200:
+		var dest ControlBackupManifest
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON200 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 401:
+		var dest UnauthenticatedError
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON401 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 403:
+		var dest ForbiddenError
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON403 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 404:
+		var dest NotFoundError
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON404 = &dest
+
+	}
+
+	return response, nil
 }
 
 // ParseUnbindMediaResponse parses an HTTP response from a UnbindMediaWithResponse call
