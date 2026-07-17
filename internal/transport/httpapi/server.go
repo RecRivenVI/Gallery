@@ -91,6 +91,8 @@ func New(mode config.Mode, store *storage.Store, clock ports.Clock, personal *au
 	mux.HandleFunc("GET /api/v1/creators/merges", server.listCreatorMerges)
 	mux.HandleFunc("POST /api/v1/creators/merges", server.mergeCreators)
 	mux.HandleFunc("DELETE /api/v1/creators/merges/{mergeId}", server.undoCreatorMerge)
+	mux.HandleFunc("GET /api/v1/binding-issues", server.listBindingIssues)
+	mux.HandleFunc("GET /api/v1/binding-issues/{issueId}", server.getBindingIssue)
 	mux.HandleFunc("GET /api/v1/query-publications/current", server.getCurrentQueryPublication)
 	mux.HandleFunc("GET /api/v1/works", server.listWorks)
 	mux.HandleFunc("GET /api/v1/works/{workId}", server.getWork)
@@ -645,6 +647,52 @@ func (s *Server) undoCreatorMerge(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, creatorMergeDTO(result.Merge, result.ProjectionJobID))
 }
 
+func (s *Server) listBindingIssues(w http.ResponseWriter, r *http.Request) {
+	if _, err := s.requireCapability(r, "bindings.read"); err != nil {
+		s.writeRequestError(w, err)
+		return
+	}
+	limit := 0
+	if raw := r.URL.Query().Get("limit"); raw != "" {
+		parsed, err := strconv.Atoi(raw)
+		if err != nil {
+			s.writeRequestError(w, fault.WithField(fault.CodeValidation, "limit", err))
+			return
+		}
+		limit = parsed
+	}
+	page, err := s.data.ListBindingIssues(r.Context(), application.BindingIssueFilter{
+		SourceID: r.URL.Query().Get("sourceId"), EntityType: r.URL.Query().Get("entityType"),
+		Status: r.URL.Query().Get("status"),
+	}, r.URL.Query().Get("cursor"), limit)
+	if err != nil {
+		s.writeRequestError(w, err)
+		return
+	}
+	items := make([]api.BindingIssue, 0, len(page.Items))
+	for _, issue := range page.Items {
+		items = append(items, bindingIssueDTO(issue))
+	}
+	response := api.BindingIssueListResponse{Issues: items}
+	if page.NextCursor != "" {
+		response.NextCursor = &page.NextCursor
+	}
+	writeJSON(w, http.StatusOK, response)
+}
+
+func (s *Server) getBindingIssue(w http.ResponseWriter, r *http.Request) {
+	if _, err := s.requireCapability(r, "bindings.read"); err != nil {
+		s.writeRequestError(w, err)
+		return
+	}
+	issue, err := s.data.GetBindingIssue(r.Context(), r.PathValue("issueId"))
+	if err != nil {
+		s.writeRequestError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, bindingIssueDTO(issue))
+}
+
 func (s *Server) getCurrentQueryPublication(w http.ResponseWriter, r *http.Request) {
 	if _, err := s.requireCapability(r, "library.read"); err != nil {
 		s.writeRequestError(w, err)
@@ -947,6 +995,46 @@ func overlayDTO(value overlay.State) api.WorkOverlayState {
 	}
 	if value.IssueCode != "" {
 		result.IssueCode = &value.IssueCode
+	}
+	return result
+}
+
+func bindingIssueDTO(value application.BindingIssue) api.BindingIssue {
+	result := api.BindingIssue{
+		Id: value.ID, SourceId: value.SourceID, EntityType: api.BindingIssueEntityType(value.EntityType),
+		SourceKey: value.SourceKey, Code: api.ErrorCode(value.Code), CandidateCount: value.CandidateCount,
+		Status: api.BindingIssueStatus(value.Status), Version: value.Version,
+		CreatedAt: value.CreatedAt, UpdatedAt: value.UpdatedAt,
+		Candidates: make([]api.BindingIssueCandidate, 0, len(value.Candidates)),
+	}
+	if value.WorkSourceKey != "" {
+		result.WorkSourceKey = &value.WorkSourceKey
+	}
+	if value.ProviderID != "" {
+		result.ProviderId = &value.ProviderID
+	}
+	if value.ExternalID != "" {
+		result.ExternalId = &value.ExternalID
+	}
+	if value.Resolution != "" {
+		resolution := api.BindingIssueResolution(value.Resolution)
+		result.Resolution = &resolution
+	}
+	if value.ResolvedTargetID != "" {
+		result.ResolvedTargetId = &value.ResolvedTargetID
+	}
+	if value.ResolvedBy != "" {
+		result.ResolvedBy = &value.ResolvedBy
+	}
+	if value.ResolvedAt != nil {
+		resolvedAt := *value.ResolvedAt
+		result.ResolvedAt = &resolvedAt
+	}
+	for _, candidate := range value.Candidates {
+		result.Candidates = append(result.Candidates, api.BindingIssueCandidate{
+			CandidateId: candidate.CandidateID, CandidateKind: api.BindingIssueCandidateCandidateKind(candidate.CandidateKind),
+			MatchSignal: candidate.MatchSignal, MatchValue: candidate.MatchValue, Label: candidate.Label,
+		})
 	}
 	return result
 }

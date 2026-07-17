@@ -29,6 +29,8 @@ const (
 )
 
 var PersonalOwnerCapabilities = []string{
+	"bindings.read",
+	"bindings.write",
 	"clients.manage",
 	"creators.write",
 	"library.read",
