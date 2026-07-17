@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/json"
+	"errors"
 	"io"
 	"log/slog"
 	"net/http"
@@ -15,6 +16,7 @@ import (
 
 	"github.com/RecRivenVI/gallery/internal/bootstrap"
 	"github.com/RecRivenVI/gallery/internal/config"
+	"github.com/RecRivenVI/gallery/internal/contract/fault"
 	"github.com/RecRivenVI/gallery/internal/platform/appdirs"
 	"github.com/RecRivenVI/gallery/internal/platform/descriptor"
 	api "github.com/RecRivenVI/gallery/pkg/galleryapi"
@@ -275,6 +277,67 @@ func TestOverlapFailsBeforeDatabaseInitialization(t *testing.T) {
 	if _, err := os.Stat(filepath.Join(dirs.Data, "control.db")); !os.IsNotExist(err) {
 		t.Fatal("重叠守卫失败前已初始化数据库")
 	}
+}
+
+func TestSecondInstanceRejectedAndLockReleasedOnStop(t *testing.T) {
+	root := t.TempDir()
+	dirs := appdirs.UnderRoot(filepath.Join(root, "app"))
+	cfg := config.Config{Mode: config.ModePersonal, Listen: "127.0.0.1:0", AppDirs: dirs}
+	logger := slog.New(slog.NewJSONHandler(io.Discard, nil))
+
+	// 第一个实例取得所有权并进入服务状态。
+	firstCancel, firstDone, firstDescriptor := startGalleryd(t, cfg, logger)
+	descriptorPath := filepath.Join(dirs.Runtime, "galleryd.json")
+
+	// 第二个实例竞争同一 AppDirs：必须以 INSTANCE_ALREADY_RUNNING 失败。
+	secondErr := bootstrap.Run(context.Background(), cfg, logger)
+	var structured *fault.Error
+	if !errors.As(secondErr, &structured) || structured.Code != fault.CodeInstanceAlreadyRunning {
+		firstCancel()
+		<-firstDone
+		t.Fatalf("第二实例未因已有实例失败: %v", secondErr)
+	}
+	// 第二实例不得改写活动实例的 descriptor（nonce 不变），第一实例仍健康。
+	after := waitForDescriptor(t, descriptorPath)
+	if after.StartupNonce != firstDescriptor.StartupNonce {
+		firstCancel()
+		<-firstDone
+		t.Fatal("第二实例改写了活动 descriptor")
+	}
+	client, err := api.NewClientWithResponses("http://" + firstDescriptor.Address)
+	if err != nil {
+		firstCancel()
+		<-firstDone
+		t.Fatal(err)
+	}
+	if health, err := client.GetHealthWithResponse(context.Background()); err != nil || health.JSON200 == nil {
+		firstCancel()
+		<-firstDone
+		t.Fatalf("第二实例失败后第一实例不健康: %v", err)
+	}
+
+	// 第一实例优雅停止后释放锁，新的实例可以取得所有权。
+	stopGalleryd(t, firstCancel, firstDone)
+	thirdCancel, thirdDone, _ := startGalleryd(t, cfg, logger)
+	stopGalleryd(t, thirdCancel, thirdDone)
+}
+
+func TestDifferentAppDirsRunConcurrently(t *testing.T) {
+	root := t.TempDir()
+	logger := slog.New(slog.NewJSONHandler(io.Discard, nil))
+	cfgA := config.Config{Mode: config.ModePersonal, Listen: "127.0.0.1:0", AppDirs: appdirs.UnderRoot(filepath.Join(root, "a"))}
+	cfgB := config.Config{Mode: config.ModePersonal, Listen: "127.0.0.1:0", AppDirs: appdirs.UnderRoot(filepath.Join(root, "b"))}
+	aCancel, aDone, aDescriptor := startGalleryd(t, cfgA, logger)
+	bCancel, bDone, bDescriptor := startGalleryd(t, cfgB, logger)
+	if aDescriptor.Address == bDescriptor.Address {
+		aCancel()
+		bCancel()
+		<-aDone
+		<-bDone
+		t.Fatal("两个不同 AppDirs 实例共用地址")
+	}
+	stopGalleryd(t, aCancel, aDone)
+	stopGalleryd(t, bCancel, bDone)
 }
 
 func waitForDescriptor(t *testing.T, path string) descriptor.Descriptor {
