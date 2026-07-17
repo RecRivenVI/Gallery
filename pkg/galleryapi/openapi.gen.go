@@ -267,22 +267,22 @@ func (e CreatorMergeStatus) Valid() bool {
 
 // Defines values for CreatorSourceBindingStatus.
 const (
-	Active        CreatorSourceBindingStatus = "active"
-	Conflict      CreatorSourceBindingStatus = "conflict"
-	ManualUnbound CreatorSourceBindingStatus = "manual_unbound"
-	Orphaned      CreatorSourceBindingStatus = "orphaned"
+	CreatorSourceBindingStatusActive        CreatorSourceBindingStatus = "active"
+	CreatorSourceBindingStatusConflict      CreatorSourceBindingStatus = "conflict"
+	CreatorSourceBindingStatusManualUnbound CreatorSourceBindingStatus = "manual_unbound"
+	CreatorSourceBindingStatusOrphaned      CreatorSourceBindingStatus = "orphaned"
 )
 
 // Valid indicates whether the value is a known member of the CreatorSourceBindingStatus enum.
 func (e CreatorSourceBindingStatus) Valid() bool {
 	switch e {
-	case Active:
+	case CreatorSourceBindingStatusActive:
 		return true
-	case Conflict:
+	case CreatorSourceBindingStatusConflict:
 		return true
-	case ManualUnbound:
+	case CreatorSourceBindingStatusManualUnbound:
 		return true
-	case Orphaned:
+	case CreatorSourceBindingStatusOrphaned:
 		return true
 	default:
 		return false
@@ -547,6 +547,117 @@ func (e JobType) Valid() bool {
 	}
 }
 
+// Defines values for OrphanCandidateEntityType.
+const (
+	OrphanCandidateEntityTypeCreator OrphanCandidateEntityType = "creator"
+	OrphanCandidateEntityTypeMedia   OrphanCandidateEntityType = "media"
+	OrphanCandidateEntityTypeWork    OrphanCandidateEntityType = "work"
+)
+
+// Valid indicates whether the value is a known member of the OrphanCandidateEntityType enum.
+func (e OrphanCandidateEntityType) Valid() bool {
+	switch e {
+	case OrphanCandidateEntityTypeCreator:
+		return true
+	case OrphanCandidateEntityTypeMedia:
+		return true
+	case OrphanCandidateEntityTypeWork:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for OrphanDecisionRequestDecision.
+const (
+	OrphanDecisionRequestDecisionConfirmOrphaned OrphanDecisionRequestDecision = "confirm_orphaned"
+	OrphanDecisionRequestDecisionExtend          OrphanDecisionRequestDecision = "extend"
+	OrphanDecisionRequestDecisionRetain          OrphanDecisionRequestDecision = "retain"
+	OrphanDecisionRequestDecisionUnbind          OrphanDecisionRequestDecision = "unbind"
+)
+
+// Valid indicates whether the value is a known member of the OrphanDecisionRequestDecision enum.
+func (e OrphanDecisionRequestDecision) Valid() bool {
+	switch e {
+	case OrphanDecisionRequestDecisionConfirmOrphaned:
+		return true
+	case OrphanDecisionRequestDecisionExtend:
+		return true
+	case OrphanDecisionRequestDecisionRetain:
+		return true
+	case OrphanDecisionRequestDecisionUnbind:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for OrphanDecisionResultDecision.
+const (
+	OrphanDecisionResultDecisionConfirmOrphaned OrphanDecisionResultDecision = "confirm_orphaned"
+	OrphanDecisionResultDecisionExtend          OrphanDecisionResultDecision = "extend"
+	OrphanDecisionResultDecisionRetain          OrphanDecisionResultDecision = "retain"
+	OrphanDecisionResultDecisionUnbind          OrphanDecisionResultDecision = "unbind"
+)
+
+// Valid indicates whether the value is a known member of the OrphanDecisionResultDecision enum.
+func (e OrphanDecisionResultDecision) Valid() bool {
+	switch e {
+	case OrphanDecisionResultDecisionConfirmOrphaned:
+		return true
+	case OrphanDecisionResultDecisionExtend:
+		return true
+	case OrphanDecisionResultDecisionRetain:
+		return true
+	case OrphanDecisionResultDecisionUnbind:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for OrphanDecisionResultEntityType.
+const (
+	OrphanDecisionResultEntityTypeCreator OrphanDecisionResultEntityType = "creator"
+	OrphanDecisionResultEntityTypeMedia   OrphanDecisionResultEntityType = "media"
+	OrphanDecisionResultEntityTypeWork    OrphanDecisionResultEntityType = "work"
+)
+
+// Valid indicates whether the value is a known member of the OrphanDecisionResultEntityType enum.
+func (e OrphanDecisionResultEntityType) Valid() bool {
+	switch e {
+	case OrphanDecisionResultEntityTypeCreator:
+		return true
+	case OrphanDecisionResultEntityTypeMedia:
+		return true
+	case OrphanDecisionResultEntityTypeWork:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for OrphanDecisionResultNewStatus.
+const (
+	OrphanDecisionResultNewStatusInactive      OrphanDecisionResultNewStatus = "inactive"
+	OrphanDecisionResultNewStatusManualUnbound OrphanDecisionResultNewStatus = "manual_unbound"
+	OrphanDecisionResultNewStatusOrphaned      OrphanDecisionResultNewStatus = "orphaned"
+)
+
+// Valid indicates whether the value is a known member of the OrphanDecisionResultNewStatus enum.
+func (e OrphanDecisionResultNewStatus) Valid() bool {
+	switch e {
+	case OrphanDecisionResultNewStatusInactive:
+		return true
+	case OrphanDecisionResultNewStatusManualUnbound:
+		return true
+	case OrphanDecisionResultNewStatusOrphaned:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for WorkListResponseSortProtocolVersion.
 const (
 	WorkListResponseSortProtocolVersionN1 WorkListResponseSortProtocolVersion = 1
@@ -625,6 +736,27 @@ func (e ListBindingIssuesParamsStatus) Valid() bool {
 	case Stale:
 		return true
 	case Superseded:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for ListOrphanCandidatesParamsEntityType.
+const (
+	ListOrphanCandidatesParamsEntityTypeCreator ListOrphanCandidatesParamsEntityType = "creator"
+	ListOrphanCandidatesParamsEntityTypeMedia   ListOrphanCandidatesParamsEntityType = "media"
+	ListOrphanCandidatesParamsEntityTypeWork    ListOrphanCandidatesParamsEntityType = "work"
+)
+
+// Valid indicates whether the value is a known member of the ListOrphanCandidatesParamsEntityType enum.
+func (e ListOrphanCandidatesParamsEntityType) Valid() bool {
+	switch e {
+	case ListOrphanCandidatesParamsEntityTypeCreator:
+		return true
+	case ListOrphanCandidatesParamsEntityTypeMedia:
+		return true
+	case ListOrphanCandidatesParamsEntityTypeWork:
 		return true
 	default:
 		return false
@@ -937,6 +1069,56 @@ type MediaListResponse struct {
 	Media              []PublishedMedia   `json:"media"`
 	QueryPublicationId QueryPublicationId `json:"queryPublicationId"`
 }
+
+// OrphanCandidate defines model for OrphanCandidate.
+type OrphanCandidate struct {
+	BindingId          string                    `json:"bindingId"`
+	CanonicalId        string                    `json:"canonicalId"`
+	CanonicalLabel     string                    `json:"canonicalLabel"`
+	CreatedAt          time.Time                 `json:"createdAt"`
+	EntityType         OrphanCandidateEntityType `json:"entityType"`
+	MissedScans        int                       `json:"missedScans"`
+	RetentionThreshold int                       `json:"retentionThreshold"`
+	SourceId           SourceId                  `json:"sourceId"`
+	SourceKey          string                    `json:"sourceKey"`
+	UpdatedAt          time.Time                 `json:"updatedAt"`
+}
+
+// OrphanCandidateEntityType defines model for OrphanCandidate.EntityType.
+type OrphanCandidateEntityType string
+
+// OrphanCandidateListResponse defines model for OrphanCandidateListResponse.
+type OrphanCandidateListResponse struct {
+	Candidates []OrphanCandidate `json:"candidates"`
+	NextCursor *string           `json:"nextCursor,omitempty"`
+}
+
+// OrphanDecisionRequest defines model for OrphanDecisionRequest.
+type OrphanDecisionRequest struct {
+	Decision    OrphanDecisionRequestDecision `json:"decision"`
+	ExtendScans *int                          `json:"extendScans,omitempty"`
+}
+
+// OrphanDecisionRequestDecision defines model for OrphanDecisionRequest.Decision.
+type OrphanDecisionRequestDecision string
+
+// OrphanDecisionResult defines model for OrphanDecisionResult.
+type OrphanDecisionResult struct {
+	BindingId   string                         `json:"bindingId"`
+	CanonicalId string                         `json:"canonicalId"`
+	Decision    OrphanDecisionResultDecision   `json:"decision"`
+	EntityType  OrphanDecisionResultEntityType `json:"entityType"`
+	NewStatus   OrphanDecisionResultNewStatus  `json:"newStatus"`
+}
+
+// OrphanDecisionResultDecision defines model for OrphanDecisionResult.Decision.
+type OrphanDecisionResultDecision string
+
+// OrphanDecisionResultEntityType defines model for OrphanDecisionResult.EntityType.
+type OrphanDecisionResultEntityType string
+
+// OrphanDecisionResultNewStatus defines model for OrphanDecisionResult.NewStatus.
+type OrphanDecisionResultNewStatus string
 
 // PairingAttemptResponse defines model for PairingAttemptResponse.
 type PairingAttemptResponse struct {
@@ -1285,6 +1467,22 @@ type HeadMediaContentParams struct {
 	IfNoneMatch *string `json:"If-None-Match,omitempty"`
 }
 
+// ListOrphanCandidatesParams defines parameters for ListOrphanCandidates.
+type ListOrphanCandidatesParams struct {
+	SourceId   *SourceId                             `form:"sourceId,omitempty" json:"sourceId,omitempty"`
+	EntityType *ListOrphanCandidatesParamsEntityType `form:"entityType,omitempty" json:"entityType,omitempty"`
+	Cursor     *string                               `form:"cursor,omitempty" json:"cursor,omitempty"`
+	Limit      *int                                  `form:"limit,omitempty" json:"limit,omitempty"`
+}
+
+// ListOrphanCandidatesParamsEntityType defines parameters for ListOrphanCandidates.
+type ListOrphanCandidatesParamsEntityType string
+
+// DecideOrphanCandidateParams defines parameters for DecideOrphanCandidate.
+type DecideOrphanCandidateParams struct {
+	XGalleryCSRF CSRFHeader `json:"X-Gallery-CSRF"`
+}
+
 // ExchangePairingCredentialParams defines parameters for ExchangePairingCredential.
 type ExchangePairingCredentialParams struct {
 	XGalleryCSRF CSRFHeader `json:"X-Gallery-CSRF"`
@@ -1383,6 +1581,9 @@ type MergeCreatorsJSONRequestBody = CreatorMergeRequest
 
 // CreateLibraryJSONRequestBody defines body for CreateLibrary for application/json ContentType.
 type CreateLibraryJSONRequestBody = LibraryCreateRequest
+
+// DecideOrphanCandidateJSONRequestBody defines body for DecideOrphanCandidate for application/json ContentType.
+type DecideOrphanCandidateJSONRequestBody = OrphanDecisionRequest
 
 // ExchangePairingCredentialJSONRequestBody defines body for ExchangePairingCredential for application/json ContentType.
 type ExchangePairingCredentialJSONRequestBody = PairingExchangeRequest
@@ -1562,6 +1763,14 @@ type ClientInterface interface {
 
 	// HeadMediaContent request
 	HeadMediaContent(ctx context.Context, mediaId CanonicalMediaId, params *HeadMediaContentParams, reqEditors ...RequestEditorFn) (*http.Response, error)
+
+	// ListOrphanCandidates request
+	ListOrphanCandidates(ctx context.Context, params *ListOrphanCandidatesParams, reqEditors ...RequestEditorFn) (*http.Response, error)
+
+	// DecideOrphanCandidateWithBody request with any body
+	DecideOrphanCandidateWithBody(ctx context.Context, bindingId string, params *DecideOrphanCandidateParams, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*http.Response, error)
+
+	DecideOrphanCandidate(ctx context.Context, bindingId string, params *DecideOrphanCandidateParams, body DecideOrphanCandidateJSONRequestBody, reqEditors ...RequestEditorFn) (*http.Response, error)
 
 	// ExchangePairingCredentialWithBody request with any body
 	ExchangePairingCredentialWithBody(ctx context.Context, params *ExchangePairingCredentialParams, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*http.Response, error)
@@ -1983,6 +2192,42 @@ func (c *Client) GetMediaContent(ctx context.Context, mediaId CanonicalMediaId, 
 
 func (c *Client) HeadMediaContent(ctx context.Context, mediaId CanonicalMediaId, params *HeadMediaContentParams, reqEditors ...RequestEditorFn) (*http.Response, error) {
 	req, err := NewHeadMediaContentRequest(c.Server, mediaId, params)
+	if err != nil {
+		return nil, err
+	}
+	req = req.WithContext(ctx)
+	if err := c.applyEditors(ctx, req, reqEditors); err != nil {
+		return nil, err
+	}
+	return c.Client.Do(req)
+}
+
+func (c *Client) ListOrphanCandidates(ctx context.Context, params *ListOrphanCandidatesParams, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewListOrphanCandidatesRequest(c.Server, params)
+	if err != nil {
+		return nil, err
+	}
+	req = req.WithContext(ctx)
+	if err := c.applyEditors(ctx, req, reqEditors); err != nil {
+		return nil, err
+	}
+	return c.Client.Do(req)
+}
+
+func (c *Client) DecideOrphanCandidateWithBody(ctx context.Context, bindingId string, params *DecideOrphanCandidateParams, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewDecideOrphanCandidateRequestWithBody(c.Server, bindingId, params, contentType, body)
+	if err != nil {
+		return nil, err
+	}
+	req = req.WithContext(ctx)
+	if err := c.applyEditors(ctx, req, reqEditors); err != nil {
+		return nil, err
+	}
+	return c.Client.Do(req)
+}
+
+func (c *Client) DecideOrphanCandidate(ctx context.Context, bindingId string, params *DecideOrphanCandidateParams, body DecideOrphanCandidateJSONRequestBody, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewDecideOrphanCandidateRequest(c.Server, bindingId, params, body)
 	if err != nil {
 		return nil, err
 	}
@@ -3345,6 +3590,156 @@ func NewHeadMediaContentRequest(server string, mediaId CanonicalMediaId, params 
 	return req, nil
 }
 
+// NewListOrphanCandidatesRequest generates requests for ListOrphanCandidates
+func NewListOrphanCandidatesRequest(server string, params *ListOrphanCandidatesParams) (*http.Request, error) {
+	var err error
+
+	serverURL, err := url.Parse(server)
+	if err != nil {
+		return nil, err
+	}
+
+	operationPath := fmt.Sprintf("/api/v1/orphan-candidates")
+	if operationPath[0] == '/' {
+		operationPath = "." + operationPath
+	}
+
+	queryURL, err := serverURL.Parse(operationPath)
+	if err != nil {
+		return nil, err
+	}
+
+	if params != nil {
+		// queryValues collects non-styled parameters (passthrough, JSON)
+		// that are safe to round-trip through url.Values.Encode().
+		queryValues := queryURL.Query()
+		// rawQueryFragments collects pre-encoded query fragments from
+		// styled parameters, preserving literal commas as delimiters
+		// per the OpenAPI spec (e.g. "color=blue,black,brown").
+		var rawQueryFragments []string
+
+		if params.SourceId != nil {
+
+			if queryFrag, err := runtime.StyleParamWithOptions("form", true, "sourceId", *params.SourceId, runtime.StyleParamOptions{ParamLocation: runtime.ParamLocationQuery, Type: "string", Format: ""}); err != nil {
+				return nil, err
+			} else {
+				for _, qp := range strings.Split(queryFrag, "&") {
+					rawQueryFragments = append(rawQueryFragments, qp)
+				}
+			}
+
+		}
+
+		if params.EntityType != nil {
+
+			if queryFrag, err := runtime.StyleParamWithOptions("form", true, "entityType", *params.EntityType, runtime.StyleParamOptions{ParamLocation: runtime.ParamLocationQuery, Type: "string", Format: ""}); err != nil {
+				return nil, err
+			} else {
+				for _, qp := range strings.Split(queryFrag, "&") {
+					rawQueryFragments = append(rawQueryFragments, qp)
+				}
+			}
+
+		}
+
+		if params.Cursor != nil {
+
+			if queryFrag, err := runtime.StyleParamWithOptions("form", true, "cursor", *params.Cursor, runtime.StyleParamOptions{ParamLocation: runtime.ParamLocationQuery, Type: "string", Format: ""}); err != nil {
+				return nil, err
+			} else {
+				for _, qp := range strings.Split(queryFrag, "&") {
+					rawQueryFragments = append(rawQueryFragments, qp)
+				}
+			}
+
+		}
+
+		if params.Limit != nil {
+
+			if queryFrag, err := runtime.StyleParamWithOptions("form", true, "limit", *params.Limit, runtime.StyleParamOptions{ParamLocation: runtime.ParamLocationQuery, Type: "integer", Format: ""}); err != nil {
+				return nil, err
+			} else {
+				for _, qp := range strings.Split(queryFrag, "&") {
+					rawQueryFragments = append(rawQueryFragments, qp)
+				}
+			}
+
+		}
+
+		if encoded := queryValues.Encode(); encoded != "" {
+			rawQueryFragments = append(rawQueryFragments, encoded)
+		}
+		queryURL.RawQuery = strings.Join(rawQueryFragments, "&")
+	}
+
+	req, err := http.NewRequest(http.MethodGet, queryURL.String(), nil)
+	if err != nil {
+		return nil, err
+	}
+
+	return req, nil
+}
+
+// NewDecideOrphanCandidateRequest calls the generic DecideOrphanCandidate builder with application/json body
+func NewDecideOrphanCandidateRequest(server string, bindingId string, params *DecideOrphanCandidateParams, body DecideOrphanCandidateJSONRequestBody) (*http.Request, error) {
+	var bodyReader io.Reader
+	buf, err := json.Marshal(body)
+	if err != nil {
+		return nil, err
+	}
+	bodyReader = bytes.NewReader(buf)
+	return NewDecideOrphanCandidateRequestWithBody(server, bindingId, params, "application/json", bodyReader)
+}
+
+// NewDecideOrphanCandidateRequestWithBody generates requests for DecideOrphanCandidate with any type of body
+func NewDecideOrphanCandidateRequestWithBody(server string, bindingId string, params *DecideOrphanCandidateParams, contentType string, body io.Reader) (*http.Request, error) {
+	var err error
+
+	var pathParam0 string
+
+	pathParam0, err = runtime.StyleParamWithOptions("simple", false, "bindingId", bindingId, runtime.StyleParamOptions{ParamLocation: runtime.ParamLocationPath, Type: "string", Format: ""})
+	if err != nil {
+		return nil, err
+	}
+
+	serverURL, err := url.Parse(server)
+	if err != nil {
+		return nil, err
+	}
+
+	operationPath := fmt.Sprintf("/api/v1/orphan-candidates/%s/decide", pathParam0)
+	if operationPath[0] == '/' {
+		operationPath = "." + operationPath
+	}
+
+	queryURL, err := serverURL.Parse(operationPath)
+	if err != nil {
+		return nil, err
+	}
+
+	req, err := http.NewRequest(http.MethodPost, queryURL.String(), body)
+	if err != nil {
+		return nil, err
+	}
+
+	req.Header.Add("Content-Type", contentType)
+
+	if params != nil {
+
+		var headerParam0 string
+
+		headerParam0, err = runtime.StyleParamWithOptions("simple", false, "X-Gallery-CSRF", params.XGalleryCSRF, runtime.StyleParamOptions{ParamLocation: runtime.ParamLocationHeader, Type: "string", Format: ""})
+		if err != nil {
+			return nil, err
+		}
+
+		req.Header.Set("X-Gallery-CSRF", headerParam0)
+
+	}
+
+	return req, nil
+}
+
 // NewExchangePairingCredentialRequest calls the generic ExchangePairingCredential builder with application/json body
 func NewExchangePairingCredentialRequest(server string, params *ExchangePairingCredentialParams, body ExchangePairingCredentialJSONRequestBody) (*http.Request, error) {
 	var bodyReader io.Reader
@@ -4481,6 +4876,14 @@ type ClientWithResponsesInterface interface {
 	// HeadMediaContentWithResponse request
 	HeadMediaContentWithResponse(ctx context.Context, mediaId CanonicalMediaId, params *HeadMediaContentParams, reqEditors ...RequestEditorFn) (*HeadMediaContentResponse, error)
 
+	// ListOrphanCandidatesWithResponse request
+	ListOrphanCandidatesWithResponse(ctx context.Context, params *ListOrphanCandidatesParams, reqEditors ...RequestEditorFn) (*ListOrphanCandidatesResponse, error)
+
+	// DecideOrphanCandidateWithBodyWithResponse request with any body
+	DecideOrphanCandidateWithBodyWithResponse(ctx context.Context, bindingId string, params *DecideOrphanCandidateParams, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*DecideOrphanCandidateResponse, error)
+
+	DecideOrphanCandidateWithResponse(ctx context.Context, bindingId string, params *DecideOrphanCandidateParams, body DecideOrphanCandidateJSONRequestBody, reqEditors ...RequestEditorFn) (*DecideOrphanCandidateResponse, error)
+
 	// ExchangePairingCredentialWithBodyWithResponse request with any body
 	ExchangePairingCredentialWithBodyWithResponse(ctx context.Context, params *ExchangePairingCredentialParams, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*ExchangePairingCredentialResponse, error)
 
@@ -5261,6 +5664,74 @@ func (r HeadMediaContentResponse) StatusCode() int {
 
 // ContentType is a convenience method to retrieve the Content-Type value from the HTTP response headers
 func (r HeadMediaContentResponse) ContentType() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Header.Get("Content-Type")
+	}
+	return ""
+}
+
+type ListOrphanCandidatesResponse struct {
+	Body         []byte
+	HTTPResponse *http.Response
+	JSON200      *OrphanCandidateListResponse
+	JSON400      *ValidationError
+	JSON401      *UnauthenticatedError
+	JSON403      *ForbiddenError
+}
+
+// Status returns HTTPResponse.Status
+func (r ListOrphanCandidatesResponse) Status() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Status
+	}
+	return http.StatusText(0)
+}
+
+// StatusCode returns HTTPResponse.StatusCode
+func (r ListOrphanCandidatesResponse) StatusCode() int {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.StatusCode
+	}
+	return 0
+}
+
+// ContentType is a convenience method to retrieve the Content-Type value from the HTTP response headers
+func (r ListOrphanCandidatesResponse) ContentType() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Header.Get("Content-Type")
+	}
+	return ""
+}
+
+type DecideOrphanCandidateResponse struct {
+	Body         []byte
+	HTTPResponse *http.Response
+	JSON200      *OrphanDecisionResult
+	JSON400      *ValidationError
+	JSON401      *UnauthenticatedError
+	JSON403      *ForbiddenError
+	JSON404      *NotFoundError
+	JSON409      *ConflictError
+}
+
+// Status returns HTTPResponse.Status
+func (r DecideOrphanCandidateResponse) Status() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Status
+	}
+	return http.StatusText(0)
+}
+
+// StatusCode returns HTTPResponse.StatusCode
+func (r DecideOrphanCandidateResponse) StatusCode() int {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.StatusCode
+	}
+	return 0
+}
+
+// ContentType is a convenience method to retrieve the Content-Type value from the HTTP response headers
+func (r DecideOrphanCandidateResponse) ContentType() string {
 	if r.HTTPResponse != nil {
 		return r.HTTPResponse.Header.Get("Content-Type")
 	}
@@ -6216,6 +6687,32 @@ func (c *ClientWithResponses) HeadMediaContentWithResponse(ctx context.Context, 
 		return nil, err
 	}
 	return ParseHeadMediaContentResponse(rsp)
+}
+
+// ListOrphanCandidatesWithResponse request returning *ListOrphanCandidatesResponse
+func (c *ClientWithResponses) ListOrphanCandidatesWithResponse(ctx context.Context, params *ListOrphanCandidatesParams, reqEditors ...RequestEditorFn) (*ListOrphanCandidatesResponse, error) {
+	rsp, err := c.ListOrphanCandidates(ctx, params, reqEditors...)
+	if err != nil {
+		return nil, err
+	}
+	return ParseListOrphanCandidatesResponse(rsp)
+}
+
+// DecideOrphanCandidateWithBodyWithResponse request with arbitrary body returning *DecideOrphanCandidateResponse
+func (c *ClientWithResponses) DecideOrphanCandidateWithBodyWithResponse(ctx context.Context, bindingId string, params *DecideOrphanCandidateParams, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*DecideOrphanCandidateResponse, error) {
+	rsp, err := c.DecideOrphanCandidateWithBody(ctx, bindingId, params, contentType, body, reqEditors...)
+	if err != nil {
+		return nil, err
+	}
+	return ParseDecideOrphanCandidateResponse(rsp)
+}
+
+func (c *ClientWithResponses) DecideOrphanCandidateWithResponse(ctx context.Context, bindingId string, params *DecideOrphanCandidateParams, body DecideOrphanCandidateJSONRequestBody, reqEditors ...RequestEditorFn) (*DecideOrphanCandidateResponse, error) {
+	rsp, err := c.DecideOrphanCandidate(ctx, bindingId, params, body, reqEditors...)
+	if err != nil {
+		return nil, err
+	}
+	return ParseDecideOrphanCandidateResponse(rsp)
 }
 
 // ExchangePairingCredentialWithBodyWithResponse request with arbitrary body returning *ExchangePairingCredentialResponse
@@ -7537,6 +8034,114 @@ func ParseHeadMediaContentResponse(rsp *http.Response) (*HeadMediaContentRespons
 			return nil, err
 		}
 		response.JSON503 = &dest
+
+	}
+
+	return response, nil
+}
+
+// ParseListOrphanCandidatesResponse parses an HTTP response from a ListOrphanCandidatesWithResponse call
+func ParseListOrphanCandidatesResponse(rsp *http.Response) (*ListOrphanCandidatesResponse, error) {
+	bodyBytes, err := io.ReadAll(rsp.Body)
+	defer func() { _ = rsp.Body.Close() }()
+	if err != nil {
+		return nil, err
+	}
+
+	response := &ListOrphanCandidatesResponse{
+		Body:         bodyBytes,
+		HTTPResponse: rsp,
+	}
+
+	switch {
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 200:
+		var dest OrphanCandidateListResponse
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON200 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 400:
+		var dest ValidationError
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON400 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 401:
+		var dest UnauthenticatedError
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON401 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 403:
+		var dest ForbiddenError
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON403 = &dest
+
+	}
+
+	return response, nil
+}
+
+// ParseDecideOrphanCandidateResponse parses an HTTP response from a DecideOrphanCandidateWithResponse call
+func ParseDecideOrphanCandidateResponse(rsp *http.Response) (*DecideOrphanCandidateResponse, error) {
+	bodyBytes, err := io.ReadAll(rsp.Body)
+	defer func() { _ = rsp.Body.Close() }()
+	if err != nil {
+		return nil, err
+	}
+
+	response := &DecideOrphanCandidateResponse{
+		Body:         bodyBytes,
+		HTTPResponse: rsp,
+	}
+
+	switch {
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 200:
+		var dest OrphanDecisionResult
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON200 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 400:
+		var dest ValidationError
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON400 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 401:
+		var dest UnauthenticatedError
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON401 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 403:
+		var dest ForbiddenError
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON403 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 404:
+		var dest NotFoundError
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON404 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 409:
+		var dest ConflictError
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON409 = &dest
 
 	}
 

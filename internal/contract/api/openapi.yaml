@@ -1041,6 +1041,64 @@ paths:
           $ref: "#/components/responses/NotFoundError"
         "409":
           $ref: "#/components/responses/ConflictError"
+  /api/v1/orphan-candidates:
+    get:
+      operationId: listOrphanCandidates
+      summary: 列出到达保留窗口、等待人工审查的 orphan candidate Binding
+      parameters:
+        - {name: sourceId, in: query, required: false, schema: {$ref: "#/components/schemas/SourceId"}}
+        - {name: entityType, in: query, required: false, schema: {type: string, enum: [work, creator, media]}}
+        - {name: cursor, in: query, required: false, schema: {type: string, maxLength: 4096}}
+        - {name: limit, in: query, required: false, schema: {type: integer, minimum: 1, maximum: 200, default: 50}}
+      responses:
+        "200":
+          description: orphan candidate 列表
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/OrphanCandidateListResponse"
+        "400":
+          $ref: "#/components/responses/ValidationError"
+        "401":
+          $ref: "#/components/responses/UnauthenticatedError"
+        "403":
+          $ref: "#/components/responses/ForbiddenError"
+  /api/v1/orphan-candidates/{bindingId}/decide:
+    post:
+      operationId: decideOrphanCandidate
+      summary: 对 orphan candidate 应用保留、延长、确认孤立或解绑决策，不删除 Canonical 与用户事实
+      parameters:
+        - name: bindingId
+          in: path
+          required: true
+          schema:
+            type: string
+            minLength: 1
+            maxLength: 128
+        - $ref: "#/components/parameters/CSRFHeader"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/OrphanDecisionRequest"
+      responses:
+        "200":
+          description: 决策结果
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/OrphanDecisionResult"
+        "400":
+          $ref: "#/components/responses/ValidationError"
+        "401":
+          $ref: "#/components/responses/UnauthenticatedError"
+        "403":
+          $ref: "#/components/responses/ForbiddenError"
+        "404":
+          $ref: "#/components/responses/NotFoundError"
+        "409":
+          $ref: "#/components/responses/ConflictError"
 components:
   securitySchemes:
     sessionCookie:
@@ -1690,6 +1748,77 @@ components:
         entityKind:
           type: string
           enum: [work, media]
+    OrphanCandidate:
+      type: object
+      additionalProperties: false
+      required: [bindingId, entityType, sourceId, sourceKey, canonicalId, canonicalLabel, missedScans, retentionThreshold, createdAt, updatedAt]
+      properties:
+        bindingId:
+          type: string
+        entityType:
+          type: string
+          enum: [work, creator, media]
+        sourceId:
+          $ref: "#/components/schemas/SourceId"
+        sourceKey:
+          type: string
+        canonicalId:
+          type: string
+        canonicalLabel:
+          type: string
+        missedScans:
+          type: integer
+          minimum: 0
+        retentionThreshold:
+          type: integer
+          minimum: 1
+        createdAt:
+          type: string
+          format: date-time
+        updatedAt:
+          type: string
+          format: date-time
+    OrphanCandidateListResponse:
+      type: object
+      additionalProperties: false
+      required: [candidates]
+      properties:
+        candidates:
+          type: array
+          items:
+            $ref: "#/components/schemas/OrphanCandidate"
+        nextCursor:
+          type: string
+    OrphanDecisionRequest:
+      type: object
+      additionalProperties: false
+      required: [decision]
+      properties:
+        decision:
+          type: string
+          enum: [retain, extend, confirm_orphaned, unbind]
+        extendScans:
+          type: integer
+          minimum: 1
+          maximum: 10000
+    OrphanDecisionResult:
+      type: object
+      additionalProperties: false
+      required: [bindingId, entityType, decision, newStatus, canonicalId]
+      properties:
+        bindingId:
+          type: string
+        entityType:
+          type: string
+          enum: [work, creator, media]
+        decision:
+          type: string
+          enum: [retain, extend, confirm_orphaned, unbind]
+        newStatus:
+          type: string
+          enum: [inactive, orphaned, manual_unbound]
+        canonicalId:
+          type: string
     LibraryCreateRequest:
       type: object
       additionalProperties: false
