@@ -24,6 +24,7 @@ type issueFixture struct {
 	resources *application.Resources
 	control   *sql.DB
 	source    application.Source
+	libraryID string
 	ids       func(domain.IDKind) string
 }
 
@@ -57,7 +58,7 @@ func newIssueFixture(t *testing.T) *issueFixture {
 	if err != nil {
 		t.Fatal(err)
 	}
-	return &issueFixture{ctx: ctx, resources: resources, control: store.Control.SQL(), source: source,
+	return &issueFixture{ctx: ctx, resources: resources, control: store.Control.SQL(), source: source, libraryID: library.ID,
 		ids: func(kind domain.IDKind) string {
 			id, err := generator.New(kind)
 			if err != nil {

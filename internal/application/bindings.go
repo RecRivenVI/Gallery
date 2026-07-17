@@ -375,3 +375,380 @@ func sortedKeys(set map[string]struct{}) []string {
 	sort.Strings(keys)
 	return keys
 }
+
+// ResolveBindingIssue 人工修复一个 Binding issue：bind_existing 把来源稳定键绑定到某个
+// 候选 Canonical 实体，create_new/keep_separate 排除全部候选使下一次扫描创建新实体。
+// 修复效果以 control.db 的 Binding 变更表达，下一次扫描据此重建投影；不改写 Canonical
+// 用户事实。乐观 version 防止并发覆盖。
+func (r *Resources) ResolveBindingIssue(ctx context.Context, issueID, resolvedBy, decision, targetID string, version int) (BindingIssue, error) {
+	if strings.TrimSpace(resolvedBy) == "" {
+		return BindingIssue{}, fault.New(fault.CodeValidation, false, nil)
+	}
+	if decision != "bind_existing" && decision != "create_new" && decision != "keep_separate" {
+		return BindingIssue{}, fault.WithField(fault.CodeValidation, "decision", nil)
+	}
+	if _, err := domain.ParseID(domain.IDBindingIssue, issueID); err != nil {
+		return BindingIssue{}, fault.New(fault.CodeNotFound, false, nil)
+	}
+	tx, err := r.control.BeginTx(ctx, nil)
+	if err != nil {
+		return BindingIssue{}, fault.New(fault.CodeInternal, true, err)
+	}
+	defer tx.Rollback()
+	sourceID, entityType, sourceKey, status, currentVersion, err := lockIssue(ctx, tx, issueID)
+	if err != nil {
+		return BindingIssue{}, err
+	}
+	if currentVersion != version {
+		return BindingIssue{}, fault.New(fault.CodeConflict, false, nil)
+	}
+	if status != "open" && status != "dismissed" {
+		return BindingIssue{}, fault.New(fault.CodeConflict, false, nil)
+	}
+	candidates, err := candidateIDs(ctx, tx, issueID)
+	if err != nil {
+		return BindingIssue{}, err
+	}
+	now := r.clock.Now().UTC().Unix()
+	switch decision {
+	case "bind_existing":
+		if !containsString(candidates, targetID) {
+			return BindingIssue{}, fault.WithField(fault.CodeValidation, "targetId", nil)
+		}
+		if err := r.bindActive(ctx, tx, entityType, sourceID, sourceKey, targetID, now); err != nil {
+			return BindingIssue{}, err
+		}
+	default:
+		for _, candidate := range candidates {
+			if err := r.excludeCandidate(ctx, tx, entityType, sourceID, sourceKey, candidate, now); err != nil {
+				return BindingIssue{}, err
+			}
+		}
+	}
+	var target any
+	if decision == "bind_existing" {
+		target = targetID
+	}
+	if _, err := tx.ExecContext(ctx, `UPDATE binding_issues SET status='resolved', resolution=?,
+resolved_target_id=?, resolved_by=?, version=version+1, updated_at=?, resolved_at=? WHERE issue_id=? AND version=?`,
+		decision, target, resolvedBy, now, now, issueID, version); err != nil {
+		return BindingIssue{}, fault.New(fault.CodeInternal, true, err)
+	}
+	if err := tx.Commit(); err != nil {
+		return BindingIssue{}, fault.New(fault.CodeInternal, true, err)
+	}
+	return r.GetBindingIssue(ctx, issueID)
+}
+
+// DismissBindingIssue 忽略/延后一个 open issue：状态转为 dismissed。它不添加任何 Binding
+// 变更，因此扫描仍会因未解决的身份歧义失败，但相同证据不再反复产生新 issue（复用被忽略
+// 的记录）。
+func (r *Resources) DismissBindingIssue(ctx context.Context, issueID, resolvedBy string, version int) (BindingIssue, error) {
+	return r.transitionIssue(ctx, issueID, resolvedBy, version, []string{"open"}, `UPDATE binding_issues
+SET status='dismissed', resolution='dismissed', resolved_by=?, version=version+1, updated_at=? WHERE issue_id=? AND version=?`)
+}
+
+// ReopenBindingIssue 重新打开一个被忽略、过时或被替代的 issue，清除解决信息。
+func (r *Resources) ReopenBindingIssue(ctx context.Context, issueID, resolvedBy string, version int) (BindingIssue, error) {
+	return r.transitionIssue(ctx, issueID, resolvedBy, version, []string{"dismissed", "stale", "superseded"}, `UPDATE binding_issues
+SET status='open', resolution=NULL, resolved_target_id=NULL, resolved_by=?, resolved_at=NULL,
+version=version+1, updated_at=? WHERE issue_id=? AND version=?`)
+}
+
+func (r *Resources) transitionIssue(ctx context.Context, issueID, resolvedBy string, version int, allowed []string, update string) (BindingIssue, error) {
+	if strings.TrimSpace(resolvedBy) == "" {
+		return BindingIssue{}, fault.New(fault.CodeValidation, false, nil)
+	}
+	if _, err := domain.ParseID(domain.IDBindingIssue, issueID); err != nil {
+		return BindingIssue{}, fault.New(fault.CodeNotFound, false, nil)
+	}
+	tx, err := r.control.BeginTx(ctx, nil)
+	if err != nil {
+		return BindingIssue{}, fault.New(fault.CodeInternal, true, err)
+	}
+	defer tx.Rollback()
+	_, _, _, status, currentVersion, err := lockIssue(ctx, tx, issueID)
+	if err != nil {
+		return BindingIssue{}, err
+	}
+	if currentVersion != version {
+		return BindingIssue{}, fault.New(fault.CodeConflict, false, nil)
+	}
+	if !containsString(allowed, status) {
+		return BindingIssue{}, fault.New(fault.CodeConflict, false, nil)
+	}
+	now := r.clock.Now().UTC().Unix()
+	if _, err := tx.ExecContext(ctx, update, resolvedBy, now, issueID, version); err != nil {
+		return BindingIssue{}, fault.New(fault.CodeInternal, true, err)
+	}
+	if err := tx.Commit(); err != nil {
+		return BindingIssue{}, fault.New(fault.CodeInternal, true, err)
+	}
+	return r.GetBindingIssue(ctx, issueID)
+}
+
+// UnbindMedia 手动解绑一个 SourceMedia：其 active MediaBinding 转为 manual_unbound，下一次
+// 扫描将为该来源媒体建立新的 CanonicalMedia occurrence，不影响其他 Source Binding 与用户事实。
+func (r *Resources) UnbindMedia(ctx context.Context, sourceID, sourceKey string) (string, error) {
+	tx, err := r.control.BeginTx(ctx, nil)
+	if err != nil {
+		return "", fault.New(fault.CodeInternal, true, err)
+	}
+	defer tx.Rollback()
+	var mediaID string
+	if err := tx.QueryRowContext(ctx, `SELECT media_id FROM media_bindings
+WHERE source_id=? AND source_key=? AND status='active'`, sourceID, sourceKey).Scan(&mediaID); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return "", fault.New(fault.CodeNotFound, false, nil)
+		}
+		return "", fault.New(fault.CodeInternal, true, err)
+	}
+	now := r.clock.Now().UTC().Unix()
+	if _, err := tx.ExecContext(ctx, `UPDATE media_bindings SET status='manual_unbound', updated_at=?
+WHERE source_id=? AND source_key=? AND status='active'`, now, sourceID, sourceKey); err != nil {
+		return "", fault.New(fault.CodeInternal, true, err)
+	}
+	if err := tx.Commit(); err != nil {
+		return "", fault.New(fault.CodeInternal, true, err)
+	}
+	return mediaID, nil
+}
+
+// UndoManualUnbind 撤销一次针对某来源稳定键的手动 Work 解绑，把 manual_unbound Binding 及其
+// 媒体 Binding 恢复为 active。若解绑后已有新的 active Binding 依赖该稳定键（例如已经重扫拆分），
+// 或存在多个 manual_unbound 无法确定唯一目标，则返回结构化冲突。
+func (r *Resources) UndoManualUnbind(ctx context.Context, sourceID, sourceKey string) (string, error) {
+	tx, err := r.control.BeginTx(ctx, nil)
+	if err != nil {
+		return "", fault.New(fault.CodeInternal, true, err)
+	}
+	defer tx.Rollback()
+	var activeCount int
+	if err := tx.QueryRowContext(ctx, `SELECT count(*) FROM work_bindings
+WHERE source_id=? AND source_key=? AND status='active'`, sourceID, sourceKey).Scan(&activeCount); err != nil {
+		return "", fault.New(fault.CodeInternal, true, err)
+	}
+	if activeCount > 0 {
+		return "", fault.New(fault.CodeConflict, false, nil)
+	}
+	rows, err := tx.QueryContext(ctx, `SELECT binding_id, work_id FROM work_bindings
+WHERE source_id=? AND source_key=? AND status='manual_unbound'`, sourceID, sourceKey)
+	if err != nil {
+		return "", fault.New(fault.CodeInternal, true, err)
+	}
+	type unbound struct{ bindingID, workID string }
+	var candidates []unbound
+	for rows.Next() {
+		var item unbound
+		if err := rows.Scan(&item.bindingID, &item.workID); err != nil {
+			rows.Close()
+			return "", fault.New(fault.CodeInternal, true, err)
+		}
+		candidates = append(candidates, item)
+	}
+	if err := rows.Err(); err != nil {
+		rows.Close()
+		return "", fault.New(fault.CodeInternal, true, err)
+	}
+	if err := rows.Close(); err != nil {
+		return "", fault.New(fault.CodeInternal, true, err)
+	}
+	if len(candidates) == 0 {
+		return "", fault.New(fault.CodeNotFound, false, nil)
+	}
+	if len(candidates) > 1 {
+		return "", fault.New(fault.CodeConflict, false, nil)
+	}
+	restored := candidates[0]
+	now := r.clock.Now().UTC().Unix()
+	if _, err := tx.ExecContext(ctx, `UPDATE work_bindings SET status='active', updated_at=? WHERE binding_id=?`,
+		now, restored.bindingID); err != nil {
+		return "", fault.New(fault.CodeInternal, true, err)
+	}
+	if err := r.restoreMediaBindings(ctx, tx, sourceID, restored.workID, now); err != nil {
+		return "", err
+	}
+	if err := tx.Commit(); err != nil {
+		return "", fault.New(fault.CodeInternal, true, err)
+	}
+	return restored.workID, nil
+}
+
+func (r *Resources) restoreMediaBindings(ctx context.Context, tx *sql.Tx, sourceID, workID string, now int64) error {
+	rows, err := tx.QueryContext(ctx, `SELECT binding_id, source_key FROM media_bindings
+WHERE source_id=? AND work_id=? AND status='manual_unbound'`, sourceID, workID)
+	if err != nil {
+		return fault.New(fault.CodeInternal, true, err)
+	}
+	type unboundMedia struct{ bindingID, sourceKey string }
+	var media []unboundMedia
+	for rows.Next() {
+		var item unboundMedia
+		if err := rows.Scan(&item.bindingID, &item.sourceKey); err != nil {
+			rows.Close()
+			return fault.New(fault.CodeInternal, true, err)
+		}
+		media = append(media, item)
+	}
+	if err := rows.Err(); err != nil {
+		rows.Close()
+		return fault.New(fault.CodeInternal, true, err)
+	}
+	if err := rows.Close(); err != nil {
+		return fault.New(fault.CodeInternal, true, err)
+	}
+	for _, item := range media {
+		var active int
+		if err := tx.QueryRowContext(ctx, `SELECT count(*) FROM media_bindings
+WHERE source_id=? AND source_key=? AND status='active'`, sourceID, item.sourceKey).Scan(&active); err != nil {
+			return fault.New(fault.CodeInternal, true, err)
+		}
+		if active > 0 {
+			continue
+		}
+		if _, err := tx.ExecContext(ctx, `UPDATE media_bindings SET status='active', updated_at=? WHERE binding_id=?`,
+			now, item.bindingID); err != nil {
+			return fault.New(fault.CodeInternal, true, err)
+		}
+	}
+	return nil
+}
+
+// bindActive 为来源稳定键建立一个指向 target 的 active Binding，供扫描据此唯一解析。
+func (r *Resources) bindActive(ctx context.Context, tx *sql.Tx, entityType, sourceID, sourceKey, targetID string, now int64) error {
+	switch entityType {
+	case "work":
+		id, err := r.ids.New(domain.IDWorkBinding)
+		if err != nil {
+			return fault.New(fault.CodeInternal, true, err)
+		}
+		if _, err := tx.ExecContext(ctx, `INSERT INTO work_bindings
+(binding_id, source_id, source_key, work_id, identity_version, status, last_seen_generation, created_at, updated_at)
+VALUES (?, ?, ?, ?, 1, 'active', 0, ?, ?)`, id.String(), sourceID, sourceKey, targetID, now, now); err != nil {
+			return bindConflict(err)
+		}
+	case "creator":
+		id, err := r.ids.New(domain.IDCreatorBinding)
+		if err != nil {
+			return fault.New(fault.CodeInternal, true, err)
+		}
+		if _, err := tx.ExecContext(ctx, `INSERT INTO creator_bindings
+(binding_id, source_id, source_key, creator_id, identity_version, status, last_seen_generation, created_at, updated_at)
+VALUES (?, ?, ?, ?, 1, 'active', 0, ?, ?)`, id.String(), sourceID, sourceKey, targetID, now, now); err != nil {
+			return bindConflict(err)
+		}
+	case "media":
+		workID, err := mediaWorkID(ctx, tx, targetID)
+		if err != nil {
+			return err
+		}
+		id, err := r.ids.New(domain.IDMediaBinding)
+		if err != nil {
+			return fault.New(fault.CodeInternal, true, err)
+		}
+		if _, err := tx.ExecContext(ctx, `INSERT INTO media_bindings
+(binding_id, source_id, source_key, media_id, work_id, identity_version, status, last_seen_generation, created_at, updated_at)
+VALUES (?, ?, ?, ?, ?, 1, 'active', 0, ?, ?)`, id.String(), sourceID, sourceKey, targetID, workID, now, now); err != nil {
+			return bindConflict(err)
+		}
+	}
+	return nil
+}
+
+// excludeCandidate 以 manual_unbound Binding 排除某候选，使扫描不再把该来源稳定键解析到它。
+func (r *Resources) excludeCandidate(ctx context.Context, tx *sql.Tx, entityType, sourceID, sourceKey, candidateID string, now int64) error {
+	switch entityType {
+	case "work":
+		id, err := r.ids.New(domain.IDWorkBinding)
+		if err != nil {
+			return fault.New(fault.CodeInternal, true, err)
+		}
+		if _, err := tx.ExecContext(ctx, `INSERT INTO work_bindings
+(binding_id, source_id, source_key, work_id, identity_version, status, last_seen_generation, created_at, updated_at)
+VALUES (?, ?, ?, ?, 1, 'manual_unbound', 0, ?, ?)`, id.String(), sourceID, sourceKey, candidateID, now, now); err != nil {
+			return fault.New(fault.CodeInternal, true, err)
+		}
+	case "creator":
+		id, err := r.ids.New(domain.IDCreatorBinding)
+		if err != nil {
+			return fault.New(fault.CodeInternal, true, err)
+		}
+		if _, err := tx.ExecContext(ctx, `INSERT INTO creator_bindings
+(binding_id, source_id, source_key, creator_id, identity_version, status, last_seen_generation, created_at, updated_at)
+VALUES (?, ?, ?, ?, 1, 'manual_unbound', 0, ?, ?)`, id.String(), sourceID, sourceKey, candidateID, now, now); err != nil {
+			return fault.New(fault.CodeInternal, true, err)
+		}
+	case "media":
+		workID, err := mediaWorkID(ctx, tx, candidateID)
+		if err != nil {
+			return err
+		}
+		id, err := r.ids.New(domain.IDMediaBinding)
+		if err != nil {
+			return fault.New(fault.CodeInternal, true, err)
+		}
+		if _, err := tx.ExecContext(ctx, `INSERT INTO media_bindings
+(binding_id, source_id, source_key, media_id, work_id, identity_version, status, last_seen_generation, created_at, updated_at)
+VALUES (?, ?, ?, ?, ?, 1, 'manual_unbound', 0, ?, ?)`, id.String(), sourceID, sourceKey, candidateID, workID, now, now); err != nil {
+			return fault.New(fault.CodeInternal, true, err)
+		}
+	}
+	return nil
+}
+
+func mediaWorkID(ctx context.Context, tx *sql.Tx, mediaID string) (string, error) {
+	var workID string
+	if err := tx.QueryRowContext(ctx, `SELECT work_id FROM canonical_media WHERE media_id=?`, mediaID).Scan(&workID); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return "", fault.WithField(fault.CodeValidation, "targetId", nil)
+		}
+		return "", fault.New(fault.CodeInternal, true, err)
+	}
+	return workID, nil
+}
+
+func lockIssue(ctx context.Context, tx *sql.Tx, issueID string) (sourceID, entityType, sourceKey, status string, version int, err error) {
+	scanErr := tx.QueryRowContext(ctx, `SELECT source_id, entity_type, source_key, status, version
+FROM binding_issues WHERE issue_id=?`, issueID).Scan(&sourceID, &entityType, &sourceKey, &status, &version)
+	if errors.Is(scanErr, sql.ErrNoRows) {
+		return "", "", "", "", 0, fault.New(fault.CodeNotFound, false, nil)
+	}
+	if scanErr != nil {
+		return "", "", "", "", 0, fault.New(fault.CodeInternal, true, scanErr)
+	}
+	return sourceID, entityType, sourceKey, status, version, nil
+}
+
+func candidateIDs(ctx context.Context, tx *sql.Tx, issueID string) ([]string, error) {
+	rows, err := tx.QueryContext(ctx, `SELECT candidate_id FROM binding_issue_candidates
+WHERE issue_id=? ORDER BY ordinal`, issueID)
+	if err != nil {
+		return nil, fault.New(fault.CodeInternal, true, err)
+	}
+	defer rows.Close()
+	var result []string
+	for rows.Next() {
+		var value string
+		if err := rows.Scan(&value); err != nil {
+			return nil, fault.New(fault.CodeInternal, true, err)
+		}
+		result = append(result, value)
+	}
+	return result, rows.Err()
+}
+
+func containsString(list []string, value string) bool {
+	for _, item := range list {
+		if item == value {
+			return true
+		}
+	}
+	return false
+}
+
+func bindConflict(err error) error {
+	if strings.Contains(strings.ToLower(err.Error()), "unique") {
+		return fault.New(fault.CodeConflict, false, nil)
+	}
+	return fault.New(fault.CodeInternal, true, err)
+}
