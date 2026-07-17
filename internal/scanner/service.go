@@ -32,14 +32,24 @@ type nopNotifier struct{}
 func (nopNotifier) JobChanged(jobs.Job)                      {}
 func (nopNotifier) PublicationPublished(catalog.Publication) {}
 
-type Service struct {
-	context   context.Context
-	resources *application.Resources
-	jobs      *jobs.Store
-	catalog   *catalog.Store
-	notifier  Notifier
-	wait      sync.WaitGroup
+// Dispatcher 把 Job 交给中央有界调度器执行。未注入时 Service 回退到自管理 goroutine（供不涉及
+// 调度器的单元测试使用）。
+type Dispatcher interface {
+	Submit(jobID string)
 }
+
+type Service struct {
+	context    context.Context
+	resources  *application.Resources
+	jobs       *jobs.Store
+	catalog    *catalog.Store
+	notifier   Notifier
+	wait       sync.WaitGroup
+	dispatcher Dispatcher
+}
+
+// SetDispatcher 注入中央调度器；注入后 Start 通过调度器领取执行并接受其 context 取消。
+func (s *Service) SetDispatcher(d Dispatcher) { s.dispatcher = d }
 
 func New(ctx context.Context, resources *application.Resources, jobStore *jobs.Store, catalogStore *catalog.Store, notifier Notifier) (*Service, error) {
 	if ctx == nil || resources == nil || jobStore == nil || catalogStore == nil {
@@ -66,6 +76,10 @@ func (s *Service) CreateScan(ctx context.Context, sourceID, createdBy string) (j
 }
 
 func (s *Service) Start(jobID string) {
+	if s.dispatcher != nil {
+		s.dispatcher.Submit(jobID)
+		return
+	}
 	s.wait.Add(1)
 	go func() { defer s.wait.Done(); _ = s.Execute(s.context, jobID) }()
 }

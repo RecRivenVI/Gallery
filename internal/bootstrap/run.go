@@ -30,6 +30,21 @@ import (
 	"github.com/RecRivenVI/gallery/internal/transport/httpapi"
 )
 
+// 各资源类别的默认并发上限。scan 允许少量不同 Source 并行；overlay 单活跃投影 Job，取 1 与其
+// 单活跃 Job 数据库约束一致。这些值属于运行配置的暂定实装决策，尚未冻结。
+const (
+	scanConcurrency    = 2
+	overlayConcurrency = 1
+)
+
+// classDispatcher 把某个资源类别的 Submit 适配为服务侧的 Dispatcher，避免服务依赖调度器具体类型。
+type classDispatcher struct {
+	scheduler *jobs.Scheduler
+	class     string
+}
+
+func (d classDispatcher) Submit(jobID string) { d.scheduler.Submit(d.class, jobID) }
+
 func Run(ctx context.Context, cfg config.Config, logger *slog.Logger) error {
 	if err := cfg.Validate(); err != nil {
 		return err
@@ -104,11 +119,20 @@ func Run(ctx context.Context, cfg config.Config, logger *slog.Logger) error {
 	if err != nil {
 		return err
 	}
-	if err := scannerService.Reconcile(ctx); err != nil {
-		return err
-	}
 	overlayService, err := overlay.New(ctx, store.Control.SQL(), jobStore, catalogStore, systemClock, hub)
 	if err != nil {
+		return err
+	}
+	// 中央有界调度器替代业务服务直接启动 goroutine：每类资源独立并发上限，取消随 context 传播，
+	// 关闭时取消在执行 Job 并等待退出（未完成 Job 由启动 reconciliation 重新入队）。
+	scheduler := jobs.NewScheduler(ctx)
+	scheduler.Register("scan", scanConcurrency, scannerService.Execute)
+	scheduler.Register("overlay", overlayConcurrency, overlayService.Execute)
+	scannerService.SetDispatcher(classDispatcher{scheduler: scheduler, class: "scan"})
+	overlayService.SetDispatcher(classDispatcher{scheduler: scheduler, class: "overlay"})
+	defer scheduler.Shutdown()
+
+	if err := scannerService.Reconcile(ctx); err != nil {
 		return err
 	}
 	if err := overlayService.Reconcile(ctx); err != nil {
@@ -133,8 +157,7 @@ func Run(ctx context.Context, cfg config.Config, logger *slog.Logger) error {
 		if err := server.Shutdown(shutdownContext); err != nil {
 			return err
 		}
-		scannerService.Wait()
-		overlayService.Wait()
+		scheduler.Shutdown()
 		logger.Info("galleryd_stopped")
 		return nil
 	case err := <-serveError:
