@@ -428,15 +428,15 @@ ON CONFLICT(work_id, role, ordinal) DO UPDATE SET creator_id=excluded.creator_id
 		}
 		result[item.SourceKey] = work
 	}
-	if _, err := tx.ExecContext(ctx, `UPDATE work_bindings SET status='orphaned', updated_at=?
+	if _, err := tx.ExecContext(ctx, `UPDATE work_bindings SET status='inactive', updated_at=?
 WHERE source_id=? AND status='active' AND last_seen_generation<>?`, now, sourceID, generation); err != nil {
 		return nil, fault.New(fault.CodeInternal, true, err)
 	}
-	if _, err := tx.ExecContext(ctx, `UPDATE media_bindings SET status='orphaned', updated_at=?
+	if _, err := tx.ExecContext(ctx, `UPDATE media_bindings SET status='inactive', updated_at=?
 WHERE source_id=? AND status='active' AND last_seen_generation<>?`, now, sourceID, generation); err != nil {
 		return nil, fault.New(fault.CodeInternal, true, err)
 	}
-	if _, err := tx.ExecContext(ctx, `UPDATE creator_bindings SET status='orphaned', updated_at=?
+	if _, err := tx.ExecContext(ctx, `UPDATE creator_bindings SET status='inactive', updated_at=?
 WHERE source_id=? AND status='active' AND last_seen_generation<>?`, now, sourceID, generation); err != nil {
 		return nil, fault.New(fault.CodeInternal, true, err)
 	}
@@ -456,7 +456,7 @@ WHERE source_id=? AND source_key=? AND status='manual_unbound'`, sourceID, item.
 		return "", "", err
 	}
 	candidates, err := stringSet(ctx, tx, `SELECT DISTINCT work_id FROM work_bindings
-WHERE source_id=? AND source_key=? AND status IN ('active', 'orphaned')`, sourceID, item.SourceKey)
+WHERE source_id=? AND source_key=? AND status IN ('active', 'inactive', 'orphaned')`, sourceID, item.SourceKey)
 	if err != nil {
 		return "", "", err
 	}
@@ -464,7 +464,7 @@ WHERE source_id=? AND source_key=? AND status IN ('active', 'orphaned')`, source
 	matchSignal, matchValue := "source_key", item.SourceKey
 	if len(candidates) == 0 && item.ExternalID != "" {
 		candidates, err = stringSet(ctx, tx, `SELECT DISTINCT work_id FROM work_bindings
-WHERE source_id=? AND provider_id=? AND external_id=? AND status IN ('active', 'orphaned')`,
+WHERE source_id=? AND provider_id=? AND external_id=? AND status IN ('active', 'inactive', 'orphaned')`,
 			sourceID, item.ProviderID, item.ExternalID)
 		if err != nil {
 			return "", "", err
@@ -498,7 +498,7 @@ WHERE source_id=? AND provider_id=? AND external_id=? AND status IN ('active', '
 	}
 	var bindingID string
 	err = tx.QueryRowContext(ctx, `SELECT binding_id FROM work_bindings
-WHERE source_id=? AND source_key=? AND work_id=? AND status IN ('active', 'orphaned')
+WHERE source_id=? AND source_key=? AND work_id=? AND status IN ('active', 'inactive', 'orphaned')
 ORDER BY CASE status WHEN 'active' THEN 0 ELSE 1 END, created_at LIMIT 1`, sourceID, item.SourceKey, workID).Scan(&bindingID)
 	if errors.Is(err, sql.ErrNoRows) {
 		id, idErr := r.ids.New(domain.IDWorkBinding)
@@ -535,7 +535,7 @@ WHERE source_id=? AND source_key=? AND status='manual_unbound'`, sourceID, item.
 		return "", "", err
 	}
 	candidates, err := stringSet(ctx, tx, `SELECT DISTINCT creator_id FROM creator_bindings
-WHERE source_id=? AND source_key=? AND status IN ('active', 'orphaned')`, sourceID, item.SourceKey)
+WHERE source_id=? AND source_key=? AND status IN ('active', 'inactive', 'orphaned')`, sourceID, item.SourceKey)
 	if err != nil {
 		return "", "", err
 	}
@@ -543,7 +543,7 @@ WHERE source_id=? AND source_key=? AND status IN ('active', 'orphaned')`, source
 	matchSignal, matchValue := "source_key", item.SourceKey
 	if len(candidates) == 0 && item.ExternalID != "" {
 		candidates, err = stringSet(ctx, tx, `SELECT DISTINCT creator_id FROM creator_bindings
-WHERE source_id=? AND provider_id=? AND external_id=? AND status IN ('active', 'orphaned')`,
+WHERE source_id=? AND provider_id=? AND external_id=? AND status IN ('active', 'inactive', 'orphaned')`,
 			sourceID, item.ProviderID, item.ExternalID)
 		if err != nil {
 			return "", "", err
@@ -577,7 +577,7 @@ WHERE source_id=? AND provider_id=? AND external_id=? AND status IN ('active', '
 	}
 	var bindingID string
 	err = tx.QueryRowContext(ctx, `SELECT binding_id FROM creator_bindings
-WHERE source_id=? AND source_key=? AND creator_id=? AND status IN ('active', 'orphaned')
+WHERE source_id=? AND source_key=? AND creator_id=? AND status IN ('active', 'inactive', 'orphaned')
 ORDER BY CASE status WHEN 'active' THEN 0 ELSE 1 END, created_at LIMIT 1`, sourceID, item.SourceKey, creatorID).Scan(&bindingID)
 	if errors.Is(err, sql.ErrNoRows) {
 		id, idErr := r.ids.New(domain.IDCreatorBinding)
@@ -610,7 +610,7 @@ WHERE source_id=? AND source_key=? AND status='manual_unbound'`, sourceID, item.
 		return "", 0, err
 	}
 	candidates, err := stringSet(ctx, tx, `SELECT DISTINCT media_id FROM media_bindings
-WHERE source_id=? AND work_id=? AND source_key=? AND status IN ('active', 'orphaned')`, sourceID, workID, item.SourceKey)
+WHERE source_id=? AND work_id=? AND source_key=? AND status IN ('active', 'inactive', 'orphaned')`, sourceID, workID, item.SourceKey)
 	if err != nil {
 		return "", 0, err
 	}
@@ -618,7 +618,7 @@ WHERE source_id=? AND work_id=? AND source_key=? AND status IN ('active', 'orpha
 	matchSignal, matchValue := "source_key", item.SourceKey
 	if len(candidates) == 0 && item.RuleKey != "" {
 		candidates, err = stringSet(ctx, tx, `SELECT DISTINCT media_id FROM media_bindings
-WHERE source_id=? AND work_id=? AND rule_key=? AND status IN ('active', 'orphaned')`, sourceID, workID, item.RuleKey)
+WHERE source_id=? AND work_id=? AND rule_key=? AND status IN ('active', 'inactive', 'orphaned')`, sourceID, workID, item.RuleKey)
 		if err != nil {
 			return "", 0, err
 		}
@@ -628,7 +628,7 @@ WHERE source_id=? AND work_id=? AND rule_key=? AND status IN ('active', 'orphane
 	if len(candidates) == 0 && item.Digest != "" {
 		candidates, err = stringSet(ctx, tx, `SELECT DISTINCT media_id FROM media_bindings
 WHERE source_id=? AND work_id=? AND algorithm=? AND digest=? AND occurrence_ordinal=?
-AND status IN ('active', 'orphaned')`, sourceID, workID, item.Algorithm, item.Digest, item.Ordinal)
+AND status IN ('active', 'inactive', 'orphaned')`, sourceID, workID, item.Algorithm, item.Digest, item.Ordinal)
 		if err != nil {
 			return "", 0, err
 		}
@@ -674,7 +674,7 @@ AND status IN ('active', 'orphaned')`, sourceID, workID, item.Algorithm, item.Di
 	}
 	var bindingID string
 	err = tx.QueryRowContext(ctx, `SELECT binding_id FROM media_bindings
-WHERE source_id=? AND source_key=? AND media_id=? AND status IN ('active', 'orphaned')
+WHERE source_id=? AND source_key=? AND media_id=? AND status IN ('active', 'inactive', 'orphaned')
 ORDER BY CASE status WHEN 'active' THEN 0 ELSE 1 END, created_at LIMIT 1`, sourceID, item.SourceKey, mediaID).Scan(&bindingID)
 	if errors.Is(err, sql.ErrNoRows) {
 		id, idErr := r.ids.New(domain.IDMediaBinding)

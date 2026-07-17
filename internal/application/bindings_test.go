@@ -75,7 +75,7 @@ func TestStableBindingRenameOrphanAndManualSplit(t *testing.T) {
 WHERE source_id=? AND source_key='old/path' ORDER BY created_at LIMIT 1`, source.ID).Scan(&oldStatus)
 	_ = store.Control.SQL().QueryRowContext(ctx, `SELECT status FROM work_bindings
 WHERE source_id=? AND source_key='renamed/path' ORDER BY created_at DESC LIMIT 1`, source.ID).Scan(&newStatus)
-	if oldStatus != "orphaned" || newStatus != "active" {
+	if oldStatus != "inactive" || newStatus != "active" {
 		t.Fatalf("alias 生命周期错误: old=%s new=%s", oldStatus, newStatus)
 	}
 
@@ -85,8 +85,8 @@ WHERE source_id=? AND source_key='renamed/path' ORDER BY created_at DESC LIMIT 1
 	var orphaned string
 	_ = store.Control.SQL().QueryRowContext(ctx, `SELECT status FROM work_bindings
 WHERE source_id=? AND source_key='renamed/path' AND work_id=?`, source.ID, firstWork.ID).Scan(&orphaned)
-	if orphaned != "orphaned" {
-		t.Fatalf("消失记录未 orphan: %s", orphaned)
+	if orphaned != "inactive" {
+		t.Fatalf("消失记录未转为 inactive: %s", orphaned)
 	}
 	reappeared, err := resources.EnsureCanonical(ctx, source.ID, []application.DiscoveredWork{renamedInput})
 	if err != nil || reappeared[renamedInput.SourceKey].ID != firstWork.ID {
