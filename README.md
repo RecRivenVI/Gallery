@@ -13,7 +13,9 @@ Gallery（画廊，代码代号 `gallery`）是面向个人及可信局域网的
 - REST 可查询 Job、当前 publication、Work 和 Media；媒体内容支持稳定 Media ID、HEAD、完整 GET、单区间 Range、显式 ETag 和条件请求；
 - `/ws/v1` 推送 Job、query publication 和 Session 吊销事件；断线后的事实恢复仍使用 REST snapshot；
 - 在任何写入和数据库初始化前检查 AppDirs 与启动参数 Source；运行中登记 Source 时再次检查真实路径、AppDirs 和已登记 Source 的双向重叠；
+- 打开或迁移数据库前取得 AppDirs 进程独占锁（Windows/Unix 各自平台 adapter）；第二个实例在此以 `INSTANCE_ALREADY_RUNNING` 失败，不打开数据库、不迁移、不监听、不改写活动 descriptor，锁在进程退出或强杀后由操作系统释放；
 - 原子发布带 nonce/ownership 的运行 descriptor，并在正常停止时按 ownership 清理；
+- 扫描与 Overlay 投影 Job 经中央有界调度器领取：按资源类别独立并发上限、context 取消传播、重复领取防护和 graceful shutdown，未完成 Job 由启动 reconciliation 重新入队；
 - `galleryctl health` 只使用公开的 `pkg/galleryapi` 生成客户端，不访问数据库、应用服务或后端 `internal` 包；
 - OpenAPI、错误信封、WebSocket 信封、签名游标、规则包 JSON Schema 与 CEL Profile v1 均可执行校验。
 - 规则 API 提供 Schema 感知规范化、默认值物化、三类 hash、validate/compile/Dry Run/Trace/Impact、参数校验和编译缓存；扫描器只执行版本化 Rule IR，不含平台特例；
@@ -21,7 +23,7 @@ Gallery（画廊，代码代号 `gallery`）是面向个人及可信局域网的
 - 标题 Override、ManualTag、HiddenState、CustomCover 写入 control 后由持久 Overlay Job 发布新 projection；Favorite/Progress 作为实时状态不改变分页成员或顺序；
 - Catalog 删除重建会通过稳定来源引用恢复 Canonical Work/Creator/Media、Binding、Overlay、Favorite、Progress 和媒体 URL；冲突与手动解绑不会被静默覆盖；
 - 用户可经 `/creators` 查看 CanonicalCreator 及来源 Binding 证据，用 `/creators/merges` 合并疑似同一创作者、用 `DELETE /creators/merges/{id}` 撤销；合并以 `merged_into` 记录于 control，不改写 Binding，复用 Overlay 投影 Job 更新查询与搜索，撤销、重扫和服务重启后结果一致；
-- 扫描无法唯一确定 Canonical Binding 时持久化富化 Binding issue（实体类型、来源稳定键、候选证据、状态与乐观版本），按候选指纹去重、忽略与 stale 收敛；用户经 `/binding-issues` 查看，用 `/binding-issues/{id}/resolve|dismiss|reopen` 与 `/binding-actions/unbind-work|unbind-media|undo-unbind` 修复，下一次扫描据此重建投影；Source 在线时未发现的 Binding 转 inactive，重现后复用原 Canonical 实体；
+- 扫描无法唯一确定 Canonical Binding 时持久化富化 Binding issue（实体类型、来源稳定键、候选证据、状态与乐观版本），按候选指纹去重、忽略与 stale 收敛；用户经 `/binding-issues` 查看，用 `/binding-issues/{id}/resolve|dismiss|reopen` 与 `/binding-actions/unbind-work|unbind-media|undo-unbind` 修复，下一次扫描据此重建投影；Source 在线时未发现的 Binding 转 inactive，连续多次成功扫描仍缺失则按保留窗口升级为 orphan candidate；用户经 `/orphan-candidates` 与 `/orphan-candidates/{bindingId}/decide` 选择保留、延长、确认孤立或解绑，四种决策都不删除 Canonical 与用户事实，重现后复用原 Canonical 实体；
 - ContentBlob、FileLocation 和逻辑 Media 分离；DerivedAsset 使用完整 key、受校验 manifest、singleflight、原子发布、读取 lease 和 GC，旧 publication 同样受游标与 Blob 读取 lease 保护；
 - 八个独立子进程强杀点覆盖扫描、publication、Overlay、DerivedAsset 和完整哈希，重启 reconciliation 保持旧快照可读并且不写 Source。
 
@@ -41,7 +43,7 @@ Gallery（画廊，代码代号 `gallery`）是面向个人及可信局域网的
 8. 对 `/media/{mediaId}/content` 执行 HEAD、GET 或单区间 Range GET；
 9. 通过 `GET/PUT /works/{workId}/overlay` 写入并观察 pending/published/failed；
 10. 通过 `GET /creators` 与 `/creators/{creatorId}` 核对创作者证据，用 `POST /creators/merges` 合并、`DELETE /creators/merges/{mergeId}` 撤销，并按返回的 `projectionJobId` 观察查询投影更新；
-11. 通过 `GET /binding-issues` 与 `/binding-issues/{issueId}` 查看绑定歧义与候选证据，用 `/binding-issues/{issueId}/resolve|dismiss|reopen` 或 `/binding-actions/unbind-work|unbind-media|undo-unbind` 修复后重扫；服务重启后复用未吊销 Session，并重新读取 Job、publication 和媒体 snapshot。
+11. 通过 `GET /binding-issues` 与 `/binding-issues/{issueId}` 查看绑定歧义与候选证据，用 `/binding-issues/{issueId}/resolve|dismiss|reopen` 或 `/binding-actions/unbind-work|unbind-media|undo-unbind` 修复后重扫；通过 `GET /orphan-candidates` 查看到达保留窗口的孤立候选，用 `/orphan-candidates/{bindingId}/decide` 决定保留、延长、确认孤立或解绑；服务重启后复用未吊销 Session，并重新读取 Job、publication 和媒体 snapshot。
 
 仓库内的完整生成客户端验收见 `internal/bootstrap` 与 `internal/transport/httpapi` 测试；合成输入位于 `tests/fixtures/walking-skeleton`。
 

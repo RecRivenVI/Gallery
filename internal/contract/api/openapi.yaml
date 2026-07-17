@@ -1,8 +1,8 @@
 openapi: 3.0.3
 info:
   title: Gallery API
-  version: 0.2.0-walking-skeleton
-  description: Gallery Walking Skeleton 正式契约；尚未冻结完整 v1 资源面。
+  version: 0.5.0-pre-alpha
+  description: Gallery pre-alpha 契约（阶段 1 领域和数据所有权）；资源面随阶段演进为兼容基线，物理 Schema 与完整 v1 语义尚未冻结。
 servers:
   - url: http://127.0.0.1:{port}
     variables:
