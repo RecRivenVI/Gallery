@@ -106,6 +106,8 @@ func New(mode config.Mode, store *storage.Store, clock ports.Clock, personal *au
 	mux.HandleFunc("POST /api/v1/admin/control-backups", server.createControlBackup)
 	mux.HandleFunc("GET /api/v1/admin/control-backups", server.listControlBackups)
 	mux.HandleFunc("GET /api/v1/admin/control-backups/{backupId}", server.getControlBackup)
+	mux.HandleFunc("POST /api/v1/admin/control-restores/verify", server.verifyControlRestore)
+	mux.HandleFunc("POST /api/v1/admin/control-restores", server.requestControlRestore)
 	mux.HandleFunc("GET /api/v1/query-publications/current", server.getCurrentQueryPublication)
 	mux.HandleFunc("GET /api/v1/works", server.listWorks)
 	mux.HandleFunc("GET /api/v1/works/{workId}", server.getWork)
@@ -931,6 +933,66 @@ func (s *Server) getControlBackup(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, backupManifestDTO(manifest))
+}
+
+func (s *Server) verifyControlRestore(w http.ResponseWriter, r *http.Request) {
+	backupID, _, err := s.decodeRestoreRequest(r)
+	if err != nil {
+		s.writeRequestError(w, err)
+		return
+	}
+	report, err := s.backup.Verify(r.Context(), backupID)
+	if err != nil {
+		s.writeRequestError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, restoreReportDTO(report))
+}
+
+func (s *Server) requestControlRestore(w http.ResponseWriter, r *http.Request) {
+	backupID, session, err := s.decodeRestoreRequest(r)
+	if err != nil {
+		s.writeRequestError(w, err)
+		return
+	}
+	report, err := s.backup.RequestRestore(r.Context(), session.PrincipalID, backupID)
+	if err != nil {
+		s.writeRequestError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusAccepted, api.ControlRestoreRequestResponse{RestartRequired: true, Report: restoreReportDTO(report)})
+}
+
+// decodeRestoreRequest 统一处理恢复端点的 capability、CSRF 与请求体解析。
+func (s *Server) decodeRestoreRequest(r *http.Request) (string, auth.Session, error) {
+	session, err := s.requireCapability(r, "admin.restore")
+	if err != nil {
+		return "", auth.Session{}, err
+	}
+	if err := auth.ValidateMutation(r, session.CSRFToken); err != nil {
+		return "", auth.Session{}, err
+	}
+	if s.backup == nil {
+		return "", auth.Session{}, fault.New(fault.CodeInternal, false, nil)
+	}
+	var request api.ControlRestoreRequest
+	if err := decodeJSON(r, &request); err != nil || request.BackupId == "" {
+		return "", auth.Session{}, fault.WithField(fault.CodeValidation, "backupId", err)
+	}
+	return request.BackupId, session, nil
+}
+
+func restoreReportDTO(value backup.RestoreReport) api.ControlRestoreReport {
+	result := api.ControlRestoreReport{
+		BackupId: value.BackupID, Compatible: value.Compatible,
+		BackupSchemaVersion: value.BackupSchemaVersion, CurrentSchemaVersion: value.CurrentSchemaVersion,
+		WillMigrate: value.WillMigrate, ChecksumVerified: value.ChecksumVerified,
+		IntegrityOk: value.IntegrityOK, InvariantsOk: value.InvariantsOK,
+	}
+	if value.Detail != "" {
+		result.Detail = &value.Detail
+	}
+	return result
 }
 
 func backupManifestDTO(value backup.Manifest) api.ControlBackupManifest {

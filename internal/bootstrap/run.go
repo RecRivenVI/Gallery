@@ -71,11 +71,25 @@ func Run(ctx context.Context, cfg config.Config, logger *slog.Logger) error {
 	}
 	defer ownership.Release()
 
+	// 待应用恢复请求必须在打开任何数据库之前、于单写者锁保护下执行原子替换。恢复失败保留当前库
+	// 并继续启动。
+	restoreOutcome, err := backup.ApplyPendingRestore(ctx, cfg.AppDirs)
+	if err != nil {
+		return err
+	}
+
 	store, err := storage.Open(ctx, cfg.AppDirs)
 	if err != nil {
 		return err
 	}
 	defer store.Close()
+
+	if restoreOutcome.Applied {
+		if err := backup.FinalizeRestore(ctx, store.Control, clock.System{}.Now()); err != nil {
+			return err
+		}
+		logger.Info("control_restore_applied", "backup", restoreOutcome.BackupID)
+	}
 
 	listener, err := net.Listen("tcp", cfg.Listen)
 	if err != nil {

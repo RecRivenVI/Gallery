@@ -516,6 +516,64 @@ paths:
           $ref: "#/components/responses/ForbiddenError"
         "404":
           $ref: "#/components/responses/NotFoundError"
+  /api/v1/admin/control-restores/verify:
+    post:
+      operationId: verifyControlRestore
+      summary: 恢复前验证备份（Dry Run），不修改任何状态
+      parameters:
+        - $ref: "#/components/parameters/CSRFHeader"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ControlRestoreRequest"
+      responses:
+        "200":
+          description: 恢复验证结论
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ControlRestoreReport"
+        "400":
+          $ref: "#/components/responses/ValidationError"
+        "401":
+          $ref: "#/components/responses/UnauthenticatedError"
+        "403":
+          $ref: "#/components/responses/ForbiddenError"
+        "404":
+          $ref: "#/components/responses/NotFoundError"
+        "409":
+          $ref: "#/components/responses/ConflictError"
+  /api/v1/admin/control-restores:
+    post:
+      operationId: requestControlRestore
+      summary: 登记待应用的 control.db 恢复请求，下次启动时原子替换
+      parameters:
+        - $ref: "#/components/parameters/CSRFHeader"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ControlRestoreRequest"
+      responses:
+        "202":
+          description: 恢复请求已登记，需重启 galleryd 应用
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ControlRestoreRequestResponse"
+        "400":
+          $ref: "#/components/responses/ValidationError"
+        "401":
+          $ref: "#/components/responses/UnauthenticatedError"
+        "403":
+          $ref: "#/components/responses/ForbiddenError"
+        "404":
+          $ref: "#/components/responses/NotFoundError"
+        "409":
+          $ref: "#/components/responses/ConflictError"
   /api/v1/query-publications/current:
     get:
       operationId: getCurrentQueryPublication
@@ -1495,6 +1553,47 @@ components:
           type: array
           items:
             $ref: "#/components/schemas/ControlBackupManifest"
+    ControlRestoreRequest:
+      type: object
+      additionalProperties: false
+      required: [backupId]
+      properties:
+        backupId:
+          type: string
+    ControlRestoreReport:
+      type: object
+      additionalProperties: false
+      required: [backupId, compatible, backupSchemaVersion, currentSchemaVersion, willMigrate, checksumVerified, integrityOk, invariantsOk]
+      properties:
+        backupId:
+          type: string
+        compatible:
+          type: boolean
+        backupSchemaVersion:
+          type: integer
+          format: int64
+        currentSchemaVersion:
+          type: integer
+          format: int64
+        willMigrate:
+          type: boolean
+        checksumVerified:
+          type: boolean
+        integrityOk:
+          type: boolean
+        invariantsOk:
+          type: boolean
+        detail:
+          type: string
+    ControlRestoreRequestResponse:
+      type: object
+      additionalProperties: false
+      required: [restartRequired, report]
+      properties:
+        restartRequired:
+          type: boolean
+        report:
+          $ref: "#/components/schemas/ControlRestoreReport"
     QueryPublication:
       type: object
       additionalProperties: false

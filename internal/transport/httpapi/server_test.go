@@ -1039,4 +1039,31 @@ func TestControlBackupEndpoints(t *testing.T) {
 	if missing, err := client.GetControlBackupWithResponse(ctx, "bkp_00000000-0000-7000-8000-000000000000"); err != nil || missing.JSON404 == nil {
 		t.Fatalf("未知备份未 404: %v status=%d", err, missing.StatusCode())
 	}
+
+	// 恢复 Dry Run 验证。
+	verify, err := client.VerifyControlRestoreWithResponse(ctx, &api.VerifyControlRestoreParams{XGalleryCSRF: csrf},
+		api.ControlRestoreRequest{BackupId: manifest.BackupId}, editor)
+	if err != nil || verify.JSON200 == nil || !verify.JSON200.Compatible {
+		t.Fatalf("恢复验证失败: %v status=%d", err, verify.StatusCode())
+	}
+	if unknownVerify, err := client.VerifyControlRestoreWithResponse(ctx, &api.VerifyControlRestoreParams{XGalleryCSRF: csrf},
+		api.ControlRestoreRequest{BackupId: "bkp_00000000-0000-7000-8000-000000000000"}, editor); err != nil || unknownVerify.JSON404 == nil {
+		t.Fatalf("未知备份验证未 404: %v status=%d", err, unknownVerify.StatusCode())
+	}
+
+	// 登记待应用恢复请求。
+	request, err := client.RequestControlRestoreWithResponse(ctx, &api.RequestControlRestoreParams{XGalleryCSRF: csrf},
+		api.ControlRestoreRequest{BackupId: manifest.BackupId}, editor)
+	if err != nil || request.JSON202 == nil || !request.JSON202.RestartRequired {
+		t.Fatalf("恢复请求失败: %v status=%d", err, request.StatusCode())
+	}
+	if _, err := os.Stat(filepath.Join(dirs.State, "restore-pending.json")); err != nil {
+		t.Fatalf("恢复请求未登记待应用标记: %v", err)
+	}
+
+	// 缺少 admin.restore 之外的 capability 或 CSRF 被拒。
+	if noCSRF, err := client.RequestControlRestoreWithResponse(ctx, &api.RequestControlRestoreParams{XGalleryCSRF: ""},
+		api.ControlRestoreRequest{BackupId: manifest.BackupId}, editor); err != nil || noCSRF.JSON403 == nil {
+		t.Fatalf("缺 CSRF 恢复请求未 403: %v status=%d", err, noCSRF.StatusCode())
+	}
 }
