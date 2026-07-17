@@ -202,6 +202,45 @@ VALUES (?, ?, 'shared-key', ?, 1, 'active', 0, 1, 1)`, f.ids(domain.IDWorkBindin
 	}
 }
 
+func TestSourceDerivedInactiveLifecycle(t *testing.T) {
+	f := newIssueFixture(t)
+	workA := application.DiscoveredWork{SourceKey: "key-a", Title: "作品甲"}
+	workB := application.DiscoveredWork{SourceKey: "key-b", Title: "作品乙"}
+	first, err := f.resources.EnsureCanonical(f.ctx, f.source.ID, []application.DiscoveredWork{workA, workB})
+	if err != nil {
+		t.Fatal(err)
+	}
+	canonicalB := first["key-b"].ID
+	if _, status := f.activeWorkBinding(t, "key-b"); status != "active" {
+		t.Fatalf("首次扫描未 active: %s", status)
+	}
+
+	// 作品乙消失但 Source 仍在线（作品甲仍被发现）：其 Binding 转为 inactive，Canonical 保留。
+	if _, err := f.resources.EnsureCanonical(f.ctx, f.source.ID, []application.DiscoveredWork{workA}); err != nil {
+		t.Fatal(err)
+	}
+	if _, status := f.activeWorkBinding(t, "key-b"); status != "inactive" {
+		t.Fatalf("消失作品未转 inactive: %s", status)
+	}
+	var canonicalCount int
+	_ = f.control.QueryRowContext(f.ctx, `SELECT count(*) FROM canonical_works WHERE work_id=?`, canonicalB).Scan(&canonicalCount)
+	if canonicalCount != 1 {
+		t.Fatal("inactive 不得删除 Canonical 实体")
+	}
+
+	// 重新出现：复用同一 CanonicalWork，Binding 恢复 active。
+	reappeared, err := f.resources.EnsureCanonical(f.ctx, f.source.ID, []application.DiscoveredWork{workA, workB})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if reappeared["key-b"].ID != canonicalB {
+		t.Fatalf("重现未复用原 CanonicalWork: got=%s want=%s", reappeared["key-b"].ID, canonicalB)
+	}
+	if _, status := f.activeWorkBinding(t, "key-b"); status != "active" {
+		t.Fatalf("重现未恢复 active: %s", status)
+	}
+}
+
 func TestManualUnbindMediaHonoredByRescan(t *testing.T) {
 	f := newIssueFixture(t)
 	discover := func() []application.DiscoveredWork {
