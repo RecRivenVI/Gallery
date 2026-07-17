@@ -843,3 +843,97 @@ VALUES (?, ?, 'work', 'alias-2', 'BINDING_REVIEW_REQUIRED', '', 2, 'open', 1, 20
 		t.Fatalf("reopen 接口失败: %v status=%d body=%s", err, reopened.StatusCode(), reopened.Body)
 	}
 }
+
+func TestOrphanCandidateAPIContract(t *testing.T) {
+	ctx := context.Background()
+	dirs := appdirs.UnderRoot(filepath.Join(t.TempDir(), "app"))
+	if err := dirs.Ensure(filesystem.OS{}); err != nil {
+		t.Fatal(err)
+	}
+	store, err := storage.Open(ctx, dirs)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	fixedClock := clock.Fixed{Time: time.Now().UTC()}
+	generator := identity.NewGenerator(fixedClock)
+	personal, err := auth.NewPersonal(store.Control.SQL(), fixedClock, generator, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resources, err := application.NewResources(store.Control.SQL(), dirs, filesystem.OS{}, fixedClock, generator)
+	if err != nil {
+		t.Fatal(err)
+	}
+	handler := httpapi.New(config.ModePersonal, store, fixedClock, personal, resources, nil, nil, nil, nil, nil, nil, slog.New(slog.NewJSONHandler(io.Discard, nil)))
+	server := httptest.NewServer(handler)
+	defer server.Close()
+
+	newID := func(kind domain.IDKind) string {
+		id, err := generator.New(kind)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return id.String()
+	}
+	exec := func(query string, args ...any) {
+		if _, err := store.Control.SQL().ExecContext(ctx, query, args...); err != nil {
+			t.Fatal(err)
+		}
+	}
+	libraryID, sourceID := newID(domain.IDLibrary), newID(domain.IDSource)
+	workID, bindingID := newID(domain.IDCanonicalWork), newID(domain.IDWorkBinding)
+	exec(`INSERT INTO libraries (library_id, name, created_at) VALUES (?, 'lib', 1)`, libraryID)
+	exec(`INSERT INTO sources (source_id, library_id, display_name, root_path, root_key, created_at)
+VALUES (?, ?, 'src', '/seed/root', '/seed/root', 1)`, sourceID, libraryID)
+	exec(`INSERT INTO canonical_works (work_id, title, created_at) VALUES (?, '孤立作品', 1)`, workID)
+	exec(`INSERT INTO work_bindings
+(binding_id, source_id, source_key, work_id, identity_version, status, missed_scans, last_seen_generation, created_at, updated_at)
+VALUES (?, ?, 'gone-key', ?, 1, 'orphan_candidate', 3, 0, 1, 1)`, bindingID, sourceID, workID)
+
+	jar, err := cookiejar.New(nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	client, err := api.NewClientWithResponses(server.URL, api.WithHTTPClient(&http.Client{Jar: jar}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	csrf := pairSession(t, ctx, client, server.URL)
+	editor := sameOrigin(server.URL)
+
+	listed, err := client.ListOrphanCandidatesWithResponse(ctx, &api.ListOrphanCandidatesParams{}, editor)
+	if err != nil || listed.JSON200 == nil || len(listed.JSON200.Candidates) != 1 {
+		t.Fatalf("orphan 列表失败: %v status=%d body=%s", err, listed.StatusCode(), listed.Body)
+	}
+	candidate := listed.JSON200.Candidates[0]
+	if candidate.BindingId != bindingID || string(candidate.EntityType) != "work" ||
+		candidate.CanonicalId != workID || candidate.CanonicalLabel != "孤立作品" ||
+		candidate.MissedScans != 3 || candidate.RetentionThreshold != 3 {
+		t.Fatalf("orphan 候选字段错误: %+v", candidate)
+	}
+
+	// 缺少 CSRF 的决策被拒绝。
+	if noCSRF, err := client.DecideOrphanCandidateWithResponse(ctx, bindingID, &api.DecideOrphanCandidateParams{XGalleryCSRF: ""},
+		api.OrphanDecisionRequest{Decision: "retain"}, editor); err != nil || noCSRF.JSON403 == nil {
+		t.Fatalf("缺 CSRF 决策未 403: %v status=%d", err, noCSRF.StatusCode())
+	}
+	// confirm_orphaned 决策。
+	decided, err := client.DecideOrphanCandidateWithResponse(ctx, bindingID, &api.DecideOrphanCandidateParams{XGalleryCSRF: csrf},
+		api.OrphanDecisionRequest{Decision: "confirm_orphaned"}, editor)
+	if err != nil || decided.JSON200 == nil || string(decided.JSON200.NewStatus) != "orphaned" ||
+		decided.JSON200.CanonicalId != workID {
+		t.Fatalf("confirm_orphaned 接口失败: %v status=%d body=%s", err, decided.StatusCode(), decided.Body)
+	}
+	// 确认孤立不得删除 Canonical 作品。
+	var count int
+	_ = store.Control.SQL().QueryRowContext(ctx, `SELECT count(*) FROM canonical_works WHERE work_id=?`, workID).Scan(&count)
+	if count != 1 {
+		t.Fatalf("确认孤立后 Canonical 作品被删: %d", count)
+	}
+	// 已非候选，再次决策冲突。
+	if again, err := client.DecideOrphanCandidateWithResponse(ctx, bindingID, &api.DecideOrphanCandidateParams{XGalleryCSRF: csrf},
+		api.OrphanDecisionRequest{Decision: "retain"}, editor); err != nil || again.JSON409 == nil {
+		t.Fatalf("非候选决策未 409: %v status=%d", err, again.StatusCode())
+	}
+}

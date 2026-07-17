@@ -99,6 +99,8 @@ func New(mode config.Mode, store *storage.Store, clock ports.Clock, personal *au
 	mux.HandleFunc("POST /api/v1/binding-actions/unbind-work", server.unbindWork)
 	mux.HandleFunc("POST /api/v1/binding-actions/unbind-media", server.unbindMedia)
 	mux.HandleFunc("POST /api/v1/binding-actions/undo-unbind", server.undoManualUnbind)
+	mux.HandleFunc("GET /api/v1/orphan-candidates", server.listOrphanCandidates)
+	mux.HandleFunc("POST /api/v1/orphan-candidates/{bindingId}/decide", server.decideOrphanCandidate)
 	mux.HandleFunc("GET /api/v1/query-publications/current", server.getCurrentQueryPublication)
 	mux.HandleFunc("GET /api/v1/works", server.listWorks)
 	mux.HandleFunc("GET /api/v1/works/{workId}", server.getWork)
@@ -791,6 +793,78 @@ func (s *Server) bindingAction(w http.ResponseWriter, r *http.Request, kind stri
 		return
 	}
 	writeJSON(w, http.StatusOK, api.BindingActionResult{CanonicalId: canonicalID, EntityKind: api.BindingActionResultEntityKind(kind)})
+}
+
+func (s *Server) listOrphanCandidates(w http.ResponseWriter, r *http.Request) {
+	if _, err := s.requireCapability(r, "bindings.read"); err != nil {
+		s.writeRequestError(w, err)
+		return
+	}
+	limit := 0
+	if raw := r.URL.Query().Get("limit"); raw != "" {
+		parsed, err := strconv.Atoi(raw)
+		if err != nil {
+			s.writeRequestError(w, fault.WithField(fault.CodeValidation, "limit", err))
+			return
+		}
+		limit = parsed
+	}
+	page, err := s.data.ListOrphanCandidates(r.Context(), application.OrphanCandidateFilter{
+		SourceID: r.URL.Query().Get("sourceId"), EntityType: r.URL.Query().Get("entityType"),
+	}, r.URL.Query().Get("cursor"), limit)
+	if err != nil {
+		s.writeRequestError(w, err)
+		return
+	}
+	items := make([]api.OrphanCandidate, 0, len(page.Items))
+	for _, candidate := range page.Items {
+		items = append(items, orphanCandidateDTO(candidate))
+	}
+	response := api.OrphanCandidateListResponse{Candidates: items}
+	if page.NextCursor != "" {
+		response.NextCursor = &page.NextCursor
+	}
+	writeJSON(w, http.StatusOK, response)
+}
+
+func (s *Server) decideOrphanCandidate(w http.ResponseWriter, r *http.Request) {
+	session, err := s.requireCapability(r, "bindings.write")
+	if err != nil {
+		s.writeRequestError(w, err)
+		return
+	}
+	if err := auth.ValidateMutation(r, session.CSRFToken); err != nil {
+		s.writeRequestError(w, err)
+		return
+	}
+	var request api.OrphanDecisionRequest
+	if err := decodeJSON(r, &request); err != nil {
+		s.writeRequestError(w, fault.WithField(fault.CodeValidation, "body", err))
+		return
+	}
+	extend := 0
+	if request.ExtendScans != nil {
+		extend = *request.ExtendScans
+	}
+	result, err := s.data.DecideOrphanCandidate(r.Context(), r.PathValue("bindingId"), string(request.Decision), extend)
+	if err != nil {
+		s.writeRequestError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, api.OrphanDecisionResult{
+		BindingId: result.BindingID, EntityType: api.OrphanDecisionResultEntityType(result.EntityType),
+		Decision: api.OrphanDecisionResultDecision(result.Decision), NewStatus: api.OrphanDecisionResultNewStatus(result.NewStatus),
+		CanonicalId: result.CanonicalID,
+	})
+}
+
+func orphanCandidateDTO(value application.OrphanCandidate) api.OrphanCandidate {
+	return api.OrphanCandidate{
+		BindingId: value.BindingID, EntityType: api.OrphanCandidateEntityType(value.EntityType),
+		SourceId: value.SourceID, SourceKey: value.SourceKey, CanonicalId: value.CanonicalID,
+		CanonicalLabel: value.CanonicalLabel, MissedScans: value.MissedScans,
+		RetentionThreshold: value.RetentionThreshold, CreatedAt: value.CreatedAt, UpdatedAt: value.UpdatedAt,
+	}
 }
 
 func (s *Server) getCurrentQueryPublication(w http.ResponseWriter, r *http.Request) {
