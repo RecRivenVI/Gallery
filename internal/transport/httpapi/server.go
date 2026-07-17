@@ -17,6 +17,7 @@ import (
 
 	"github.com/RecRivenVI/gallery/internal/application"
 	"github.com/RecRivenVI/gallery/internal/auth"
+	"github.com/RecRivenVI/gallery/internal/backup"
 	"github.com/RecRivenVI/gallery/internal/catalog"
 	"github.com/RecRivenVI/gallery/internal/config"
 	"github.com/RecRivenVI/gallery/internal/contract/fault"
@@ -50,9 +51,10 @@ type Server struct {
 	query    *queryservice.Service
 	overlay  *overlay.Service
 	creators *creators.Service
+	backup   *backup.Service
 }
 
-func New(mode config.Mode, store *storage.Store, clock ports.Clock, personal *auth.Personal, resources *application.Resources, jobStore *jobs.Store, catalogStore *catalog.Store, scannerService *scanner.Service, overlayService *overlay.Service, creatorsService *creators.Service, hub *realtime.Hub, logger *slog.Logger) http.Handler {
+func New(mode config.Mode, store *storage.Store, clock ports.Clock, personal *auth.Personal, resources *application.Resources, jobStore *jobs.Store, catalogStore *catalog.Store, scannerService *scanner.Service, overlayService *overlay.Service, creatorsService *creators.Service, backupService *backup.Service, hub *realtime.Hub, logger *slog.Logger) http.Handler {
 	if hub == nil {
 		hub = realtime.NewHub(clock)
 	}
@@ -64,7 +66,7 @@ func New(mode config.Mode, store *storage.Store, clock ports.Clock, personal *au
 	if err != nil {
 		panic(fmt.Sprintf("初始化查询服务: %v", err))
 	}
-	server := &Server{mode: mode, store: store, clock: clock, auth: personal, data: resources, jobs: jobStore, catalog: catalogStore, scanner: scannerService, hub: hub, logger: logger, rules: ruleLifecycle, query: queryService, overlay: overlayService, creators: creatorsService}
+	server := &Server{mode: mode, store: store, clock: clock, auth: personal, data: resources, jobs: jobStore, catalog: catalogStore, scanner: scannerService, hub: hub, logger: logger, rules: ruleLifecycle, query: queryService, overlay: overlayService, creators: creatorsService, backup: backupService}
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /api/v1/health", server.health)
 	mux.HandleFunc("GET /api/v1/bootstrap", server.bootstrap)
@@ -101,6 +103,9 @@ func New(mode config.Mode, store *storage.Store, clock ports.Clock, personal *au
 	mux.HandleFunc("POST /api/v1/binding-actions/undo-unbind", server.undoManualUnbind)
 	mux.HandleFunc("GET /api/v1/orphan-candidates", server.listOrphanCandidates)
 	mux.HandleFunc("POST /api/v1/orphan-candidates/{bindingId}/decide", server.decideOrphanCandidate)
+	mux.HandleFunc("POST /api/v1/admin/control-backups", server.createControlBackup)
+	mux.HandleFunc("GET /api/v1/admin/control-backups", server.listControlBackups)
+	mux.HandleFunc("GET /api/v1/admin/control-backups/{backupId}", server.getControlBackup)
 	mux.HandleFunc("GET /api/v1/query-publications/current", server.getCurrentQueryPublication)
 	mux.HandleFunc("GET /api/v1/works", server.listWorks)
 	mux.HandleFunc("GET /api/v1/works/{workId}", server.getWork)
@@ -867,6 +872,88 @@ func orphanCandidateDTO(value application.OrphanCandidate) api.OrphanCandidate {
 	}
 }
 
+func (s *Server) createControlBackup(w http.ResponseWriter, r *http.Request) {
+	session, err := s.requireCapability(r, "admin.backup")
+	if err != nil {
+		s.writeRequestError(w, err)
+		return
+	}
+	if err := auth.ValidateMutation(r, session.CSRFToken); err != nil {
+		s.writeRequestError(w, err)
+		return
+	}
+	if s.backup == nil {
+		s.writeRequestError(w, fault.New(fault.CodeInternal, false, nil))
+		return
+	}
+	job, err := s.backup.CreateBackup(r.Context(), session.PrincipalID)
+	if err != nil {
+		s.writeRequestError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusAccepted, jobDTO(job))
+	s.backup.Start(job.ID)
+}
+
+func (s *Server) listControlBackups(w http.ResponseWriter, r *http.Request) {
+	if _, err := s.requireCapability(r, "admin.backup"); err != nil {
+		s.writeRequestError(w, err)
+		return
+	}
+	if s.backup == nil {
+		s.writeRequestError(w, fault.New(fault.CodeInternal, false, nil))
+		return
+	}
+	list, err := s.backup.List(r.Context())
+	if err != nil {
+		s.writeRequestError(w, err)
+		return
+	}
+	items := make([]api.ControlBackupManifest, 0, len(list))
+	for _, manifest := range list {
+		items = append(items, backupManifestDTO(manifest))
+	}
+	writeJSON(w, http.StatusOK, api.ControlBackupListResponse{Backups: items})
+}
+
+func (s *Server) getControlBackup(w http.ResponseWriter, r *http.Request) {
+	if _, err := s.requireCapability(r, "admin.backup"); err != nil {
+		s.writeRequestError(w, err)
+		return
+	}
+	if s.backup == nil {
+		s.writeRequestError(w, fault.New(fault.CodeInternal, false, nil))
+		return
+	}
+	manifest, err := s.backup.Get(r.Context(), r.PathValue("backupId"))
+	if err != nil {
+		s.writeRequestError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, backupManifestDTO(manifest))
+}
+
+func backupManifestDTO(value backup.Manifest) api.ControlBackupManifest {
+	result := api.ControlBackupManifest{
+		BackupId: value.BackupID, ManifestVersion: value.ManifestVersion,
+		Role: api.ControlBackupManifestRole(value.Role), AppVersion: value.AppVersion,
+		SchemaVersion: value.SchemaVersion, MigrationChecksum: value.MigrationChecksum, CreatedAt: value.CreatedAt,
+	}
+	result.Database.FileName = value.Database.FileName
+	result.Database.SizeBytes = value.Database.SizeBytes
+	result.Database.Checksum = value.Database.Checksum
+	result.Database.ChecksumAlgorithm = api.ControlBackupManifestDatabaseChecksumAlgorithm(value.Database.ChecksumAlgorithm)
+	result.Security.Sessions = value.Security.Sessions
+	result.Security.PairingCredentials = value.Security.PairingCredentials
+	result.Security.ApiTokens = value.Security.APITokens
+	result.Security.CredentialStoreRefs = value.Security.CredentialStoreRefs
+	result.Security.Note = value.Security.Note
+	if value.Notes != "" {
+		result.Notes = &value.Notes
+	}
+	return result
+}
+
 func (s *Server) getCurrentQueryPublication(w http.ResponseWriter, r *http.Request) {
 	if _, err := s.requireCapability(r, "library.read"); err != nil {
 		s.writeRequestError(w, err)
@@ -1348,8 +1435,10 @@ func statusForFault(err error) int {
 		return http.StatusUnauthorized
 	case fault.CodeForbidden, fault.CodeHostRejected, fault.CodeOriginRejected, fault.CodeCSRFInvalid:
 		return http.StatusForbidden
-	case fault.CodeNotFound:
+	case fault.CodeNotFound, fault.CodeBackupNotFound:
 		return http.StatusNotFound
+	case fault.CodeBackupCorrupt, fault.CodeBackupIncompatible:
+		return http.StatusConflict
 	case fault.CodeConflict:
 		return http.StatusConflict
 	case fault.CodeJobStateConflict, fault.CodeScanAlreadyRunning, fault.CodeCatalogCandidateInvalid:

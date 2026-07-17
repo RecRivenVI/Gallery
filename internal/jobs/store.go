@@ -109,6 +109,46 @@ VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`, job.ID, job.Type, job.SourceID, job.C
 	return job, nil
 }
 
+// maintenanceTypes 是不绑定 source_id、复用 jobs 状态机的维护类 Job 类型集合。它们各自持有
+// 数据库层的单活跃约束，避免并发备份或并发恢复相互破坏一致性。
+var maintenanceTypes = map[string]struct{}{"control_backup": {}, "control_restore": {}}
+
+// CreateMaintenance 入库一个维护类 Job（control_backup / control_restore）。source_id 为 NULL；
+// 若同类别已有活跃 Job，数据库单活跃约束触发 JOB_STATE_CONFLICT。
+func (s *Store) CreateMaintenance(ctx context.Context, jobType, createdBy string) (Job, error) {
+	if _, ok := maintenanceTypes[jobType]; !ok || strings.TrimSpace(createdBy) == "" {
+		return Job{}, fault.New(fault.CodeValidation, false, nil)
+	}
+	id, err := s.ids.New(domain.IDJob)
+	if err != nil {
+		return Job{}, fault.New(fault.CodeInternal, true, err)
+	}
+	now := s.clock.Now().UTC()
+	job := Job{
+		ID: id.String(), Type: jobType, CreatedBy: createdBy,
+		Status: StatusQueued, Stage: "queued", ProgressSequence: 1, Attempt: 1,
+		CreatedAt: now, UpdatedAt: now,
+	}
+	_, err = s.db.ExecContext(ctx, `
+INSERT INTO jobs (job_id, job_type, created_by, status, stage, progress_sequence, attempt, created_at, updated_at)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`, job.ID, job.Type, job.CreatedBy,
+		job.Status, job.Stage, job.ProgressSequence, job.Attempt, now.Unix(), now.Unix())
+	if err != nil {
+		if strings.Contains(strings.ToLower(err.Error()), "unique") {
+			return Job{}, fault.New(fault.CodeJobStateConflict, true, nil)
+		}
+		return Job{}, fault.New(fault.CodeInternal, true, err)
+	}
+	return job, nil
+}
+
+// CompleteMaintenance 把维护类 Job 从 running 收敛为 completed。维护类 Job 不产生
+// query publication，因此不写 publication_id。
+func (s *Store) CompleteMaintenance(ctx context.Context, id string) (Job, error) {
+	now := s.clock.Now().UTC()
+	return s.transition(ctx, id, StatusRunning, StatusCompleted, "completed", `finished_at = ?,`, []any{now.Unix()}, now)
+}
+
 // EnqueueOverlayProjectionTx 与 Overlay fact 使用同一个 control.db 事务：同一 Catalog
 // 上的连续写入合并为更高 watermark，Catalog 已切换时显式 supersede 旧请求。
 func (s *Store) EnqueueOverlayProjectionTx(ctx context.Context, tx *sql.Tx, createdBy, catalogRevisionID, basePublicationID string, targetWatermark int64) (OverlayEnqueueResult, error) {

@@ -460,6 +460,62 @@ paths:
           $ref: "#/components/responses/ForbiddenError"
         "404":
           $ref: "#/components/responses/NotFoundError"
+  /api/v1/admin/control-backups:
+    post:
+      operationId: createControlBackup
+      summary: 创建 control.db 产品级备份 Job 并异步执行
+      parameters:
+        - $ref: "#/components/parameters/CSRFHeader"
+      responses:
+        "202":
+          description: 备份 Job 已排队
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Job"
+        "401":
+          $ref: "#/components/responses/UnauthenticatedError"
+        "403":
+          $ref: "#/components/responses/ForbiddenError"
+        "409":
+          $ref: "#/components/responses/ConflictError"
+    get:
+      operationId: listControlBackups
+      summary: 列出已发布的 control.db 备份 manifest
+      responses:
+        "200":
+          description: 备份 manifest 列表
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ControlBackupListResponse"
+        "401":
+          $ref: "#/components/responses/UnauthenticatedError"
+        "403":
+          $ref: "#/components/responses/ForbiddenError"
+  /api/v1/admin/control-backups/{backupId}:
+    get:
+      operationId: getControlBackup
+      summary: 读取单个 control.db 备份 manifest
+      parameters:
+        - name: backupId
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: 备份 manifest
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ControlBackupManifest"
+        "401":
+          $ref: "#/components/responses/UnauthenticatedError"
+        "403":
+          $ref: "#/components/responses/ForbiddenError"
+        "404":
+          $ref: "#/components/responses/NotFoundError"
   /api/v1/query-publications/current:
     get:
       operationId: getCurrentQueryPublication
@@ -1307,6 +1363,10 @@ components:
         - CATALOG_CANDIDATE_INVALID
         - PROCESS_INTERRUPTED
         - RANGE_INVALID
+        - RESTORE_FAILED
+        - BACKUP_NOT_FOUND
+        - BACKUP_CORRUPT
+        - BACKUP_INCOMPATIBLE
     Job:
       type: object
       additionalProperties: false
@@ -1316,7 +1376,7 @@ components:
           $ref: "#/components/schemas/JobId"
         type:
           type: string
-          enum: [scan, overlay_projection]
+          enum: [scan, overlay_projection, control_backup, control_restore]
         sourceId:
           $ref: "#/components/schemas/SourceId"
         status:
@@ -1369,6 +1429,72 @@ components:
         updatedAt:
           type: string
           format: date-time
+    ControlBackupManifest:
+      type: object
+      additionalProperties: false
+      required: [backupId, manifestVersion, role, appVersion, schemaVersion, migrationChecksum, createdAt, database, security]
+      properties:
+        backupId:
+          type: string
+        manifestVersion:
+          type: integer
+          minimum: 1
+        role:
+          type: string
+          enum: [control]
+        appVersion:
+          type: string
+        schemaVersion:
+          type: integer
+          format: int64
+          minimum: 0
+        migrationChecksum:
+          type: string
+        createdAt:
+          type: string
+          format: date-time
+        database:
+          type: object
+          additionalProperties: false
+          required: [fileName, sizeBytes, checksum, checksumAlgorithm]
+          properties:
+            fileName:
+              type: string
+            sizeBytes:
+              type: integer
+              format: int64
+              minimum: 0
+            checksum:
+              type: string
+            checksumAlgorithm:
+              type: string
+              enum: [sha256]
+        security:
+          type: object
+          additionalProperties: false
+          required: [sessions, pairingCredentials, apiTokens, credentialStoreRefs, note]
+          properties:
+            sessions:
+              type: string
+            pairingCredentials:
+              type: string
+            apiTokens:
+              type: string
+            credentialStoreRefs:
+              type: string
+            note:
+              type: string
+        notes:
+          type: string
+    ControlBackupListResponse:
+      type: object
+      additionalProperties: false
+      required: [backups]
+      properties:
+        backups:
+          type: array
+          items:
+            $ref: "#/components/schemas/ControlBackupManifest"
     QueryPublication:
       type: object
       additionalProperties: false
