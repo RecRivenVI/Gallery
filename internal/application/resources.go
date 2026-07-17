@@ -358,6 +358,7 @@ WHERE singleton=1 RETURNING generation`).Scan(&generation); err != nil {
 	now := r.clock.Now().UTC().Unix()
 	result := make(map[string]CanonicalWork, len(discovered))
 	seenSourceKeys := make(map[string]struct{}, len(discovered))
+	seenKeys := make(map[string]struct{}, len(discovered))
 	seenExternal := make(map[string]string)
 	for _, item := range discovered {
 		if item.SourceKey == "" || item.Title == "" || len([]rune(item.SourceKey)) > 4096 || containsControl(item.SourceKey) {
@@ -368,13 +369,23 @@ WHERE singleton=1 RETURNING generation`).Scan(&generation); err != nil {
 			return nil, fault.WithField(fault.CodeValidation, "externalId", nil)
 		}
 		if _, duplicate := seenSourceKeys[item.SourceKey]; duplicate {
-			return nil, r.bindingConflict(ctx, tx, sourceID, item, 2, now)
+			return nil, r.recordBindingIssue(ctx, tx, bindingIssueInput{
+				sourceID: sourceID, entityType: "work", sourceKey: item.SourceKey,
+				providerID: item.ProviderID, externalID: item.ExternalID,
+				candidateKind: "work", matchSignal: "duplicate_source_key", candidateCount: 2,
+			}, now)
 		}
 		seenSourceKeys[item.SourceKey] = struct{}{}
+		seenKeys[item.SourceKey] = struct{}{}
 		if item.ExternalID != "" {
 			key := item.ProviderID + "\x00" + item.ExternalID
 			if previous, duplicate := seenExternal[key]; duplicate && previous != item.SourceKey {
-				return nil, r.bindingConflict(ctx, tx, sourceID, item, 2, now)
+				return nil, r.recordBindingIssue(ctx, tx, bindingIssueInput{
+					sourceID: sourceID, entityType: "work", sourceKey: item.SourceKey,
+					providerID: item.ProviderID, externalID: item.ExternalID,
+					candidateKind: "work", matchSignal: "duplicate_external_id", matchValue: item.ExternalID,
+					candidateCount: 2,
+				}, now)
 			}
 			seenExternal[key] = item.SourceKey
 		}
@@ -391,6 +402,7 @@ WHERE singleton=1 RETURNING generation`).Scan(&generation); err != nil {
 		}
 		work := CanonicalWork{ID: workID, Title: title, Media: make(map[string]CanonicalMedia, len(mediaItems))}
 		if item.Creator.Name != "" {
+			seenKeys[item.Creator.SourceKey] = struct{}{}
 			creatorID, creatorName, err := r.resolveCreator(ctx, tx, sourceID, item.Creator, generation, now)
 			if err != nil {
 				return nil, err
@@ -407,7 +419,8 @@ ON CONFLICT(work_id, role, ordinal) DO UPDATE SET creator_id=excluded.creator_id
 			if mediaItem.Ordinal < 0 {
 				mediaItem.Ordinal = ordinal
 			}
-			mediaID, canonicalOrdinal, err := r.resolveMedia(ctx, tx, sourceID, workID, mediaItem, generation, now)
+			seenKeys[mediaItem.SourceKey] = struct{}{}
+			mediaID, canonicalOrdinal, err := r.resolveMedia(ctx, tx, sourceID, workID, item.SourceKey, mediaItem, generation, now)
 			if err != nil {
 				return nil, err
 			}
@@ -427,9 +440,8 @@ WHERE source_id=? AND status='active' AND last_seen_generation<>?`, now, sourceI
 WHERE source_id=? AND status='active' AND last_seen_generation<>?`, now, sourceID, generation); err != nil {
 		return nil, fault.New(fault.CodeInternal, true, err)
 	}
-	if _, err := tx.ExecContext(ctx, `UPDATE binding_issues SET status='resolved', resolved_at=?
-WHERE source_id=? AND status='open'`, now, sourceID); err != nil {
-		return nil, fault.New(fault.CodeInternal, true, err)
+	if err := r.reconcileOpenIssues(ctx, tx, sourceID, seenKeys, now); err != nil {
+		return nil, err
 	}
 	if err := tx.Commit(); err != nil {
 		return nil, fault.New(fault.CodeInternal, true, err)
@@ -449,6 +461,7 @@ WHERE source_id=? AND source_key=? AND status IN ('active', 'orphaned')`, source
 		return "", "", err
 	}
 	removeSet(candidates, blocked)
+	matchSignal, matchValue := "source_key", item.SourceKey
 	if len(candidates) == 0 && item.ExternalID != "" {
 		candidates, err = stringSet(ctx, tx, `SELECT DISTINCT work_id FROM work_bindings
 WHERE source_id=? AND provider_id=? AND external_id=? AND status IN ('active', 'orphaned')`,
@@ -457,9 +470,15 @@ WHERE source_id=? AND provider_id=? AND external_id=? AND status IN ('active', '
 			return "", "", err
 		}
 		removeSet(candidates, blocked)
+		matchSignal, matchValue = "external_id", item.ExternalID
 	}
 	if len(candidates) > 1 {
-		return "", "", r.bindingConflict(ctx, tx, sourceID, item, len(candidates), now)
+		return "", "", r.recordBindingIssue(ctx, tx, bindingIssueInput{
+			sourceID: sourceID, entityType: "work", sourceKey: item.SourceKey,
+			providerID: item.ProviderID, externalID: item.ExternalID,
+			candidateIDs: sortedKeys(candidates), candidateKind: "work",
+			matchSignal: matchSignal, matchValue: matchValue,
+		}, now)
 	}
 	var workID, title string
 	for workID = range candidates {
@@ -521,6 +540,7 @@ WHERE source_id=? AND source_key=? AND status IN ('active', 'orphaned')`, source
 		return "", "", err
 	}
 	removeSet(candidates, blocked)
+	matchSignal, matchValue := "source_key", item.SourceKey
 	if len(candidates) == 0 && item.ExternalID != "" {
 		candidates, err = stringSet(ctx, tx, `SELECT DISTINCT creator_id FROM creator_bindings
 WHERE source_id=? AND provider_id=? AND external_id=? AND status IN ('active', 'orphaned')`,
@@ -529,9 +549,15 @@ WHERE source_id=? AND provider_id=? AND external_id=? AND status IN ('active', '
 			return "", "", err
 		}
 		removeSet(candidates, blocked)
+		matchSignal, matchValue = "external_id", item.ExternalID
 	}
 	if len(candidates) > 1 {
-		return "", "", r.bindingIssue(ctx, tx, sourceID, item.SourceKey, item.ProviderID, item.ExternalID, len(candidates), now)
+		return "", "", r.recordBindingIssue(ctx, tx, bindingIssueInput{
+			sourceID: sourceID, entityType: "creator", sourceKey: item.SourceKey,
+			providerID: item.ProviderID, externalID: item.ExternalID,
+			candidateIDs: sortedKeys(candidates), candidateKind: "creator",
+			matchSignal: matchSignal, matchValue: matchValue,
+		}, now)
 	}
 	var creatorID, name string
 	for creatorID = range candidates {
@@ -574,7 +600,7 @@ last_seen_generation=?, updated_at=? WHERE binding_id=?`, item.ProviderID, item.
 	return creatorID, name, nil
 }
 
-func (r *Resources) resolveMedia(ctx context.Context, tx *sql.Tx, sourceID, workID string, item DiscoveredMedia, generation, now int64) (string, int, error) {
+func (r *Resources) resolveMedia(ctx context.Context, tx *sql.Tx, sourceID, workID, workSourceKey string, item DiscoveredMedia, generation, now int64) (string, int, error) {
 	if item.SourceKey == "" {
 		return "", 0, fault.WithField(fault.CodeValidation, "media.sourceKey", nil)
 	}
@@ -589,6 +615,7 @@ WHERE source_id=? AND work_id=? AND source_key=? AND status IN ('active', 'orpha
 		return "", 0, err
 	}
 	removeSet(candidates, blocked)
+	matchSignal, matchValue := "source_key", item.SourceKey
 	if len(candidates) == 0 && item.RuleKey != "" {
 		candidates, err = stringSet(ctx, tx, `SELECT DISTINCT media_id FROM media_bindings
 WHERE source_id=? AND work_id=? AND rule_key=? AND status IN ('active', 'orphaned')`, sourceID, workID, item.RuleKey)
@@ -596,6 +623,7 @@ WHERE source_id=? AND work_id=? AND rule_key=? AND status IN ('active', 'orphane
 			return "", 0, err
 		}
 		removeSet(candidates, blocked)
+		matchSignal, matchValue = "rule_key", item.RuleKey
 	}
 	if len(candidates) == 0 && item.Digest != "" {
 		candidates, err = stringSet(ctx, tx, `SELECT DISTINCT media_id FROM media_bindings
@@ -605,9 +633,14 @@ AND status IN ('active', 'orphaned')`, sourceID, workID, item.Algorithm, item.Di
 			return "", 0, err
 		}
 		removeSet(candidates, blocked)
+		matchSignal, matchValue = "blob_digest", item.Algorithm
 	}
 	if len(candidates) > 1 {
-		return "", 0, fault.New(fault.CodeBindingReviewRequired, false, nil)
+		return "", 0, r.recordBindingIssue(ctx, tx, bindingIssueInput{
+			sourceID: sourceID, entityType: "media", sourceKey: item.SourceKey, workSourceKey: workSourceKey,
+			candidateIDs: sortedKeys(candidates), candidateKind: "media",
+			matchSignal: matchSignal, matchValue: matchValue,
+		}, now)
 	}
 	var mediaID string
 	canonicalOrdinal := item.Ordinal
@@ -651,27 +684,6 @@ occurrence_ordinal=?, status='active', last_seen_generation=?, updated_at=? WHER
 		return "", 0, fault.New(fault.CodeInternal, true, err)
 	}
 	return mediaID, canonicalOrdinal, nil
-}
-
-func (r *Resources) bindingConflict(ctx context.Context, tx *sql.Tx, sourceID string, item DiscoveredWork, candidates int, now int64) error {
-	return r.bindingIssue(ctx, tx, sourceID, item.SourceKey, item.ProviderID, item.ExternalID, candidates, now)
-}
-
-func (r *Resources) bindingIssue(ctx context.Context, tx *sql.Tx, sourceID, sourceKey, providerID, externalID string, candidates int, now int64) error {
-	id, err := r.ids.New(domain.IDBindingIssue)
-	if err != nil {
-		return fault.New(fault.CodeInternal, true, err)
-	}
-	if _, err := tx.ExecContext(ctx, `INSERT INTO binding_issues
-(issue_id, source_id, source_key, provider_id, external_id, code, candidate_count, status, created_at)
-VALUES (?, ?, ?, ?, ?, ?, ?, 'open', ?)`, id.String(), sourceID, sourceKey, providerID,
-		externalID, string(fault.CodeBindingReviewRequired), candidates, now); err != nil {
-		return fault.New(fault.CodeInternal, true, err)
-	}
-	if err := tx.Commit(); err != nil {
-		return fault.New(fault.CodeInternal, true, err)
-	}
-	return fault.WithField(fault.CodeBindingReviewRequired, "sourceKey", nil)
 }
 
 func (r *Resources) ManualUnbindWork(ctx context.Context, sourceID, sourceKey string) (string, error) {

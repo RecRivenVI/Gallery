@@ -810,6 +810,52 @@ paths:
           $ref: "#/components/responses/NotFoundError"
         "409":
           $ref: "#/components/responses/ConflictError"
+  /api/v1/binding-issues:
+    get:
+      operationId: listBindingIssues
+      summary: 按 Source、实体类型和状态过滤并 keyset 分页列出 Binding issue
+      parameters:
+        - {name: sourceId, in: query, required: false, schema: {$ref: "#/components/schemas/SourceId"}}
+        - {name: entityType, in: query, required: false, schema: {type: string, enum: [work, creator, media]}}
+        - {name: status, in: query, required: false, schema: {type: string, enum: [open, resolved, dismissed, superseded, stale]}}
+        - {name: cursor, in: query, required: false, schema: {type: string, maxLength: 4096}}
+        - {name: limit, in: query, required: false, schema: {type: integer, minimum: 1, maximum: 200, default: 50}}
+      responses:
+        "200":
+          description: Binding issue 列表
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/BindingIssueListResponse"
+        "400":
+          $ref: "#/components/responses/ValidationError"
+        "401":
+          $ref: "#/components/responses/UnauthenticatedError"
+        "403":
+          $ref: "#/components/responses/ForbiddenError"
+  /api/v1/binding-issues/{issueId}:
+    get:
+      operationId: getBindingIssue
+      summary: 读取单个 Binding issue 及其候选证据
+      parameters:
+        - name: issueId
+          in: path
+          required: true
+          schema:
+            $ref: "#/components/schemas/BindingIssueId"
+      responses:
+        "200":
+          description: Binding issue 与候选证据
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/BindingIssue"
+        "401":
+          $ref: "#/components/responses/UnauthenticatedError"
+        "403":
+          $ref: "#/components/responses/ForbiddenError"
+        "404":
+          $ref: "#/components/responses/NotFoundError"
 components:
   securitySchemes:
     sessionCookie:
@@ -1335,6 +1381,88 @@ components:
           type: array
           items:
             $ref: "#/components/schemas/CreatorMerge"
+    BindingIssueCandidate:
+      type: object
+      additionalProperties: false
+      required: [candidateId, candidateKind, matchSignal, matchValue, label]
+      properties:
+        candidateId:
+          type: string
+        candidateKind:
+          type: string
+          enum: [work, creator, media]
+        matchSignal:
+          type: string
+        matchValue:
+          type: string
+        label:
+          type: string
+    BindingIssue:
+      type: object
+      additionalProperties: false
+      required: [id, sourceId, entityType, sourceKey, code, candidateCount, status, version, createdAt, updatedAt, candidates]
+      properties:
+        id:
+          $ref: "#/components/schemas/BindingIssueId"
+        sourceId:
+          $ref: "#/components/schemas/SourceId"
+        entityType:
+          type: string
+          enum: [work, creator, media]
+        sourceKey:
+          type: string
+        workSourceKey:
+          type: string
+        providerId:
+          type: string
+        externalId:
+          type: string
+        code:
+          $ref: "#/components/schemas/ErrorCode"
+        candidateCount:
+          type: integer
+          minimum: 0
+        status:
+          type: string
+          enum: [open, resolved, dismissed, superseded, stale]
+        resolution:
+          type: string
+          enum: [bind_existing, create_new, keep_separate, dismissed]
+          nullable: true
+        resolvedTargetId:
+          type: string
+          nullable: true
+        resolvedBy:
+          type: string
+          nullable: true
+        version:
+          type: integer
+          minimum: 1
+        createdAt:
+          type: string
+          format: date-time
+        updatedAt:
+          type: string
+          format: date-time
+        resolvedAt:
+          type: string
+          format: date-time
+          nullable: true
+        candidates:
+          type: array
+          items:
+            $ref: "#/components/schemas/BindingIssueCandidate"
+    BindingIssueListResponse:
+      type: object
+      additionalProperties: false
+      required: [issues]
+      properties:
+        issues:
+          type: array
+          items:
+            $ref: "#/components/schemas/BindingIssue"
+        nextCursor:
+          type: string
     LibraryCreateRequest:
       type: object
       additionalProperties: false
@@ -1634,6 +1762,9 @@ components:
     CreatorMergeId:
       type: string
       pattern: "^cmrg_[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+    BindingIssueId:
+      type: string
+      pattern: "^biss_[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
     ContentBlobRef:
       type: object
       additionalProperties: false

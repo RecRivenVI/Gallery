@@ -634,3 +634,91 @@ func newCreatorID(t *testing.T, generator interface {
 	}
 	return id.String()
 }
+
+func TestBindingIssueQueryAPI(t *testing.T) {
+	ctx := context.Background()
+	dirs := appdirs.UnderRoot(filepath.Join(t.TempDir(), "app"))
+	if err := dirs.Ensure(filesystem.OS{}); err != nil {
+		t.Fatal(err)
+	}
+	store, err := storage.Open(ctx, dirs)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	fixedClock := clock.Fixed{Time: time.Now().UTC()}
+	generator := identity.NewGenerator(fixedClock)
+	personal, err := auth.NewPersonal(store.Control.SQL(), fixedClock, generator, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resources, err := application.NewResources(store.Control.SQL(), dirs, filesystem.OS{}, fixedClock, generator)
+	if err != nil {
+		t.Fatal(err)
+	}
+	handler := httpapi.New(config.ModePersonal, store, fixedClock, personal, resources, nil, nil, nil, nil, nil, nil, slog.New(slog.NewJSONHandler(io.Discard, nil)))
+	server := httptest.NewServer(handler)
+	defer server.Close()
+
+	newID := func(kind domain.IDKind) string {
+		id, err := generator.New(kind)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return id.String()
+	}
+	libraryID, sourceID := newID(domain.IDLibrary), newID(domain.IDSource)
+	workID, issueID := newID(domain.IDCanonicalWork), newID(domain.IDBindingIssue)
+	exec := func(query string, args ...any) {
+		if _, err := store.Control.SQL().ExecContext(ctx, query, args...); err != nil {
+			t.Fatal(err)
+		}
+	}
+	exec(`INSERT INTO libraries (library_id, name, created_at) VALUES (?, 'lib', 1)`, libraryID)
+	exec(`INSERT INTO sources (source_id, library_id, display_name, root_path, root_key, created_at)
+VALUES (?, ?, 'src', '/seed/root', '/seed/root', 1)`, sourceID, libraryID)
+	exec(`INSERT INTO canonical_works (work_id, title, created_at) VALUES (?, '候选作品', 1)`, workID)
+	exec(`INSERT INTO binding_issues
+(issue_id, source_id, entity_type, source_key, provider_id, external_id, code,
+ candidate_fingerprint, candidate_count, status, version, created_at, updated_at)
+VALUES (?, ?, 'work', 'alias-new', 'example', 'post-42', 'BINDING_REVIEW_REQUIRED', ?, 1, 'open', 1, 10, 10)`,
+		issueID, sourceID, workID)
+	exec(`INSERT INTO binding_issue_candidates
+(issue_id, ordinal, candidate_id, candidate_kind, match_signal, match_value, label)
+VALUES (?, 0, ?, 'work', 'external_id', 'post-42', '候选作品')`, issueID, workID)
+
+	jar, err := cookiejar.New(nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	client, err := api.NewClientWithResponses(server.URL, api.WithHTTPClient(&http.Client{Jar: jar}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	anonymous, err := api.NewClientWithResponses(server.URL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if unauth, err := anonymous.ListBindingIssuesWithResponse(ctx, nil); err != nil || unauth.JSON401 == nil {
+		t.Fatalf("未认证列表未 401: %v status=%d", err, unauth.StatusCode())
+	}
+	_ = pairSession(t, ctx, client, server.URL)
+
+	status := api.ListBindingIssuesParamsStatus("open")
+	entity := api.ListBindingIssuesParamsEntityType("work")
+	list, err := client.ListBindingIssuesWithResponse(ctx, &api.ListBindingIssuesParams{Status: &status, EntityType: &entity})
+	if err != nil || list.JSON200 == nil || len(list.JSON200.Issues) != 1 || list.JSON200.Issues[0].Id != issueID {
+		t.Fatalf("issue 列表错误: %v status=%d body=%s", err, list.StatusCode(), list.Body)
+	}
+	if bytes.Contains(list.Body, []byte("/seed/root")) {
+		t.Fatal("issue 列表泄露绝对路径")
+	}
+	detail, err := client.GetBindingIssueWithResponse(ctx, issueID)
+	if err != nil || detail.JSON200 == nil || len(detail.JSON200.Candidates) != 1 ||
+		detail.JSON200.Candidates[0].CandidateId != workID || detail.JSON200.Candidates[0].Label != "候选作品" {
+		t.Fatalf("issue 详情候选错误: %v status=%d body=%s", err, detail.StatusCode(), detail.Body)
+	}
+	if missing, err := client.GetBindingIssueWithResponse(ctx, newID(domain.IDBindingIssue)); err != nil || missing.JSON404 == nil {
+		t.Fatalf("不存在 issue 未 404: %v status=%d", err, missing.StatusCode())
+	}
+}
