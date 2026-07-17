@@ -994,6 +994,30 @@ type ControlBackupManifestDatabaseChecksumAlgorithm string
 // ControlBackupManifestRole defines model for ControlBackupManifest.Role.
 type ControlBackupManifestRole string
 
+// ControlRestoreReport defines model for ControlRestoreReport.
+type ControlRestoreReport struct {
+	BackupId             string  `json:"backupId"`
+	BackupSchemaVersion  int64   `json:"backupSchemaVersion"`
+	ChecksumVerified     bool    `json:"checksumVerified"`
+	Compatible           bool    `json:"compatible"`
+	CurrentSchemaVersion int64   `json:"currentSchemaVersion"`
+	Detail               *string `json:"detail,omitempty"`
+	IntegrityOk          bool    `json:"integrityOk"`
+	InvariantsOk         bool    `json:"invariantsOk"`
+	WillMigrate          bool    `json:"willMigrate"`
+}
+
+// ControlRestoreRequest defines model for ControlRestoreRequest.
+type ControlRestoreRequest struct {
+	BackupId string `json:"backupId"`
+}
+
+// ControlRestoreRequestResponse defines model for ControlRestoreRequestResponse.
+type ControlRestoreRequestResponse struct {
+	Report          ControlRestoreReport `json:"report"`
+	RestartRequired bool                 `json:"restartRequired"`
+}
+
 // Creator defines model for Creator.
 type Creator struct {
 	CreatedAt   time.Time           `json:"createdAt"`
@@ -1484,6 +1508,16 @@ type CreateControlBackupParams struct {
 	XGalleryCSRF CSRFHeader `json:"X-Gallery-CSRF"`
 }
 
+// RequestControlRestoreParams defines parameters for RequestControlRestore.
+type RequestControlRestoreParams struct {
+	XGalleryCSRF CSRFHeader `json:"X-Gallery-CSRF"`
+}
+
+// VerifyControlRestoreParams defines parameters for VerifyControlRestore.
+type VerifyControlRestoreParams struct {
+	XGalleryCSRF CSRFHeader `json:"X-Gallery-CSRF"`
+}
+
 // UnbindMediaParams defines parameters for UnbindMedia.
 type UnbindMediaParams struct {
 	XGalleryCSRF CSRFHeader `json:"X-Gallery-CSRF"`
@@ -1647,6 +1681,12 @@ type PutWorkOverlayParams struct {
 	XGalleryCSRF CSRFHeader `json:"X-Gallery-CSRF"`
 }
 
+// RequestControlRestoreJSONRequestBody defines body for RequestControlRestore for application/json ContentType.
+type RequestControlRestoreJSONRequestBody = ControlRestoreRequest
+
+// VerifyControlRestoreJSONRequestBody defines body for VerifyControlRestore for application/json ContentType.
+type VerifyControlRestoreJSONRequestBody = ControlRestoreRequest
+
 // UnbindMediaJSONRequestBody defines body for UnbindMedia for application/json ContentType.
 type UnbindMediaJSONRequestBody = BindingUnbindRequest
 
@@ -1782,6 +1822,16 @@ type ClientInterface interface {
 
 	// GetControlBackup request
 	GetControlBackup(ctx context.Context, backupId string, reqEditors ...RequestEditorFn) (*http.Response, error)
+
+	// RequestControlRestoreWithBody request with any body
+	RequestControlRestoreWithBody(ctx context.Context, params *RequestControlRestoreParams, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*http.Response, error)
+
+	RequestControlRestore(ctx context.Context, params *RequestControlRestoreParams, body RequestControlRestoreJSONRequestBody, reqEditors ...RequestEditorFn) (*http.Response, error)
+
+	// VerifyControlRestoreWithBody request with any body
+	VerifyControlRestoreWithBody(ctx context.Context, params *VerifyControlRestoreParams, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*http.Response, error)
+
+	VerifyControlRestore(ctx context.Context, params *VerifyControlRestoreParams, body VerifyControlRestoreJSONRequestBody, reqEditors ...RequestEditorFn) (*http.Response, error)
 
 	// UnbindMediaWithBody request with any body
 	UnbindMediaWithBody(ctx context.Context, params *UnbindMediaParams, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*http.Response, error)
@@ -1978,6 +2028,54 @@ func (c *Client) CreateControlBackup(ctx context.Context, params *CreateControlB
 
 func (c *Client) GetControlBackup(ctx context.Context, backupId string, reqEditors ...RequestEditorFn) (*http.Response, error) {
 	req, err := NewGetControlBackupRequest(c.Server, backupId)
+	if err != nil {
+		return nil, err
+	}
+	req = req.WithContext(ctx)
+	if err := c.applyEditors(ctx, req, reqEditors); err != nil {
+		return nil, err
+	}
+	return c.Client.Do(req)
+}
+
+func (c *Client) RequestControlRestoreWithBody(ctx context.Context, params *RequestControlRestoreParams, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewRequestControlRestoreRequestWithBody(c.Server, params, contentType, body)
+	if err != nil {
+		return nil, err
+	}
+	req = req.WithContext(ctx)
+	if err := c.applyEditors(ctx, req, reqEditors); err != nil {
+		return nil, err
+	}
+	return c.Client.Do(req)
+}
+
+func (c *Client) RequestControlRestore(ctx context.Context, params *RequestControlRestoreParams, body RequestControlRestoreJSONRequestBody, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewRequestControlRestoreRequest(c.Server, params, body)
+	if err != nil {
+		return nil, err
+	}
+	req = req.WithContext(ctx)
+	if err := c.applyEditors(ctx, req, reqEditors); err != nil {
+		return nil, err
+	}
+	return c.Client.Do(req)
+}
+
+func (c *Client) VerifyControlRestoreWithBody(ctx context.Context, params *VerifyControlRestoreParams, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewVerifyControlRestoreRequestWithBody(c.Server, params, contentType, body)
+	if err != nil {
+		return nil, err
+	}
+	req = req.WithContext(ctx)
+	if err := c.applyEditors(ctx, req, reqEditors); err != nil {
+		return nil, err
+	}
+	return c.Client.Do(req)
+}
+
+func (c *Client) VerifyControlRestore(ctx context.Context, params *VerifyControlRestoreParams, body VerifyControlRestoreJSONRequestBody, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewVerifyControlRestoreRequest(c.Server, params, body)
 	if err != nil {
 		return nil, err
 	}
@@ -2828,6 +2926,112 @@ func NewGetControlBackupRequest(server string, backupId string) (*http.Request, 
 	req, err := http.NewRequest(http.MethodGet, queryURL.String(), nil)
 	if err != nil {
 		return nil, err
+	}
+
+	return req, nil
+}
+
+// NewRequestControlRestoreRequest calls the generic RequestControlRestore builder with application/json body
+func NewRequestControlRestoreRequest(server string, params *RequestControlRestoreParams, body RequestControlRestoreJSONRequestBody) (*http.Request, error) {
+	var bodyReader io.Reader
+	buf, err := json.Marshal(body)
+	if err != nil {
+		return nil, err
+	}
+	bodyReader = bytes.NewReader(buf)
+	return NewRequestControlRestoreRequestWithBody(server, params, "application/json", bodyReader)
+}
+
+// NewRequestControlRestoreRequestWithBody generates requests for RequestControlRestore with any type of body
+func NewRequestControlRestoreRequestWithBody(server string, params *RequestControlRestoreParams, contentType string, body io.Reader) (*http.Request, error) {
+	var err error
+
+	serverURL, err := url.Parse(server)
+	if err != nil {
+		return nil, err
+	}
+
+	operationPath := fmt.Sprintf("/api/v1/admin/control-restores")
+	if operationPath[0] == '/' {
+		operationPath = "." + operationPath
+	}
+
+	queryURL, err := serverURL.Parse(operationPath)
+	if err != nil {
+		return nil, err
+	}
+
+	req, err := http.NewRequest(http.MethodPost, queryURL.String(), body)
+	if err != nil {
+		return nil, err
+	}
+
+	req.Header.Add("Content-Type", contentType)
+
+	if params != nil {
+
+		var headerParam0 string
+
+		headerParam0, err = runtime.StyleParamWithOptions("simple", false, "X-Gallery-CSRF", params.XGalleryCSRF, runtime.StyleParamOptions{ParamLocation: runtime.ParamLocationHeader, Type: "string", Format: ""})
+		if err != nil {
+			return nil, err
+		}
+
+		req.Header.Set("X-Gallery-CSRF", headerParam0)
+
+	}
+
+	return req, nil
+}
+
+// NewVerifyControlRestoreRequest calls the generic VerifyControlRestore builder with application/json body
+func NewVerifyControlRestoreRequest(server string, params *VerifyControlRestoreParams, body VerifyControlRestoreJSONRequestBody) (*http.Request, error) {
+	var bodyReader io.Reader
+	buf, err := json.Marshal(body)
+	if err != nil {
+		return nil, err
+	}
+	bodyReader = bytes.NewReader(buf)
+	return NewVerifyControlRestoreRequestWithBody(server, params, "application/json", bodyReader)
+}
+
+// NewVerifyControlRestoreRequestWithBody generates requests for VerifyControlRestore with any type of body
+func NewVerifyControlRestoreRequestWithBody(server string, params *VerifyControlRestoreParams, contentType string, body io.Reader) (*http.Request, error) {
+	var err error
+
+	serverURL, err := url.Parse(server)
+	if err != nil {
+		return nil, err
+	}
+
+	operationPath := fmt.Sprintf("/api/v1/admin/control-restores/verify")
+	if operationPath[0] == '/' {
+		operationPath = "." + operationPath
+	}
+
+	queryURL, err := serverURL.Parse(operationPath)
+	if err != nil {
+		return nil, err
+	}
+
+	req, err := http.NewRequest(http.MethodPost, queryURL.String(), body)
+	if err != nil {
+		return nil, err
+	}
+
+	req.Header.Add("Content-Type", contentType)
+
+	if params != nil {
+
+		var headerParam0 string
+
+		headerParam0, err = runtime.StyleParamWithOptions("simple", false, "X-Gallery-CSRF", params.XGalleryCSRF, runtime.StyleParamOptions{ParamLocation: runtime.ParamLocationHeader, Type: "string", Format: ""})
+		if err != nil {
+			return nil, err
+		}
+
+		req.Header.Set("X-Gallery-CSRF", headerParam0)
+
 	}
 
 	return req, nil
@@ -5041,6 +5245,16 @@ type ClientWithResponsesInterface interface {
 	// GetControlBackupWithResponse request
 	GetControlBackupWithResponse(ctx context.Context, backupId string, reqEditors ...RequestEditorFn) (*GetControlBackupResponse, error)
 
+	// RequestControlRestoreWithBodyWithResponse request with any body
+	RequestControlRestoreWithBodyWithResponse(ctx context.Context, params *RequestControlRestoreParams, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*RequestControlRestoreResponse, error)
+
+	RequestControlRestoreWithResponse(ctx context.Context, params *RequestControlRestoreParams, body RequestControlRestoreJSONRequestBody, reqEditors ...RequestEditorFn) (*RequestControlRestoreResponse, error)
+
+	// VerifyControlRestoreWithBodyWithResponse request with any body
+	VerifyControlRestoreWithBodyWithResponse(ctx context.Context, params *VerifyControlRestoreParams, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*VerifyControlRestoreResponse, error)
+
+	VerifyControlRestoreWithResponse(ctx context.Context, params *VerifyControlRestoreParams, body VerifyControlRestoreJSONRequestBody, reqEditors ...RequestEditorFn) (*VerifyControlRestoreResponse, error)
+
 	// UnbindMediaWithBodyWithResponse request with any body
 	UnbindMediaWithBodyWithResponse(ctx context.Context, params *UnbindMediaParams, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*UnbindMediaResponse, error)
 
@@ -5302,6 +5516,76 @@ func (r GetControlBackupResponse) StatusCode() int {
 
 // ContentType is a convenience method to retrieve the Content-Type value from the HTTP response headers
 func (r GetControlBackupResponse) ContentType() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Header.Get("Content-Type")
+	}
+	return ""
+}
+
+type RequestControlRestoreResponse struct {
+	Body         []byte
+	HTTPResponse *http.Response
+	JSON202      *ControlRestoreRequestResponse
+	JSON400      *ValidationError
+	JSON401      *UnauthenticatedError
+	JSON403      *ForbiddenError
+	JSON404      *NotFoundError
+	JSON409      *ConflictError
+}
+
+// Status returns HTTPResponse.Status
+func (r RequestControlRestoreResponse) Status() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Status
+	}
+	return http.StatusText(0)
+}
+
+// StatusCode returns HTTPResponse.StatusCode
+func (r RequestControlRestoreResponse) StatusCode() int {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.StatusCode
+	}
+	return 0
+}
+
+// ContentType is a convenience method to retrieve the Content-Type value from the HTTP response headers
+func (r RequestControlRestoreResponse) ContentType() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Header.Get("Content-Type")
+	}
+	return ""
+}
+
+type VerifyControlRestoreResponse struct {
+	Body         []byte
+	HTTPResponse *http.Response
+	JSON200      *ControlRestoreReport
+	JSON400      *ValidationError
+	JSON401      *UnauthenticatedError
+	JSON403      *ForbiddenError
+	JSON404      *NotFoundError
+	JSON409      *ConflictError
+}
+
+// Status returns HTTPResponse.Status
+func (r VerifyControlRestoreResponse) Status() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Status
+	}
+	return http.StatusText(0)
+}
+
+// StatusCode returns HTTPResponse.StatusCode
+func (r VerifyControlRestoreResponse) StatusCode() int {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.StatusCode
+	}
+	return 0
+}
+
+// ContentType is a convenience method to retrieve the Content-Type value from the HTTP response headers
+func (r VerifyControlRestoreResponse) ContentType() string {
 	if r.HTTPResponse != nil {
 		return r.HTTPResponse.Header.Get("Content-Type")
 	}
@@ -6805,6 +7089,40 @@ func (c *ClientWithResponses) GetControlBackupWithResponse(ctx context.Context, 
 	return ParseGetControlBackupResponse(rsp)
 }
 
+// RequestControlRestoreWithBodyWithResponse request with arbitrary body returning *RequestControlRestoreResponse
+func (c *ClientWithResponses) RequestControlRestoreWithBodyWithResponse(ctx context.Context, params *RequestControlRestoreParams, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*RequestControlRestoreResponse, error) {
+	rsp, err := c.RequestControlRestoreWithBody(ctx, params, contentType, body, reqEditors...)
+	if err != nil {
+		return nil, err
+	}
+	return ParseRequestControlRestoreResponse(rsp)
+}
+
+func (c *ClientWithResponses) RequestControlRestoreWithResponse(ctx context.Context, params *RequestControlRestoreParams, body RequestControlRestoreJSONRequestBody, reqEditors ...RequestEditorFn) (*RequestControlRestoreResponse, error) {
+	rsp, err := c.RequestControlRestore(ctx, params, body, reqEditors...)
+	if err != nil {
+		return nil, err
+	}
+	return ParseRequestControlRestoreResponse(rsp)
+}
+
+// VerifyControlRestoreWithBodyWithResponse request with arbitrary body returning *VerifyControlRestoreResponse
+func (c *ClientWithResponses) VerifyControlRestoreWithBodyWithResponse(ctx context.Context, params *VerifyControlRestoreParams, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*VerifyControlRestoreResponse, error) {
+	rsp, err := c.VerifyControlRestoreWithBody(ctx, params, contentType, body, reqEditors...)
+	if err != nil {
+		return nil, err
+	}
+	return ParseVerifyControlRestoreResponse(rsp)
+}
+
+func (c *ClientWithResponses) VerifyControlRestoreWithResponse(ctx context.Context, params *VerifyControlRestoreParams, body VerifyControlRestoreJSONRequestBody, reqEditors ...RequestEditorFn) (*VerifyControlRestoreResponse, error) {
+	rsp, err := c.VerifyControlRestore(ctx, params, body, reqEditors...)
+	if err != nil {
+		return nil, err
+	}
+	return ParseVerifyControlRestoreResponse(rsp)
+}
+
 // UnbindMediaWithBodyWithResponse request with arbitrary body returning *UnbindMediaResponse
 func (c *ClientWithResponses) UnbindMediaWithBodyWithResponse(ctx context.Context, params *UnbindMediaParams, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*UnbindMediaResponse, error) {
 	rsp, err := c.UnbindMediaWithBody(ctx, params, contentType, body, reqEditors...)
@@ -7473,6 +7791,128 @@ func ParseGetControlBackupResponse(rsp *http.Response) (*GetControlBackupRespons
 			return nil, err
 		}
 		response.JSON404 = &dest
+
+	}
+
+	return response, nil
+}
+
+// ParseRequestControlRestoreResponse parses an HTTP response from a RequestControlRestoreWithResponse call
+func ParseRequestControlRestoreResponse(rsp *http.Response) (*RequestControlRestoreResponse, error) {
+	bodyBytes, err := io.ReadAll(rsp.Body)
+	defer func() { _ = rsp.Body.Close() }()
+	if err != nil {
+		return nil, err
+	}
+
+	response := &RequestControlRestoreResponse{
+		Body:         bodyBytes,
+		HTTPResponse: rsp,
+	}
+
+	switch {
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 202:
+		var dest ControlRestoreRequestResponse
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON202 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 400:
+		var dest ValidationError
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON400 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 401:
+		var dest UnauthenticatedError
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON401 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 403:
+		var dest ForbiddenError
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON403 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 404:
+		var dest NotFoundError
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON404 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 409:
+		var dest ConflictError
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON409 = &dest
+
+	}
+
+	return response, nil
+}
+
+// ParseVerifyControlRestoreResponse parses an HTTP response from a VerifyControlRestoreWithResponse call
+func ParseVerifyControlRestoreResponse(rsp *http.Response) (*VerifyControlRestoreResponse, error) {
+	bodyBytes, err := io.ReadAll(rsp.Body)
+	defer func() { _ = rsp.Body.Close() }()
+	if err != nil {
+		return nil, err
+	}
+
+	response := &VerifyControlRestoreResponse{
+		Body:         bodyBytes,
+		HTTPResponse: rsp,
+	}
+
+	switch {
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 200:
+		var dest ControlRestoreReport
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON200 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 400:
+		var dest ValidationError
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON400 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 401:
+		var dest UnauthenticatedError
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON401 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 403:
+		var dest ForbiddenError
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON403 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 404:
+		var dest NotFoundError
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON404 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 409:
+		var dest ConflictError
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON409 = &dest
 
 	}
 

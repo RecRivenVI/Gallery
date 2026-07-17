@@ -59,6 +59,13 @@ func Open(ctx context.Context, dirs appdirs.Dirs) (*Store, error) {
 	return &Store{Control: control, Catalog: catalog}, nil
 }
 
+// OpenControlAt 打开指定路径的 control 数据库并执行 forward 迁移，供备份验证与恢复暂存使用。
+// 调用方负责 Close。它绝不隐式创建 catalog.db，也不参与 AppDirs 单写者锁；恢复流程必须在持有
+// 单写者锁、且当前 control.db 未被其他连接打开时使用。
+func OpenControlAt(ctx context.Context, path string) (*Database, error) {
+	return openDatabase(ctx, RoleControl, path)
+}
+
 func (s *Store) Close() error {
 	if s == nil {
 		return nil
