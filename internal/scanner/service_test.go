@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/RecRivenVI/gallery/internal/application"
+	"github.com/RecRivenVI/gallery/internal/backup"
 	"github.com/RecRivenVI/gallery/internal/catalog"
 	"github.com/RecRivenVI/gallery/internal/contract/fault"
 	"github.com/RecRivenVI/gallery/internal/domain"
@@ -266,6 +267,139 @@ WHERE catalog_revision_id=? AND overlay_revision_id=? AND work_id=?`, newPublica
 	afterSource := sha256.Sum256(mustRead(t, filepath.Join(source.RootPath, "work-one", "media.bin")))
 	if beforeSource != afterSource {
 		t.Fatal("Catalog 重建修改了 Source")
+	}
+}
+
+// TestBackupRestoreControlThenCatalogRebuildRecoversDecisions 是阶段 1 的端到端门禁：
+// 备份 control.db → 删除 catalog.db → 从备份恢复 control.db → 从空 Catalog 全量重扫 →
+// 恢复稳定 Binding 与用户事实。它证明备份捕获了全部不可重建人工决策，恢复与重建协同后
+// Canonical ID、Overlay/Favorite/Progress、Creator 绑定与媒体稳定 URL 均不漂移。
+func TestBackupRestoreControlThenCatalogRebuildRecoversDecisions(t *testing.T) {
+	fixture := []byte("backup restore rebuild gate fixture")
+	_, jobStore, catalogStore, service, source, store := setup(t, fixture)
+	ctx := context.Background()
+	fixedClock := clock.Fixed{Time: time.Date(2026, 7, 16, 0, 0, 0, 0, time.UTC)}
+	generator := identity.NewGenerator(fixedClock)
+
+	firstJob, err := service.CreateScan(ctx, source.ID, "personal-owner")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := service.Execute(ctx, firstJob.ID); err != nil {
+		t.Fatal(err)
+	}
+	_, works, err := catalogStore.ListWorks(ctx)
+	if err != nil || len(works) != 1 {
+		t.Fatalf("首次扫描失败: %+v %v", works, err)
+	}
+	workID := works[0].ID
+	_, mediaItems, err := catalogStore.ListMediaForWork(ctx, workID)
+	if err != nil || len(mediaItems) != 1 {
+		t.Fatalf("首次媒体投影失败: %+v %v", mediaItems, err)
+	}
+	mediaID := mediaItems[0].ID
+	var oldCreatorID string
+	if err := store.Control.SQL().QueryRowContext(ctx, `SELECT creator_id FROM creator_bindings
+WHERE source_id=? AND status='active'`, source.ID).Scan(&oldCreatorID); err != nil {
+		t.Fatalf("首次扫描未建立 CreatorBinding: %v", err)
+	}
+
+	// 人工决策：Overlay 标题、收藏与进度。
+	overlayService, err := overlay.New(ctx, store.Control.SQL(), jobStore, catalogStore, fixedClock, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	changed, err := overlayService.Put(ctx, workID, "personal-owner", overlay.Input{TitleOverride: "门禁标题", Favorite: true, Progress: 0.42})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := overlayService.Execute(ctx, changed.ProjectionJobID); err != nil {
+		t.Fatal(err)
+	}
+
+	// 备份 control.db，随后登记待应用恢复请求。
+	dirs := appdirs.UnderRoot(filepath.Join(filepath.Dir(source.RootPath), "app"))
+	backupSvc, err := backup.New(ctx, store.Control, jobStore, dirs, fixedClock, generator, "gate-1.0", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	backupJob, err := backupSvc.CreateBackup(ctx, "personal-owner")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := backupSvc.Execute(ctx, backupJob.ID); err != nil {
+		t.Fatal(err)
+	}
+	backups, err := backupSvc.List(ctx)
+	if err != nil || len(backups) != 1 {
+		t.Fatalf("备份未产出: %+v %v", backups, err)
+	}
+	if _, err := backupSvc.RequestRestore(ctx, "personal-owner", backups[0].BackupID); err != nil {
+		t.Fatal(err)
+	}
+
+	// 关闭当前 store，删除 catalog.db，应用恢复（原子替换 control.db）。
+	catalogPath := filepath.Join(dirs.Data, "catalog.db")
+	if err := store.Close(); err != nil {
+		t.Fatal(err)
+	}
+	for _, path := range []string{catalogPath, catalogPath + "-wal", catalogPath + "-shm"} {
+		if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
+			t.Fatal(err)
+		}
+	}
+	outcome, err := backup.ApplyPendingRestore(ctx, dirs)
+	if err != nil || !outcome.Applied {
+		t.Fatalf("恢复未应用: %+v %v", outcome, err)
+	}
+
+	reopened, err := storage.Open(ctx, dirs)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer reopened.Close()
+	if err := backup.FinalizeRestore(ctx, reopened.Control, fixedClock.Now()); err != nil {
+		t.Fatal(err)
+	}
+
+	// 从空 Catalog 全量重扫。
+	rebuiltResources, _ := application.NewResources(reopened.Control.SQL(), dirs, filesystem.OS{}, fixedClock, generator)
+	rebuiltJobs, _ := jobs.NewStore(reopened.Control.SQL(), fixedClock, generator)
+	rebuiltCatalog, _ := catalog.NewStore(reopened.Catalog.SQL(), fixedClock, generator)
+	rebuiltScanner, _ := scanner.New(ctx, rebuiltResources, rebuiltJobs, rebuiltCatalog, nil)
+	rebuildJob, err := rebuiltScanner.CreateScan(ctx, source.ID, "personal-owner")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := rebuiltScanner.Execute(ctx, rebuildJob.ID); err != nil {
+		t.Fatal(err)
+	}
+
+	// 稳定 Binding 与用户事实恢复，Canonical 与媒体 URL 身份不漂移。
+	newPublication, rebuiltWorks, err := rebuiltCatalog.ListWorks(ctx)
+	if err != nil || len(rebuiltWorks) != 1 || rebuiltWorks[0].ID != workID || rebuiltWorks[0].Title != "门禁标题" {
+		t.Fatalf("重建后 Work/Overlay 漂移: works=%+v err=%v", rebuiltWorks, err)
+	}
+	_, rebuiltMedia, err := rebuiltCatalog.ListMediaForWork(ctx, workID)
+	if err != nil || len(rebuiltMedia) != 1 || rebuiltMedia[0].ID != mediaID {
+		t.Fatalf("重建后媒体身份漂移: %+v %v", rebuiltMedia, err)
+	}
+	rebuiltOverlay, _ := overlay.New(ctx, reopened.Control.SQL(), rebuiltJobs, rebuiltCatalog, fixedClock, nil)
+	state, err := rebuiltOverlay.Get(ctx, workID)
+	if err != nil || !state.Favorite || state.Progress != 0.42 || state.ProjectionStatus != "published" || state.PublishedQueryPublicationID != newPublication.ID {
+		t.Fatalf("重建后用户事实/投影状态漂移: %+v %v", state, err)
+	}
+	var creatorID string
+	if err := reopened.Control.SQL().QueryRowContext(ctx, `SELECT creator_id FROM creator_bindings
+WHERE source_id=? AND status='active'`, source.ID).Scan(&creatorID); err != nil || creatorID != oldCreatorID {
+		t.Fatalf("CreatorBinding 未以稳定 ID 恢复: old=%s new=%s err=%v", oldCreatorID, creatorID, err)
+	}
+	var workCount, creatorCount, mediaCount int
+	_ = reopened.Control.SQL().QueryRowContext(ctx, "SELECT count(*) FROM canonical_works").Scan(&workCount)
+	_ = reopened.Control.SQL().QueryRowContext(ctx, "SELECT count(*) FROM canonical_creators").Scan(&creatorCount)
+	_ = reopened.Control.SQL().QueryRowContext(ctx, "SELECT count(*) FROM canonical_media").Scan(&mediaCount)
+	if workCount != 1 || creatorCount != 1 || mediaCount != 1 {
+		t.Fatalf("重建重复创建 Canonical 实体: works=%d creators=%d media=%d", workCount, creatorCount, mediaCount)
 	}
 }
 
