@@ -22,6 +22,99 @@ const (
 	SessionCookieScopes sessionCookieContextKey = "sessionCookie.Scopes"
 )
 
+// Defines values for BindingIssueEntityType.
+const (
+	BindingIssueEntityTypeCreator BindingIssueEntityType = "creator"
+	BindingIssueEntityTypeMedia   BindingIssueEntityType = "media"
+	BindingIssueEntityTypeWork    BindingIssueEntityType = "work"
+)
+
+// Valid indicates whether the value is a known member of the BindingIssueEntityType enum.
+func (e BindingIssueEntityType) Valid() bool {
+	switch e {
+	case BindingIssueEntityTypeCreator:
+		return true
+	case BindingIssueEntityTypeMedia:
+		return true
+	case BindingIssueEntityTypeWork:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for BindingIssueResolution.
+const (
+	BindingIssueResolutionBindExisting BindingIssueResolution = "bind_existing"
+	BindingIssueResolutionCreateNew    BindingIssueResolution = "create_new"
+	BindingIssueResolutionDismissed    BindingIssueResolution = "dismissed"
+	BindingIssueResolutionKeepSeparate BindingIssueResolution = "keep_separate"
+)
+
+// Valid indicates whether the value is a known member of the BindingIssueResolution enum.
+func (e BindingIssueResolution) Valid() bool {
+	switch e {
+	case BindingIssueResolutionBindExisting:
+		return true
+	case BindingIssueResolutionCreateNew:
+		return true
+	case BindingIssueResolutionDismissed:
+		return true
+	case BindingIssueResolutionKeepSeparate:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for BindingIssueStatus.
+const (
+	BindingIssueStatusDismissed  BindingIssueStatus = "dismissed"
+	BindingIssueStatusOpen       BindingIssueStatus = "open"
+	BindingIssueStatusResolved   BindingIssueStatus = "resolved"
+	BindingIssueStatusStale      BindingIssueStatus = "stale"
+	BindingIssueStatusSuperseded BindingIssueStatus = "superseded"
+)
+
+// Valid indicates whether the value is a known member of the BindingIssueStatus enum.
+func (e BindingIssueStatus) Valid() bool {
+	switch e {
+	case BindingIssueStatusDismissed:
+		return true
+	case BindingIssueStatusOpen:
+		return true
+	case BindingIssueStatusResolved:
+		return true
+	case BindingIssueStatusStale:
+		return true
+	case BindingIssueStatusSuperseded:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for BindingIssueCandidateCandidateKind.
+const (
+	BindingIssueCandidateCandidateKindCreator BindingIssueCandidateCandidateKind = "creator"
+	BindingIssueCandidateCandidateKindMedia   BindingIssueCandidateCandidateKind = "media"
+	BindingIssueCandidateCandidateKindWork    BindingIssueCandidateCandidateKind = "work"
+)
+
+// Valid indicates whether the value is a known member of the BindingIssueCandidateCandidateKind enum.
+func (e BindingIssueCandidateCandidateKind) Valid() bool {
+	switch e {
+	case BindingIssueCandidateCandidateKindCreator:
+		return true
+	case BindingIssueCandidateCandidateKindMedia:
+		return true
+	case BindingIssueCandidateCandidateKindWork:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for BootstrapResponseApiVersion.
 const (
 	BootstrapResponseApiVersionV1 BootstrapResponseApiVersion = "v1"
@@ -451,6 +544,54 @@ func (e WorkOverlayStateProjectionStatus) Valid() bool {
 	}
 }
 
+// Defines values for ListBindingIssuesParamsEntityType.
+const (
+	ListBindingIssuesParamsEntityTypeCreator ListBindingIssuesParamsEntityType = "creator"
+	ListBindingIssuesParamsEntityTypeMedia   ListBindingIssuesParamsEntityType = "media"
+	ListBindingIssuesParamsEntityTypeWork    ListBindingIssuesParamsEntityType = "work"
+)
+
+// Valid indicates whether the value is a known member of the ListBindingIssuesParamsEntityType enum.
+func (e ListBindingIssuesParamsEntityType) Valid() bool {
+	switch e {
+	case ListBindingIssuesParamsEntityTypeCreator:
+		return true
+	case ListBindingIssuesParamsEntityTypeMedia:
+		return true
+	case ListBindingIssuesParamsEntityTypeWork:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for ListBindingIssuesParamsStatus.
+const (
+	Dismissed  ListBindingIssuesParamsStatus = "dismissed"
+	Open       ListBindingIssuesParamsStatus = "open"
+	Resolved   ListBindingIssuesParamsStatus = "resolved"
+	Stale      ListBindingIssuesParamsStatus = "stale"
+	Superseded ListBindingIssuesParamsStatus = "superseded"
+)
+
+// Valid indicates whether the value is a known member of the ListBindingIssuesParamsStatus enum.
+func (e ListBindingIssuesParamsStatus) Valid() bool {
+	switch e {
+	case Dismissed:
+		return true
+	case Open:
+		return true
+	case Resolved:
+		return true
+	case Stale:
+		return true
+	case Superseded:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for ListWorksParamsSortDirection.
 const (
 	Asc  ListWorksParamsSortDirection = "asc"
@@ -467,6 +608,58 @@ func (e ListWorksParamsSortDirection) Valid() bool {
 	default:
 		return false
 	}
+}
+
+// BindingIssue defines model for BindingIssue.
+type BindingIssue struct {
+	CandidateCount   int                     `json:"candidateCount"`
+	Candidates       []BindingIssueCandidate `json:"candidates"`
+	Code             ErrorCode               `json:"code"`
+	CreatedAt        time.Time               `json:"createdAt"`
+	EntityType       BindingIssueEntityType  `json:"entityType"`
+	ExternalId       *string                 `json:"externalId,omitempty"`
+	Id               BindingIssueId          `json:"id"`
+	ProviderId       *string                 `json:"providerId,omitempty"`
+	Resolution       *BindingIssueResolution `json:"resolution,omitempty"`
+	ResolvedAt       *time.Time              `json:"resolvedAt,omitempty"`
+	ResolvedBy       *string                 `json:"resolvedBy,omitempty"`
+	ResolvedTargetId *string                 `json:"resolvedTargetId,omitempty"`
+	SourceId         SourceId                `json:"sourceId"`
+	SourceKey        string                  `json:"sourceKey"`
+	Status           BindingIssueStatus      `json:"status"`
+	UpdatedAt        time.Time               `json:"updatedAt"`
+	Version          int                     `json:"version"`
+	WorkSourceKey    *string                 `json:"workSourceKey,omitempty"`
+}
+
+// BindingIssueEntityType defines model for BindingIssue.EntityType.
+type BindingIssueEntityType string
+
+// BindingIssueResolution defines model for BindingIssue.Resolution.
+type BindingIssueResolution string
+
+// BindingIssueStatus defines model for BindingIssue.Status.
+type BindingIssueStatus string
+
+// BindingIssueCandidate defines model for BindingIssueCandidate.
+type BindingIssueCandidate struct {
+	CandidateId   string                             `json:"candidateId"`
+	CandidateKind BindingIssueCandidateCandidateKind `json:"candidateKind"`
+	Label         string                             `json:"label"`
+	MatchSignal   string                             `json:"matchSignal"`
+	MatchValue    string                             `json:"matchValue"`
+}
+
+// BindingIssueCandidateCandidateKind defines model for BindingIssueCandidate.CandidateKind.
+type BindingIssueCandidateCandidateKind string
+
+// BindingIssueId defines model for BindingIssueId.
+type BindingIssueId = string
+
+// BindingIssueListResponse defines model for BindingIssueListResponse.
+type BindingIssueListResponse struct {
+	Issues     []BindingIssue `json:"issues"`
+	NextCursor *string        `json:"nextCursor,omitempty"`
 }
 
 // BootstrapResponse defines model for BootstrapResponse.
@@ -951,6 +1144,21 @@ type apiTokenContextKey string
 // sessionCookieContextKey is the context key for sessionCookie security scheme
 type sessionCookieContextKey string
 
+// ListBindingIssuesParams defines parameters for ListBindingIssues.
+type ListBindingIssuesParams struct {
+	SourceId   *SourceId                          `form:"sourceId,omitempty" json:"sourceId,omitempty"`
+	EntityType *ListBindingIssuesParamsEntityType `form:"entityType,omitempty" json:"entityType,omitempty"`
+	Status     *ListBindingIssuesParamsStatus     `form:"status,omitempty" json:"status,omitempty"`
+	Cursor     *string                            `form:"cursor,omitempty" json:"cursor,omitempty"`
+	Limit      *int                               `form:"limit,omitempty" json:"limit,omitempty"`
+}
+
+// ListBindingIssuesParamsEntityType defines parameters for ListBindingIssues.
+type ListBindingIssuesParamsEntityType string
+
+// ListBindingIssuesParamsStatus defines parameters for ListBindingIssues.
+type ListBindingIssuesParamsStatus string
+
 // MergeCreatorsParams defines parameters for MergeCreators.
 type MergeCreatorsParams struct {
 	XGalleryCSRF CSRFHeader `json:"X-Gallery-CSRF"`
@@ -1159,6 +1367,12 @@ func WithRequestEditorFn(fn RequestEditorFn) ClientOption {
 
 // The interface specification for the client above.
 type ClientInterface interface {
+	// ListBindingIssues request
+	ListBindingIssues(ctx context.Context, params *ListBindingIssuesParams, reqEditors ...RequestEditorFn) (*http.Response, error)
+
+	// GetBindingIssue request
+	GetBindingIssue(ctx context.Context, issueId BindingIssueId, reqEditors ...RequestEditorFn) (*http.Response, error)
+
 	// GetBootstrap request
 	GetBootstrap(ctx context.Context, reqEditors ...RequestEditorFn) (*http.Response, error)
 
@@ -1282,6 +1496,30 @@ type ClientInterface interface {
 	PutWorkOverlayWithBody(ctx context.Context, workId CanonicalWorkId, params *PutWorkOverlayParams, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*http.Response, error)
 
 	PutWorkOverlay(ctx context.Context, workId CanonicalWorkId, params *PutWorkOverlayParams, body PutWorkOverlayJSONRequestBody, reqEditors ...RequestEditorFn) (*http.Response, error)
+}
+
+func (c *Client) ListBindingIssues(ctx context.Context, params *ListBindingIssuesParams, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewListBindingIssuesRequest(c.Server, params)
+	if err != nil {
+		return nil, err
+	}
+	req = req.WithContext(ctx)
+	if err := c.applyEditors(ctx, req, reqEditors); err != nil {
+		return nil, err
+	}
+	return c.Client.Do(req)
+}
+
+func (c *Client) GetBindingIssue(ctx context.Context, issueId BindingIssueId, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewGetBindingIssueRequest(c.Server, issueId)
+	if err != nil {
+		return nil, err
+	}
+	req = req.WithContext(ctx)
+	if err := c.applyEditors(ctx, req, reqEditors); err != nil {
+		return nil, err
+	}
+	return c.Client.Do(req)
 }
 
 func (c *Client) GetBootstrap(ctx context.Context, reqEditors ...RequestEditorFn) (*http.Response, error) {
@@ -1822,6 +2060,142 @@ func (c *Client) PutWorkOverlay(ctx context.Context, workId CanonicalWorkId, par
 		return nil, err
 	}
 	return c.Client.Do(req)
+}
+
+// NewListBindingIssuesRequest generates requests for ListBindingIssues
+func NewListBindingIssuesRequest(server string, params *ListBindingIssuesParams) (*http.Request, error) {
+	var err error
+
+	serverURL, err := url.Parse(server)
+	if err != nil {
+		return nil, err
+	}
+
+	operationPath := fmt.Sprintf("/api/v1/binding-issues")
+	if operationPath[0] == '/' {
+		operationPath = "." + operationPath
+	}
+
+	queryURL, err := serverURL.Parse(operationPath)
+	if err != nil {
+		return nil, err
+	}
+
+	if params != nil {
+		// queryValues collects non-styled parameters (passthrough, JSON)
+		// that are safe to round-trip through url.Values.Encode().
+		queryValues := queryURL.Query()
+		// rawQueryFragments collects pre-encoded query fragments from
+		// styled parameters, preserving literal commas as delimiters
+		// per the OpenAPI spec (e.g. "color=blue,black,brown").
+		var rawQueryFragments []string
+
+		if params.SourceId != nil {
+
+			if queryFrag, err := runtime.StyleParamWithOptions("form", true, "sourceId", *params.SourceId, runtime.StyleParamOptions{ParamLocation: runtime.ParamLocationQuery, Type: "string", Format: ""}); err != nil {
+				return nil, err
+			} else {
+				for _, qp := range strings.Split(queryFrag, "&") {
+					rawQueryFragments = append(rawQueryFragments, qp)
+				}
+			}
+
+		}
+
+		if params.EntityType != nil {
+
+			if queryFrag, err := runtime.StyleParamWithOptions("form", true, "entityType", *params.EntityType, runtime.StyleParamOptions{ParamLocation: runtime.ParamLocationQuery, Type: "string", Format: ""}); err != nil {
+				return nil, err
+			} else {
+				for _, qp := range strings.Split(queryFrag, "&") {
+					rawQueryFragments = append(rawQueryFragments, qp)
+				}
+			}
+
+		}
+
+		if params.Status != nil {
+
+			if queryFrag, err := runtime.StyleParamWithOptions("form", true, "status", *params.Status, runtime.StyleParamOptions{ParamLocation: runtime.ParamLocationQuery, Type: "string", Format: ""}); err != nil {
+				return nil, err
+			} else {
+				for _, qp := range strings.Split(queryFrag, "&") {
+					rawQueryFragments = append(rawQueryFragments, qp)
+				}
+			}
+
+		}
+
+		if params.Cursor != nil {
+
+			if queryFrag, err := runtime.StyleParamWithOptions("form", true, "cursor", *params.Cursor, runtime.StyleParamOptions{ParamLocation: runtime.ParamLocationQuery, Type: "string", Format: ""}); err != nil {
+				return nil, err
+			} else {
+				for _, qp := range strings.Split(queryFrag, "&") {
+					rawQueryFragments = append(rawQueryFragments, qp)
+				}
+			}
+
+		}
+
+		if params.Limit != nil {
+
+			if queryFrag, err := runtime.StyleParamWithOptions("form", true, "limit", *params.Limit, runtime.StyleParamOptions{ParamLocation: runtime.ParamLocationQuery, Type: "integer", Format: ""}); err != nil {
+				return nil, err
+			} else {
+				for _, qp := range strings.Split(queryFrag, "&") {
+					rawQueryFragments = append(rawQueryFragments, qp)
+				}
+			}
+
+		}
+
+		if encoded := queryValues.Encode(); encoded != "" {
+			rawQueryFragments = append(rawQueryFragments, encoded)
+		}
+		queryURL.RawQuery = strings.Join(rawQueryFragments, "&")
+	}
+
+	req, err := http.NewRequest(http.MethodGet, queryURL.String(), nil)
+	if err != nil {
+		return nil, err
+	}
+
+	return req, nil
+}
+
+// NewGetBindingIssueRequest generates requests for GetBindingIssue
+func NewGetBindingIssueRequest(server string, issueId BindingIssueId) (*http.Request, error) {
+	var err error
+
+	var pathParam0 string
+
+	pathParam0, err = runtime.StyleParamWithOptions("simple", false, "issueId", issueId, runtime.StyleParamOptions{ParamLocation: runtime.ParamLocationPath, Type: "string", Format: ""})
+	if err != nil {
+		return nil, err
+	}
+
+	serverURL, err := url.Parse(server)
+	if err != nil {
+		return nil, err
+	}
+
+	operationPath := fmt.Sprintf("/api/v1/binding-issues/%s", pathParam0)
+	if operationPath[0] == '/' {
+		operationPath = "." + operationPath
+	}
+
+	queryURL, err := serverURL.Parse(operationPath)
+	if err != nil {
+		return nil, err
+	}
+
+	req, err := http.NewRequest(http.MethodGet, queryURL.String(), nil)
+	if err != nil {
+		return nil, err
+	}
+
+	return req, nil
 }
 
 // NewGetBootstrapRequest generates requests for GetBootstrap
@@ -3398,6 +3772,12 @@ func WithBaseURL(baseURL string) ClientOption {
 
 // ClientWithResponsesInterface is the interface specification for the client with responses above.
 type ClientWithResponsesInterface interface {
+	// ListBindingIssuesWithResponse request
+	ListBindingIssuesWithResponse(ctx context.Context, params *ListBindingIssuesParams, reqEditors ...RequestEditorFn) (*ListBindingIssuesResponse, error)
+
+	// GetBindingIssueWithResponse request
+	GetBindingIssueWithResponse(ctx context.Context, issueId BindingIssueId, reqEditors ...RequestEditorFn) (*GetBindingIssueResponse, error)
+
 	// GetBootstrapWithResponse request
 	GetBootstrapWithResponse(ctx context.Context, reqEditors ...RequestEditorFn) (*GetBootstrapResponse, error)
 
@@ -3521,6 +3901,72 @@ type ClientWithResponsesInterface interface {
 	PutWorkOverlayWithBodyWithResponse(ctx context.Context, workId CanonicalWorkId, params *PutWorkOverlayParams, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*PutWorkOverlayResponse, error)
 
 	PutWorkOverlayWithResponse(ctx context.Context, workId CanonicalWorkId, params *PutWorkOverlayParams, body PutWorkOverlayJSONRequestBody, reqEditors ...RequestEditorFn) (*PutWorkOverlayResponse, error)
+}
+
+type ListBindingIssuesResponse struct {
+	Body         []byte
+	HTTPResponse *http.Response
+	JSON200      *BindingIssueListResponse
+	JSON400      *ValidationError
+	JSON401      *UnauthenticatedError
+	JSON403      *ForbiddenError
+}
+
+// Status returns HTTPResponse.Status
+func (r ListBindingIssuesResponse) Status() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Status
+	}
+	return http.StatusText(0)
+}
+
+// StatusCode returns HTTPResponse.StatusCode
+func (r ListBindingIssuesResponse) StatusCode() int {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.StatusCode
+	}
+	return 0
+}
+
+// ContentType is a convenience method to retrieve the Content-Type value from the HTTP response headers
+func (r ListBindingIssuesResponse) ContentType() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Header.Get("Content-Type")
+	}
+	return ""
+}
+
+type GetBindingIssueResponse struct {
+	Body         []byte
+	HTTPResponse *http.Response
+	JSON200      *BindingIssue
+	JSON401      *UnauthenticatedError
+	JSON403      *ForbiddenError
+	JSON404      *NotFoundError
+}
+
+// Status returns HTTPResponse.Status
+func (r GetBindingIssueResponse) Status() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Status
+	}
+	return http.StatusText(0)
+}
+
+// StatusCode returns HTTPResponse.StatusCode
+func (r GetBindingIssueResponse) StatusCode() int {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.StatusCode
+	}
+	return 0
+}
+
+// ContentType is a convenience method to retrieve the Content-Type value from the HTTP response headers
+func (r GetBindingIssueResponse) ContentType() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Header.Get("Content-Type")
+	}
+	return ""
 }
 
 type GetBootstrapResponse struct {
@@ -4651,6 +5097,24 @@ func (r PutWorkOverlayResponse) ContentType() string {
 	return ""
 }
 
+// ListBindingIssuesWithResponse request returning *ListBindingIssuesResponse
+func (c *ClientWithResponses) ListBindingIssuesWithResponse(ctx context.Context, params *ListBindingIssuesParams, reqEditors ...RequestEditorFn) (*ListBindingIssuesResponse, error) {
+	rsp, err := c.ListBindingIssues(ctx, params, reqEditors...)
+	if err != nil {
+		return nil, err
+	}
+	return ParseListBindingIssuesResponse(rsp)
+}
+
+// GetBindingIssueWithResponse request returning *GetBindingIssueResponse
+func (c *ClientWithResponses) GetBindingIssueWithResponse(ctx context.Context, issueId BindingIssueId, reqEditors ...RequestEditorFn) (*GetBindingIssueResponse, error) {
+	rsp, err := c.GetBindingIssue(ctx, issueId, reqEditors...)
+	if err != nil {
+		return nil, err
+	}
+	return ParseGetBindingIssueResponse(rsp)
+}
+
 // GetBootstrapWithResponse request returning *GetBootstrapResponse
 func (c *ClientWithResponses) GetBootstrapWithResponse(ctx context.Context, reqEditors ...RequestEditorFn) (*GetBootstrapResponse, error) {
 	rsp, err := c.GetBootstrap(ctx, reqEditors...)
@@ -5043,6 +5507,100 @@ func (c *ClientWithResponses) PutWorkOverlayWithResponse(ctx context.Context, wo
 		return nil, err
 	}
 	return ParsePutWorkOverlayResponse(rsp)
+}
+
+// ParseListBindingIssuesResponse parses an HTTP response from a ListBindingIssuesWithResponse call
+func ParseListBindingIssuesResponse(rsp *http.Response) (*ListBindingIssuesResponse, error) {
+	bodyBytes, err := io.ReadAll(rsp.Body)
+	defer func() { _ = rsp.Body.Close() }()
+	if err != nil {
+		return nil, err
+	}
+
+	response := &ListBindingIssuesResponse{
+		Body:         bodyBytes,
+		HTTPResponse: rsp,
+	}
+
+	switch {
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 200:
+		var dest BindingIssueListResponse
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON200 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 400:
+		var dest ValidationError
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON400 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 401:
+		var dest UnauthenticatedError
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON401 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 403:
+		var dest ForbiddenError
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON403 = &dest
+
+	}
+
+	return response, nil
+}
+
+// ParseGetBindingIssueResponse parses an HTTP response from a GetBindingIssueWithResponse call
+func ParseGetBindingIssueResponse(rsp *http.Response) (*GetBindingIssueResponse, error) {
+	bodyBytes, err := io.ReadAll(rsp.Body)
+	defer func() { _ = rsp.Body.Close() }()
+	if err != nil {
+		return nil, err
+	}
+
+	response := &GetBindingIssueResponse{
+		Body:         bodyBytes,
+		HTTPResponse: rsp,
+	}
+
+	switch {
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 200:
+		var dest BindingIssue
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON200 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 401:
+		var dest UnauthenticatedError
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON401 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 403:
+		var dest ForbiddenError
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON403 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 404:
+		var dest NotFoundError
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON404 = &dest
+
+	}
+
+	return response, nil
 }
 
 // ParseGetBootstrapResponse parses an HTTP response from a GetBootstrapWithResponse call
