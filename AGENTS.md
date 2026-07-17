@@ -15,7 +15,8 @@
 - 代码、仓库、包、命令和服务代号：`gallery`。
 - 建议后端命令：`galleryd`；建议 CLI：`galleryctl`。
 - Gallery 是独立的净室产品，不以任何旧 Gallery 的数据库、配置、API、目录结构或行为作为兼容、迁移或对拍目标。
-- 当前仓库保存已收敛的工程文档和早期 cleanroom 验证台，尚没有正式产品代码。下一步是阶段 0 契约骨架和 Walking Skeleton，不是继续无边界调研。
+- 当前仓库已有正式产品代码（`cmd/`、`internal/`、`pkg/`）。阶段 0 契约骨架、Walking Skeleton 与 Architecture Proof 正确性切片均已完成；当前处于**阶段 1「领域和数据所有权」**。已落地并配套 API 的能力包括：Personal 配对/Session/capability、Library/Source/RuleVersion/SourceRuleBinding、持久 Scan Job 与完整 SHA-256 publication、双 revision `query_publication_id` 查询/FTS5/自然排序/签名游标、Overlay 同步写与异步重投影、Catalog 删除重建与稳定重绑、八点强杀恢复、CanonicalCreator 合并/撤销、Work/Media/Creator Binding issue 人工修复、Source-derived active/inactive/orphan_candidate/orphaned 保留窗口与人工审查、AppDirs 进程独占锁、有界 Job 调度器、规则 extension 身份分类。尚未完成：SourceWork 拆分/合并、control 产品级备份恢复与 Catalog 全量重建后的人工决策恢复、阶段 1 Schema Freeze Gate 的最终唯一约束、以及阶段 2+ 的规则闭环/查询/媒体/安全/Web/平台发行。
+- 本文件是需要随真实开发状态持续维护的 Agent 规则；发现与代码、有效 ADR 或规范不一致时应更新本文件，但不得放宽安全、只读 Source、Git、签名或测试要求，也不得把临时实装写成已冻结决策。
 
 ## 权威资料与阅读顺序
 
@@ -56,6 +57,18 @@
 
 前端框架、CSS 组件库、SQLite 驱动、最终细粒度路由和物理表结构尚未冻结，不要仅凭原型依赖替未来实现做决定。
 
+### 平台适配边界（开发约束）
+
+- 新增任何平台相关能力必须通过 `internal/platform/*` 与 `internal/ports`，不得把 OS 专有实现写进领域或应用层。AppDirs 进程独占锁已按此实现（`internal/platform/lock`，Windows LockFileEx / Unix flock 分文件构建）。
+- 后续 FileID、Watcher、句柄式打开、ToolDiscovery 与 CredentialStore 同样不得直接进入领域层，必须经平台 adapter。
+- `internal/scanner`、`internal/media`、`internal/derived` 中现存对 `os`/`filepath` 的直接依赖是技术债，只在本轮实际触及的代码中做局部迁移，不为形式统一制造大量空接口或一次性大重构。
+
+### 当前限定的暂定行为
+
+- **Overlay 查询影响是当前实现，不是字段永久分类**：TitleOverride/ManualTag/Hidden/CustomCover 目前属于 query-affecting snapshot，Favorite/ReadingProgress 属于实时附加。某字段未来一旦参与过滤、排序、搜索或集合成员判断，必须进入当前查询的 dependency set 与 revision。
+- **SourceRuleBinding 目前只执行优先级最高的一条有效 Binding**：尚未支持多规则链、Provider 路由组合或多 Binding 合并执行，这些属于阶段 2 待冻结语义，不得声称已支持。
+- 已实装但未冻结的常量与选择集中登记在 `Documents/指南/01-v1实施计划.md` 的「暂定实装决策」表，修改前先查该表的冻结阶段与重新审议门禁。
+
 ## 不可违反的产品边界
 
 1. **媒体根永久只读**：数据库、配置、日志、缓存、临时文件、缩略图、转码和更新文件全部位于独立 AppDirs。
@@ -93,10 +106,12 @@
 
 严格遵循 `Documents/指南/01-v1实施计划.md`：
 
-1. 阶段 0：正式领域 ID、两库迁移/备份骨架、OpenAPI、错误 code、WebSocket 信封、规则 Schema 和 AppDirs 写入守卫。
-2. Walking Skeleton：用一个作品和一个媒体的合成只读 Source 打通 Personal 配对、Library/Source、规则绑定、完整哈希、最小 publication、REST、媒体 Range 和 WebSocket Job。
-3. Architecture Proof：补齐快照分页、Overlay、FTS、Catalog 重建、强杀恢复和多客户端边界后，再冻结数据库与 API。
-4. 按领域/规则/扫描/查询与媒体/安全/Web/PWA/平台发行的顺序扩展。
+1. 阶段 0：正式领域 ID、两库迁移/备份骨架、OpenAPI、错误 code、WebSocket 信封、规则 Schema 和 AppDirs 写入守卫。**（已完成）**
+2. Walking Skeleton：用一个作品和一个媒体的合成只读 Source 打通 Personal 配对、Library/Source、规则绑定、完整哈希、最小 publication、REST、媒体 Range 和 WebSocket Job。**（已完成）**
+3. Architecture Proof：补齐快照分页、Overlay、FTS、Catalog 重建、强杀恢复和多客户端边界后，再冻结数据库与 API。**（正确性切片已完成；物理 Schema 与完整 API 仍未冻结）**
+4. 按领域/规则/扫描/查询与媒体/安全/Web/PWA/平台发行的顺序扩展。**（进行中：阶段 1 领域和数据所有权）**
+
+当前处于阶段 1。下一优先级为 control 备份/恢复 → SourceWork 拆分/合并 → Catalog 全量重建决策恢复 → 阶段 1 Schema Freeze Gate，之后才进入完整规则闭环、查询/媒体、安全、Web/PWA 与平台发行。不要据此提前展开前端、LAN 完整账户、桌面壳或发行。
 
 Walking Skeleton 功能可以少，但基础模型不能是临时替代品：
 
@@ -275,6 +290,20 @@ docs(agents): 采用 Markdown 提交正文格式
 - `AGENTS.md`：将 YAML 正文规范替换为一个文件一行的 Markdown 变动列表，并保留 Conventional Commits、签名和历史重写约束
 ```
 
+## 代码入口
+
+开始改动前，除权威文档外按需阅读相关实现与其测试：
+
+- `cmd/galleryd`、`cmd/galleryctl`：进程入口与公开客户端；
+- `internal/bootstrap`：启动顺序（AppDirs 锁 → 迁移 → 服务 → 监听 → descriptor）与关闭；
+- `internal/platform/{appdirs,descriptor,lock,clock,identity,filesystem}`：平台适配；
+- `internal/storage` 与 `internal/storage/migrations/{control,catalog}`：两库迁移；
+- `internal/application`：资源、Binding、Binding issue、orphan candidate；
+- `internal/rules`：规则包编译、三类 hash、extension 分类、CEL Profile；
+- `internal/jobs`：Job Store 与有界 scheduler；
+- `internal/scanner`、`internal/overlay`、`internal/creators`、`internal/catalog`、`internal/query`、`internal/media`、`internal/derived`、`internal/recovery`；
+- `internal/transport/httpapi` 与 `internal/contract/api/openapi.yaml`（生成物在 `pkg/galleryapi`）。
+
 ## 当前可开工结论
 
-当前规范不存在阻塞 Walking Skeleton 开工的架构冲突。搜索排名/高亮/精确总数、游标租约、最终唯一约束、HDD/NAS 性能、Wails/Tauri、Linux/macOS/Docker 支持等仍是后续冻结或发行门禁，但不应继续延迟阶段 0 和第一条正式垂直切片。
+阶段 0、Walking Skeleton 与 Architecture Proof 正确性切片已完成，当前在阶段 1。搜索排名/高亮/精确总数、游标租约、最终唯一约束、HDD/NAS 性能、Wails/Tauri、Linux/macOS/Docker 支持等仍是后续冻结或发行门禁。下一条正式垂直切片优先级为 control 备份/恢复与 SourceWork 拆分/合并，之后是阶段 1 Schema Freeze Gate；不要提前展开前端、LAN 完整账户、桌面壳或发行。
