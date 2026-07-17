@@ -113,7 +113,21 @@ func CompilePackage(input []byte) (CompiledPackage, error) {
 
 	semantic := cloneRawObject(root)
 	delete(semantic, "tests")
-	delete(semantic, "extensions")
+	semanticExtensions, err := classifyExtensions(root["extensions"])
+	if err != nil {
+		return CompiledPackage{}, err
+	}
+	if len(semanticExtensions) == 0 {
+		// 没有 semantic extension 时删除整个 extensions 键，使既有（仅含 nonsemantic 或遗留
+		// extension 的）RuleVersion 的 semantic_hash 与历史保持完全一致。
+		delete(semantic, "extensions")
+	} else {
+		encoded, err := json.Marshal(semanticExtensions)
+		if err != nil {
+			return CompiledPackage{}, err
+		}
+		semantic["extensions"] = encoded
+	}
 	semanticCanonical, err := canonicalObject(semantic)
 	if err != nil {
 		return CompiledPackage{}, err
