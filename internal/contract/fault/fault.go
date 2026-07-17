@@ -51,6 +51,10 @@ const (
 	CodeCatalogCandidateInvalid  Code = "CATALOG_CANDIDATE_INVALID"
 	CodeProcessInterrupted       Code = "PROCESS_INTERRUPTED"
 	CodeRangeInvalid             Code = "RANGE_INVALID"
+	CodeRestoreFailed            Code = "RESTORE_FAILED"
+	CodeBackupNotFound           Code = "BACKUP_NOT_FOUND"
+	CodeBackupCorrupt            Code = "BACKUP_CORRUPT"
+	CodeBackupIncompatible       Code = "BACKUP_INCOMPATIBLE"
 	// 以下为进程启动期（bootstrap）失败码，不经 HTTP 暴露，仅用于日志与退出诊断。
 	CodeInstanceAlreadyRunning Code = "INSTANCE_ALREADY_RUNNING"
 	CodeLockUnavailable        Code = "LOCK_UNAVAILABLE"

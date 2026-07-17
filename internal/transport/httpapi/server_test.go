@@ -19,6 +19,7 @@ import (
 
 	"github.com/RecRivenVI/gallery/internal/application"
 	"github.com/RecRivenVI/gallery/internal/auth"
+	"github.com/RecRivenVI/gallery/internal/backup"
 	"github.com/RecRivenVI/gallery/internal/catalog"
 	"github.com/RecRivenVI/gallery/internal/config"
 	"github.com/RecRivenVI/gallery/internal/contract/fault"
@@ -59,7 +60,7 @@ func TestGeneratedClientHealthBootstrapAndAnonymousWS(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	server := httptest.NewServer(httpapi.New(config.ModePersonal, store, fixedClock, personal, resources, nil, nil, nil, nil, nil, nil, logger))
+	server := httptest.NewServer(httpapi.New(config.ModePersonal, store, fixedClock, personal, resources, nil, nil, nil, nil, nil, nil, nil, logger))
 	defer server.Close()
 
 	client, err := api.NewClientWithResponses(server.URL)
@@ -150,7 +151,7 @@ func TestPersonalPairingIsSingleUseAndRevocationInvalidatesREST(t *testing.T) {
 		t.Fatal(err)
 	}
 	server := httptest.NewServer(httpapi.New(
-		config.ModePersonal, store, fixedClock, personal, resources, jobStore, catalogStore, scannerService, overlayService, creatorsService, hub,
+		config.ModePersonal, store, fixedClock, personal, resources, jobStore, catalogStore, scannerService, overlayService, creatorsService, nil, hub,
 		slog.New(slog.NewJSONHandler(io.Discard, nil)),
 	))
 	defer server.Close()
@@ -510,7 +511,7 @@ func TestCreatorMergeAPIContract(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	handler := httpapi.New(config.ModePersonal, store, fixedClock, personal, resources, jobStore, catalogStore, nil, overlayService, creatorsService, nil, slog.New(slog.NewJSONHandler(io.Discard, nil)))
+	handler := httpapi.New(config.ModePersonal, store, fixedClock, personal, resources, jobStore, catalogStore, nil, overlayService, creatorsService, nil, nil, slog.New(slog.NewJSONHandler(io.Discard, nil)))
 	server := httptest.NewServer(handler)
 	defer server.Close()
 
@@ -656,7 +657,7 @@ func TestBindingIssueQueryAPI(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	handler := httpapi.New(config.ModePersonal, store, fixedClock, personal, resources, nil, nil, nil, nil, nil, nil, slog.New(slog.NewJSONHandler(io.Discard, nil)))
+	handler := httpapi.New(config.ModePersonal, store, fixedClock, personal, resources, nil, nil, nil, nil, nil, nil, nil, slog.New(slog.NewJSONHandler(io.Discard, nil)))
 	server := httptest.NewServer(handler)
 	defer server.Close()
 
@@ -744,7 +745,7 @@ func TestBindingRepairAPI(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	handler := httpapi.New(config.ModePersonal, store, fixedClock, personal, resources, nil, nil, nil, nil, nil, nil, slog.New(slog.NewJSONHandler(io.Discard, nil)))
+	handler := httpapi.New(config.ModePersonal, store, fixedClock, personal, resources, nil, nil, nil, nil, nil, nil, nil, slog.New(slog.NewJSONHandler(io.Discard, nil)))
 	server := httptest.NewServer(handler)
 	defer server.Close()
 
@@ -865,7 +866,7 @@ func TestOrphanCandidateAPIContract(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	handler := httpapi.New(config.ModePersonal, store, fixedClock, personal, resources, nil, nil, nil, nil, nil, nil, slog.New(slog.NewJSONHandler(io.Discard, nil)))
+	handler := httpapi.New(config.ModePersonal, store, fixedClock, personal, resources, nil, nil, nil, nil, nil, nil, nil, slog.New(slog.NewJSONHandler(io.Discard, nil)))
 	server := httptest.NewServer(handler)
 	defer server.Close()
 
@@ -935,5 +936,107 @@ VALUES (?, ?, 'gone-key', ?, 1, 'orphan_candidate', 3, 0, 1, 1)`, bindingID, sou
 	if again, err := client.DecideOrphanCandidateWithResponse(ctx, bindingID, &api.DecideOrphanCandidateParams{XGalleryCSRF: csrf},
 		api.OrphanDecisionRequest{Decision: "retain"}, editor); err != nil || again.JSON409 == nil {
 		t.Fatalf("非候选决策未 409: %v status=%d", err, again.StatusCode())
+	}
+}
+
+func TestControlBackupEndpoints(t *testing.T) {
+	ctx := context.Background()
+	dirs := appdirs.UnderRoot(filepath.Join(t.TempDir(), "app"))
+	if err := dirs.Ensure(filesystem.OS{}); err != nil {
+		t.Fatal(err)
+	}
+	store, err := storage.Open(ctx, dirs)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	fixedClock := clock.Fixed{Time: time.Now().UTC()}
+	generator := identity.NewGenerator(fixedClock)
+	personal, err := auth.NewPersonal(store.Control.SQL(), fixedClock, generator, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resources, err := application.NewResources(store.Control.SQL(), dirs, filesystem.OS{}, fixedClock, generator)
+	if err != nil {
+		t.Fatal(err)
+	}
+	jobStore, err := jobs.NewStore(store.Control.SQL(), fixedClock, generator)
+	if err != nil {
+		t.Fatal(err)
+	}
+	backupService, err := backup.New(ctx, store.Control, jobStore, dirs, fixedClock, generator, "test-1.0", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	handler := httpapi.New(config.ModePersonal, store, fixedClock, personal, resources, jobStore, nil, nil, nil, nil, backupService, nil, slog.New(slog.NewJSONHandler(io.Discard, nil)))
+	server := httptest.NewServer(handler)
+	defer server.Close()
+
+	jar, err := cookiejar.New(nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	client, err := api.NewClientWithResponses(server.URL, api.WithHTTPClient(&http.Client{Jar: jar}))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// 未认证时不得创建备份。
+	anonymous, err := api.NewClientWithResponses(server.URL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if unauth, err := anonymous.CreateControlBackupWithResponse(ctx, &api.CreateControlBackupParams{XGalleryCSRF: "x"}, sameOrigin(server.URL)); err != nil || unauth.JSON401 == nil {
+		t.Fatalf("未认证创建备份未 401: %v status=%d", err, unauth.StatusCode())
+	}
+
+	csrf := pairSession(t, ctx, client, server.URL)
+	editor := sameOrigin(server.URL)
+
+	// 缺少 CSRF 头应 403。
+	if noCSRF, err := client.CreateControlBackupWithResponse(ctx, &api.CreateControlBackupParams{XGalleryCSRF: ""}, editor); err != nil || noCSRF.JSON403 == nil {
+		t.Fatalf("缺 CSRF 创建备份未 403: %v status=%d", err, noCSRF.StatusCode())
+	}
+
+	created, err := client.CreateControlBackupWithResponse(ctx, &api.CreateControlBackupParams{XGalleryCSRF: csrf}, editor)
+	if err != nil || created.JSON202 == nil || created.JSON202.Type != "control_backup" {
+		t.Fatalf("创建备份失败: %v status=%d", err, created.StatusCode())
+	}
+	jobID := created.JSON202.Id
+
+	// 轮询直到备份 Job 完成。
+	deadline := time.Now().Add(10 * time.Second)
+	for {
+		snapshot, err := client.GetJobWithResponse(ctx, jobID)
+		if err != nil || snapshot.JSON200 == nil {
+			t.Fatalf("读取备份 Job 失败: %v status=%d", err, snapshot.StatusCode())
+		}
+		if snapshot.JSON200.Status == "completed" {
+			break
+		}
+		if snapshot.JSON200.Status == "failed" || snapshot.JSON200.Status == "cancelled" {
+			t.Fatalf("备份 Job 异常终止: %s", snapshot.JSON200.Status)
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("备份 Job 超时未完成，最后状态 %s", snapshot.JSON200.Status)
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+
+	list, err := client.ListControlBackupsWithResponse(ctx)
+	if err != nil || list.JSON200 == nil || len(list.JSON200.Backups) != 1 {
+		t.Fatalf("备份列表错误: %v status=%d", err, list.StatusCode())
+	}
+	manifest := list.JSON200.Backups[0]
+	if manifest.Role != "control" || manifest.Database.ChecksumAlgorithm != "sha256" {
+		t.Fatalf("备份 manifest 字段错误: %+v", manifest)
+	}
+
+	got, err := client.GetControlBackupWithResponse(ctx, manifest.BackupId)
+	if err != nil || got.JSON200 == nil || got.JSON200.BackupId != manifest.BackupId {
+		t.Fatalf("读取单个备份错误: %v status=%d", err, got.StatusCode())
+	}
+	if missing, err := client.GetControlBackupWithResponse(ctx, "bkp_00000000-0000-7000-8000-000000000000"); err != nil || missing.JSON404 == nil {
+		t.Fatalf("未知备份未 404: %v status=%d", err, missing.StatusCode())
 	}
 }

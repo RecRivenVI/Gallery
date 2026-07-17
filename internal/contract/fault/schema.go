@@ -20,6 +20,7 @@ func AllCodes() []Code {
 		CodeRuleParameterInvalid, CodeJobStateConflict, CodeScanAlreadyRunning,
 		CodeSourceUnavailable, CodeSourceReadFailed, CodeContentDisappeared, CodePathEscape,
 		CodeCatalogCandidateInvalid, CodeProcessInterrupted, CodeRangeInvalid,
+		CodeRestoreFailed, CodeBackupNotFound, CodeBackupCorrupt, CodeBackupIncompatible,
 	}
 }
 
