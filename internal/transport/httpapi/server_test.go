@@ -722,3 +722,124 @@ VALUES (?, 0, ?, 'work', 'external_id', 'post-42', '候选作品')`, issueID, wo
 		t.Fatalf("不存在 issue 未 404: %v status=%d", err, missing.StatusCode())
 	}
 }
+
+func TestBindingRepairAPI(t *testing.T) {
+	ctx := context.Background()
+	dirs := appdirs.UnderRoot(filepath.Join(t.TempDir(), "app"))
+	if err := dirs.Ensure(filesystem.OS{}); err != nil {
+		t.Fatal(err)
+	}
+	store, err := storage.Open(ctx, dirs)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	fixedClock := clock.Fixed{Time: time.Now().UTC()}
+	generator := identity.NewGenerator(fixedClock)
+	personal, err := auth.NewPersonal(store.Control.SQL(), fixedClock, generator, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resources, err := application.NewResources(store.Control.SQL(), dirs, filesystem.OS{}, fixedClock, generator)
+	if err != nil {
+		t.Fatal(err)
+	}
+	handler := httpapi.New(config.ModePersonal, store, fixedClock, personal, resources, nil, nil, nil, nil, nil, nil, slog.New(slog.NewJSONHandler(io.Discard, nil)))
+	server := httptest.NewServer(handler)
+	defer server.Close()
+
+	newID := func(kind domain.IDKind) string {
+		id, err := generator.New(kind)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return id.String()
+	}
+	exec := func(query string, args ...any) {
+		if _, err := store.Control.SQL().ExecContext(ctx, query, args...); err != nil {
+			t.Fatal(err)
+		}
+	}
+	libraryID, sourceID := newID(domain.IDLibrary), newID(domain.IDSource)
+	workA, workB := newID(domain.IDCanonicalWork), newID(domain.IDCanonicalWork)
+	issueID := newID(domain.IDBindingIssue)
+	exec(`INSERT INTO libraries (library_id, name, created_at) VALUES (?, 'lib', 1)`, libraryID)
+	exec(`INSERT INTO sources (source_id, library_id, display_name, root_path, root_key, created_at)
+VALUES (?, ?, 'src', '/seed/root', '/seed/root', 1)`, sourceID, libraryID)
+	exec(`INSERT INTO canonical_works (work_id, title, created_at) VALUES (?, '作品甲', 1), (?, '作品乙', 1)`, workA, workB)
+	exec(`INSERT INTO binding_issues
+(issue_id, source_id, entity_type, source_key, provider_id, external_id, code,
+ candidate_fingerprint, candidate_count, status, version, created_at, updated_at)
+VALUES (?, ?, 'work', 'alias-new', 'example', 'post-42', 'BINDING_REVIEW_REQUIRED', ?, 2, 'open', 1, 10, 10)`,
+		issueID, sourceID, workA+"\x00"+workB)
+	exec(`INSERT INTO binding_issue_candidates (issue_id, ordinal, candidate_id, candidate_kind, match_signal, match_value, label)
+VALUES (?, 0, ?, 'work', 'external_id', 'post-42', '作品甲'), (?, 1, ?, 'work', 'external_id', 'post-42', '作品乙')`,
+		issueID, workA, issueID, workB)
+
+	jar, err := cookiejar.New(nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	client, err := api.NewClientWithResponses(server.URL, api.WithHTTPClient(&http.Client{Jar: jar}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	csrf := pairSession(t, ctx, client, server.URL)
+	editor := sameOrigin(server.URL)
+
+	// 缺少 CSRF 的修复被拒绝。
+	if noCSRF, err := client.ResolveBindingIssueWithResponse(ctx, issueID, &api.ResolveBindingIssueParams{XGalleryCSRF: ""},
+		api.BindingIssueResolveRequest{Decision: "bind_existing", TargetId: &workA, Version: 1}, editor); err != nil || noCSRF.JSON403 == nil {
+		t.Fatalf("缺 CSRF 修复未 403: %v status=%d", err, noCSRF.StatusCode())
+	}
+	// 过时 version 冲突。
+	if stale, err := client.ResolveBindingIssueWithResponse(ctx, issueID, &api.ResolveBindingIssueParams{XGalleryCSRF: csrf},
+		api.BindingIssueResolveRequest{Decision: "bind_existing", TargetId: &workA, Version: 99}, editor); err != nil || stale.JSON409 == nil {
+		t.Fatalf("过时 version 未 409: %v status=%d", err, stale.StatusCode())
+	}
+	// bind_existing 修复。
+	resolved, err := client.ResolveBindingIssueWithResponse(ctx, issueID, &api.ResolveBindingIssueParams{XGalleryCSRF: csrf},
+		api.BindingIssueResolveRequest{Decision: "bind_existing", TargetId: &workA, Version: 1}, editor)
+	if err != nil || resolved.JSON200 == nil || string(resolved.JSON200.Status) != "resolved" ||
+		resolved.JSON200.ResolvedTargetId == nil || *resolved.JSON200.ResolvedTargetId != workA {
+		t.Fatalf("bind_existing 接口失败: %v status=%d body=%s", err, resolved.StatusCode(), resolved.Body)
+	}
+	var activeCount int
+	_ = store.Control.SQL().QueryRowContext(ctx, `SELECT count(*) FROM work_bindings
+WHERE source_id=? AND source_key='alias-new' AND work_id=? AND status='active'`, sourceID, workA).Scan(&activeCount)
+	if activeCount != 1 {
+		t.Fatalf("修复未建立 active binding: %d", activeCount)
+	}
+
+	// unbind-work + undo。
+	unbindKey := "clean-key"
+	exec(`INSERT INTO work_bindings
+(binding_id, source_id, source_key, work_id, identity_version, status, last_seen_generation, created_at, updated_at)
+VALUES (?, ?, ?, ?, 1, 'active', 0, 1, 1)`, newID(domain.IDWorkBinding), sourceID, unbindKey, workB)
+	unbind, err := client.UnbindWorkWithResponse(ctx, &api.UnbindWorkParams{XGalleryCSRF: csrf},
+		api.BindingUnbindRequest{SourceId: sourceID, SourceKey: unbindKey}, editor)
+	if err != nil || unbind.JSON200 == nil || unbind.JSON200.CanonicalId != workB || string(unbind.JSON200.EntityKind) != "work" {
+		t.Fatalf("unbind-work 接口失败: %v status=%d body=%s", err, unbind.StatusCode(), unbind.Body)
+	}
+	undo, err := client.UndoManualUnbindWithResponse(ctx, &api.UndoManualUnbindParams{XGalleryCSRF: csrf},
+		api.BindingUnbindRequest{SourceId: sourceID, SourceKey: unbindKey}, editor)
+	if err != nil || undo.JSON200 == nil || undo.JSON200.CanonicalId != workB {
+		t.Fatalf("undo-unbind 接口失败: %v status=%d body=%s", err, undo.StatusCode(), undo.Body)
+	}
+
+	// dismiss + reopen 另一个 issue。
+	issue2 := newID(domain.IDBindingIssue)
+	exec(`INSERT INTO binding_issues
+(issue_id, source_id, entity_type, source_key, code, candidate_fingerprint, candidate_count, status, version, created_at, updated_at)
+VALUES (?, ?, 'work', 'alias-2', 'BINDING_REVIEW_REQUIRED', '', 2, 'open', 1, 20, 20)`, issue2, sourceID)
+	dismissed, err := client.DismissBindingIssueWithResponse(ctx, issue2, &api.DismissBindingIssueParams{XGalleryCSRF: csrf},
+		api.BindingIssueVersionRequest{Version: 1}, editor)
+	if err != nil || dismissed.JSON200 == nil || string(dismissed.JSON200.Status) != "dismissed" {
+		t.Fatalf("dismiss 接口失败: %v status=%d body=%s", err, dismissed.StatusCode(), dismissed.Body)
+	}
+	reopened, err := client.ReopenBindingIssueWithResponse(ctx, issue2, &api.ReopenBindingIssueParams{XGalleryCSRF: csrf},
+		api.BindingIssueVersionRequest{Version: dismissed.JSON200.Version}, editor)
+	if err != nil || reopened.JSON200 == nil || string(reopened.JSON200.Status) != "open" {
+		t.Fatalf("reopen 接口失败: %v status=%d body=%s", err, reopened.StatusCode(), reopened.Body)
+	}
+}

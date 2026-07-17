@@ -856,6 +856,191 @@ paths:
           $ref: "#/components/responses/ForbiddenError"
         "404":
           $ref: "#/components/responses/NotFoundError"
+  /api/v1/binding-issues/{issueId}/resolve:
+    post:
+      operationId: resolveBindingIssue
+      summary: 人工修复 Binding issue（绑定候选或创建新实体），下一次扫描据此重建
+      parameters:
+        - name: issueId
+          in: path
+          required: true
+          schema:
+            $ref: "#/components/schemas/BindingIssueId"
+        - $ref: "#/components/parameters/CSRFHeader"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/BindingIssueResolveRequest"
+      responses:
+        "200":
+          description: 修复已记录
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/BindingIssue"
+        "400":
+          $ref: "#/components/responses/ValidationError"
+        "401":
+          $ref: "#/components/responses/UnauthenticatedError"
+        "403":
+          $ref: "#/components/responses/ForbiddenError"
+        "404":
+          $ref: "#/components/responses/NotFoundError"
+        "409":
+          $ref: "#/components/responses/ConflictError"
+  /api/v1/binding-issues/{issueId}/dismiss:
+    post:
+      operationId: dismissBindingIssue
+      summary: 忽略/延后 Binding issue，抑制相同证据重复产生
+      parameters:
+        - name: issueId
+          in: path
+          required: true
+          schema:
+            $ref: "#/components/schemas/BindingIssueId"
+        - $ref: "#/components/parameters/CSRFHeader"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/BindingIssueVersionRequest"
+      responses:
+        "200":
+          description: 已忽略
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/BindingIssue"
+        "400":
+          $ref: "#/components/responses/ValidationError"
+        "401":
+          $ref: "#/components/responses/UnauthenticatedError"
+        "403":
+          $ref: "#/components/responses/ForbiddenError"
+        "404":
+          $ref: "#/components/responses/NotFoundError"
+        "409":
+          $ref: "#/components/responses/ConflictError"
+  /api/v1/binding-issues/{issueId}/reopen:
+    post:
+      operationId: reopenBindingIssue
+      summary: 重新打开被忽略、过时或被替代的 Binding issue
+      parameters:
+        - name: issueId
+          in: path
+          required: true
+          schema:
+            $ref: "#/components/schemas/BindingIssueId"
+        - $ref: "#/components/parameters/CSRFHeader"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/BindingIssueVersionRequest"
+      responses:
+        "200":
+          description: 已重新打开
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/BindingIssue"
+        "400":
+          $ref: "#/components/responses/ValidationError"
+        "401":
+          $ref: "#/components/responses/UnauthenticatedError"
+        "403":
+          $ref: "#/components/responses/ForbiddenError"
+        "404":
+          $ref: "#/components/responses/NotFoundError"
+        "409":
+          $ref: "#/components/responses/ConflictError"
+  /api/v1/binding-actions/unbind-work:
+    post:
+      operationId: unbindWork
+      summary: 手动解绑 SourceWork，下一次扫描将其拆分为新的 CanonicalWork
+      parameters:
+        - $ref: "#/components/parameters/CSRFHeader"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/BindingUnbindRequest"
+      responses:
+        "200":
+          description: 已解绑
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/BindingActionResult"
+        "400":
+          $ref: "#/components/responses/ValidationError"
+        "401":
+          $ref: "#/components/responses/UnauthenticatedError"
+        "403":
+          $ref: "#/components/responses/ForbiddenError"
+        "404":
+          $ref: "#/components/responses/NotFoundError"
+  /api/v1/binding-actions/unbind-media:
+    post:
+      operationId: unbindMedia
+      summary: 手动解绑 SourceMedia，下一次扫描建立新的 CanonicalMedia occurrence
+      parameters:
+        - $ref: "#/components/parameters/CSRFHeader"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/BindingUnbindRequest"
+      responses:
+        "200":
+          description: 已解绑
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/BindingActionResult"
+        "400":
+          $ref: "#/components/responses/ValidationError"
+        "401":
+          $ref: "#/components/responses/UnauthenticatedError"
+        "403":
+          $ref: "#/components/responses/ForbiddenError"
+        "404":
+          $ref: "#/components/responses/NotFoundError"
+  /api/v1/binding-actions/undo-unbind:
+    post:
+      operationId: undoManualUnbind
+      summary: 撤销一次手动 Work 解绑，恢复原 Binding
+      parameters:
+        - $ref: "#/components/parameters/CSRFHeader"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/BindingUnbindRequest"
+      responses:
+        "200":
+          description: 已撤销
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/BindingActionResult"
+        "400":
+          $ref: "#/components/responses/ValidationError"
+        "401":
+          $ref: "#/components/responses/UnauthenticatedError"
+        "403":
+          $ref: "#/components/responses/ForbiddenError"
+        "404":
+          $ref: "#/components/responses/NotFoundError"
+        "409":
+          $ref: "#/components/responses/ConflictError"
 components:
   securitySchemes:
     sessionCookie:
@@ -1463,6 +1648,48 @@ components:
             $ref: "#/components/schemas/BindingIssue"
         nextCursor:
           type: string
+    BindingIssueResolveRequest:
+      type: object
+      additionalProperties: false
+      required: [decision, version]
+      properties:
+        decision:
+          type: string
+          enum: [bind_existing, create_new, keep_separate]
+        targetId:
+          type: string
+        version:
+          type: integer
+          minimum: 1
+    BindingIssueVersionRequest:
+      type: object
+      additionalProperties: false
+      required: [version]
+      properties:
+        version:
+          type: integer
+          minimum: 1
+    BindingUnbindRequest:
+      type: object
+      additionalProperties: false
+      required: [sourceId, sourceKey]
+      properties:
+        sourceId:
+          $ref: "#/components/schemas/SourceId"
+        sourceKey:
+          type: string
+          minLength: 1
+          maxLength: 4096
+    BindingActionResult:
+      type: object
+      additionalProperties: false
+      required: [canonicalId, entityKind]
+      properties:
+        canonicalId:
+          type: string
+        entityKind:
+          type: string
+          enum: [work, media]
     LibraryCreateRequest:
       type: object
       additionalProperties: false

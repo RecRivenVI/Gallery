@@ -655,8 +655,20 @@ AND status IN ('active', 'orphaned')`, sourceID, workID, item.Algorithm, item.Di
 			return "", 0, fault.New(fault.CodeInternal, true, err)
 		}
 		mediaID = id.String()
+		// 手动解绑后重扫会在同一 Work 内为来源媒体建立新 occurrence；旧的孤立 CanonicalMedia
+		// 仍占据其 ordinal，因此新 occurrence 取该 Work 内下一个空闲 ordinal，避免唯一约束冲突。
+		canonicalOrdinal = item.Ordinal
+		var taken int
+		if err := tx.QueryRowContext(ctx, "SELECT count(*) FROM canonical_media WHERE work_id=? AND ordinal=?", workID, item.Ordinal).Scan(&taken); err != nil {
+			return "", 0, fault.New(fault.CodeInternal, true, err)
+		}
+		if taken > 0 {
+			if err := tx.QueryRowContext(ctx, "SELECT COALESCE(max(ordinal), -1)+1 FROM canonical_media WHERE work_id=?", workID).Scan(&canonicalOrdinal); err != nil {
+				return "", 0, fault.New(fault.CodeInternal, true, err)
+			}
+		}
 		if _, err := tx.ExecContext(ctx, `INSERT INTO canonical_media
-(media_id, work_id, role, ordinal, created_at) VALUES (?, ?, 'content', ?, ?)`, mediaID, workID, item.Ordinal, now); err != nil {
+(media_id, work_id, role, ordinal, created_at) VALUES (?, ?, 'content', ?, ?)`, mediaID, workID, canonicalOrdinal, now); err != nil {
 			return "", 0, fault.New(fault.CodeInternal, true, err)
 		}
 	}

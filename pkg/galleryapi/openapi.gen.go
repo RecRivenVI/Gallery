@@ -22,6 +22,24 @@ const (
 	SessionCookieScopes sessionCookieContextKey = "sessionCookie.Scopes"
 )
 
+// Defines values for BindingActionResultEntityKind.
+const (
+	BindingActionResultEntityKindMedia BindingActionResultEntityKind = "media"
+	BindingActionResultEntityKindWork  BindingActionResultEntityKind = "work"
+)
+
+// Valid indicates whether the value is a known member of the BindingActionResultEntityKind enum.
+func (e BindingActionResultEntityKind) Valid() bool {
+	switch e {
+	case BindingActionResultEntityKindMedia:
+		return true
+	case BindingActionResultEntityKindWork:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for BindingIssueEntityType.
 const (
 	BindingIssueEntityTypeCreator BindingIssueEntityType = "creator"
@@ -109,6 +127,27 @@ func (e BindingIssueCandidateCandidateKind) Valid() bool {
 	case BindingIssueCandidateCandidateKindMedia:
 		return true
 	case BindingIssueCandidateCandidateKindWork:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for BindingIssueResolveRequestDecision.
+const (
+	BindExisting BindingIssueResolveRequestDecision = "bind_existing"
+	CreateNew    BindingIssueResolveRequestDecision = "create_new"
+	KeepSeparate BindingIssueResolveRequestDecision = "keep_separate"
+)
+
+// Valid indicates whether the value is a known member of the BindingIssueResolveRequestDecision enum.
+func (e BindingIssueResolveRequestDecision) Valid() bool {
+	switch e {
+	case BindExisting:
+		return true
+	case CreateNew:
+		return true
+	case KeepSeparate:
 		return true
 	default:
 		return false
@@ -610,6 +649,15 @@ func (e ListWorksParamsSortDirection) Valid() bool {
 	}
 }
 
+// BindingActionResult defines model for BindingActionResult.
+type BindingActionResult struct {
+	CanonicalId string                        `json:"canonicalId"`
+	EntityKind  BindingActionResultEntityKind `json:"entityKind"`
+}
+
+// BindingActionResultEntityKind defines model for BindingActionResult.EntityKind.
+type BindingActionResultEntityKind string
+
 // BindingIssue defines model for BindingIssue.
 type BindingIssue struct {
 	CandidateCount   int                     `json:"candidateCount"`
@@ -660,6 +708,27 @@ type BindingIssueId = string
 type BindingIssueListResponse struct {
 	Issues     []BindingIssue `json:"issues"`
 	NextCursor *string        `json:"nextCursor,omitempty"`
+}
+
+// BindingIssueResolveRequest defines model for BindingIssueResolveRequest.
+type BindingIssueResolveRequest struct {
+	Decision BindingIssueResolveRequestDecision `json:"decision"`
+	TargetId *string                            `json:"targetId,omitempty"`
+	Version  int                                `json:"version"`
+}
+
+// BindingIssueResolveRequestDecision defines model for BindingIssueResolveRequest.Decision.
+type BindingIssueResolveRequestDecision string
+
+// BindingIssueVersionRequest defines model for BindingIssueVersionRequest.
+type BindingIssueVersionRequest struct {
+	Version int `json:"version"`
+}
+
+// BindingUnbindRequest defines model for BindingUnbindRequest.
+type BindingUnbindRequest struct {
+	SourceId  SourceId `json:"sourceId"`
+	SourceKey string   `json:"sourceKey"`
 }
 
 // BootstrapResponse defines model for BootstrapResponse.
@@ -1144,6 +1213,21 @@ type apiTokenContextKey string
 // sessionCookieContextKey is the context key for sessionCookie security scheme
 type sessionCookieContextKey string
 
+// UnbindMediaParams defines parameters for UnbindMedia.
+type UnbindMediaParams struct {
+	XGalleryCSRF CSRFHeader `json:"X-Gallery-CSRF"`
+}
+
+// UnbindWorkParams defines parameters for UnbindWork.
+type UnbindWorkParams struct {
+	XGalleryCSRF CSRFHeader `json:"X-Gallery-CSRF"`
+}
+
+// UndoManualUnbindParams defines parameters for UndoManualUnbind.
+type UndoManualUnbindParams struct {
+	XGalleryCSRF CSRFHeader `json:"X-Gallery-CSRF"`
+}
+
 // ListBindingIssuesParams defines parameters for ListBindingIssues.
 type ListBindingIssuesParams struct {
 	SourceId   *SourceId                          `form:"sourceId,omitempty" json:"sourceId,omitempty"`
@@ -1158,6 +1242,21 @@ type ListBindingIssuesParamsEntityType string
 
 // ListBindingIssuesParamsStatus defines parameters for ListBindingIssues.
 type ListBindingIssuesParamsStatus string
+
+// DismissBindingIssueParams defines parameters for DismissBindingIssue.
+type DismissBindingIssueParams struct {
+	XGalleryCSRF CSRFHeader `json:"X-Gallery-CSRF"`
+}
+
+// ReopenBindingIssueParams defines parameters for ReopenBindingIssue.
+type ReopenBindingIssueParams struct {
+	XGalleryCSRF CSRFHeader `json:"X-Gallery-CSRF"`
+}
+
+// ResolveBindingIssueParams defines parameters for ResolveBindingIssue.
+type ResolveBindingIssueParams struct {
+	XGalleryCSRF CSRFHeader `json:"X-Gallery-CSRF"`
+}
 
 // MergeCreatorsParams defines parameters for MergeCreators.
 type MergeCreatorsParams struct {
@@ -1260,6 +1359,24 @@ type ListWorksParamsSortDirection string
 type PutWorkOverlayParams struct {
 	XGalleryCSRF CSRFHeader `json:"X-Gallery-CSRF"`
 }
+
+// UnbindMediaJSONRequestBody defines body for UnbindMedia for application/json ContentType.
+type UnbindMediaJSONRequestBody = BindingUnbindRequest
+
+// UnbindWorkJSONRequestBody defines body for UnbindWork for application/json ContentType.
+type UnbindWorkJSONRequestBody = BindingUnbindRequest
+
+// UndoManualUnbindJSONRequestBody defines body for UndoManualUnbind for application/json ContentType.
+type UndoManualUnbindJSONRequestBody = BindingUnbindRequest
+
+// DismissBindingIssueJSONRequestBody defines body for DismissBindingIssue for application/json ContentType.
+type DismissBindingIssueJSONRequestBody = BindingIssueVersionRequest
+
+// ReopenBindingIssueJSONRequestBody defines body for ReopenBindingIssue for application/json ContentType.
+type ReopenBindingIssueJSONRequestBody = BindingIssueVersionRequest
+
+// ResolveBindingIssueJSONRequestBody defines body for ResolveBindingIssue for application/json ContentType.
+type ResolveBindingIssueJSONRequestBody = BindingIssueResolveRequest
 
 // MergeCreatorsJSONRequestBody defines body for MergeCreators for application/json ContentType.
 type MergeCreatorsJSONRequestBody = CreatorMergeRequest
@@ -1367,11 +1484,41 @@ func WithRequestEditorFn(fn RequestEditorFn) ClientOption {
 
 // The interface specification for the client above.
 type ClientInterface interface {
+	// UnbindMediaWithBody request with any body
+	UnbindMediaWithBody(ctx context.Context, params *UnbindMediaParams, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*http.Response, error)
+
+	UnbindMedia(ctx context.Context, params *UnbindMediaParams, body UnbindMediaJSONRequestBody, reqEditors ...RequestEditorFn) (*http.Response, error)
+
+	// UnbindWorkWithBody request with any body
+	UnbindWorkWithBody(ctx context.Context, params *UnbindWorkParams, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*http.Response, error)
+
+	UnbindWork(ctx context.Context, params *UnbindWorkParams, body UnbindWorkJSONRequestBody, reqEditors ...RequestEditorFn) (*http.Response, error)
+
+	// UndoManualUnbindWithBody request with any body
+	UndoManualUnbindWithBody(ctx context.Context, params *UndoManualUnbindParams, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*http.Response, error)
+
+	UndoManualUnbind(ctx context.Context, params *UndoManualUnbindParams, body UndoManualUnbindJSONRequestBody, reqEditors ...RequestEditorFn) (*http.Response, error)
+
 	// ListBindingIssues request
 	ListBindingIssues(ctx context.Context, params *ListBindingIssuesParams, reqEditors ...RequestEditorFn) (*http.Response, error)
 
 	// GetBindingIssue request
 	GetBindingIssue(ctx context.Context, issueId BindingIssueId, reqEditors ...RequestEditorFn) (*http.Response, error)
+
+	// DismissBindingIssueWithBody request with any body
+	DismissBindingIssueWithBody(ctx context.Context, issueId BindingIssueId, params *DismissBindingIssueParams, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*http.Response, error)
+
+	DismissBindingIssue(ctx context.Context, issueId BindingIssueId, params *DismissBindingIssueParams, body DismissBindingIssueJSONRequestBody, reqEditors ...RequestEditorFn) (*http.Response, error)
+
+	// ReopenBindingIssueWithBody request with any body
+	ReopenBindingIssueWithBody(ctx context.Context, issueId BindingIssueId, params *ReopenBindingIssueParams, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*http.Response, error)
+
+	ReopenBindingIssue(ctx context.Context, issueId BindingIssueId, params *ReopenBindingIssueParams, body ReopenBindingIssueJSONRequestBody, reqEditors ...RequestEditorFn) (*http.Response, error)
+
+	// ResolveBindingIssueWithBody request with any body
+	ResolveBindingIssueWithBody(ctx context.Context, issueId BindingIssueId, params *ResolveBindingIssueParams, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*http.Response, error)
+
+	ResolveBindingIssue(ctx context.Context, issueId BindingIssueId, params *ResolveBindingIssueParams, body ResolveBindingIssueJSONRequestBody, reqEditors ...RequestEditorFn) (*http.Response, error)
 
 	// GetBootstrap request
 	GetBootstrap(ctx context.Context, reqEditors ...RequestEditorFn) (*http.Response, error)
@@ -1498,6 +1645,78 @@ type ClientInterface interface {
 	PutWorkOverlay(ctx context.Context, workId CanonicalWorkId, params *PutWorkOverlayParams, body PutWorkOverlayJSONRequestBody, reqEditors ...RequestEditorFn) (*http.Response, error)
 }
 
+func (c *Client) UnbindMediaWithBody(ctx context.Context, params *UnbindMediaParams, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewUnbindMediaRequestWithBody(c.Server, params, contentType, body)
+	if err != nil {
+		return nil, err
+	}
+	req = req.WithContext(ctx)
+	if err := c.applyEditors(ctx, req, reqEditors); err != nil {
+		return nil, err
+	}
+	return c.Client.Do(req)
+}
+
+func (c *Client) UnbindMedia(ctx context.Context, params *UnbindMediaParams, body UnbindMediaJSONRequestBody, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewUnbindMediaRequest(c.Server, params, body)
+	if err != nil {
+		return nil, err
+	}
+	req = req.WithContext(ctx)
+	if err := c.applyEditors(ctx, req, reqEditors); err != nil {
+		return nil, err
+	}
+	return c.Client.Do(req)
+}
+
+func (c *Client) UnbindWorkWithBody(ctx context.Context, params *UnbindWorkParams, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewUnbindWorkRequestWithBody(c.Server, params, contentType, body)
+	if err != nil {
+		return nil, err
+	}
+	req = req.WithContext(ctx)
+	if err := c.applyEditors(ctx, req, reqEditors); err != nil {
+		return nil, err
+	}
+	return c.Client.Do(req)
+}
+
+func (c *Client) UnbindWork(ctx context.Context, params *UnbindWorkParams, body UnbindWorkJSONRequestBody, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewUnbindWorkRequest(c.Server, params, body)
+	if err != nil {
+		return nil, err
+	}
+	req = req.WithContext(ctx)
+	if err := c.applyEditors(ctx, req, reqEditors); err != nil {
+		return nil, err
+	}
+	return c.Client.Do(req)
+}
+
+func (c *Client) UndoManualUnbindWithBody(ctx context.Context, params *UndoManualUnbindParams, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewUndoManualUnbindRequestWithBody(c.Server, params, contentType, body)
+	if err != nil {
+		return nil, err
+	}
+	req = req.WithContext(ctx)
+	if err := c.applyEditors(ctx, req, reqEditors); err != nil {
+		return nil, err
+	}
+	return c.Client.Do(req)
+}
+
+func (c *Client) UndoManualUnbind(ctx context.Context, params *UndoManualUnbindParams, body UndoManualUnbindJSONRequestBody, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewUndoManualUnbindRequest(c.Server, params, body)
+	if err != nil {
+		return nil, err
+	}
+	req = req.WithContext(ctx)
+	if err := c.applyEditors(ctx, req, reqEditors); err != nil {
+		return nil, err
+	}
+	return c.Client.Do(req)
+}
+
 func (c *Client) ListBindingIssues(ctx context.Context, params *ListBindingIssuesParams, reqEditors ...RequestEditorFn) (*http.Response, error) {
 	req, err := NewListBindingIssuesRequest(c.Server, params)
 	if err != nil {
@@ -1512,6 +1731,78 @@ func (c *Client) ListBindingIssues(ctx context.Context, params *ListBindingIssue
 
 func (c *Client) GetBindingIssue(ctx context.Context, issueId BindingIssueId, reqEditors ...RequestEditorFn) (*http.Response, error) {
 	req, err := NewGetBindingIssueRequest(c.Server, issueId)
+	if err != nil {
+		return nil, err
+	}
+	req = req.WithContext(ctx)
+	if err := c.applyEditors(ctx, req, reqEditors); err != nil {
+		return nil, err
+	}
+	return c.Client.Do(req)
+}
+
+func (c *Client) DismissBindingIssueWithBody(ctx context.Context, issueId BindingIssueId, params *DismissBindingIssueParams, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewDismissBindingIssueRequestWithBody(c.Server, issueId, params, contentType, body)
+	if err != nil {
+		return nil, err
+	}
+	req = req.WithContext(ctx)
+	if err := c.applyEditors(ctx, req, reqEditors); err != nil {
+		return nil, err
+	}
+	return c.Client.Do(req)
+}
+
+func (c *Client) DismissBindingIssue(ctx context.Context, issueId BindingIssueId, params *DismissBindingIssueParams, body DismissBindingIssueJSONRequestBody, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewDismissBindingIssueRequest(c.Server, issueId, params, body)
+	if err != nil {
+		return nil, err
+	}
+	req = req.WithContext(ctx)
+	if err := c.applyEditors(ctx, req, reqEditors); err != nil {
+		return nil, err
+	}
+	return c.Client.Do(req)
+}
+
+func (c *Client) ReopenBindingIssueWithBody(ctx context.Context, issueId BindingIssueId, params *ReopenBindingIssueParams, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewReopenBindingIssueRequestWithBody(c.Server, issueId, params, contentType, body)
+	if err != nil {
+		return nil, err
+	}
+	req = req.WithContext(ctx)
+	if err := c.applyEditors(ctx, req, reqEditors); err != nil {
+		return nil, err
+	}
+	return c.Client.Do(req)
+}
+
+func (c *Client) ReopenBindingIssue(ctx context.Context, issueId BindingIssueId, params *ReopenBindingIssueParams, body ReopenBindingIssueJSONRequestBody, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewReopenBindingIssueRequest(c.Server, issueId, params, body)
+	if err != nil {
+		return nil, err
+	}
+	req = req.WithContext(ctx)
+	if err := c.applyEditors(ctx, req, reqEditors); err != nil {
+		return nil, err
+	}
+	return c.Client.Do(req)
+}
+
+func (c *Client) ResolveBindingIssueWithBody(ctx context.Context, issueId BindingIssueId, params *ResolveBindingIssueParams, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewResolveBindingIssueRequestWithBody(c.Server, issueId, params, contentType, body)
+	if err != nil {
+		return nil, err
+	}
+	req = req.WithContext(ctx)
+	if err := c.applyEditors(ctx, req, reqEditors); err != nil {
+		return nil, err
+	}
+	return c.Client.Do(req)
+}
+
+func (c *Client) ResolveBindingIssue(ctx context.Context, issueId BindingIssueId, params *ResolveBindingIssueParams, body ResolveBindingIssueJSONRequestBody, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewResolveBindingIssueRequest(c.Server, issueId, params, body)
 	if err != nil {
 		return nil, err
 	}
@@ -2062,6 +2353,165 @@ func (c *Client) PutWorkOverlay(ctx context.Context, workId CanonicalWorkId, par
 	return c.Client.Do(req)
 }
 
+// NewUnbindMediaRequest calls the generic UnbindMedia builder with application/json body
+func NewUnbindMediaRequest(server string, params *UnbindMediaParams, body UnbindMediaJSONRequestBody) (*http.Request, error) {
+	var bodyReader io.Reader
+	buf, err := json.Marshal(body)
+	if err != nil {
+		return nil, err
+	}
+	bodyReader = bytes.NewReader(buf)
+	return NewUnbindMediaRequestWithBody(server, params, "application/json", bodyReader)
+}
+
+// NewUnbindMediaRequestWithBody generates requests for UnbindMedia with any type of body
+func NewUnbindMediaRequestWithBody(server string, params *UnbindMediaParams, contentType string, body io.Reader) (*http.Request, error) {
+	var err error
+
+	serverURL, err := url.Parse(server)
+	if err != nil {
+		return nil, err
+	}
+
+	operationPath := fmt.Sprintf("/api/v1/binding-actions/unbind-media")
+	if operationPath[0] == '/' {
+		operationPath = "." + operationPath
+	}
+
+	queryURL, err := serverURL.Parse(operationPath)
+	if err != nil {
+		return nil, err
+	}
+
+	req, err := http.NewRequest(http.MethodPost, queryURL.String(), body)
+	if err != nil {
+		return nil, err
+	}
+
+	req.Header.Add("Content-Type", contentType)
+
+	if params != nil {
+
+		var headerParam0 string
+
+		headerParam0, err = runtime.StyleParamWithOptions("simple", false, "X-Gallery-CSRF", params.XGalleryCSRF, runtime.StyleParamOptions{ParamLocation: runtime.ParamLocationHeader, Type: "string", Format: ""})
+		if err != nil {
+			return nil, err
+		}
+
+		req.Header.Set("X-Gallery-CSRF", headerParam0)
+
+	}
+
+	return req, nil
+}
+
+// NewUnbindWorkRequest calls the generic UnbindWork builder with application/json body
+func NewUnbindWorkRequest(server string, params *UnbindWorkParams, body UnbindWorkJSONRequestBody) (*http.Request, error) {
+	var bodyReader io.Reader
+	buf, err := json.Marshal(body)
+	if err != nil {
+		return nil, err
+	}
+	bodyReader = bytes.NewReader(buf)
+	return NewUnbindWorkRequestWithBody(server, params, "application/json", bodyReader)
+}
+
+// NewUnbindWorkRequestWithBody generates requests for UnbindWork with any type of body
+func NewUnbindWorkRequestWithBody(server string, params *UnbindWorkParams, contentType string, body io.Reader) (*http.Request, error) {
+	var err error
+
+	serverURL, err := url.Parse(server)
+	if err != nil {
+		return nil, err
+	}
+
+	operationPath := fmt.Sprintf("/api/v1/binding-actions/unbind-work")
+	if operationPath[0] == '/' {
+		operationPath = "." + operationPath
+	}
+
+	queryURL, err := serverURL.Parse(operationPath)
+	if err != nil {
+		return nil, err
+	}
+
+	req, err := http.NewRequest(http.MethodPost, queryURL.String(), body)
+	if err != nil {
+		return nil, err
+	}
+
+	req.Header.Add("Content-Type", contentType)
+
+	if params != nil {
+
+		var headerParam0 string
+
+		headerParam0, err = runtime.StyleParamWithOptions("simple", false, "X-Gallery-CSRF", params.XGalleryCSRF, runtime.StyleParamOptions{ParamLocation: runtime.ParamLocationHeader, Type: "string", Format: ""})
+		if err != nil {
+			return nil, err
+		}
+
+		req.Header.Set("X-Gallery-CSRF", headerParam0)
+
+	}
+
+	return req, nil
+}
+
+// NewUndoManualUnbindRequest calls the generic UndoManualUnbind builder with application/json body
+func NewUndoManualUnbindRequest(server string, params *UndoManualUnbindParams, body UndoManualUnbindJSONRequestBody) (*http.Request, error) {
+	var bodyReader io.Reader
+	buf, err := json.Marshal(body)
+	if err != nil {
+		return nil, err
+	}
+	bodyReader = bytes.NewReader(buf)
+	return NewUndoManualUnbindRequestWithBody(server, params, "application/json", bodyReader)
+}
+
+// NewUndoManualUnbindRequestWithBody generates requests for UndoManualUnbind with any type of body
+func NewUndoManualUnbindRequestWithBody(server string, params *UndoManualUnbindParams, contentType string, body io.Reader) (*http.Request, error) {
+	var err error
+
+	serverURL, err := url.Parse(server)
+	if err != nil {
+		return nil, err
+	}
+
+	operationPath := fmt.Sprintf("/api/v1/binding-actions/undo-unbind")
+	if operationPath[0] == '/' {
+		operationPath = "." + operationPath
+	}
+
+	queryURL, err := serverURL.Parse(operationPath)
+	if err != nil {
+		return nil, err
+	}
+
+	req, err := http.NewRequest(http.MethodPost, queryURL.String(), body)
+	if err != nil {
+		return nil, err
+	}
+
+	req.Header.Add("Content-Type", contentType)
+
+	if params != nil {
+
+		var headerParam0 string
+
+		headerParam0, err = runtime.StyleParamWithOptions("simple", false, "X-Gallery-CSRF", params.XGalleryCSRF, runtime.StyleParamOptions{ParamLocation: runtime.ParamLocationHeader, Type: "string", Format: ""})
+		if err != nil {
+			return nil, err
+		}
+
+		req.Header.Set("X-Gallery-CSRF", headerParam0)
+
+	}
+
+	return req, nil
+}
+
 // NewListBindingIssuesRequest generates requests for ListBindingIssues
 func NewListBindingIssuesRequest(server string, params *ListBindingIssuesParams) (*http.Request, error) {
 	var err error
@@ -2193,6 +2643,186 @@ func NewGetBindingIssueRequest(server string, issueId BindingIssueId) (*http.Req
 	req, err := http.NewRequest(http.MethodGet, queryURL.String(), nil)
 	if err != nil {
 		return nil, err
+	}
+
+	return req, nil
+}
+
+// NewDismissBindingIssueRequest calls the generic DismissBindingIssue builder with application/json body
+func NewDismissBindingIssueRequest(server string, issueId BindingIssueId, params *DismissBindingIssueParams, body DismissBindingIssueJSONRequestBody) (*http.Request, error) {
+	var bodyReader io.Reader
+	buf, err := json.Marshal(body)
+	if err != nil {
+		return nil, err
+	}
+	bodyReader = bytes.NewReader(buf)
+	return NewDismissBindingIssueRequestWithBody(server, issueId, params, "application/json", bodyReader)
+}
+
+// NewDismissBindingIssueRequestWithBody generates requests for DismissBindingIssue with any type of body
+func NewDismissBindingIssueRequestWithBody(server string, issueId BindingIssueId, params *DismissBindingIssueParams, contentType string, body io.Reader) (*http.Request, error) {
+	var err error
+
+	var pathParam0 string
+
+	pathParam0, err = runtime.StyleParamWithOptions("simple", false, "issueId", issueId, runtime.StyleParamOptions{ParamLocation: runtime.ParamLocationPath, Type: "string", Format: ""})
+	if err != nil {
+		return nil, err
+	}
+
+	serverURL, err := url.Parse(server)
+	if err != nil {
+		return nil, err
+	}
+
+	operationPath := fmt.Sprintf("/api/v1/binding-issues/%s/dismiss", pathParam0)
+	if operationPath[0] == '/' {
+		operationPath = "." + operationPath
+	}
+
+	queryURL, err := serverURL.Parse(operationPath)
+	if err != nil {
+		return nil, err
+	}
+
+	req, err := http.NewRequest(http.MethodPost, queryURL.String(), body)
+	if err != nil {
+		return nil, err
+	}
+
+	req.Header.Add("Content-Type", contentType)
+
+	if params != nil {
+
+		var headerParam0 string
+
+		headerParam0, err = runtime.StyleParamWithOptions("simple", false, "X-Gallery-CSRF", params.XGalleryCSRF, runtime.StyleParamOptions{ParamLocation: runtime.ParamLocationHeader, Type: "string", Format: ""})
+		if err != nil {
+			return nil, err
+		}
+
+		req.Header.Set("X-Gallery-CSRF", headerParam0)
+
+	}
+
+	return req, nil
+}
+
+// NewReopenBindingIssueRequest calls the generic ReopenBindingIssue builder with application/json body
+func NewReopenBindingIssueRequest(server string, issueId BindingIssueId, params *ReopenBindingIssueParams, body ReopenBindingIssueJSONRequestBody) (*http.Request, error) {
+	var bodyReader io.Reader
+	buf, err := json.Marshal(body)
+	if err != nil {
+		return nil, err
+	}
+	bodyReader = bytes.NewReader(buf)
+	return NewReopenBindingIssueRequestWithBody(server, issueId, params, "application/json", bodyReader)
+}
+
+// NewReopenBindingIssueRequestWithBody generates requests for ReopenBindingIssue with any type of body
+func NewReopenBindingIssueRequestWithBody(server string, issueId BindingIssueId, params *ReopenBindingIssueParams, contentType string, body io.Reader) (*http.Request, error) {
+	var err error
+
+	var pathParam0 string
+
+	pathParam0, err = runtime.StyleParamWithOptions("simple", false, "issueId", issueId, runtime.StyleParamOptions{ParamLocation: runtime.ParamLocationPath, Type: "string", Format: ""})
+	if err != nil {
+		return nil, err
+	}
+
+	serverURL, err := url.Parse(server)
+	if err != nil {
+		return nil, err
+	}
+
+	operationPath := fmt.Sprintf("/api/v1/binding-issues/%s/reopen", pathParam0)
+	if operationPath[0] == '/' {
+		operationPath = "." + operationPath
+	}
+
+	queryURL, err := serverURL.Parse(operationPath)
+	if err != nil {
+		return nil, err
+	}
+
+	req, err := http.NewRequest(http.MethodPost, queryURL.String(), body)
+	if err != nil {
+		return nil, err
+	}
+
+	req.Header.Add("Content-Type", contentType)
+
+	if params != nil {
+
+		var headerParam0 string
+
+		headerParam0, err = runtime.StyleParamWithOptions("simple", false, "X-Gallery-CSRF", params.XGalleryCSRF, runtime.StyleParamOptions{ParamLocation: runtime.ParamLocationHeader, Type: "string", Format: ""})
+		if err != nil {
+			return nil, err
+		}
+
+		req.Header.Set("X-Gallery-CSRF", headerParam0)
+
+	}
+
+	return req, nil
+}
+
+// NewResolveBindingIssueRequest calls the generic ResolveBindingIssue builder with application/json body
+func NewResolveBindingIssueRequest(server string, issueId BindingIssueId, params *ResolveBindingIssueParams, body ResolveBindingIssueJSONRequestBody) (*http.Request, error) {
+	var bodyReader io.Reader
+	buf, err := json.Marshal(body)
+	if err != nil {
+		return nil, err
+	}
+	bodyReader = bytes.NewReader(buf)
+	return NewResolveBindingIssueRequestWithBody(server, issueId, params, "application/json", bodyReader)
+}
+
+// NewResolveBindingIssueRequestWithBody generates requests for ResolveBindingIssue with any type of body
+func NewResolveBindingIssueRequestWithBody(server string, issueId BindingIssueId, params *ResolveBindingIssueParams, contentType string, body io.Reader) (*http.Request, error) {
+	var err error
+
+	var pathParam0 string
+
+	pathParam0, err = runtime.StyleParamWithOptions("simple", false, "issueId", issueId, runtime.StyleParamOptions{ParamLocation: runtime.ParamLocationPath, Type: "string", Format: ""})
+	if err != nil {
+		return nil, err
+	}
+
+	serverURL, err := url.Parse(server)
+	if err != nil {
+		return nil, err
+	}
+
+	operationPath := fmt.Sprintf("/api/v1/binding-issues/%s/resolve", pathParam0)
+	if operationPath[0] == '/' {
+		operationPath = "." + operationPath
+	}
+
+	queryURL, err := serverURL.Parse(operationPath)
+	if err != nil {
+		return nil, err
+	}
+
+	req, err := http.NewRequest(http.MethodPost, queryURL.String(), body)
+	if err != nil {
+		return nil, err
+	}
+
+	req.Header.Add("Content-Type", contentType)
+
+	if params != nil {
+
+		var headerParam0 string
+
+		headerParam0, err = runtime.StyleParamWithOptions("simple", false, "X-Gallery-CSRF", params.XGalleryCSRF, runtime.StyleParamOptions{ParamLocation: runtime.ParamLocationHeader, Type: "string", Format: ""})
+		if err != nil {
+			return nil, err
+		}
+
+		req.Header.Set("X-Gallery-CSRF", headerParam0)
+
 	}
 
 	return req, nil
@@ -3772,11 +4402,41 @@ func WithBaseURL(baseURL string) ClientOption {
 
 // ClientWithResponsesInterface is the interface specification for the client with responses above.
 type ClientWithResponsesInterface interface {
+	// UnbindMediaWithBodyWithResponse request with any body
+	UnbindMediaWithBodyWithResponse(ctx context.Context, params *UnbindMediaParams, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*UnbindMediaResponse, error)
+
+	UnbindMediaWithResponse(ctx context.Context, params *UnbindMediaParams, body UnbindMediaJSONRequestBody, reqEditors ...RequestEditorFn) (*UnbindMediaResponse, error)
+
+	// UnbindWorkWithBodyWithResponse request with any body
+	UnbindWorkWithBodyWithResponse(ctx context.Context, params *UnbindWorkParams, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*UnbindWorkResponse, error)
+
+	UnbindWorkWithResponse(ctx context.Context, params *UnbindWorkParams, body UnbindWorkJSONRequestBody, reqEditors ...RequestEditorFn) (*UnbindWorkResponse, error)
+
+	// UndoManualUnbindWithBodyWithResponse request with any body
+	UndoManualUnbindWithBodyWithResponse(ctx context.Context, params *UndoManualUnbindParams, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*UndoManualUnbindResponse, error)
+
+	UndoManualUnbindWithResponse(ctx context.Context, params *UndoManualUnbindParams, body UndoManualUnbindJSONRequestBody, reqEditors ...RequestEditorFn) (*UndoManualUnbindResponse, error)
+
 	// ListBindingIssuesWithResponse request
 	ListBindingIssuesWithResponse(ctx context.Context, params *ListBindingIssuesParams, reqEditors ...RequestEditorFn) (*ListBindingIssuesResponse, error)
 
 	// GetBindingIssueWithResponse request
 	GetBindingIssueWithResponse(ctx context.Context, issueId BindingIssueId, reqEditors ...RequestEditorFn) (*GetBindingIssueResponse, error)
+
+	// DismissBindingIssueWithBodyWithResponse request with any body
+	DismissBindingIssueWithBodyWithResponse(ctx context.Context, issueId BindingIssueId, params *DismissBindingIssueParams, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*DismissBindingIssueResponse, error)
+
+	DismissBindingIssueWithResponse(ctx context.Context, issueId BindingIssueId, params *DismissBindingIssueParams, body DismissBindingIssueJSONRequestBody, reqEditors ...RequestEditorFn) (*DismissBindingIssueResponse, error)
+
+	// ReopenBindingIssueWithBodyWithResponse request with any body
+	ReopenBindingIssueWithBodyWithResponse(ctx context.Context, issueId BindingIssueId, params *ReopenBindingIssueParams, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*ReopenBindingIssueResponse, error)
+
+	ReopenBindingIssueWithResponse(ctx context.Context, issueId BindingIssueId, params *ReopenBindingIssueParams, body ReopenBindingIssueJSONRequestBody, reqEditors ...RequestEditorFn) (*ReopenBindingIssueResponse, error)
+
+	// ResolveBindingIssueWithBodyWithResponse request with any body
+	ResolveBindingIssueWithBodyWithResponse(ctx context.Context, issueId BindingIssueId, params *ResolveBindingIssueParams, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*ResolveBindingIssueResponse, error)
+
+	ResolveBindingIssueWithResponse(ctx context.Context, issueId BindingIssueId, params *ResolveBindingIssueParams, body ResolveBindingIssueJSONRequestBody, reqEditors ...RequestEditorFn) (*ResolveBindingIssueResponse, error)
 
 	// GetBootstrapWithResponse request
 	GetBootstrapWithResponse(ctx context.Context, reqEditors ...RequestEditorFn) (*GetBootstrapResponse, error)
@@ -3903,6 +4563,109 @@ type ClientWithResponsesInterface interface {
 	PutWorkOverlayWithResponse(ctx context.Context, workId CanonicalWorkId, params *PutWorkOverlayParams, body PutWorkOverlayJSONRequestBody, reqEditors ...RequestEditorFn) (*PutWorkOverlayResponse, error)
 }
 
+type UnbindMediaResponse struct {
+	Body         []byte
+	HTTPResponse *http.Response
+	JSON200      *BindingActionResult
+	JSON400      *ValidationError
+	JSON401      *UnauthenticatedError
+	JSON403      *ForbiddenError
+	JSON404      *NotFoundError
+}
+
+// Status returns HTTPResponse.Status
+func (r UnbindMediaResponse) Status() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Status
+	}
+	return http.StatusText(0)
+}
+
+// StatusCode returns HTTPResponse.StatusCode
+func (r UnbindMediaResponse) StatusCode() int {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.StatusCode
+	}
+	return 0
+}
+
+// ContentType is a convenience method to retrieve the Content-Type value from the HTTP response headers
+func (r UnbindMediaResponse) ContentType() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Header.Get("Content-Type")
+	}
+	return ""
+}
+
+type UnbindWorkResponse struct {
+	Body         []byte
+	HTTPResponse *http.Response
+	JSON200      *BindingActionResult
+	JSON400      *ValidationError
+	JSON401      *UnauthenticatedError
+	JSON403      *ForbiddenError
+	JSON404      *NotFoundError
+}
+
+// Status returns HTTPResponse.Status
+func (r UnbindWorkResponse) Status() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Status
+	}
+	return http.StatusText(0)
+}
+
+// StatusCode returns HTTPResponse.StatusCode
+func (r UnbindWorkResponse) StatusCode() int {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.StatusCode
+	}
+	return 0
+}
+
+// ContentType is a convenience method to retrieve the Content-Type value from the HTTP response headers
+func (r UnbindWorkResponse) ContentType() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Header.Get("Content-Type")
+	}
+	return ""
+}
+
+type UndoManualUnbindResponse struct {
+	Body         []byte
+	HTTPResponse *http.Response
+	JSON200      *BindingActionResult
+	JSON400      *ValidationError
+	JSON401      *UnauthenticatedError
+	JSON403      *ForbiddenError
+	JSON404      *NotFoundError
+	JSON409      *ConflictError
+}
+
+// Status returns HTTPResponse.Status
+func (r UndoManualUnbindResponse) Status() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Status
+	}
+	return http.StatusText(0)
+}
+
+// StatusCode returns HTTPResponse.StatusCode
+func (r UndoManualUnbindResponse) StatusCode() int {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.StatusCode
+	}
+	return 0
+}
+
+// ContentType is a convenience method to retrieve the Content-Type value from the HTTP response headers
+func (r UndoManualUnbindResponse) ContentType() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Header.Get("Content-Type")
+	}
+	return ""
+}
+
 type ListBindingIssuesResponse struct {
 	Body         []byte
 	HTTPResponse *http.Response
@@ -3963,6 +4726,111 @@ func (r GetBindingIssueResponse) StatusCode() int {
 
 // ContentType is a convenience method to retrieve the Content-Type value from the HTTP response headers
 func (r GetBindingIssueResponse) ContentType() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Header.Get("Content-Type")
+	}
+	return ""
+}
+
+type DismissBindingIssueResponse struct {
+	Body         []byte
+	HTTPResponse *http.Response
+	JSON200      *BindingIssue
+	JSON400      *ValidationError
+	JSON401      *UnauthenticatedError
+	JSON403      *ForbiddenError
+	JSON404      *NotFoundError
+	JSON409      *ConflictError
+}
+
+// Status returns HTTPResponse.Status
+func (r DismissBindingIssueResponse) Status() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Status
+	}
+	return http.StatusText(0)
+}
+
+// StatusCode returns HTTPResponse.StatusCode
+func (r DismissBindingIssueResponse) StatusCode() int {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.StatusCode
+	}
+	return 0
+}
+
+// ContentType is a convenience method to retrieve the Content-Type value from the HTTP response headers
+func (r DismissBindingIssueResponse) ContentType() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Header.Get("Content-Type")
+	}
+	return ""
+}
+
+type ReopenBindingIssueResponse struct {
+	Body         []byte
+	HTTPResponse *http.Response
+	JSON200      *BindingIssue
+	JSON400      *ValidationError
+	JSON401      *UnauthenticatedError
+	JSON403      *ForbiddenError
+	JSON404      *NotFoundError
+	JSON409      *ConflictError
+}
+
+// Status returns HTTPResponse.Status
+func (r ReopenBindingIssueResponse) Status() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Status
+	}
+	return http.StatusText(0)
+}
+
+// StatusCode returns HTTPResponse.StatusCode
+func (r ReopenBindingIssueResponse) StatusCode() int {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.StatusCode
+	}
+	return 0
+}
+
+// ContentType is a convenience method to retrieve the Content-Type value from the HTTP response headers
+func (r ReopenBindingIssueResponse) ContentType() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Header.Get("Content-Type")
+	}
+	return ""
+}
+
+type ResolveBindingIssueResponse struct {
+	Body         []byte
+	HTTPResponse *http.Response
+	JSON200      *BindingIssue
+	JSON400      *ValidationError
+	JSON401      *UnauthenticatedError
+	JSON403      *ForbiddenError
+	JSON404      *NotFoundError
+	JSON409      *ConflictError
+}
+
+// Status returns HTTPResponse.Status
+func (r ResolveBindingIssueResponse) Status() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Status
+	}
+	return http.StatusText(0)
+}
+
+// StatusCode returns HTTPResponse.StatusCode
+func (r ResolveBindingIssueResponse) StatusCode() int {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.StatusCode
+	}
+	return 0
+}
+
+// ContentType is a convenience method to retrieve the Content-Type value from the HTTP response headers
+func (r ResolveBindingIssueResponse) ContentType() string {
 	if r.HTTPResponse != nil {
 		return r.HTTPResponse.Header.Get("Content-Type")
 	}
@@ -5097,6 +5965,57 @@ func (r PutWorkOverlayResponse) ContentType() string {
 	return ""
 }
 
+// UnbindMediaWithBodyWithResponse request with arbitrary body returning *UnbindMediaResponse
+func (c *ClientWithResponses) UnbindMediaWithBodyWithResponse(ctx context.Context, params *UnbindMediaParams, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*UnbindMediaResponse, error) {
+	rsp, err := c.UnbindMediaWithBody(ctx, params, contentType, body, reqEditors...)
+	if err != nil {
+		return nil, err
+	}
+	return ParseUnbindMediaResponse(rsp)
+}
+
+func (c *ClientWithResponses) UnbindMediaWithResponse(ctx context.Context, params *UnbindMediaParams, body UnbindMediaJSONRequestBody, reqEditors ...RequestEditorFn) (*UnbindMediaResponse, error) {
+	rsp, err := c.UnbindMedia(ctx, params, body, reqEditors...)
+	if err != nil {
+		return nil, err
+	}
+	return ParseUnbindMediaResponse(rsp)
+}
+
+// UnbindWorkWithBodyWithResponse request with arbitrary body returning *UnbindWorkResponse
+func (c *ClientWithResponses) UnbindWorkWithBodyWithResponse(ctx context.Context, params *UnbindWorkParams, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*UnbindWorkResponse, error) {
+	rsp, err := c.UnbindWorkWithBody(ctx, params, contentType, body, reqEditors...)
+	if err != nil {
+		return nil, err
+	}
+	return ParseUnbindWorkResponse(rsp)
+}
+
+func (c *ClientWithResponses) UnbindWorkWithResponse(ctx context.Context, params *UnbindWorkParams, body UnbindWorkJSONRequestBody, reqEditors ...RequestEditorFn) (*UnbindWorkResponse, error) {
+	rsp, err := c.UnbindWork(ctx, params, body, reqEditors...)
+	if err != nil {
+		return nil, err
+	}
+	return ParseUnbindWorkResponse(rsp)
+}
+
+// UndoManualUnbindWithBodyWithResponse request with arbitrary body returning *UndoManualUnbindResponse
+func (c *ClientWithResponses) UndoManualUnbindWithBodyWithResponse(ctx context.Context, params *UndoManualUnbindParams, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*UndoManualUnbindResponse, error) {
+	rsp, err := c.UndoManualUnbindWithBody(ctx, params, contentType, body, reqEditors...)
+	if err != nil {
+		return nil, err
+	}
+	return ParseUndoManualUnbindResponse(rsp)
+}
+
+func (c *ClientWithResponses) UndoManualUnbindWithResponse(ctx context.Context, params *UndoManualUnbindParams, body UndoManualUnbindJSONRequestBody, reqEditors ...RequestEditorFn) (*UndoManualUnbindResponse, error) {
+	rsp, err := c.UndoManualUnbind(ctx, params, body, reqEditors...)
+	if err != nil {
+		return nil, err
+	}
+	return ParseUndoManualUnbindResponse(rsp)
+}
+
 // ListBindingIssuesWithResponse request returning *ListBindingIssuesResponse
 func (c *ClientWithResponses) ListBindingIssuesWithResponse(ctx context.Context, params *ListBindingIssuesParams, reqEditors ...RequestEditorFn) (*ListBindingIssuesResponse, error) {
 	rsp, err := c.ListBindingIssues(ctx, params, reqEditors...)
@@ -5113,6 +6032,57 @@ func (c *ClientWithResponses) GetBindingIssueWithResponse(ctx context.Context, i
 		return nil, err
 	}
 	return ParseGetBindingIssueResponse(rsp)
+}
+
+// DismissBindingIssueWithBodyWithResponse request with arbitrary body returning *DismissBindingIssueResponse
+func (c *ClientWithResponses) DismissBindingIssueWithBodyWithResponse(ctx context.Context, issueId BindingIssueId, params *DismissBindingIssueParams, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*DismissBindingIssueResponse, error) {
+	rsp, err := c.DismissBindingIssueWithBody(ctx, issueId, params, contentType, body, reqEditors...)
+	if err != nil {
+		return nil, err
+	}
+	return ParseDismissBindingIssueResponse(rsp)
+}
+
+func (c *ClientWithResponses) DismissBindingIssueWithResponse(ctx context.Context, issueId BindingIssueId, params *DismissBindingIssueParams, body DismissBindingIssueJSONRequestBody, reqEditors ...RequestEditorFn) (*DismissBindingIssueResponse, error) {
+	rsp, err := c.DismissBindingIssue(ctx, issueId, params, body, reqEditors...)
+	if err != nil {
+		return nil, err
+	}
+	return ParseDismissBindingIssueResponse(rsp)
+}
+
+// ReopenBindingIssueWithBodyWithResponse request with arbitrary body returning *ReopenBindingIssueResponse
+func (c *ClientWithResponses) ReopenBindingIssueWithBodyWithResponse(ctx context.Context, issueId BindingIssueId, params *ReopenBindingIssueParams, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*ReopenBindingIssueResponse, error) {
+	rsp, err := c.ReopenBindingIssueWithBody(ctx, issueId, params, contentType, body, reqEditors...)
+	if err != nil {
+		return nil, err
+	}
+	return ParseReopenBindingIssueResponse(rsp)
+}
+
+func (c *ClientWithResponses) ReopenBindingIssueWithResponse(ctx context.Context, issueId BindingIssueId, params *ReopenBindingIssueParams, body ReopenBindingIssueJSONRequestBody, reqEditors ...RequestEditorFn) (*ReopenBindingIssueResponse, error) {
+	rsp, err := c.ReopenBindingIssue(ctx, issueId, params, body, reqEditors...)
+	if err != nil {
+		return nil, err
+	}
+	return ParseReopenBindingIssueResponse(rsp)
+}
+
+// ResolveBindingIssueWithBodyWithResponse request with arbitrary body returning *ResolveBindingIssueResponse
+func (c *ClientWithResponses) ResolveBindingIssueWithBodyWithResponse(ctx context.Context, issueId BindingIssueId, params *ResolveBindingIssueParams, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*ResolveBindingIssueResponse, error) {
+	rsp, err := c.ResolveBindingIssueWithBody(ctx, issueId, params, contentType, body, reqEditors...)
+	if err != nil {
+		return nil, err
+	}
+	return ParseResolveBindingIssueResponse(rsp)
+}
+
+func (c *ClientWithResponses) ResolveBindingIssueWithResponse(ctx context.Context, issueId BindingIssueId, params *ResolveBindingIssueParams, body ResolveBindingIssueJSONRequestBody, reqEditors ...RequestEditorFn) (*ResolveBindingIssueResponse, error) {
+	rsp, err := c.ResolveBindingIssue(ctx, issueId, params, body, reqEditors...)
+	if err != nil {
+		return nil, err
+	}
+	return ParseResolveBindingIssueResponse(rsp)
 }
 
 // GetBootstrapWithResponse request returning *GetBootstrapResponse
@@ -5509,6 +6479,175 @@ func (c *ClientWithResponses) PutWorkOverlayWithResponse(ctx context.Context, wo
 	return ParsePutWorkOverlayResponse(rsp)
 }
 
+// ParseUnbindMediaResponse parses an HTTP response from a UnbindMediaWithResponse call
+func ParseUnbindMediaResponse(rsp *http.Response) (*UnbindMediaResponse, error) {
+	bodyBytes, err := io.ReadAll(rsp.Body)
+	defer func() { _ = rsp.Body.Close() }()
+	if err != nil {
+		return nil, err
+	}
+
+	response := &UnbindMediaResponse{
+		Body:         bodyBytes,
+		HTTPResponse: rsp,
+	}
+
+	switch {
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 200:
+		var dest BindingActionResult
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON200 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 400:
+		var dest ValidationError
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON400 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 401:
+		var dest UnauthenticatedError
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON401 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 403:
+		var dest ForbiddenError
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON403 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 404:
+		var dest NotFoundError
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON404 = &dest
+
+	}
+
+	return response, nil
+}
+
+// ParseUnbindWorkResponse parses an HTTP response from a UnbindWorkWithResponse call
+func ParseUnbindWorkResponse(rsp *http.Response) (*UnbindWorkResponse, error) {
+	bodyBytes, err := io.ReadAll(rsp.Body)
+	defer func() { _ = rsp.Body.Close() }()
+	if err != nil {
+		return nil, err
+	}
+
+	response := &UnbindWorkResponse{
+		Body:         bodyBytes,
+		HTTPResponse: rsp,
+	}
+
+	switch {
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 200:
+		var dest BindingActionResult
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON200 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 400:
+		var dest ValidationError
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON400 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 401:
+		var dest UnauthenticatedError
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON401 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 403:
+		var dest ForbiddenError
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON403 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 404:
+		var dest NotFoundError
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON404 = &dest
+
+	}
+
+	return response, nil
+}
+
+// ParseUndoManualUnbindResponse parses an HTTP response from a UndoManualUnbindWithResponse call
+func ParseUndoManualUnbindResponse(rsp *http.Response) (*UndoManualUnbindResponse, error) {
+	bodyBytes, err := io.ReadAll(rsp.Body)
+	defer func() { _ = rsp.Body.Close() }()
+	if err != nil {
+		return nil, err
+	}
+
+	response := &UndoManualUnbindResponse{
+		Body:         bodyBytes,
+		HTTPResponse: rsp,
+	}
+
+	switch {
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 200:
+		var dest BindingActionResult
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON200 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 400:
+		var dest ValidationError
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON400 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 401:
+		var dest UnauthenticatedError
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON401 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 403:
+		var dest ForbiddenError
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON403 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 404:
+		var dest NotFoundError
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON404 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 409:
+		var dest ConflictError
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON409 = &dest
+
+	}
+
+	return response, nil
+}
+
 // ParseListBindingIssuesResponse parses an HTTP response from a ListBindingIssuesWithResponse call
 func ParseListBindingIssuesResponse(rsp *http.Response) (*ListBindingIssuesResponse, error) {
 	bodyBytes, err := io.ReadAll(rsp.Body)
@@ -5597,6 +6736,189 @@ func ParseGetBindingIssueResponse(rsp *http.Response) (*GetBindingIssueResponse,
 			return nil, err
 		}
 		response.JSON404 = &dest
+
+	}
+
+	return response, nil
+}
+
+// ParseDismissBindingIssueResponse parses an HTTP response from a DismissBindingIssueWithResponse call
+func ParseDismissBindingIssueResponse(rsp *http.Response) (*DismissBindingIssueResponse, error) {
+	bodyBytes, err := io.ReadAll(rsp.Body)
+	defer func() { _ = rsp.Body.Close() }()
+	if err != nil {
+		return nil, err
+	}
+
+	response := &DismissBindingIssueResponse{
+		Body:         bodyBytes,
+		HTTPResponse: rsp,
+	}
+
+	switch {
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 200:
+		var dest BindingIssue
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON200 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 400:
+		var dest ValidationError
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON400 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 401:
+		var dest UnauthenticatedError
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON401 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 403:
+		var dest ForbiddenError
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON403 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 404:
+		var dest NotFoundError
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON404 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 409:
+		var dest ConflictError
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON409 = &dest
+
+	}
+
+	return response, nil
+}
+
+// ParseReopenBindingIssueResponse parses an HTTP response from a ReopenBindingIssueWithResponse call
+func ParseReopenBindingIssueResponse(rsp *http.Response) (*ReopenBindingIssueResponse, error) {
+	bodyBytes, err := io.ReadAll(rsp.Body)
+	defer func() { _ = rsp.Body.Close() }()
+	if err != nil {
+		return nil, err
+	}
+
+	response := &ReopenBindingIssueResponse{
+		Body:         bodyBytes,
+		HTTPResponse: rsp,
+	}
+
+	switch {
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 200:
+		var dest BindingIssue
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON200 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 400:
+		var dest ValidationError
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON400 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 401:
+		var dest UnauthenticatedError
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON401 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 403:
+		var dest ForbiddenError
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON403 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 404:
+		var dest NotFoundError
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON404 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 409:
+		var dest ConflictError
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON409 = &dest
+
+	}
+
+	return response, nil
+}
+
+// ParseResolveBindingIssueResponse parses an HTTP response from a ResolveBindingIssueWithResponse call
+func ParseResolveBindingIssueResponse(rsp *http.Response) (*ResolveBindingIssueResponse, error) {
+	bodyBytes, err := io.ReadAll(rsp.Body)
+	defer func() { _ = rsp.Body.Close() }()
+	if err != nil {
+		return nil, err
+	}
+
+	response := &ResolveBindingIssueResponse{
+		Body:         bodyBytes,
+		HTTPResponse: rsp,
+	}
+
+	switch {
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 200:
+		var dest BindingIssue
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON200 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 400:
+		var dest ValidationError
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON400 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 401:
+		var dest UnauthenticatedError
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON401 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 403:
+		var dest ForbiddenError
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON403 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 404:
+		var dest NotFoundError
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON404 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 409:
+		var dest ConflictError
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON409 = &dest
 
 	}
 
