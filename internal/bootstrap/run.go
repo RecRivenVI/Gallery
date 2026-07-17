@@ -2,16 +2,19 @@ package bootstrap
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"net"
 	"net/http"
+	"path/filepath"
 	"time"
 
 	"github.com/RecRivenVI/gallery/internal/application"
 	"github.com/RecRivenVI/gallery/internal/auth"
 	"github.com/RecRivenVI/gallery/internal/catalog"
 	"github.com/RecRivenVI/gallery/internal/config"
+	"github.com/RecRivenVI/gallery/internal/contract/fault"
 	"github.com/RecRivenVI/gallery/internal/contract/realtime"
 	"github.com/RecRivenVI/gallery/internal/creators"
 	"github.com/RecRivenVI/gallery/internal/derived"
@@ -21,6 +24,7 @@ import (
 	"github.com/RecRivenVI/gallery/internal/platform/descriptor"
 	"github.com/RecRivenVI/gallery/internal/platform/filesystem"
 	"github.com/RecRivenVI/gallery/internal/platform/identity"
+	"github.com/RecRivenVI/gallery/internal/platform/lock"
 	"github.com/RecRivenVI/gallery/internal/scanner"
 	"github.com/RecRivenVI/gallery/internal/storage"
 	"github.com/RecRivenVI/gallery/internal/transport/httpapi"
@@ -37,6 +41,18 @@ func Run(ctx context.Context, cfg config.Config, logger *slog.Logger) error {
 	if err := cfg.AppDirs.Ensure(fileSystem); err != nil {
 		return err
 	}
+	// 在打开或迁移任何数据库之前取得 AppDirs 独占所有权。第二个实例在此失败，不会打开数据库、
+	// 执行 migration、建立监听、重写 descriptor 或启动后台 Job。锁由操作系统在进程退出（含强杀）
+	// 时释放，遗留锁文件不会永久阻止启动。
+	ownership, err := lock.Acquire(filepath.Join(cfg.AppDirs.Runtime, "galleryd.lock"))
+	if err != nil {
+		if errors.Is(err, lock.ErrAlreadyLocked) {
+			return fault.New(fault.CodeInstanceAlreadyRunning, false, err)
+		}
+		return fault.New(fault.CodeLockUnavailable, false, err)
+	}
+	defer ownership.Release()
+
 	store, err := storage.Open(ctx, cfg.AppDirs)
 	if err != nil {
 		return err

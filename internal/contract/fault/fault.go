@@ -51,6 +51,9 @@ const (
 	CodeCatalogCandidateInvalid  Code = "CATALOG_CANDIDATE_INVALID"
 	CodeProcessInterrupted       Code = "PROCESS_INTERRUPTED"
 	CodeRangeInvalid             Code = "RANGE_INVALID"
+	// 以下为进程启动期（bootstrap）失败码，不经 HTTP 暴露，仅用于日志与退出诊断。
+	CodeInstanceAlreadyRunning Code = "INSTANCE_ALREADY_RUNNING"
+	CodeLockUnavailable        Code = "LOCK_UNAVAILABLE"
 )
 
 // Error 在进程内保留 cause，但对外序列化时只应暴露稳定字段。
