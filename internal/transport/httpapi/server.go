@@ -93,6 +93,12 @@ func New(mode config.Mode, store *storage.Store, clock ports.Clock, personal *au
 	mux.HandleFunc("DELETE /api/v1/creators/merges/{mergeId}", server.undoCreatorMerge)
 	mux.HandleFunc("GET /api/v1/binding-issues", server.listBindingIssues)
 	mux.HandleFunc("GET /api/v1/binding-issues/{issueId}", server.getBindingIssue)
+	mux.HandleFunc("POST /api/v1/binding-issues/{issueId}/resolve", server.resolveBindingIssue)
+	mux.HandleFunc("POST /api/v1/binding-issues/{issueId}/dismiss", server.dismissBindingIssue)
+	mux.HandleFunc("POST /api/v1/binding-issues/{issueId}/reopen", server.reopenBindingIssue)
+	mux.HandleFunc("POST /api/v1/binding-actions/unbind-work", server.unbindWork)
+	mux.HandleFunc("POST /api/v1/binding-actions/unbind-media", server.unbindMedia)
+	mux.HandleFunc("POST /api/v1/binding-actions/undo-unbind", server.undoManualUnbind)
 	mux.HandleFunc("GET /api/v1/query-publications/current", server.getCurrentQueryPublication)
 	mux.HandleFunc("GET /api/v1/works", server.listWorks)
 	mux.HandleFunc("GET /api/v1/works/{workId}", server.getWork)
@@ -691,6 +697,100 @@ func (s *Server) getBindingIssue(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, bindingIssueDTO(issue))
+}
+
+func (s *Server) resolveBindingIssue(w http.ResponseWriter, r *http.Request) {
+	session, err := s.requireCapability(r, "bindings.write")
+	if err != nil {
+		s.writeRequestError(w, err)
+		return
+	}
+	if err := auth.ValidateMutation(r, session.CSRFToken); err != nil {
+		s.writeRequestError(w, err)
+		return
+	}
+	var request api.BindingIssueResolveRequest
+	if err := decodeJSON(r, &request); err != nil {
+		s.writeRequestError(w, fault.WithField(fault.CodeValidation, "body", err))
+		return
+	}
+	target := ""
+	if request.TargetId != nil {
+		target = *request.TargetId
+	}
+	issue, err := s.data.ResolveBindingIssue(r.Context(), r.PathValue("issueId"), session.PrincipalID,
+		string(request.Decision), target, request.Version)
+	if err != nil {
+		s.writeRequestError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, bindingIssueDTO(issue))
+}
+
+func (s *Server) dismissBindingIssue(w http.ResponseWriter, r *http.Request) {
+	s.transitionBindingIssue(w, r, s.data.DismissBindingIssue)
+}
+
+func (s *Server) reopenBindingIssue(w http.ResponseWriter, r *http.Request) {
+	s.transitionBindingIssue(w, r, s.data.ReopenBindingIssue)
+}
+
+func (s *Server) transitionBindingIssue(w http.ResponseWriter, r *http.Request, action func(context.Context, string, string, int) (application.BindingIssue, error)) {
+	session, err := s.requireCapability(r, "bindings.write")
+	if err != nil {
+		s.writeRequestError(w, err)
+		return
+	}
+	if err := auth.ValidateMutation(r, session.CSRFToken); err != nil {
+		s.writeRequestError(w, err)
+		return
+	}
+	var request api.BindingIssueVersionRequest
+	if err := decodeJSON(r, &request); err != nil {
+		s.writeRequestError(w, fault.WithField(fault.CodeValidation, "body", err))
+		return
+	}
+	issue, err := action(r.Context(), r.PathValue("issueId"), session.PrincipalID, request.Version)
+	if err != nil {
+		s.writeRequestError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, bindingIssueDTO(issue))
+}
+
+func (s *Server) unbindWork(w http.ResponseWriter, r *http.Request) {
+	s.bindingAction(w, r, "work", s.data.ManualUnbindWork)
+}
+
+func (s *Server) unbindMedia(w http.ResponseWriter, r *http.Request) {
+	s.bindingAction(w, r, "media", s.data.UnbindMedia)
+}
+
+func (s *Server) undoManualUnbind(w http.ResponseWriter, r *http.Request) {
+	s.bindingAction(w, r, "work", s.data.UndoManualUnbind)
+}
+
+func (s *Server) bindingAction(w http.ResponseWriter, r *http.Request, kind string, action func(context.Context, string, string) (string, error)) {
+	session, err := s.requireCapability(r, "bindings.write")
+	if err != nil {
+		s.writeRequestError(w, err)
+		return
+	}
+	if err := auth.ValidateMutation(r, session.CSRFToken); err != nil {
+		s.writeRequestError(w, err)
+		return
+	}
+	var request api.BindingUnbindRequest
+	if err := decodeJSON(r, &request); err != nil {
+		s.writeRequestError(w, fault.WithField(fault.CodeValidation, "body", err))
+		return
+	}
+	canonicalID, err := action(r.Context(), request.SourceId, request.SourceKey)
+	if err != nil {
+		s.writeRequestError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, api.BindingActionResult{CanonicalId: canonicalID, EntityKind: api.BindingActionResultEntityKind(kind)})
 }
 
 func (s *Server) getCurrentQueryPublication(w http.ResponseWriter, r *http.Request) {
