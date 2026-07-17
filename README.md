@@ -21,6 +21,7 @@ Gallery（画廊，代码代号 `gallery`）是面向个人及可信局域网的
 - 标题 Override、ManualTag、HiddenState、CustomCover 写入 control 后由持久 Overlay Job 发布新 projection；Favorite/Progress 作为实时状态不改变分页成员或顺序；
 - Catalog 删除重建会通过稳定来源引用恢复 Canonical Work/Creator/Media、Binding、Overlay、Favorite、Progress 和媒体 URL；冲突与手动解绑不会被静默覆盖；
 - 用户可经 `/creators` 查看 CanonicalCreator 及来源 Binding 证据，用 `/creators/merges` 合并疑似同一创作者、用 `DELETE /creators/merges/{id}` 撤销；合并以 `merged_into` 记录于 control，不改写 Binding，复用 Overlay 投影 Job 更新查询与搜索，撤销、重扫和服务重启后结果一致；
+- 扫描无法唯一确定 Canonical Binding 时持久化富化 Binding issue（实体类型、来源稳定键、候选证据、状态与乐观版本），按候选指纹去重、忽略与 stale 收敛；用户经 `/binding-issues` 查看，用 `/binding-issues/{id}/resolve|dismiss|reopen` 与 `/binding-actions/unbind-work|unbind-media|undo-unbind` 修复，下一次扫描据此重建投影；Source 在线时未发现的 Binding 转 inactive，重现后复用原 Canonical 实体；
 - ContentBlob、FileLocation 和逻辑 Media 分离；DerivedAsset 使用完整 key、受校验 manifest、singleflight、原子发布、读取 lease 和 GC，旧 publication 同样受游标与 Blob 读取 lease 保护；
 - 八个独立子进程强杀点覆盖扫描、publication、Overlay、DerivedAsset 和完整哈希，重启 reconciliation 保持旧快照可读并且不写 Source。
 
@@ -39,7 +40,8 @@ Gallery（画廊，代码代号 `gallery`）是面向个人及可信局域网的
 7. `GET /query-publications/current`，通过 `GET /works` 的服务端过滤、搜索、排序和 cursor 分页读取固定快照，再读取 `/works/{workId}/media`；
 8. 对 `/media/{mediaId}/content` 执行 HEAD、GET 或单区间 Range GET；
 9. 通过 `GET/PUT /works/{workId}/overlay` 写入并观察 pending/published/failed；
-10. 通过 `GET /creators` 与 `/creators/{creatorId}` 核对创作者证据，用 `POST /creators/merges` 合并、`DELETE /creators/merges/{mergeId}` 撤销，并按返回的 `projectionJobId` 观察查询投影更新；服务重启后复用未吊销 Session，并重新读取 Job、publication 和媒体 snapshot。
+10. 通过 `GET /creators` 与 `/creators/{creatorId}` 核对创作者证据，用 `POST /creators/merges` 合并、`DELETE /creators/merges/{mergeId}` 撤销，并按返回的 `projectionJobId` 观察查询投影更新；
+11. 通过 `GET /binding-issues` 与 `/binding-issues/{issueId}` 查看绑定歧义与候选证据，用 `/binding-issues/{issueId}/resolve|dismiss|reopen` 或 `/binding-actions/unbind-work|unbind-media|undo-unbind` 修复后重扫；服务重启后复用未吊销 Session，并重新读取 Job、publication 和媒体 snapshot。
 
 仓库内的完整生成客户端验收见 `internal/bootstrap` 与 `internal/transport/httpapi` 测试；合成输入位于 `tests/fixtures/walking-skeleton`。
 

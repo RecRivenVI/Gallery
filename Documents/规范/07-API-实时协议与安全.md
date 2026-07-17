@@ -82,6 +82,8 @@ media.download
 scan.run[:sourceId]
 rules.read / rules.write / rules.debug
 overlays.write
+creators.write
+bindings.read / bindings.write
 shares.create
 clients.manage
 logs.read
