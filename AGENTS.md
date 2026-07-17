@@ -15,7 +15,7 @@
 - 代码、仓库、包、命令和服务代号：`gallery`。
 - 建议后端命令：`galleryd`；建议 CLI：`galleryctl`。
 - Gallery 是独立的净室产品，不以任何旧 Gallery 的数据库、配置、API、目录结构或行为作为兼容、迁移或对拍目标。
-- 当前仓库已有正式产品代码（`cmd/`、`internal/`、`pkg/`）。阶段 0 契约骨架、Walking Skeleton 与 Architecture Proof 正确性切片均已完成；当前处于**阶段 1「领域和数据所有权」**。已落地并配套 API 的能力包括：Personal 配对/Session/capability、Library/Source/RuleVersion/SourceRuleBinding、持久 Scan Job 与完整 SHA-256 publication、双 revision `query_publication_id` 查询/FTS5/自然排序/签名游标、Overlay 同步写与异步重投影、Catalog 删除重建与稳定重绑、八点强杀恢复、CanonicalCreator 合并/撤销、Work/Media/Creator Binding issue 人工修复、Source-derived active/inactive/orphan_candidate/orphaned 保留窗口与人工审查、AppDirs 进程独占锁、有界 Job 调度器、规则 extension 身份分类。尚未完成：SourceWork 拆分/合并、control 产品级备份恢复与 Catalog 全量重建后的人工决策恢复、阶段 1 Schema Freeze Gate 的最终唯一约束、以及阶段 2+ 的规则闭环/查询/媒体/安全/Web/平台发行。
+- 当前仓库已有正式产品代码（`cmd/`、`internal/`、`pkg/`）。阶段 0 契约骨架、Walking Skeleton 与 Architecture Proof 正确性切片均已完成；当前处于**阶段 1「领域和数据所有权」**。已落地并配套 API 的能力包括：Personal 配对/Session/capability、Library/Source/RuleVersion/SourceRuleBinding、持久 Scan Job 与完整 SHA-256 publication、双 revision `query_publication_id` 查询/FTS5/自然排序/签名游标、Overlay 同步写与异步重投影、Catalog 删除重建与稳定重绑、八点强杀恢复、CanonicalCreator 合并/撤销、Work/Media/Creator Binding issue 人工修复、Source-derived active/inactive/orphan_candidate/orphaned 保留窗口与人工审查、AppDirs 进程独占锁、有界 Job 调度器、规则 extension 身份分类、control.db 产品级备份（manifest、SQLite 一致性副本、原子发布、安全范围声明、maintenance 调度类别）、control.db 恢复（Dry Run 验证、启动期隔离迁移与原子替换、旧库轮换、Session/Job 运行时状态作废）、Catalog 全量重建后人工决策恢复的端到端门禁。尚未完成：SourceWork 拆分/合并、阶段 1 Schema Freeze Gate 的最终唯一约束、以及阶段 2+ 的规则闭环/查询/媒体/安全/Web/平台发行。
 - 本文件是需要随真实开发状态持续维护的 Agent 规则；发现与代码、有效 ADR 或规范不一致时应更新本文件，但不得放宽安全、只读 Source、Git、签名或测试要求，也不得把临时实装写成已冻结决策。
 
 ## 权威资料与阅读顺序
@@ -111,7 +111,7 @@
 3. Architecture Proof：补齐快照分页、Overlay、FTS、Catalog 重建、强杀恢复和多客户端边界后，再冻结数据库与 API。**（正确性切片已完成；物理 Schema 与完整 API 仍未冻结）**
 4. 按领域/规则/扫描/查询与媒体/安全/Web/PWA/平台发行的顺序扩展。**（进行中：阶段 1 领域和数据所有权）**
 
-当前处于阶段 1。下一优先级为 control 备份/恢复 → SourceWork 拆分/合并 → Catalog 全量重建决策恢复 → 阶段 1 Schema Freeze Gate，之后才进入完整规则闭环、查询/媒体、安全、Web/PWA 与平台发行。不要据此提前展开前端、LAN 完整账户、桌面壳或发行。
+当前处于阶段 1。control 备份/恢复与 Catalog 全量重建决策恢复门禁已落地；下一优先级为 SourceWork 拆分/合并 → 阶段 1 Schema Freeze Gate，之后才进入完整规则闭环、查询/媒体、安全、Web/PWA 与平台发行。阶段 1 Schema Freeze Gate 的最终唯一约束评估依赖 SourceWork 拆分/合并证据，未完成前不得冻结 `(source_id, source_key)` 等物理约束。不要据此提前展开前端、LAN 完整账户、桌面壳或发行。
 
 Walking Skeleton 功能可以少，但基础模型不能是临时替代品：
 
@@ -302,6 +302,7 @@ docs(agents): 采用 Markdown 提交正文格式
 - `internal/rules`：规则包编译、三类 hash、extension 分类、CEL Profile；
 - `internal/jobs`：Job Store 与有界 scheduler；
 - `internal/scanner`、`internal/overlay`、`internal/creators`、`internal/catalog`、`internal/query`、`internal/media`、`internal/derived`、`internal/recovery`；
+- `internal/backup`：control.db 一致性备份、manifest、恢复验证与启动期原子替换；
 - `internal/transport/httpapi` 与 `internal/contract/api/openapi.yaml`（生成物在 `pkg/galleryapi`）。
 
 ## 当前可开工结论

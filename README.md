@@ -25,6 +25,8 @@ Gallery（画廊，代码代号 `gallery`）是面向个人及可信局域网的
 - 用户可经 `/creators` 查看 CanonicalCreator 及来源 Binding 证据，用 `/creators/merges` 合并疑似同一创作者、用 `DELETE /creators/merges/{id}` 撤销；合并以 `merged_into` 记录于 control，不改写 Binding，复用 Overlay 投影 Job 更新查询与搜索，撤销、重扫和服务重启后结果一致；
 - 扫描无法唯一确定 Canonical Binding 时持久化富化 Binding issue（实体类型、来源稳定键、候选证据、状态与乐观版本），按候选指纹去重、忽略与 stale 收敛；用户经 `/binding-issues` 查看，用 `/binding-issues/{id}/resolve|dismiss|reopen` 与 `/binding-actions/unbind-work|unbind-media|undo-unbind` 修复，下一次扫描据此重建投影；Source 在线时未发现的 Binding 转 inactive，连续多次成功扫描仍缺失则按保留窗口升级为 orphan candidate；用户经 `/orphan-candidates` 与 `/orphan-candidates/{bindingId}/decide` 选择保留、延长、确认孤立或解绑，四种决策都不删除 Canonical 与用户事实，重现后复用原 Canonical 实体；
 - ContentBlob、FileLocation 和逻辑 Media 分离；DerivedAsset 使用完整 key、受校验 manifest、singleflight、原子发布、读取 lease 和 GC，旧 publication 同样受游标与 Blob 读取 lease 保护；
+- control.db 可经 `admin.backup` 生成产品级备份：SQLite 一致性副本 + 自描述 manifest（role、schema 版本、checksum、安全范围），接入 `maintenance` 有界调度类别，写临时位置校验后原子发布到 AppDirs 受控目录，不纳入 catalog、媒体或缓存，Source 零写入；用户经 `POST/GET /admin/control-backups` 创建与列出；
+- control.db 恢复经 `admin.restore`：`POST /admin/control-restores/verify` 做 Dry Run 验证（checksum、版本兼容、隔离迁移与完整性/外键检查），`POST /admin/control-restores` 登记待应用请求，下次启动在打开数据库前于单写者锁下隔离迁移并原子替换当前库、轮换旧库，坏备份或迁移失败保留当前库，恢复后作废 Session/pairing 与非终态 Job；备份 control.db、删除 catalog.db、恢复 control.db 再全量重扫可端到端恢复人工决策；
 - 八个独立子进程强杀点覆盖扫描、publication、Overlay、DerivedAsset 和完整哈希，重启 reconciliation 保持旧快照可读并且不写 Source。
 
 上述能力代表合成 Source 上的 Architecture Proof 正确性切片，不代表百万/千万正式性能、真实媒体规模、多平台支持、Web/PWA 或发行就绪。当前冻结结论和剩余门禁见 [v1 实施计划](Documents/指南/01-v1实施计划.md) 与 [验证记录](Documents/证据/验证记录.md)。
