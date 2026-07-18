@@ -2,7 +2,7 @@
 
 Gallery（画廊，代码代号 `gallery`）是面向个人及可信局域网的本地优先、只读媒体目录产品。它是独立净室项目，不兼容或迁移任何旧 Gallery 实现。
 
-> 当前状态：Architecture Proof Slice 已完成正确性验收，正式实现已证明规则、双 revision 查询、Overlay 重投影、Catalog 重建、媒体缓存生命周期和强杀恢复路径。当前仍没有可供普通用户安装的产品版本；物理 Schema 和完整 API 因百万级参考性能、完整排序/过滤语义及平台门禁尚未冻结。
+> 当前状态：**阶段 1「领域和数据所有权」已完成**（含 CanonicalCreator 合并、Binding 修复、inactive/orphan 生命周期、control 备份/恢复、SourceWork 拆分/合并与阶段 1 Schema Freeze Gate）。正式实现已证明规则、双 revision 查询、Overlay 重投影、Catalog 重建、媒体缓存生命周期和强杀恢复路径。当前仍没有可供普通用户安装的产品版本；核心身份约束已冻结，FileLocation 唯一约束、完整 API 与物理 Schema 因文件身份、百万级参考性能、完整排序/过滤语义及平台门禁仍未冻结。下一阶段为规则闭环。
 
 ## 当前可运行能力
 
@@ -29,7 +29,9 @@ Gallery（画廊，代码代号 `gallery`）是面向个人及可信局域网的
 - control.db 恢复经 `admin.restore`：`POST /admin/control-restores/verify` 做 Dry Run 验证（checksum、版本兼容、隔离迁移与完整性/外键检查），`POST /admin/control-restores` 登记待应用请求，下次启动在打开数据库前于单写者锁下隔离迁移并原子替换当前库、轮换旧库，坏备份或迁移失败保留当前库，恢复后作废 Session/pairing 与非终态 Job；备份 control.db、删除 catalog.db、恢复 control.db 再全量重扫可端到端恢复人工决策；
 - 八个独立子进程强杀点覆盖扫描、publication、Overlay、DerivedAsset 和完整哈希，重启 reconciliation 保持旧快照可读并且不写 Source。
 
-上述能力代表合成 Source 上的 Architecture Proof 正确性切片，不代表百万/千万正式性能、真实媒体规模、多平台支持、Web/PWA 或发行就绪。当前冻结结论和剩余门禁见 [v1 实施计划](Documents/指南/01-v1实施计划.md) 与 [验证记录](Documents/证据/验证记录.md)。
+- SourceWork 拆分/合并按 ContentBlob digest 证据检测，复用 Binding issue（`SOURCE_WORK_SPLIT/MERGE_REVIEW_REQUIRED`）阻塞 publication；人工决策经 `POST /binding-issues/{id}/resolve-structure`（继承/保持同一/新建、绑定现有/新建）以 pre-seed WorkBinding 表达，`GET /source-structure-decisions` 与 `.../undo` 查询/撤销，撤销在已被扫描消费时返回 `CONFLICT`，决策经 Catalog 全量重建恢复；
+
+上述能力代表合成 Source 上的正确性切片，不代表百万/千万正式性能、真实媒体规模、多平台支持、Web/PWA 或发行就绪。当前冻结结论和剩余门禁见 [v1 实施计划](Documents/指南/01-v1实施计划.md) 与 [验证记录](Documents/证据/验证记录.md)。
 
 ## 当前 API 流程
 
