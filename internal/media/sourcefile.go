@@ -1,6 +1,7 @@
 package media
 
 import (
+	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"errors"
@@ -22,7 +23,25 @@ type HashResult struct {
 	RelativePath string
 }
 
+type HashOptions struct {
+	Context              context.Context
+	ExpectedSize         int64
+	ExpectedModTimeNanos int64
+	HasExpectedIdentity  bool
+	Progress             func(bytes int64)
+	AfterRead            func()
+}
+
 func HashSourceFile(root, relative string, afterRead func()) (HashResult, error) {
+	return HashSourceFileWithOptions(root, relative, HashOptions{AfterRead: afterRead})
+}
+
+// HashSourceFileWithOptions 以可取消、可报告进度的方式计算完整 sha256-v1。快速 stat 只用于
+// 候选筛选；发布前仍会比较打开句柄、解析后的路径和前后文件身份，任何变化都不产生 Blob。
+func HashSourceFileWithOptions(root, relative string, options HashOptions) (HashResult, error) {
+	if options.Context == nil {
+		options.Context = context.Background()
+	}
 	file, resolved, normalized, err := OpenSourceFile(root, relative)
 	if err != nil {
 		return HashResult{}, err
@@ -32,13 +51,38 @@ func HashSourceFile(root, relative string, afterRead func()) (HashResult, error)
 	if err != nil {
 		return HashResult{}, readFault(err)
 	}
-	hasher := sha256.New()
-	written, err := io.Copy(hasher, file)
-	if err != nil {
-		return HashResult{}, readFault(err)
+	if options.HasExpectedIdentity && (before.Size() != options.ExpectedSize || before.ModTime().UnixNano() != options.ExpectedModTimeNanos) {
+		return HashResult{}, fault.New(fault.CodeContentChangedDuringHash, true, nil)
 	}
-	if afterRead != nil {
-		afterRead()
+	hasher := sha256.New()
+	buffer := make([]byte, 1024*1024)
+	var written int64
+	for {
+		select {
+		case <-options.Context.Done():
+			return HashResult{}, fault.New(fault.CodeProcessInterrupted, true, options.Context.Err())
+		default:
+		}
+		read, readErr := file.Read(buffer)
+		if read > 0 {
+			count, writeErr := hasher.Write(buffer[:read])
+			if writeErr != nil || count != read {
+				return HashResult{}, readFault(io.ErrShortWrite)
+			}
+			written += int64(read)
+			if options.Progress != nil {
+				options.Progress(written)
+			}
+		}
+		if readErr != nil {
+			if errors.Is(readErr, io.EOF) {
+				break
+			}
+			return HashResult{}, readFault(readErr)
+		}
+	}
+	if options.AfterRead != nil {
+		options.AfterRead()
 	}
 	afterHandle, handleErr := file.Stat()
 	afterPath, pathErr := os.Stat(resolved)
