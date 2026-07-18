@@ -339,3 +339,61 @@ func TestStructureResolveVersionConflictAndKindMismatch(t *testing.T) {
 		t.Fatalf("kind 不匹配应校验失败: %v", err)
 	}
 }
+
+func TestStructureDecisionUndoBeforeRescan(t *testing.T) {
+	f := newIssueFixture(t)
+	issue, origin, split := f.seedSplit(t)
+	decision, err := f.resources.ResolveSourceStructureIssue(f.ctx, issue.ID, "owner", "split_create_new", "", "", issue.Version)
+	if err != nil {
+		t.Fatalf("决策应成功: %v", err)
+	}
+	// 重扫前撤销：应清除 pre-seed Binding 并重新打开 issue。
+	undone, err := f.resources.UndoSourceStructureDecision(f.ctx, decision.DecisionID, "owner", decision.Version)
+	if err != nil || undone.Status != "undone" {
+		t.Fatalf("撤销应成功: %+v %v", undone, err)
+	}
+	reopened, err := f.resources.GetBindingIssue(f.ctx, issue.ID)
+	if err != nil || reopened.Status != "open" {
+		t.Fatalf("撤销后 issue 应重新打开: %+v %v", reopened, err)
+	}
+	// pre-seed Binding 已清除：wkA1、wkA2 不再有任何 work binding。
+	var seeded int
+	if err := f.control.QueryRowContext(f.ctx, `SELECT count(*) FROM work_bindings
+WHERE source_id=? AND source_key IN ('wkA1','wkA2')`, f.source.ID).Scan(&seeded); err != nil {
+		t.Fatal(err)
+	}
+	if seeded != 0 {
+		t.Fatalf("pre-seed Binding 未清除: %d", seeded)
+	}
+	// 撤销后重扫应再次阻塞（结构变化恢复为待审查）。
+	if _, err := f.resources.EnsureCanonical(f.ctx, f.source.ID, split); err == nil {
+		t.Fatal("撤销后重扫应再次阻塞")
+	}
+	_ = origin
+	// fingerprint 已释放，可重新决策为继承。
+	current := f.openIssues(t)
+	if len(current) != 1 {
+		t.Fatalf("应有一个待审查 issue: %+v", current)
+	}
+	if _, err := f.resources.ResolveSourceStructureIssue(f.ctx, current[0].ID, "owner", "split_inherit", "wkA1", "", current[0].Version); err != nil {
+		t.Fatalf("撤销后应可重新决策: %v", err)
+	}
+}
+
+func TestStructureDecisionUndoConflictAfterRescan(t *testing.T) {
+	f := newIssueFixture(t)
+	issue, _, split := f.seedSplit(t)
+	decision, err := f.resources.ResolveSourceStructureIssue(f.ctx, issue.ID, "owner", "split_inherit", "wkA1", "", issue.Version)
+	if err != nil {
+		t.Fatalf("决策应成功: %v", err)
+	}
+	// 重扫消费决策，产生新 active Binding。
+	if _, err := f.resources.EnsureCanonical(f.ctx, f.source.ID, split); err != nil {
+		t.Fatalf("决策后重扫应成功: %v", err)
+	}
+	// 撤销应返回 CONFLICT。
+	_, err = f.resources.UndoSourceStructureDecision(f.ctx, decision.DecisionID, "owner", decision.Version)
+	if err == nil || asStructured(t, err).Code != fault.CodeConflict {
+		t.Fatalf("已消费决策撤销应冲突: %v", err)
+	}
+}

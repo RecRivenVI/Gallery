@@ -450,6 +450,172 @@ resolved_target_id=?, resolved_by=?, version=version+1, updated_at=?, resolved_a
 		Status: "applied", Version: 1, CreatedAt: time.Unix(now, 0).UTC(), UpdatedAt: time.Unix(now, 0).UTC()}, nil
 }
 
+// GetSourceStructureDecision 读取一条拆分/合并决策记录。
+func (r *Resources) GetSourceStructureDecision(ctx context.Context, decisionID string) (SourceStructureDecision, error) {
+	if _, err := domain.ParseID(domain.IDStructureDecision, decisionID); err != nil {
+		return SourceStructureDecision{}, fault.New(fault.CodeNotFound, false, nil)
+	}
+	row := r.control.QueryRowContext(ctx, `SELECT decision_id, issue_id, source_id, kind, action,
+target_source_key, target_work_id, status, version, created_at, updated_at
+FROM source_structure_decisions WHERE decision_id=?`, decisionID)
+	decision, err := scanStructureDecision(row)
+	if errors.Is(err, sql.ErrNoRows) {
+		return SourceStructureDecision{}, fault.New(fault.CodeNotFound, false, nil)
+	}
+	return decision, err
+}
+
+// ListSourceStructureDecisions 按 Source 与状态列出拆分/合并决策，供审查与运维查询。
+func (r *Resources) ListSourceStructureDecisions(ctx context.Context, sourceID, status string, limit int) ([]SourceStructureDecision, error) {
+	if limit <= 0 || limit > 200 {
+		limit = 50
+	}
+	conditions := []string{"1=1"}
+	args := []any{}
+	if sourceID != "" {
+		if _, err := domain.ParseID(domain.IDSource, sourceID); err != nil {
+			return nil, fault.WithField(fault.CodeValidation, "sourceId", nil)
+		}
+		conditions = append(conditions, "source_id=?")
+		args = append(args, sourceID)
+	}
+	if status != "" {
+		if status != "applied" && status != "undone" {
+			return nil, fault.WithField(fault.CodeValidation, "status", nil)
+		}
+		conditions = append(conditions, "status=?")
+		args = append(args, status)
+	}
+	query := `SELECT decision_id, issue_id, source_id, kind, action, target_source_key, target_work_id,
+status, version, created_at, updated_at FROM source_structure_decisions WHERE ` +
+		strings.Join(conditions, " AND ") + ` ORDER BY created_at DESC, decision_id DESC LIMIT ?`
+	args = append(args, limit)
+	rows, err := r.control.QueryContext(ctx, query, args...)
+	if err != nil {
+		return nil, fault.New(fault.CodeInternal, true, err)
+	}
+	defer rows.Close()
+	result := make([]SourceStructureDecision, 0)
+	for rows.Next() {
+		decision, err := scanStructureDecision(rows)
+		if err != nil {
+			return nil, err
+		}
+		result = append(result, decision)
+	}
+	return result, rows.Err()
+}
+
+func scanStructureDecision(row rowScanner) (SourceStructureDecision, error) {
+	var decision SourceStructureDecision
+	var createdAt, updatedAt int64
+	if err := row.Scan(&decision.DecisionID, &decision.IssueID, &decision.SourceID, &decision.Kind,
+		&decision.Action, &decision.TargetSourceKey, &decision.TargetWorkID, &decision.Status,
+		&decision.Version, &createdAt, &updatedAt); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return SourceStructureDecision{}, err
+		}
+		return SourceStructureDecision{}, fault.New(fault.CodeInternal, true, err)
+	}
+	decision.CreatedAt = time.Unix(createdAt, 0).UTC()
+	decision.UpdatedAt = time.Unix(updatedAt, 0).UTC()
+	return decision, nil
+}
+
+// UndoSourceStructureDecision 撤销一次尚未被扫描消费的拆分/合并决策：删除其 pre-seed Binding，将
+// 决策标为 undone，并把对应审查 issue 重新打开，使结构变化恢复为待审查状态。若决策已被后续成功
+// 扫描消费（新 source_key 已产生 active Binding，即已发生新 Binding 与可能的 Overlay/Favorite/
+// Progress 依赖），返回结构化 CONFLICT，不做不可靠的逆向重建。
+func (r *Resources) UndoSourceStructureDecision(ctx context.Context, decisionID, undoneBy string, version int) (SourceStructureDecision, error) {
+	if strings.TrimSpace(undoneBy) == "" {
+		return SourceStructureDecision{}, fault.New(fault.CodeValidation, false, nil)
+	}
+	if _, err := domain.ParseID(domain.IDStructureDecision, decisionID); err != nil {
+		return SourceStructureDecision{}, fault.New(fault.CodeNotFound, false, nil)
+	}
+	tx, err := r.control.BeginTx(ctx, nil)
+	if err != nil {
+		return SourceStructureDecision{}, fault.New(fault.CodeInternal, true, err)
+	}
+	defer tx.Rollback()
+
+	var issueID, srcID, status, newKeysJSON string
+	var currentVersion int
+	err = tx.QueryRowContext(ctx, `SELECT issue_id, source_id, status, new_source_keys, version
+FROM source_structure_decisions WHERE decision_id=?`, decisionID).Scan(&issueID, &srcID, &status, &newKeysJSON, &currentVersion)
+	if errors.Is(err, sql.ErrNoRows) {
+		return SourceStructureDecision{}, fault.New(fault.CodeNotFound, false, nil)
+	}
+	if err != nil {
+		return SourceStructureDecision{}, fault.New(fault.CodeInternal, true, err)
+	}
+	if currentVersion != version {
+		return SourceStructureDecision{}, fault.New(fault.CodeConflict, false, nil)
+	}
+	if status != "applied" {
+		return SourceStructureDecision{}, fault.New(fault.CodeConflict, false, nil)
+	}
+
+	// 后续依赖检查：任一新 source_key 已产生 active Binding，说明决策已被扫描消费。
+	for _, newKey := range decodeStringList(newKeysJSON) {
+		var active int
+		if err := tx.QueryRowContext(ctx, `SELECT count(*) FROM work_bindings
+WHERE source_id=? AND source_key=? AND status='active'`, srcID, newKey).Scan(&active); err != nil {
+			return SourceStructureDecision{}, fault.New(fault.CodeInternal, true, err)
+		}
+		if active > 0 {
+			return SourceStructureDecision{}, fault.WithField(fault.CodeConflict, "consumedByScan", nil)
+		}
+	}
+
+	// 删除 pre-seed Binding 及其溯源，把决策状态改为 undone。
+	seedRows, err := tx.QueryContext(ctx, `SELECT binding_id FROM source_structure_decision_bindings
+WHERE decision_id=? AND entity_type='work'`, decisionID)
+	if err != nil {
+		return SourceStructureDecision{}, fault.New(fault.CodeInternal, true, err)
+	}
+	var seedBindingIDs []string
+	for seedRows.Next() {
+		var bindingID string
+		if err := seedRows.Scan(&bindingID); err != nil {
+			seedRows.Close()
+			return SourceStructureDecision{}, fault.New(fault.CodeInternal, true, err)
+		}
+		seedBindingIDs = append(seedBindingIDs, bindingID)
+	}
+	if err := seedRows.Err(); err != nil {
+		seedRows.Close()
+		return SourceStructureDecision{}, fault.New(fault.CodeInternal, true, err)
+	}
+	if err := seedRows.Close(); err != nil {
+		return SourceStructureDecision{}, fault.New(fault.CodeInternal, true, err)
+	}
+	if _, err := tx.ExecContext(ctx, `DELETE FROM source_structure_decision_bindings WHERE decision_id=?`, decisionID); err != nil {
+		return SourceStructureDecision{}, fault.New(fault.CodeInternal, true, err)
+	}
+	for _, bindingID := range seedBindingIDs {
+		// 仅删除仍处于 pre-seed（非 active）状态的行，避免误删被其他流程改写的 Binding。
+		if _, err := tx.ExecContext(ctx, `DELETE FROM work_bindings WHERE binding_id=? AND status<>'active'`, bindingID); err != nil {
+			return SourceStructureDecision{}, fault.New(fault.CodeInternal, true, err)
+		}
+	}
+	now := r.clock.Now().UTC().Unix()
+	if _, err := tx.ExecContext(ctx, `UPDATE source_structure_decisions SET status='undone',
+version=version+1, updated_at=?, undone_at=? WHERE decision_id=? AND version=?`, now, now, decisionID, version); err != nil {
+		return SourceStructureDecision{}, fault.New(fault.CodeInternal, true, err)
+	}
+	// 恢复审查 issue：重新打开，使结构变化再次可审查（若 issue 已被更晚证据 superseded 则保持不变）。
+	if _, err := tx.ExecContext(ctx, `UPDATE binding_issues SET status='open', resolution=NULL,
+resolved_target_id=NULL, resolved_by=?, resolved_at=NULL, version=version+1, updated_at=?
+WHERE issue_id=? AND status='resolved'`, undoneBy, now, issueID); err != nil {
+		return SourceStructureDecision{}, fault.New(fault.CodeInternal, true, err)
+	}
+	if err := tx.Commit(); err != nil {
+		return SourceStructureDecision{}, fault.New(fault.CodeInternal, true, err)
+	}
+	return r.GetSourceStructureDecision(ctx, decisionID)
+}
+
 type structureSeed struct {
 	sourceKey string
 	workID    string
