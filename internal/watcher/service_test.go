@@ -2,6 +2,7 @@ package watcher_test
 
 import (
 	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"testing"
@@ -17,6 +18,37 @@ import (
 	"github.com/RecRivenVI/gallery/internal/storage"
 	watcherservice "github.com/RecRivenVI/gallery/internal/watcher"
 )
+
+type watchResult struct {
+	events chan ports.WatchEvent
+	err    error
+}
+
+type scriptedWatcher struct {
+	calls   chan string
+	results chan watchResult
+	stops   chan string
+}
+
+func (w *scriptedWatcher) Watch(ctx context.Context, root string) (<-chan ports.WatchEvent, error) {
+	select {
+	case w.calls <- root:
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	}
+	select {
+	case result := <-w.results:
+		go func() {
+			<-ctx.Done()
+			w.stops <- root
+		}()
+		return result.events, result.err
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	}
+}
+
+var _ ports.FileWatcher = (*scriptedWatcher)(nil)
 
 type fakeScanner struct {
 	jobs  *jobs.Store
@@ -111,5 +143,151 @@ func TestWatcherStateCoalescesEventsAndTracksOfflineSource(t *testing.T) {
 	state, err = service.GetState(ctx, source.ID)
 	if err != nil || state.Status != "offline" || !state.Dirty {
 		t.Fatalf("Source 离线状态错误: %+v %v", state, err)
+	}
+}
+
+func TestWatcherManagerAddsRestartsRebuildsAndStopsSources(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	dirs := appdirs.UnderRoot(filepath.Join(t.TempDir(), "app"))
+	if err := dirs.Ensure(filesystem.OS{}); err != nil {
+		t.Fatal(err)
+	}
+	store, err := storage.Open(ctx, dirs)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	now := clock.Fixed{Time: time.Date(2026, 7, 18, 6, 0, 0, 0, time.UTC)}
+	ids := identity.NewGenerator(now)
+	resources, _ := application.NewResources(store.Control.SQL(), dirs, filesystem.OS{}, now, ids)
+	library, _ := resources.CreateLibrary(ctx, "watch-manager")
+	firstRoot := filepath.Join(t.TempDir(), "source-a")
+	if err := os.MkdirAll(firstRoot, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	first, _ := resources.CreateSource(ctx, library.ID, "source-a", firstRoot)
+	jobStore, _ := jobs.NewStore(store.Control.SQL(), now, ids)
+	scanner := &fakeScanner{jobs: jobStore}
+	watcher := &scriptedWatcher{calls: make(chan string, 16), results: make(chan watchResult, 16), stops: make(chan string, 16)}
+	firstEvents := make(chan ports.WatchEvent)
+	watcher.results <- watchResult{events: firstEvents}
+	service, err := watcherservice.New(ctx, store.Control.SQL(), resources, jobStore, scanner, watcher, now, 10*time.Millisecond)
+	if err != nil {
+		t.Fatal(err)
+	}
+	service.SetRetryPolicy(5*time.Millisecond, 20*time.Millisecond)
+	service.Start(ctx)
+	if got := waitWatchCall(t, watcher.calls); got != firstRoot {
+		t.Fatalf("启动时 Watcher root=%q", got)
+	}
+
+	secondRoot := filepath.Join(t.TempDir(), "source-b")
+	if err := os.MkdirAll(secondRoot, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	secondEvents := make(chan ports.WatchEvent)
+	watcher.results <- watchResult{events: secondEvents}
+	second, err := resources.CreateSource(ctx, library.ID, "source-b", secondRoot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := waitWatchCall(t, watcher.calls); got != secondRoot {
+		t.Fatalf("运行时新增 Source 未启动 Watcher: %q", got)
+	}
+
+	// channel 关闭后标记不可用并按退避重启同一 Source。
+	restartedEvents := make(chan ports.WatchEvent)
+	watcher.results <- watchResult{err: errors.New("synthetic watcher failure")}
+	watcher.results <- watchResult{events: restartedEvents}
+	close(firstEvents)
+	if got := waitWatchCall(t, watcher.calls); got != firstRoot {
+		t.Fatalf("Watcher 关闭后首次重试 root=%q", got)
+	}
+	if got := waitWatchCall(t, watcher.calls); got != firstRoot {
+		t.Fatalf("Watcher 失败后退避重启 root=%q", got)
+	}
+	waitWatcherAvailable(t, ctx, service, first.ID)
+
+	// 根变更会取消旧实例并为同一 Source 重建。
+	changedRoot := filepath.Join(t.TempDir(), "source-a-moved")
+	if err := os.MkdirAll(changedRoot, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	changedEvents := make(chan ports.WatchEvent)
+	watcher.results <- watchResult{events: changedEvents}
+	if _, err := store.Control.SQL().ExecContext(ctx, "UPDATE sources SET root_path=? WHERE source_id=?", changedRoot, first.ID); err != nil {
+		t.Fatal(err)
+	}
+	if got := waitWatchCall(t, watcher.calls); got != changedRoot {
+		t.Fatalf("Source 根变更未重建 Watcher: %q", got)
+	}
+
+	// 删除 Source 会停止对应实例；服务取消后全部 goroutine 必须退出。
+	if _, err := store.Control.SQL().ExecContext(ctx, "DELETE FROM jobs WHERE source_id=?", second.ID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.Control.SQL().ExecContext(ctx, "DELETE FROM sources WHERE source_id=?", second.ID); err != nil {
+		t.Fatal(err)
+	}
+	waitWatchStop(t, watcher.stops, secondRoot)
+	cancel()
+	done := make(chan struct{})
+	go func() {
+		service.Wait()
+		close(done)
+	}()
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("Watcher Manager 关闭后 goroutine 未退出")
+	}
+	close(secondEvents)
+	close(restartedEvents)
+	close(changedEvents)
+}
+
+func waitWatcherAvailable(t *testing.T, ctx context.Context, service *watcherservice.Service, sourceID string) {
+	t.Helper()
+	deadline := time.NewTimer(5 * time.Second)
+	defer deadline.Stop()
+	ticker := time.NewTicker(2 * time.Millisecond)
+	defer ticker.Stop()
+	for {
+		state, err := service.GetState(ctx, sourceID)
+		if err == nil && state.WatcherAvailable {
+			return
+		}
+		select {
+		case <-deadline.C:
+			t.Fatalf("Watcher 未恢复 available: %+v %v", state, err)
+		case <-ticker.C:
+		}
+	}
+}
+
+func waitWatchStop(t *testing.T, stops <-chan string, want string) {
+	t.Helper()
+	timer := time.NewTimer(5 * time.Second)
+	defer timer.Stop()
+	for {
+		select {
+		case root := <-stops:
+			if root == want {
+				return
+			}
+		case <-timer.C:
+			t.Fatalf("等待 Watcher 停止超时: %s", want)
+		}
+	}
+}
+
+func waitWatchCall(t *testing.T, calls <-chan string) string {
+	t.Helper()
+	select {
+	case root := <-calls:
+		return root
+	case <-time.After(5 * time.Second):
+		t.Fatal("等待 Watcher 调用超时")
+		return ""
 	}
 }
