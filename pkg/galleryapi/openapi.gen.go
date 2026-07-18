@@ -351,16 +351,23 @@ const (
 	CONFLICT                      ErrorCode = "CONFLICT"
 	CONTENTCHANGEDDURINGHASH      ErrorCode = "CONTENT_CHANGED_DURING_HASH"
 	CONTENTDISAPPEARED            ErrorCode = "CONTENT_DISAPPEARED"
+	CONTENTHASHPENDING            ErrorCode = "CONTENT_HASH_PENDING"
 	CSRFINVALID                   ErrorCode = "CSRF_INVALID"
 	CURSOREXPIRED                 ErrorCode = "CURSOR_EXPIRED"
 	CURSORINVALID                 ErrorCode = "CURSOR_INVALID"
 	DATABASEOPENFAILED            ErrorCode = "DATABASE_OPEN_FAILED"
 	DERIVEDASSETFAILED            ErrorCode = "DERIVED_ASSET_FAILED"
 	DERIVEDASSETINVALID           ErrorCode = "DERIVED_ASSET_INVALID"
+	DISKSPACEINSUFFICIENT         ErrorCode = "DISK_SPACE_INSUFFICIENT"
+	EXTERNALTOOLFAILED            ErrorCode = "EXTERNAL_TOOL_FAILED"
 	FORBIDDEN                     ErrorCode = "FORBIDDEN"
 	HOSTREJECTED                  ErrorCode = "HOST_REJECTED"
 	INTERNALERROR                 ErrorCode = "INTERNAL_ERROR"
+	JOBCANCELLATIONREQUESTED      ErrorCode = "JOB_CANCELLATION_REQUESTED"
+	JOBPROGRESSREGRESSION         ErrorCode = "JOB_PROGRESS_REGRESSION"
+	JOBRETRYEXHAUSTED             ErrorCode = "JOB_RETRY_EXHAUSTED"
 	JOBSTATECONFLICT              ErrorCode = "JOB_STATE_CONFLICT"
+	MAINTENANCEBLOCKED            ErrorCode = "MAINTENANCE_BLOCKED"
 	MEDIAOFFLINE                  ErrorCode = "MEDIA_OFFLINE"
 	MIGRATIONFAILED               ErrorCode = "MIGRATION_FAILED"
 	NOTFOUND                      ErrorCode = "NOT_FOUND"
@@ -390,7 +397,9 @@ const (
 	RULESCHEMAINVALID             ErrorCode = "RULE_SCHEMA_INVALID"
 	RULEVERSIONINUSE              ErrorCode = "RULE_VERSION_IN_USE"
 	SCANALREADYRUNNING            ErrorCode = "SCAN_ALREADY_RUNNING"
+	SOURCEIDENTITYCHANGED         ErrorCode = "SOURCE_IDENTITY_CHANGED"
 	SOURCEPATHINVALID             ErrorCode = "SOURCE_PATH_INVALID"
+	SOURCEPERMISSIONDENIED        ErrorCode = "SOURCE_PERMISSION_DENIED"
 	SOURCEREADFAILED              ErrorCode = "SOURCE_READ_FAILED"
 	SOURCEROOTSOVERLAP            ErrorCode = "SOURCE_ROOTS_OVERLAP"
 	SOURCEUNAVAILABLE             ErrorCode = "SOURCE_UNAVAILABLE"
@@ -398,6 +407,7 @@ const (
 	SOURCEWORKSPLITREVIEWREQUIRED ErrorCode = "SOURCE_WORK_SPLIT_REVIEW_REQUIRED"
 	UNAUTHENTICATED               ErrorCode = "UNAUTHENTICATED"
 	VALIDATIONERROR               ErrorCode = "VALIDATION_ERROR"
+	WATCHEROVERFLOW               ErrorCode = "WATCHER_OVERFLOW"
 )
 
 // Valid indicates whether the value is a known member of the ErrorCode enum.
@@ -427,6 +437,8 @@ func (e ErrorCode) Valid() bool {
 		return true
 	case CONTENTDISAPPEARED:
 		return true
+	case CONTENTHASHPENDING:
+		return true
 	case CSRFINVALID:
 		return true
 	case CURSOREXPIRED:
@@ -439,13 +451,25 @@ func (e ErrorCode) Valid() bool {
 		return true
 	case DERIVEDASSETINVALID:
 		return true
+	case DISKSPACEINSUFFICIENT:
+		return true
+	case EXTERNALTOOLFAILED:
+		return true
 	case FORBIDDEN:
 		return true
 	case HOSTREJECTED:
 		return true
 	case INTERNALERROR:
 		return true
+	case JOBCANCELLATIONREQUESTED:
+		return true
+	case JOBPROGRESSREGRESSION:
+		return true
+	case JOBRETRYEXHAUSTED:
+		return true
 	case JOBSTATECONFLICT:
+		return true
+	case MAINTENANCEBLOCKED:
 		return true
 	case MEDIAOFFLINE:
 		return true
@@ -505,7 +529,11 @@ func (e ErrorCode) Valid() bool {
 		return true
 	case SCANALREADYRUNNING:
 		return true
+	case SOURCEIDENTITYCHANGED:
+		return true
 	case SOURCEPATHINVALID:
+		return true
+	case SOURCEPERMISSIONDENIED:
 		return true
 	case SOURCEREADFAILED:
 		return true
@@ -520,6 +548,8 @@ func (e ErrorCode) Valid() bool {
 	case UNAUTHENTICATED:
 		return true
 	case VALIDATIONERROR:
+		return true
+	case WATCHEROVERFLOW:
 		return true
 	default:
 		return false
@@ -589,18 +619,22 @@ func (e HealthResponseStatus) Valid() bool {
 // Defines values for JobStatus.
 const (
 	JobStatusCancelled   JobStatus = "cancelled"
+	JobStatusCancelling  JobStatus = "cancelling"
 	JobStatusCompleted   JobStatus = "completed"
 	JobStatusFailed      JobStatus = "failed"
 	JobStatusNeedsRepair JobStatus = "needs_repair"
 	JobStatusPublishing  JobStatus = "publishing"
 	JobStatusQueued      JobStatus = "queued"
 	JobStatusRunning     JobStatus = "running"
+	JobStatusSuperseded  JobStatus = "superseded"
 )
 
 // Valid indicates whether the value is a known member of the JobStatus enum.
 func (e JobStatus) Valid() bool {
 	switch e {
 	case JobStatusCancelled:
+		return true
+	case JobStatusCancelling:
 		return true
 	case JobStatusCompleted:
 		return true
@@ -614,6 +648,8 @@ func (e JobStatus) Valid() bool {
 		return true
 	case JobStatusRunning:
 		return true
+	case JobStatusSuperseded:
+		return true
 	default:
 		return false
 	}
@@ -621,8 +657,15 @@ func (e JobStatus) Valid() bool {
 
 // Defines values for JobType.
 const (
+	CatalogCheckpoint JobType = "catalog_checkpoint"
+	CatalogGc         JobType = "catalog_gc"
+	CatalogVacuum     JobType = "catalog_vacuum"
 	ControlBackup     JobType = "control_backup"
 	ControlRestore    JobType = "control_restore"
+	Derived           JobType = "derived"
+	DerivedGc         JobType = "derived_gc"
+	ExternalTool      JobType = "external_tool"
+	Hash              JobType = "hash"
 	OverlayProjection JobType = "overlay_projection"
 	Scan              JobType = "scan"
 )
@@ -630,13 +673,57 @@ const (
 // Valid indicates whether the value is a known member of the JobType enum.
 func (e JobType) Valid() bool {
 	switch e {
+	case CatalogCheckpoint:
+		return true
+	case CatalogGc:
+		return true
+	case CatalogVacuum:
+		return true
 	case ControlBackup:
 		return true
 	case ControlRestore:
 		return true
+	case Derived:
+		return true
+	case DerivedGc:
+		return true
+	case ExternalTool:
+		return true
+	case Hash:
+		return true
 	case OverlayProjection:
 		return true
 	case Scan:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for JobAttemptStatus.
+const (
+	JobAttemptStatusCancelled JobAttemptStatus = "cancelled"
+	JobAttemptStatusCompleted JobAttemptStatus = "completed"
+	JobAttemptStatusFailed    JobAttemptStatus = "failed"
+	JobAttemptStatusQueued    JobAttemptStatus = "queued"
+	JobAttemptStatusRecovered JobAttemptStatus = "recovered"
+	JobAttemptStatusRunning   JobAttemptStatus = "running"
+)
+
+// Valid indicates whether the value is a known member of the JobAttemptStatus enum.
+func (e JobAttemptStatus) Valid() bool {
+	switch e {
+	case JobAttemptStatusCancelled:
+		return true
+	case JobAttemptStatusCompleted:
+		return true
+	case JobAttemptStatusFailed:
+		return true
+	case JobAttemptStatusQueued:
+		return true
+	case JobAttemptStatusRecovered:
+		return true
+	case JobAttemptStatusRunning:
 		return true
 	default:
 		return false
@@ -981,16 +1068,16 @@ func (e RuleParameterSetStatus) Valid() bool {
 
 // Defines values for RuleVersionStatus.
 const (
-	Deprecated RuleVersionStatus = "deprecated"
-	Published  RuleVersionStatus = "published"
+	RuleVersionStatusDeprecated RuleVersionStatus = "deprecated"
+	RuleVersionStatusPublished  RuleVersionStatus = "published"
 )
 
 // Valid indicates whether the value is a known member of the RuleVersionStatus enum.
 func (e RuleVersionStatus) Valid() bool {
 	switch e {
-	case Deprecated:
+	case RuleVersionStatusDeprecated:
 		return true
-	case Published:
+	case RuleVersionStatusPublished:
 		return true
 	default:
 		return false
@@ -1042,6 +1129,36 @@ func (e SourceRuleBindingStatus) Valid() bool {
 	case SourceRuleBindingStatusInvalid:
 		return true
 	case SourceRuleBindingStatusPaused:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for SourceScanStateStatus.
+const (
+	Degraded         SourceScanStateStatus = "degraded"
+	IdentityChanged  SourceScanStateStatus = "identity_changed"
+	Offline          SourceScanStateStatus = "offline"
+	Online           SourceScanStateStatus = "online"
+	PermissionDenied SourceScanStateStatus = "permission_denied"
+	Unknown          SourceScanStateStatus = "unknown"
+)
+
+// Valid indicates whether the value is a known member of the SourceScanStateStatus enum.
+func (e SourceScanStateStatus) Valid() bool {
+	switch e {
+	case Degraded:
+		return true
+	case IdentityChanged:
+		return true
+	case Offline:
+		return true
+	case Online:
+		return true
+	case PermissionDenied:
+		return true
+	case Unknown:
 		return true
 	default:
 		return false
@@ -1619,19 +1736,28 @@ type HealthResponseStatus string
 // Job defines model for Job.
 type Job struct {
 	Attempt                  int        `json:"attempt"`
+	CancelRequested          *bool      `json:"cancelRequested,omitempty"`
 	CelProfileVersion        *string    `json:"celProfileVersion,omitempty"`
 	CompilerVersion          *string    `json:"compilerVersion,omitempty"`
 	CreatedAt                time.Time  `json:"createdAt"`
 	ExtensionRegistryVersion *string    `json:"extensionRegistryVersion,omitempty"`
+	FailureRetryable         *bool      `json:"failureRetryable,omitempty"`
 	FinishedAt               *time.Time `json:"finishedAt,omitempty"`
 	Id                       JobId      `json:"id"`
 	IssueCode                *string    `json:"issueCode,omitempty"`
 	Progress                 struct {
-		Current  int64 `json:"current"`
-		Sequence int64 `json:"sequence"`
-		Total    int64 `json:"total"`
+		Bytes     *int64  `json:"bytes,omitempty"`
+		Current   int64   `json:"current"`
+		Entities  *int64  `json:"entities,omitempty"`
+		Estimated *bool   `json:"estimated,omitempty"`
+		Message   *string `json:"message,omitempty"`
+		Phase     *string `json:"phase,omitempty"`
+		Sequence  int64   `json:"sequence"`
+		Total     int64   `json:"total"`
+		Unit      *string `json:"unit,omitempty"`
 	} `json:"progress"`
 	QueryPublicationId *QueryPublicationId `json:"queryPublicationId,omitempty"`
+	ResourceClass      *string             `json:"resourceClass,omitempty"`
 	RetryOf            *JobId              `json:"retryOf,omitempty"`
 	RuleIrHash         *SHA256Digest       `json:"ruleIrHash,omitempty"`
 	RuleParametersHash *SHA256Digest       `json:"ruleParametersHash,omitempty"`
@@ -1640,6 +1766,7 @@ type Job struct {
 	Stage              string              `json:"stage"`
 	StartedAt          *time.Time          `json:"startedAt,omitempty"`
 	Status             JobStatus           `json:"status"`
+	TargetResource     *string             `json:"targetResource,omitempty"`
 	Type               JobType             `json:"type"`
 	UpdatedAt          time.Time           `json:"updatedAt"`
 }
@@ -1650,8 +1777,38 @@ type JobStatus string
 // JobType defines model for Job.Type.
 type JobType string
 
+// JobAttempt defines model for JobAttempt.
+type JobAttempt struct {
+	Attempt          int              `json:"attempt"`
+	AttemptId        string           `json:"attemptId"`
+	CreatedAt        time.Time        `json:"createdAt"`
+	ErrorCode        *string          `json:"errorCode,omitempty"`
+	ErrorRetryable   *bool            `json:"errorRetryable,omitempty"`
+	FinishedAt       *time.Time       `json:"finishedAt,omitempty"`
+	HeartbeatAt      *time.Time       `json:"heartbeatAt,omitempty"`
+	JobId            JobId            `json:"jobId"`
+	ProgressSequence int64            `json:"progressSequence"`
+	ResourceClass    string           `json:"resourceClass"`
+	StartedAt        *time.Time       `json:"startedAt,omitempty"`
+	Status           JobAttemptStatus `json:"status"`
+	UpdatedAt        time.Time        `json:"updatedAt"`
+}
+
+// JobAttemptStatus defines model for JobAttempt.Status.
+type JobAttemptStatus string
+
+// JobAttemptsResponse defines model for JobAttemptsResponse.
+type JobAttemptsResponse struct {
+	Attempts []JobAttempt `json:"attempts"`
+}
+
 // JobId defines model for JobId.
 type JobId = string
+
+// JobListResponse defines model for JobListResponse.
+type JobListResponse struct {
+	Jobs []Job `json:"jobs"`
+}
 
 // Library defines model for Library.
 type Library struct {
@@ -1667,6 +1824,13 @@ type LibraryCreateRequest struct {
 
 // LibraryId defines model for LibraryId.
 type LibraryId = string
+
+// MaintenanceGCRequest defines model for MaintenanceGCRequest.
+type MaintenanceGCRequest struct {
+	DryRun           *bool  `json:"dryRun,omitempty"`
+	RequiredBytes    *int64 `json:"requiredBytes,omitempty"`
+	RetentionSeconds *int64 `json:"retentionSeconds,omitempty"`
+}
 
 // MediaListResponse defines model for MediaListResponse.
 type MediaListResponse struct {
@@ -2186,6 +2350,25 @@ type SourceRuleBindingCreateRequest struct {
 // SourceRuleBindingId defines model for SourceRuleBindingId.
 type SourceRuleBindingId = string
 
+// SourceScanState defines model for SourceScanState.
+type SourceScanState struct {
+	BlockingIssueCode    *string               `json:"blockingIssueCode,omitempty"`
+	CurrentJobId         *JobId                `json:"currentJobId,omitempty"`
+	CurrentPublicationId *QueryPublicationId   `json:"currentPublicationId,omitempty"`
+	Dirty                bool                  `json:"dirty"`
+	LastCheckedAt        *time.Time            `json:"lastCheckedAt,omitempty"`
+	LastEventAt          *time.Time            `json:"lastEventAt,omitempty"`
+	PendingHashCount     int64                 `json:"pendingHashCount"`
+	SourceId             SourceId              `json:"sourceId"`
+	Status               SourceScanStateStatus `json:"status"`
+	UpdatedAt            time.Time             `json:"updatedAt"`
+	WatcherAvailable     bool                  `json:"watcherAvailable"`
+	WatcherOverflow      bool                  `json:"watcherOverflow"`
+}
+
+// SourceScanStateStatus defines model for SourceScanState.Status.
+type SourceScanStateStatus string
+
 // SourceStructureDecision defines model for SourceStructureDecision.
 type SourceStructureDecision struct {
 	Action          SourceStructureDecisionAction `json:"action"`
@@ -2273,6 +2456,9 @@ type WorkOverlayStateProjectionStatus string
 // CSRFHeader defines model for CSRFHeader.
 type CSRFHeader = string
 
+// IdempotencyKey defines model for IdempotencyKey.
+type IdempotencyKey = string
+
 // IfMatch defines model for IfMatch.
 type IfMatch = string
 
@@ -2318,6 +2504,21 @@ type RequestControlRestoreParams struct {
 
 // VerifyControlRestoreParams defines parameters for VerifyControlRestore.
 type VerifyControlRestoreParams struct {
+	XGalleryCSRF CSRFHeader `json:"X-Gallery-CSRF"`
+}
+
+// CreateCatalogCheckpointJobParams defines parameters for CreateCatalogCheckpointJob.
+type CreateCatalogCheckpointJobParams struct {
+	XGalleryCSRF CSRFHeader `json:"X-Gallery-CSRF"`
+}
+
+// CreateCatalogGCJobParams defines parameters for CreateCatalogGCJob.
+type CreateCatalogGCJobParams struct {
+	XGalleryCSRF CSRFHeader `json:"X-Gallery-CSRF"`
+}
+
+// CreateCatalogVacuumJobParams defines parameters for CreateCatalogVacuumJob.
+type CreateCatalogVacuumJobParams struct {
 	XGalleryCSRF CSRFHeader `json:"X-Gallery-CSRF"`
 }
 
@@ -2378,6 +2579,22 @@ type MergeCreatorsParams struct {
 
 // UndoCreatorMergeParams defines parameters for UndoCreatorMerge.
 type UndoCreatorMergeParams struct {
+	XGalleryCSRF CSRFHeader `json:"X-Gallery-CSRF"`
+}
+
+// ListJobsParams defines parameters for ListJobs.
+type ListJobsParams struct {
+	Status *string `form:"status,omitempty" json:"status,omitempty"`
+	Limit  *int    `form:"limit,omitempty" json:"limit,omitempty"`
+}
+
+// CancelJobParams defines parameters for CancelJob.
+type CancelJobParams struct {
+	XGalleryCSRF CSRFHeader `json:"X-Gallery-CSRF"`
+}
+
+// RetryJobParams defines parameters for RetryJob.
+type RetryJobParams struct {
 	XGalleryCSRF CSRFHeader `json:"X-Gallery-CSRF"`
 }
 
@@ -2641,7 +2858,8 @@ type CreateSourceParams struct {
 
 // CreateScanJobParams defines parameters for CreateScanJob.
 type CreateScanJobParams struct {
-	XGalleryCSRF CSRFHeader `json:"X-Gallery-CSRF"`
+	XGalleryCSRF   CSRFHeader      `json:"X-Gallery-CSRF"`
+	IdempotencyKey *IdempotencyKey `json:"Idempotency-Key,omitempty"`
 }
 
 // ListWorksParams defines parameters for ListWorks.
@@ -2669,6 +2887,9 @@ type RequestControlRestoreJSONRequestBody = ControlRestoreRequest
 
 // VerifyControlRestoreJSONRequestBody defines body for VerifyControlRestore for application/json ContentType.
 type VerifyControlRestoreJSONRequestBody = ControlRestoreRequest
+
+// CreateCatalogGCJobJSONRequestBody defines body for CreateCatalogGCJob for application/json ContentType.
+type CreateCatalogGCJobJSONRequestBody = MaintenanceGCRequest
 
 // UnbindMediaJSONRequestBody defines body for UnbindMedia for application/json ContentType.
 type UnbindMediaJSONRequestBody = BindingUnbindRequest
@@ -2873,6 +3094,17 @@ type ClientInterface interface {
 
 	VerifyControlRestore(ctx context.Context, params *VerifyControlRestoreParams, body VerifyControlRestoreJSONRequestBody, reqEditors ...RequestEditorFn) (*http.Response, error)
 
+	// CreateCatalogCheckpointJob request
+	CreateCatalogCheckpointJob(ctx context.Context, params *CreateCatalogCheckpointJobParams, reqEditors ...RequestEditorFn) (*http.Response, error)
+
+	// CreateCatalogGCJobWithBody request with any body
+	CreateCatalogGCJobWithBody(ctx context.Context, params *CreateCatalogGCJobParams, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*http.Response, error)
+
+	CreateCatalogGCJob(ctx context.Context, params *CreateCatalogGCJobParams, body CreateCatalogGCJobJSONRequestBody, reqEditors ...RequestEditorFn) (*http.Response, error)
+
+	// CreateCatalogVacuumJob request
+	CreateCatalogVacuumJob(ctx context.Context, params *CreateCatalogVacuumJobParams, reqEditors ...RequestEditorFn) (*http.Response, error)
+
 	// UnbindMediaWithBody request with any body
 	UnbindMediaWithBody(ctx context.Context, params *UnbindMediaParams, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*http.Response, error)
 
@@ -2937,8 +3169,20 @@ type ClientInterface interface {
 	// GetHealth request
 	GetHealth(ctx context.Context, reqEditors ...RequestEditorFn) (*http.Response, error)
 
+	// ListJobs request
+	ListJobs(ctx context.Context, params *ListJobsParams, reqEditors ...RequestEditorFn) (*http.Response, error)
+
 	// GetJob request
 	GetJob(ctx context.Context, jobId JobId, reqEditors ...RequestEditorFn) (*http.Response, error)
+
+	// ListJobAttempts request
+	ListJobAttempts(ctx context.Context, jobId JobId, reqEditors ...RequestEditorFn) (*http.Response, error)
+
+	// CancelJob request
+	CancelJob(ctx context.Context, jobId JobId, params *CancelJobParams, reqEditors ...RequestEditorFn) (*http.Response, error)
+
+	// RetryJob request
+	RetryJob(ctx context.Context, jobId JobId, params *RetryJobParams, reqEditors ...RequestEditorFn) (*http.Response, error)
 
 	// CreateLibraryWithBody request with any body
 	CreateLibraryWithBody(ctx context.Context, params *CreateLibraryParams, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*http.Response, error)
@@ -3164,6 +3408,9 @@ type ClientInterface interface {
 	// CreateScanJob request
 	CreateScanJob(ctx context.Context, sourceId SourceId, params *CreateScanJobParams, reqEditors ...RequestEditorFn) (*http.Response, error)
 
+	// GetSourceScanStatus request
+	GetSourceScanStatus(ctx context.Context, sourceId SourceId, reqEditors ...RequestEditorFn) (*http.Response, error)
+
 	// ListWorks request
 	ListWorks(ctx context.Context, params *ListWorksParams, reqEditors ...RequestEditorFn) (*http.Response, error)
 
@@ -3256,6 +3503,54 @@ func (c *Client) VerifyControlRestoreWithBody(ctx context.Context, params *Verif
 
 func (c *Client) VerifyControlRestore(ctx context.Context, params *VerifyControlRestoreParams, body VerifyControlRestoreJSONRequestBody, reqEditors ...RequestEditorFn) (*http.Response, error) {
 	req, err := NewVerifyControlRestoreRequest(c.Server, params, body)
+	if err != nil {
+		return nil, err
+	}
+	req = req.WithContext(ctx)
+	if err := c.applyEditors(ctx, req, reqEditors); err != nil {
+		return nil, err
+	}
+	return c.Client.Do(req)
+}
+
+func (c *Client) CreateCatalogCheckpointJob(ctx context.Context, params *CreateCatalogCheckpointJobParams, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewCreateCatalogCheckpointJobRequest(c.Server, params)
+	if err != nil {
+		return nil, err
+	}
+	req = req.WithContext(ctx)
+	if err := c.applyEditors(ctx, req, reqEditors); err != nil {
+		return nil, err
+	}
+	return c.Client.Do(req)
+}
+
+func (c *Client) CreateCatalogGCJobWithBody(ctx context.Context, params *CreateCatalogGCJobParams, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewCreateCatalogGCJobRequestWithBody(c.Server, params, contentType, body)
+	if err != nil {
+		return nil, err
+	}
+	req = req.WithContext(ctx)
+	if err := c.applyEditors(ctx, req, reqEditors); err != nil {
+		return nil, err
+	}
+	return c.Client.Do(req)
+}
+
+func (c *Client) CreateCatalogGCJob(ctx context.Context, params *CreateCatalogGCJobParams, body CreateCatalogGCJobJSONRequestBody, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewCreateCatalogGCJobRequest(c.Server, params, body)
+	if err != nil {
+		return nil, err
+	}
+	req = req.WithContext(ctx)
+	if err := c.applyEditors(ctx, req, reqEditors); err != nil {
+		return nil, err
+	}
+	return c.Client.Do(req)
+}
+
+func (c *Client) CreateCatalogVacuumJob(ctx context.Context, params *CreateCatalogVacuumJobParams, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewCreateCatalogVacuumJobRequest(c.Server, params)
 	if err != nil {
 		return nil, err
 	}
@@ -3554,8 +3849,56 @@ func (c *Client) GetHealth(ctx context.Context, reqEditors ...RequestEditorFn) (
 	return c.Client.Do(req)
 }
 
+func (c *Client) ListJobs(ctx context.Context, params *ListJobsParams, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewListJobsRequest(c.Server, params)
+	if err != nil {
+		return nil, err
+	}
+	req = req.WithContext(ctx)
+	if err := c.applyEditors(ctx, req, reqEditors); err != nil {
+		return nil, err
+	}
+	return c.Client.Do(req)
+}
+
 func (c *Client) GetJob(ctx context.Context, jobId JobId, reqEditors ...RequestEditorFn) (*http.Response, error) {
 	req, err := NewGetJobRequest(c.Server, jobId)
+	if err != nil {
+		return nil, err
+	}
+	req = req.WithContext(ctx)
+	if err := c.applyEditors(ctx, req, reqEditors); err != nil {
+		return nil, err
+	}
+	return c.Client.Do(req)
+}
+
+func (c *Client) ListJobAttempts(ctx context.Context, jobId JobId, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewListJobAttemptsRequest(c.Server, jobId)
+	if err != nil {
+		return nil, err
+	}
+	req = req.WithContext(ctx)
+	if err := c.applyEditors(ctx, req, reqEditors); err != nil {
+		return nil, err
+	}
+	return c.Client.Do(req)
+}
+
+func (c *Client) CancelJob(ctx context.Context, jobId JobId, params *CancelJobParams, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewCancelJobRequest(c.Server, jobId, params)
+	if err != nil {
+		return nil, err
+	}
+	req = req.WithContext(ctx)
+	if err := c.applyEditors(ctx, req, reqEditors); err != nil {
+		return nil, err
+	}
+	return c.Client.Do(req)
+}
+
+func (c *Client) RetryJob(ctx context.Context, jobId JobId, params *RetryJobParams, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewRetryJobRequest(c.Server, jobId, params)
 	if err != nil {
 		return nil, err
 	}
@@ -4574,6 +4917,18 @@ func (c *Client) CreateScanJob(ctx context.Context, sourceId SourceId, params *C
 	return c.Client.Do(req)
 }
 
+func (c *Client) GetSourceScanStatus(ctx context.Context, sourceId SourceId, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewGetSourceScanStatusRequest(c.Server, sourceId)
+	if err != nil {
+		return nil, err
+	}
+	req = req.WithContext(ctx)
+	if err := c.applyEditors(ctx, req, reqEditors); err != nil {
+		return nil, err
+	}
+	return c.Client.Do(req)
+}
+
 func (c *Client) ListWorks(ctx context.Context, params *ListWorksParams, reqEditors ...RequestEditorFn) (*http.Response, error) {
 	req, err := NewListWorksRequest(c.Server, params)
 	if err != nil {
@@ -4836,6 +5191,139 @@ func NewVerifyControlRestoreRequestWithBody(server string, params *VerifyControl
 	}
 
 	req.Header.Add("Content-Type", contentType)
+
+	if params != nil {
+
+		var headerParam0 string
+
+		headerParam0, err = runtime.StyleParamWithOptions("simple", false, "X-Gallery-CSRF", params.XGalleryCSRF, runtime.StyleParamOptions{ParamLocation: runtime.ParamLocationHeader, Type: "string", Format: ""})
+		if err != nil {
+			return nil, err
+		}
+
+		req.Header.Set("X-Gallery-CSRF", headerParam0)
+
+	}
+
+	return req, nil
+}
+
+// NewCreateCatalogCheckpointJobRequest generates requests for CreateCatalogCheckpointJob
+func NewCreateCatalogCheckpointJobRequest(server string, params *CreateCatalogCheckpointJobParams) (*http.Request, error) {
+	var err error
+
+	serverURL, err := url.Parse(server)
+	if err != nil {
+		return nil, err
+	}
+
+	operationPath := fmt.Sprintf("/api/v1/admin/maintenance/checkpoint")
+	if operationPath[0] == '/' {
+		operationPath = "." + operationPath
+	}
+
+	queryURL, err := serverURL.Parse(operationPath)
+	if err != nil {
+		return nil, err
+	}
+
+	req, err := http.NewRequest(http.MethodPost, queryURL.String(), nil)
+	if err != nil {
+		return nil, err
+	}
+
+	if params != nil {
+
+		var headerParam0 string
+
+		headerParam0, err = runtime.StyleParamWithOptions("simple", false, "X-Gallery-CSRF", params.XGalleryCSRF, runtime.StyleParamOptions{ParamLocation: runtime.ParamLocationHeader, Type: "string", Format: ""})
+		if err != nil {
+			return nil, err
+		}
+
+		req.Header.Set("X-Gallery-CSRF", headerParam0)
+
+	}
+
+	return req, nil
+}
+
+// NewCreateCatalogGCJobRequest calls the generic CreateCatalogGCJob builder with application/json body
+func NewCreateCatalogGCJobRequest(server string, params *CreateCatalogGCJobParams, body CreateCatalogGCJobJSONRequestBody) (*http.Request, error) {
+	var bodyReader io.Reader
+	buf, err := json.Marshal(body)
+	if err != nil {
+		return nil, err
+	}
+	bodyReader = bytes.NewReader(buf)
+	return NewCreateCatalogGCJobRequestWithBody(server, params, "application/json", bodyReader)
+}
+
+// NewCreateCatalogGCJobRequestWithBody generates requests for CreateCatalogGCJob with any type of body
+func NewCreateCatalogGCJobRequestWithBody(server string, params *CreateCatalogGCJobParams, contentType string, body io.Reader) (*http.Request, error) {
+	var err error
+
+	serverURL, err := url.Parse(server)
+	if err != nil {
+		return nil, err
+	}
+
+	operationPath := fmt.Sprintf("/api/v1/admin/maintenance/gc")
+	if operationPath[0] == '/' {
+		operationPath = "." + operationPath
+	}
+
+	queryURL, err := serverURL.Parse(operationPath)
+	if err != nil {
+		return nil, err
+	}
+
+	req, err := http.NewRequest(http.MethodPost, queryURL.String(), body)
+	if err != nil {
+		return nil, err
+	}
+
+	req.Header.Add("Content-Type", contentType)
+
+	if params != nil {
+
+		var headerParam0 string
+
+		headerParam0, err = runtime.StyleParamWithOptions("simple", false, "X-Gallery-CSRF", params.XGalleryCSRF, runtime.StyleParamOptions{ParamLocation: runtime.ParamLocationHeader, Type: "string", Format: ""})
+		if err != nil {
+			return nil, err
+		}
+
+		req.Header.Set("X-Gallery-CSRF", headerParam0)
+
+	}
+
+	return req, nil
+}
+
+// NewCreateCatalogVacuumJobRequest generates requests for CreateCatalogVacuumJob
+func NewCreateCatalogVacuumJobRequest(server string, params *CreateCatalogVacuumJobParams) (*http.Request, error) {
+	var err error
+
+	serverURL, err := url.Parse(server)
+	if err != nil {
+		return nil, err
+	}
+
+	operationPath := fmt.Sprintf("/api/v1/admin/maintenance/vacuum")
+	if operationPath[0] == '/' {
+		operationPath = "." + operationPath
+	}
+
+	queryURL, err := serverURL.Parse(operationPath)
+	if err != nil {
+		return nil, err
+	}
+
+	req, err := http.NewRequest(http.MethodPost, queryURL.String(), nil)
+	if err != nil {
+		return nil, err
+	}
 
 	if params != nil {
 
@@ -5630,6 +6118,72 @@ func NewGetHealthRequest(server string) (*http.Request, error) {
 	return req, nil
 }
 
+// NewListJobsRequest generates requests for ListJobs
+func NewListJobsRequest(server string, params *ListJobsParams) (*http.Request, error) {
+	var err error
+
+	serverURL, err := url.Parse(server)
+	if err != nil {
+		return nil, err
+	}
+
+	operationPath := fmt.Sprintf("/api/v1/jobs")
+	if operationPath[0] == '/' {
+		operationPath = "." + operationPath
+	}
+
+	queryURL, err := serverURL.Parse(operationPath)
+	if err != nil {
+		return nil, err
+	}
+
+	if params != nil {
+		// queryValues collects non-styled parameters (passthrough, JSON)
+		// that are safe to round-trip through url.Values.Encode().
+		queryValues := queryURL.Query()
+		// rawQueryFragments collects pre-encoded query fragments from
+		// styled parameters, preserving literal commas as delimiters
+		// per the OpenAPI spec (e.g. "color=blue,black,brown").
+		var rawQueryFragments []string
+
+		if params.Status != nil {
+
+			if queryFrag, err := runtime.StyleParamWithOptions("form", true, "status", *params.Status, runtime.StyleParamOptions{ParamLocation: runtime.ParamLocationQuery, Type: "string", Format: ""}); err != nil {
+				return nil, err
+			} else {
+				for _, qp := range strings.Split(queryFrag, "&") {
+					rawQueryFragments = append(rawQueryFragments, qp)
+				}
+			}
+
+		}
+
+		if params.Limit != nil {
+
+			if queryFrag, err := runtime.StyleParamWithOptions("form", true, "limit", *params.Limit, runtime.StyleParamOptions{ParamLocation: runtime.ParamLocationQuery, Type: "integer", Format: ""}); err != nil {
+				return nil, err
+			} else {
+				for _, qp := range strings.Split(queryFrag, "&") {
+					rawQueryFragments = append(rawQueryFragments, qp)
+				}
+			}
+
+		}
+
+		if encoded := queryValues.Encode(); encoded != "" {
+			rawQueryFragments = append(rawQueryFragments, encoded)
+		}
+		queryURL.RawQuery = strings.Join(rawQueryFragments, "&")
+	}
+
+	req, err := http.NewRequest(http.MethodGet, queryURL.String(), nil)
+	if err != nil {
+		return nil, err
+	}
+
+	return req, nil
+}
+
 // NewGetJobRequest generates requests for GetJob
 func NewGetJobRequest(server string, jobId JobId) (*http.Request, error) {
 	var err error
@@ -5659,6 +6213,134 @@ func NewGetJobRequest(server string, jobId JobId) (*http.Request, error) {
 	req, err := http.NewRequest(http.MethodGet, queryURL.String(), nil)
 	if err != nil {
 		return nil, err
+	}
+
+	return req, nil
+}
+
+// NewListJobAttemptsRequest generates requests for ListJobAttempts
+func NewListJobAttemptsRequest(server string, jobId JobId) (*http.Request, error) {
+	var err error
+
+	var pathParam0 string
+
+	pathParam0, err = runtime.StyleParamWithOptions("simple", false, "jobId", jobId, runtime.StyleParamOptions{ParamLocation: runtime.ParamLocationPath, Type: "string", Format: ""})
+	if err != nil {
+		return nil, err
+	}
+
+	serverURL, err := url.Parse(server)
+	if err != nil {
+		return nil, err
+	}
+
+	operationPath := fmt.Sprintf("/api/v1/jobs/%s/attempts", pathParam0)
+	if operationPath[0] == '/' {
+		operationPath = "." + operationPath
+	}
+
+	queryURL, err := serverURL.Parse(operationPath)
+	if err != nil {
+		return nil, err
+	}
+
+	req, err := http.NewRequest(http.MethodGet, queryURL.String(), nil)
+	if err != nil {
+		return nil, err
+	}
+
+	return req, nil
+}
+
+// NewCancelJobRequest generates requests for CancelJob
+func NewCancelJobRequest(server string, jobId JobId, params *CancelJobParams) (*http.Request, error) {
+	var err error
+
+	var pathParam0 string
+
+	pathParam0, err = runtime.StyleParamWithOptions("simple", false, "jobId", jobId, runtime.StyleParamOptions{ParamLocation: runtime.ParamLocationPath, Type: "string", Format: ""})
+	if err != nil {
+		return nil, err
+	}
+
+	serverURL, err := url.Parse(server)
+	if err != nil {
+		return nil, err
+	}
+
+	operationPath := fmt.Sprintf("/api/v1/jobs/%s/cancel", pathParam0)
+	if operationPath[0] == '/' {
+		operationPath = "." + operationPath
+	}
+
+	queryURL, err := serverURL.Parse(operationPath)
+	if err != nil {
+		return nil, err
+	}
+
+	req, err := http.NewRequest(http.MethodPost, queryURL.String(), nil)
+	if err != nil {
+		return nil, err
+	}
+
+	if params != nil {
+
+		var headerParam0 string
+
+		headerParam0, err = runtime.StyleParamWithOptions("simple", false, "X-Gallery-CSRF", params.XGalleryCSRF, runtime.StyleParamOptions{ParamLocation: runtime.ParamLocationHeader, Type: "string", Format: ""})
+		if err != nil {
+			return nil, err
+		}
+
+		req.Header.Set("X-Gallery-CSRF", headerParam0)
+
+	}
+
+	return req, nil
+}
+
+// NewRetryJobRequest generates requests for RetryJob
+func NewRetryJobRequest(server string, jobId JobId, params *RetryJobParams) (*http.Request, error) {
+	var err error
+
+	var pathParam0 string
+
+	pathParam0, err = runtime.StyleParamWithOptions("simple", false, "jobId", jobId, runtime.StyleParamOptions{ParamLocation: runtime.ParamLocationPath, Type: "string", Format: ""})
+	if err != nil {
+		return nil, err
+	}
+
+	serverURL, err := url.Parse(server)
+	if err != nil {
+		return nil, err
+	}
+
+	operationPath := fmt.Sprintf("/api/v1/jobs/%s/retry", pathParam0)
+	if operationPath[0] == '/' {
+		operationPath = "." + operationPath
+	}
+
+	queryURL, err := serverURL.Parse(operationPath)
+	if err != nil {
+		return nil, err
+	}
+
+	req, err := http.NewRequest(http.MethodPost, queryURL.String(), nil)
+	if err != nil {
+		return nil, err
+	}
+
+	if params != nil {
+
+		var headerParam0 string
+
+		headerParam0, err = runtime.StyleParamWithOptions("simple", false, "X-Gallery-CSRF", params.XGalleryCSRF, runtime.StyleParamOptions{ParamLocation: runtime.ParamLocationHeader, Type: "string", Format: ""})
+		if err != nil {
+			return nil, err
+		}
+
+		req.Header.Set("X-Gallery-CSRF", headerParam0)
+
 	}
 
 	return req, nil
@@ -8498,6 +9180,51 @@ func NewCreateScanJobRequest(server string, sourceId SourceId, params *CreateSca
 
 		req.Header.Set("X-Gallery-CSRF", headerParam0)
 
+		if params.IdempotencyKey != nil {
+			var headerParam1 string
+
+			headerParam1, err = runtime.StyleParamWithOptions("simple", false, "Idempotency-Key", *params.IdempotencyKey, runtime.StyleParamOptions{ParamLocation: runtime.ParamLocationHeader, Type: "string", Format: ""})
+			if err != nil {
+				return nil, err
+			}
+
+			req.Header.Set("Idempotency-Key", headerParam1)
+		}
+
+	}
+
+	return req, nil
+}
+
+// NewGetSourceScanStatusRequest generates requests for GetSourceScanStatus
+func NewGetSourceScanStatusRequest(server string, sourceId SourceId) (*http.Request, error) {
+	var err error
+
+	var pathParam0 string
+
+	pathParam0, err = runtime.StyleParamWithOptions("simple", false, "sourceId", sourceId, runtime.StyleParamOptions{ParamLocation: runtime.ParamLocationPath, Type: "string", Format: ""})
+	if err != nil {
+		return nil, err
+	}
+
+	serverURL, err := url.Parse(server)
+	if err != nil {
+		return nil, err
+	}
+
+	operationPath := fmt.Sprintf("/api/v1/sources/%s/scan-status", pathParam0)
+	if operationPath[0] == '/' {
+		operationPath = "." + operationPath
+	}
+
+	queryURL, err := serverURL.Parse(operationPath)
+	if err != nil {
+		return nil, err
+	}
+
+	req, err := http.NewRequest(http.MethodGet, queryURL.String(), nil)
+	if err != nil {
+		return nil, err
 	}
 
 	return req, nil
@@ -8865,6 +9592,17 @@ type ClientWithResponsesInterface interface {
 
 	VerifyControlRestoreWithResponse(ctx context.Context, params *VerifyControlRestoreParams, body VerifyControlRestoreJSONRequestBody, reqEditors ...RequestEditorFn) (*VerifyControlRestoreResponse, error)
 
+	// CreateCatalogCheckpointJobWithResponse request
+	CreateCatalogCheckpointJobWithResponse(ctx context.Context, params *CreateCatalogCheckpointJobParams, reqEditors ...RequestEditorFn) (*CreateCatalogCheckpointJobResponse, error)
+
+	// CreateCatalogGCJobWithBodyWithResponse request with any body
+	CreateCatalogGCJobWithBodyWithResponse(ctx context.Context, params *CreateCatalogGCJobParams, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*CreateCatalogGCJobResponse, error)
+
+	CreateCatalogGCJobWithResponse(ctx context.Context, params *CreateCatalogGCJobParams, body CreateCatalogGCJobJSONRequestBody, reqEditors ...RequestEditorFn) (*CreateCatalogGCJobResponse, error)
+
+	// CreateCatalogVacuumJobWithResponse request
+	CreateCatalogVacuumJobWithResponse(ctx context.Context, params *CreateCatalogVacuumJobParams, reqEditors ...RequestEditorFn) (*CreateCatalogVacuumJobResponse, error)
+
 	// UnbindMediaWithBodyWithResponse request with any body
 	UnbindMediaWithBodyWithResponse(ctx context.Context, params *UnbindMediaParams, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*UnbindMediaResponse, error)
 
@@ -8929,8 +9667,20 @@ type ClientWithResponsesInterface interface {
 	// GetHealthWithResponse request
 	GetHealthWithResponse(ctx context.Context, reqEditors ...RequestEditorFn) (*GetHealthResponse, error)
 
+	// ListJobsWithResponse request
+	ListJobsWithResponse(ctx context.Context, params *ListJobsParams, reqEditors ...RequestEditorFn) (*ListJobsResponse, error)
+
 	// GetJobWithResponse request
 	GetJobWithResponse(ctx context.Context, jobId JobId, reqEditors ...RequestEditorFn) (*GetJobResponse, error)
+
+	// ListJobAttemptsWithResponse request
+	ListJobAttemptsWithResponse(ctx context.Context, jobId JobId, reqEditors ...RequestEditorFn) (*ListJobAttemptsResponse, error)
+
+	// CancelJobWithResponse request
+	CancelJobWithResponse(ctx context.Context, jobId JobId, params *CancelJobParams, reqEditors ...RequestEditorFn) (*CancelJobResponse, error)
+
+	// RetryJobWithResponse request
+	RetryJobWithResponse(ctx context.Context, jobId JobId, params *RetryJobParams, reqEditors ...RequestEditorFn) (*RetryJobResponse, error)
 
 	// CreateLibraryWithBodyWithResponse request with any body
 	CreateLibraryWithBodyWithResponse(ctx context.Context, params *CreateLibraryParams, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*CreateLibraryResponse, error)
@@ -9156,6 +9906,9 @@ type ClientWithResponsesInterface interface {
 	// CreateScanJobWithResponse request
 	CreateScanJobWithResponse(ctx context.Context, sourceId SourceId, params *CreateScanJobParams, reqEditors ...RequestEditorFn) (*CreateScanJobResponse, error)
 
+	// GetSourceScanStatusWithResponse request
+	GetSourceScanStatusWithResponse(ctx context.Context, sourceId SourceId, reqEditors ...RequestEditorFn) (*GetSourceScanStatusResponse, error)
+
 	// ListWorksWithResponse request
 	ListWorksWithResponse(ctx context.Context, params *ListWorksParams, reqEditors ...RequestEditorFn) (*ListWorksResponse, error)
 
@@ -9336,6 +10089,105 @@ func (r VerifyControlRestoreResponse) StatusCode() int {
 
 // ContentType is a convenience method to retrieve the Content-Type value from the HTTP response headers
 func (r VerifyControlRestoreResponse) ContentType() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Header.Get("Content-Type")
+	}
+	return ""
+}
+
+type CreateCatalogCheckpointJobResponse struct {
+	Body         []byte
+	HTTPResponse *http.Response
+	JSON202      *Job
+	JSON401      *UnauthenticatedError
+	JSON403      *ForbiddenError
+	JSON409      *ConflictError
+}
+
+// Status returns HTTPResponse.Status
+func (r CreateCatalogCheckpointJobResponse) Status() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Status
+	}
+	return http.StatusText(0)
+}
+
+// StatusCode returns HTTPResponse.StatusCode
+func (r CreateCatalogCheckpointJobResponse) StatusCode() int {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.StatusCode
+	}
+	return 0
+}
+
+// ContentType is a convenience method to retrieve the Content-Type value from the HTTP response headers
+func (r CreateCatalogCheckpointJobResponse) ContentType() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Header.Get("Content-Type")
+	}
+	return ""
+}
+
+type CreateCatalogGCJobResponse struct {
+	Body         []byte
+	HTTPResponse *http.Response
+	JSON202      *Job
+	JSON401      *UnauthenticatedError
+	JSON403      *ForbiddenError
+	JSON409      *ConflictError
+}
+
+// Status returns HTTPResponse.Status
+func (r CreateCatalogGCJobResponse) Status() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Status
+	}
+	return http.StatusText(0)
+}
+
+// StatusCode returns HTTPResponse.StatusCode
+func (r CreateCatalogGCJobResponse) StatusCode() int {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.StatusCode
+	}
+	return 0
+}
+
+// ContentType is a convenience method to retrieve the Content-Type value from the HTTP response headers
+func (r CreateCatalogGCJobResponse) ContentType() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Header.Get("Content-Type")
+	}
+	return ""
+}
+
+type CreateCatalogVacuumJobResponse struct {
+	Body         []byte
+	HTTPResponse *http.Response
+	JSON202      *Job
+	JSON401      *UnauthenticatedError
+	JSON403      *ForbiddenError
+	JSON409      *ConflictError
+}
+
+// Status returns HTTPResponse.Status
+func (r CreateCatalogVacuumJobResponse) Status() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Status
+	}
+	return http.StatusText(0)
+}
+
+// StatusCode returns HTTPResponse.StatusCode
+func (r CreateCatalogVacuumJobResponse) StatusCode() int {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.StatusCode
+	}
+	return 0
+}
+
+// ContentType is a convenience method to retrieve the Content-Type value from the HTTP response headers
+func (r CreateCatalogVacuumJobResponse) ContentType() string {
 	if r.HTTPResponse != nil {
 		return r.HTTPResponse.Header.Get("Content-Type")
 	}
@@ -9879,6 +10731,38 @@ func (r GetHealthResponse) ContentType() string {
 	return ""
 }
 
+type ListJobsResponse struct {
+	Body         []byte
+	HTTPResponse *http.Response
+	JSON200      *JobListResponse
+	JSON401      *UnauthenticatedError
+	JSON403      *ForbiddenError
+}
+
+// Status returns HTTPResponse.Status
+func (r ListJobsResponse) Status() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Status
+	}
+	return http.StatusText(0)
+}
+
+// StatusCode returns HTTPResponse.StatusCode
+func (r ListJobsResponse) StatusCode() int {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.StatusCode
+	}
+	return 0
+}
+
+// ContentType is a convenience method to retrieve the Content-Type value from the HTTP response headers
+func (r ListJobsResponse) ContentType() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Header.Get("Content-Type")
+	}
+	return ""
+}
+
 type GetJobResponse struct {
 	Body         []byte
 	HTTPResponse *http.Response
@@ -9906,6 +10790,107 @@ func (r GetJobResponse) StatusCode() int {
 
 // ContentType is a convenience method to retrieve the Content-Type value from the HTTP response headers
 func (r GetJobResponse) ContentType() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Header.Get("Content-Type")
+	}
+	return ""
+}
+
+type ListJobAttemptsResponse struct {
+	Body         []byte
+	HTTPResponse *http.Response
+	JSON200      *JobAttemptsResponse
+	JSON401      *UnauthenticatedError
+	JSON403      *ForbiddenError
+	JSON404      *NotFoundError
+}
+
+// Status returns HTTPResponse.Status
+func (r ListJobAttemptsResponse) Status() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Status
+	}
+	return http.StatusText(0)
+}
+
+// StatusCode returns HTTPResponse.StatusCode
+func (r ListJobAttemptsResponse) StatusCode() int {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.StatusCode
+	}
+	return 0
+}
+
+// ContentType is a convenience method to retrieve the Content-Type value from the HTTP response headers
+func (r ListJobAttemptsResponse) ContentType() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Header.Get("Content-Type")
+	}
+	return ""
+}
+
+type CancelJobResponse struct {
+	Body         []byte
+	HTTPResponse *http.Response
+	JSON202      *Job
+	JSON401      *UnauthenticatedError
+	JSON403      *ForbiddenError
+	JSON404      *NotFoundError
+	JSON409      *ConflictError
+}
+
+// Status returns HTTPResponse.Status
+func (r CancelJobResponse) Status() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Status
+	}
+	return http.StatusText(0)
+}
+
+// StatusCode returns HTTPResponse.StatusCode
+func (r CancelJobResponse) StatusCode() int {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.StatusCode
+	}
+	return 0
+}
+
+// ContentType is a convenience method to retrieve the Content-Type value from the HTTP response headers
+func (r CancelJobResponse) ContentType() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Header.Get("Content-Type")
+	}
+	return ""
+}
+
+type RetryJobResponse struct {
+	Body         []byte
+	HTTPResponse *http.Response
+	JSON202      *Job
+	JSON401      *UnauthenticatedError
+	JSON403      *ForbiddenError
+	JSON404      *NotFoundError
+	JSON409      *ConflictError
+}
+
+// Status returns HTTPResponse.Status
+func (r RetryJobResponse) Status() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Status
+	}
+	return http.StatusText(0)
+}
+
+// StatusCode returns HTTPResponse.StatusCode
+func (r RetryJobResponse) StatusCode() int {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.StatusCode
+	}
+	return 0
+}
+
+// ContentType is a convenience method to retrieve the Content-Type value from the HTTP response headers
+func (r RetryJobResponse) ContentType() string {
 	if r.HTTPResponse != nil {
 		return r.HTTPResponse.Header.Get("Content-Type")
 	}
@@ -11786,6 +12771,39 @@ func (r CreateScanJobResponse) ContentType() string {
 	return ""
 }
 
+type GetSourceScanStatusResponse struct {
+	Body         []byte
+	HTTPResponse *http.Response
+	JSON200      *SourceScanState
+	JSON401      *UnauthenticatedError
+	JSON403      *ForbiddenError
+	JSON404      *NotFoundError
+}
+
+// Status returns HTTPResponse.Status
+func (r GetSourceScanStatusResponse) Status() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Status
+	}
+	return http.StatusText(0)
+}
+
+// StatusCode returns HTTPResponse.StatusCode
+func (r GetSourceScanStatusResponse) StatusCode() int {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.StatusCode
+	}
+	return 0
+}
+
+// ContentType is a convenience method to retrieve the Content-Type value from the HTTP response headers
+func (r GetSourceScanStatusResponse) ContentType() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Header.Get("Content-Type")
+	}
+	return ""
+}
+
 type ListWorksResponse struct {
 	Body         []byte
 	HTTPResponse *http.Response
@@ -12015,6 +13033,41 @@ func (c *ClientWithResponses) VerifyControlRestoreWithResponse(ctx context.Conte
 	return ParseVerifyControlRestoreResponse(rsp)
 }
 
+// CreateCatalogCheckpointJobWithResponse request returning *CreateCatalogCheckpointJobResponse
+func (c *ClientWithResponses) CreateCatalogCheckpointJobWithResponse(ctx context.Context, params *CreateCatalogCheckpointJobParams, reqEditors ...RequestEditorFn) (*CreateCatalogCheckpointJobResponse, error) {
+	rsp, err := c.CreateCatalogCheckpointJob(ctx, params, reqEditors...)
+	if err != nil {
+		return nil, err
+	}
+	return ParseCreateCatalogCheckpointJobResponse(rsp)
+}
+
+// CreateCatalogGCJobWithBodyWithResponse request with arbitrary body returning *CreateCatalogGCJobResponse
+func (c *ClientWithResponses) CreateCatalogGCJobWithBodyWithResponse(ctx context.Context, params *CreateCatalogGCJobParams, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*CreateCatalogGCJobResponse, error) {
+	rsp, err := c.CreateCatalogGCJobWithBody(ctx, params, contentType, body, reqEditors...)
+	if err != nil {
+		return nil, err
+	}
+	return ParseCreateCatalogGCJobResponse(rsp)
+}
+
+func (c *ClientWithResponses) CreateCatalogGCJobWithResponse(ctx context.Context, params *CreateCatalogGCJobParams, body CreateCatalogGCJobJSONRequestBody, reqEditors ...RequestEditorFn) (*CreateCatalogGCJobResponse, error) {
+	rsp, err := c.CreateCatalogGCJob(ctx, params, body, reqEditors...)
+	if err != nil {
+		return nil, err
+	}
+	return ParseCreateCatalogGCJobResponse(rsp)
+}
+
+// CreateCatalogVacuumJobWithResponse request returning *CreateCatalogVacuumJobResponse
+func (c *ClientWithResponses) CreateCatalogVacuumJobWithResponse(ctx context.Context, params *CreateCatalogVacuumJobParams, reqEditors ...RequestEditorFn) (*CreateCatalogVacuumJobResponse, error) {
+	rsp, err := c.CreateCatalogVacuumJob(ctx, params, reqEditors...)
+	if err != nil {
+		return nil, err
+	}
+	return ParseCreateCatalogVacuumJobResponse(rsp)
+}
+
 // UnbindMediaWithBodyWithResponse request with arbitrary body returning *UnbindMediaResponse
 func (c *ClientWithResponses) UnbindMediaWithBodyWithResponse(ctx context.Context, params *UnbindMediaParams, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*UnbindMediaResponse, error) {
 	rsp, err := c.UnbindMediaWithBody(ctx, params, contentType, body, reqEditors...)
@@ -12223,6 +13276,15 @@ func (c *ClientWithResponses) GetHealthWithResponse(ctx context.Context, reqEdit
 	return ParseGetHealthResponse(rsp)
 }
 
+// ListJobsWithResponse request returning *ListJobsResponse
+func (c *ClientWithResponses) ListJobsWithResponse(ctx context.Context, params *ListJobsParams, reqEditors ...RequestEditorFn) (*ListJobsResponse, error) {
+	rsp, err := c.ListJobs(ctx, params, reqEditors...)
+	if err != nil {
+		return nil, err
+	}
+	return ParseListJobsResponse(rsp)
+}
+
 // GetJobWithResponse request returning *GetJobResponse
 func (c *ClientWithResponses) GetJobWithResponse(ctx context.Context, jobId JobId, reqEditors ...RequestEditorFn) (*GetJobResponse, error) {
 	rsp, err := c.GetJob(ctx, jobId, reqEditors...)
@@ -12230,6 +13292,33 @@ func (c *ClientWithResponses) GetJobWithResponse(ctx context.Context, jobId JobI
 		return nil, err
 	}
 	return ParseGetJobResponse(rsp)
+}
+
+// ListJobAttemptsWithResponse request returning *ListJobAttemptsResponse
+func (c *ClientWithResponses) ListJobAttemptsWithResponse(ctx context.Context, jobId JobId, reqEditors ...RequestEditorFn) (*ListJobAttemptsResponse, error) {
+	rsp, err := c.ListJobAttempts(ctx, jobId, reqEditors...)
+	if err != nil {
+		return nil, err
+	}
+	return ParseListJobAttemptsResponse(rsp)
+}
+
+// CancelJobWithResponse request returning *CancelJobResponse
+func (c *ClientWithResponses) CancelJobWithResponse(ctx context.Context, jobId JobId, params *CancelJobParams, reqEditors ...RequestEditorFn) (*CancelJobResponse, error) {
+	rsp, err := c.CancelJob(ctx, jobId, params, reqEditors...)
+	if err != nil {
+		return nil, err
+	}
+	return ParseCancelJobResponse(rsp)
+}
+
+// RetryJobWithResponse request returning *RetryJobResponse
+func (c *ClientWithResponses) RetryJobWithResponse(ctx context.Context, jobId JobId, params *RetryJobParams, reqEditors ...RequestEditorFn) (*RetryJobResponse, error) {
+	rsp, err := c.RetryJob(ctx, jobId, params, reqEditors...)
+	if err != nil {
+		return nil, err
+	}
+	return ParseRetryJobResponse(rsp)
 }
 
 // CreateLibraryWithBodyWithResponse request with arbitrary body returning *CreateLibraryResponse
@@ -12960,6 +14049,15 @@ func (c *ClientWithResponses) CreateScanJobWithResponse(ctx context.Context, sou
 	return ParseCreateScanJobResponse(rsp)
 }
 
+// GetSourceScanStatusWithResponse request returning *GetSourceScanStatusResponse
+func (c *ClientWithResponses) GetSourceScanStatusWithResponse(ctx context.Context, sourceId SourceId, reqEditors ...RequestEditorFn) (*GetSourceScanStatusResponse, error) {
+	rsp, err := c.GetSourceScanStatus(ctx, sourceId, reqEditors...)
+	if err != nil {
+		return nil, err
+	}
+	return ParseGetSourceScanStatusResponse(rsp)
+}
+
 // ListWorksWithResponse request returning *ListWorksResponse
 func (c *ClientWithResponses) ListWorksWithResponse(ctx context.Context, params *ListWorksParams, reqEditors ...RequestEditorFn) (*ListWorksResponse, error) {
 	rsp, err := c.ListWorks(ctx, params, reqEditors...)
@@ -13256,6 +14354,147 @@ func ParseVerifyControlRestoreResponse(rsp *http.Response) (*VerifyControlRestor
 			return nil, err
 		}
 		response.JSON404 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 409:
+		var dest ConflictError
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON409 = &dest
+
+	}
+
+	return response, nil
+}
+
+// ParseCreateCatalogCheckpointJobResponse parses an HTTP response from a CreateCatalogCheckpointJobWithResponse call
+func ParseCreateCatalogCheckpointJobResponse(rsp *http.Response) (*CreateCatalogCheckpointJobResponse, error) {
+	bodyBytes, err := io.ReadAll(rsp.Body)
+	defer func() { _ = rsp.Body.Close() }()
+	if err != nil {
+		return nil, err
+	}
+
+	response := &CreateCatalogCheckpointJobResponse{
+		Body:         bodyBytes,
+		HTTPResponse: rsp,
+	}
+
+	switch {
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 202:
+		var dest Job
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON202 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 401:
+		var dest UnauthenticatedError
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON401 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 403:
+		var dest ForbiddenError
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON403 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 409:
+		var dest ConflictError
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON409 = &dest
+
+	}
+
+	return response, nil
+}
+
+// ParseCreateCatalogGCJobResponse parses an HTTP response from a CreateCatalogGCJobWithResponse call
+func ParseCreateCatalogGCJobResponse(rsp *http.Response) (*CreateCatalogGCJobResponse, error) {
+	bodyBytes, err := io.ReadAll(rsp.Body)
+	defer func() { _ = rsp.Body.Close() }()
+	if err != nil {
+		return nil, err
+	}
+
+	response := &CreateCatalogGCJobResponse{
+		Body:         bodyBytes,
+		HTTPResponse: rsp,
+	}
+
+	switch {
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 202:
+		var dest Job
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON202 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 401:
+		var dest UnauthenticatedError
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON401 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 403:
+		var dest ForbiddenError
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON403 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 409:
+		var dest ConflictError
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON409 = &dest
+
+	}
+
+	return response, nil
+}
+
+// ParseCreateCatalogVacuumJobResponse parses an HTTP response from a CreateCatalogVacuumJobWithResponse call
+func ParseCreateCatalogVacuumJobResponse(rsp *http.Response) (*CreateCatalogVacuumJobResponse, error) {
+	bodyBytes, err := io.ReadAll(rsp.Body)
+	defer func() { _ = rsp.Body.Close() }()
+	if err != nil {
+		return nil, err
+	}
+
+	response := &CreateCatalogVacuumJobResponse{
+		Body:         bodyBytes,
+		HTTPResponse: rsp,
+	}
+
+	switch {
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 202:
+		var dest Job
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON202 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 401:
+		var dest UnauthenticatedError
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON401 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 403:
+		var dest ForbiddenError
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON403 = &dest
 
 	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 409:
 		var dest ConflictError
@@ -14084,6 +15323,46 @@ func ParseGetHealthResponse(rsp *http.Response) (*GetHealthResponse, error) {
 	return response, nil
 }
 
+// ParseListJobsResponse parses an HTTP response from a ListJobsWithResponse call
+func ParseListJobsResponse(rsp *http.Response) (*ListJobsResponse, error) {
+	bodyBytes, err := io.ReadAll(rsp.Body)
+	defer func() { _ = rsp.Body.Close() }()
+	if err != nil {
+		return nil, err
+	}
+
+	response := &ListJobsResponse{
+		Body:         bodyBytes,
+		HTTPResponse: rsp,
+	}
+
+	switch {
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 200:
+		var dest JobListResponse
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON200 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 401:
+		var dest UnauthenticatedError
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON401 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 403:
+		var dest ForbiddenError
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON403 = &dest
+
+	}
+
+	return response, nil
+}
+
 // ParseGetJobResponse parses an HTTP response from a GetJobWithResponse call
 func ParseGetJobResponse(rsp *http.Response) (*GetJobResponse, error) {
 	bodyBytes, err := io.ReadAll(rsp.Body)
@@ -14125,6 +15404,161 @@ func ParseGetJobResponse(rsp *http.Response) (*GetJobResponse, error) {
 			return nil, err
 		}
 		response.JSON404 = &dest
+
+	}
+
+	return response, nil
+}
+
+// ParseListJobAttemptsResponse parses an HTTP response from a ListJobAttemptsWithResponse call
+func ParseListJobAttemptsResponse(rsp *http.Response) (*ListJobAttemptsResponse, error) {
+	bodyBytes, err := io.ReadAll(rsp.Body)
+	defer func() { _ = rsp.Body.Close() }()
+	if err != nil {
+		return nil, err
+	}
+
+	response := &ListJobAttemptsResponse{
+		Body:         bodyBytes,
+		HTTPResponse: rsp,
+	}
+
+	switch {
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 200:
+		var dest JobAttemptsResponse
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON200 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 401:
+		var dest UnauthenticatedError
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON401 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 403:
+		var dest ForbiddenError
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON403 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 404:
+		var dest NotFoundError
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON404 = &dest
+
+	}
+
+	return response, nil
+}
+
+// ParseCancelJobResponse parses an HTTP response from a CancelJobWithResponse call
+func ParseCancelJobResponse(rsp *http.Response) (*CancelJobResponse, error) {
+	bodyBytes, err := io.ReadAll(rsp.Body)
+	defer func() { _ = rsp.Body.Close() }()
+	if err != nil {
+		return nil, err
+	}
+
+	response := &CancelJobResponse{
+		Body:         bodyBytes,
+		HTTPResponse: rsp,
+	}
+
+	switch {
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 202:
+		var dest Job
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON202 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 401:
+		var dest UnauthenticatedError
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON401 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 403:
+		var dest ForbiddenError
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON403 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 404:
+		var dest NotFoundError
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON404 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 409:
+		var dest ConflictError
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON409 = &dest
+
+	}
+
+	return response, nil
+}
+
+// ParseRetryJobResponse parses an HTTP response from a RetryJobWithResponse call
+func ParseRetryJobResponse(rsp *http.Response) (*RetryJobResponse, error) {
+	bodyBytes, err := io.ReadAll(rsp.Body)
+	defer func() { _ = rsp.Body.Close() }()
+	if err != nil {
+		return nil, err
+	}
+
+	response := &RetryJobResponse{
+		Body:         bodyBytes,
+		HTTPResponse: rsp,
+	}
+
+	switch {
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 202:
+		var dest Job
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON202 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 401:
+		var dest UnauthenticatedError
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON401 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 403:
+		var dest ForbiddenError
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON403 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 404:
+		var dest NotFoundError
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON404 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 409:
+		var dest ConflictError
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON409 = &dest
 
 	}
 
@@ -16879,6 +18313,53 @@ func ParseCreateScanJobResponse(rsp *http.Response) (*CreateScanJobResponse, err
 			return nil, err
 		}
 		response.JSON409 = &dest
+
+	}
+
+	return response, nil
+}
+
+// ParseGetSourceScanStatusResponse parses an HTTP response from a GetSourceScanStatusWithResponse call
+func ParseGetSourceScanStatusResponse(rsp *http.Response) (*GetSourceScanStatusResponse, error) {
+	bodyBytes, err := io.ReadAll(rsp.Body)
+	defer func() { _ = rsp.Body.Close() }()
+	if err != nil {
+		return nil, err
+	}
+
+	response := &GetSourceScanStatusResponse{
+		Body:         bodyBytes,
+		HTTPResponse: rsp,
+	}
+
+	switch {
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 200:
+		var dest SourceScanState
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON200 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 401:
+		var dest UnauthenticatedError
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON401 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 403:
+		var dest ForbiddenError
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON403 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 404:
+		var dest NotFoundError
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON404 = &dest
 
 	}
 
