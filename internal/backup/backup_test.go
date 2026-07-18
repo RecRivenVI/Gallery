@@ -63,6 +63,14 @@ func seedControl(t *testing.T, store *storage.Store) {
 VALUES ('ses_seed', 'hash', 'personal-owner', 'csrf', 1, 9999999999, 1)`); err != nil {
 		t.Fatal(err)
 	}
+	if _, err := store.Control.SQL().Exec(`INSERT INTO rule_packages
+(package_id, rule_set_id, name, description, status, created_by, created_at, updated_at, revision)
+VALUES ('rpack_018f47d2-5c16-7a44-a8a0-000000000010', 'rset_018f47d2-5c16-7a44-a8a0-000000000010', '备份规则包', '', 'active', 'owner', 1, 1, 1);
+INSERT INTO rule_drafts
+(draft_id, package_id, content_json, source_format, validation_status, diagnostics_json, revision, saved_by, created_at, updated_at)
+VALUES ('rdraft_018f47d2-5c16-7a44-a8a0-000000000010', 'rpack_018f47d2-5c16-7a44-a8a0-000000000010', '{}', 'json', 'invalid', '[{"path":"/","message":"synthetic"}]', 1, 'owner', 1, 1)`); err != nil {
+		t.Fatal(err)
+	}
 }
 
 func runBackup(t *testing.T, h harness) backup.Manifest {
@@ -96,7 +104,7 @@ func TestBackupProducesConsistentRestorableCopy(t *testing.T) {
 	if manifest.Role != string(storage.RoleControl) || manifest.ManifestVersion != backup.ManifestVersion {
 		t.Fatalf("manifest 基本字段错误: %+v", manifest)
 	}
-	if manifest.SchemaVersion != 16 {
+	if manifest.SchemaVersion != 17 {
 		t.Fatalf("manifest schemaVersion = %d，应等于 control 最高 migration", manifest.SchemaVersion)
 	}
 	if manifest.Database.ChecksumAlgorithm != "sha256" || manifest.Database.FileName != "control.db" {
@@ -131,6 +139,13 @@ func TestBackupProducesConsistentRestorableCopy(t *testing.T) {
 	var sessionCount int
 	if err := backupDB.QueryRow("SELECT count(*) FROM sessions WHERE session_id='ses_seed'").Scan(&sessionCount); err != nil || sessionCount != 1 {
 		t.Fatalf("session 状态未按声明进入备份: %d %v", sessionCount, err)
+	}
+	var ruleName, draftStatus string
+	if err := backupDB.QueryRow("SELECT name FROM rule_packages WHERE package_id='rpack_018f47d2-5c16-7a44-a8a0-000000000010'").Scan(&ruleName); err != nil || ruleName != "备份规则包" {
+		t.Fatalf("RulePackage 未进入备份: %q %v", ruleName, err)
+	}
+	if err := backupDB.QueryRow("SELECT validation_status FROM rule_drafts WHERE draft_id='rdraft_018f47d2-5c16-7a44-a8a0-000000000010'").Scan(&draftStatus); err != nil || draftStatus != "invalid" {
+		t.Fatalf("RuleDraft 状态未进入备份: %q %v", draftStatus, err)
 	}
 }
 

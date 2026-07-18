@@ -157,6 +157,13 @@ VALUES ('ses_after', 'hash', 'personal-owner', 'csrf', 2, 9999999999, 2)`); err 
 	if sessionCount != 0 {
 		t.Fatalf("恢复后 Session 未作废: %d", sessionCount)
 	}
+	var ruleCount int
+	if err := reopened.Control.SQL().QueryRow("SELECT count(*) FROM rule_packages WHERE package_id='rpack_018f47d2-5c16-7a44-a8a0-000000000010'").Scan(&ruleCount); err != nil {
+		t.Fatal(err)
+	}
+	if ruleCount != 1 {
+		t.Fatalf("恢复后 RulePackage 不存在: %d", ruleCount)
+	}
 	var jobStatus, issue string
 	if err := reopened.Control.SQL().QueryRow(
 		"SELECT status, coalesce(issue_code,'') FROM jobs WHERE job_id='job_00000000-0000-7000-8000-0000000000aa'").Scan(&jobStatus, &issue); err != nil {

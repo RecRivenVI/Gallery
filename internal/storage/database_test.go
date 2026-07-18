@@ -30,7 +30,7 @@ func openTestStore(t *testing.T) (*Store, appdirs.Dirs) {
 
 func TestIndependentWALMigrationsAndBackup(t *testing.T) {
 	store, dirs := openTestStore(t)
-	wantVersions := map[Role]int{RoleControl: 16, RoleCatalog: 7}
+	wantVersions := map[Role]int{RoleControl: 17, RoleCatalog: 7}
 	for _, database := range []*Database{store.Control, store.Catalog} {
 		var version int
 		if err := database.db.QueryRow("PRAGMA user_version").Scan(&version); err != nil {
@@ -261,7 +261,7 @@ VALUES ('decision_existing', 'issue_existing', 'src_existing', 'split', 'split_c
 	if err := upgraded.db.QueryRowContext(ctx, "PRAGMA user_version").Scan(&version); err != nil {
 		t.Fatal(err)
 	}
-	if version != 16 {
+	if version != 17 {
 		t.Fatalf("v15 数据升级后的 user_version = %d", version)
 	}
 	var issueFingerprint, decisionFingerprint string
@@ -379,5 +379,59 @@ WHERE type='index' AND name=?`, index).Scan(&name)
 		if err != nil {
 			t.Fatalf("冻结索引缺失 %s: %v", index, err)
 		}
+	}
+}
+
+func TestPhase2RuleFreezeRecorded(t *testing.T) {
+	store, _ := openTestStore(t)
+	ctx := context.Background()
+	control := store.Control.SQL()
+	want := map[string]string{
+		"rule.package_canonical_json_control_owner": "FROZEN",
+		"rule.version_immutable":                    "FROZEN",
+		"rule.draft_optimistic_revision":            "FROZEN",
+		"rule.job_execution_snapshot":               "FROZEN",
+		"rule.ui_metadata_nonsemantic":              "COMPATIBILITY_BASELINE",
+		"rule.extension_registry":                   "COMPATIBILITY_BASELINE",
+		"rule.source_binding_single_effective":      "COMPATIBILITY_BASELINE",
+		"rule.parameter_revision_and_override":      "COMPATIBILITY_BASELINE",
+		"rule.impact_dependency_categories":         "COMPATIBILITY_BASELINE",
+		"orphan.default_threshold_3":                "COMPATIBILITY_BASELINE",
+		"orphan.retention_scans_override":           "COMPATIBILITY_BASELINE",
+		"source_structure.missing_blob_evidence":    "COMPATIBILITY_BASELINE",
+		"source_structure.split_bind_existing":      "DEFERRED",
+		"source_structure.action_set":               "COMPATIBILITY_BASELINE",
+		"rule_version.identity_namespace":           "COMPATIBILITY_BASELINE",
+	}
+	rows, err := control.QueryContext(ctx, `SELECT subject, classification FROM schema_freeze WHERE freeze_phase='phase2'`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer rows.Close()
+	got := make(map[string]string, len(want))
+	for rows.Next() {
+		var subject, classification string
+		if err := rows.Scan(&subject, &classification); err != nil {
+			t.Fatal(err)
+		}
+		got[subject] = classification
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != len(want) {
+		t.Fatalf("阶段 2 冻结项数量错误: got=%d want=%d", len(got), len(want))
+	}
+	for subject, classification := range want {
+		if got[subject] != classification {
+			t.Fatalf("阶段 2 冻结项 %s = %q，期望 %q", subject, got[subject], classification)
+		}
+	}
+	var indexCount int
+	if err := control.QueryRowContext(ctx, `SELECT count(*) FROM sqlite_master WHERE type='index' AND name='source_rule_bindings_effective_idx'`).Scan(&indexCount); err != nil {
+		t.Fatal(err)
+	}
+	if indexCount != 1 {
+		t.Fatal("规则 Binding 生效索引未创建")
 	}
 }

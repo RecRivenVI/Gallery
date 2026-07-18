@@ -4,13 +4,72 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
+	"sort"
+	"sync"
 )
 
+const ExtensionRegistryVersion = "gallery-extensions-v1"
+
+// ExtensionDescriptor 是受控 semantic extension 的注册契约。注册表只描述校验和编译，
+// 不授予 extension 文件、网络、进程或任意 host 权限。
+type ExtensionDescriptor struct {
+	Namespace string
+	Versions  []string
+	Semantic  bool
+	Required  bool
+}
+
+var extensionRegistryMu sync.RWMutex
+
 // supportedExtensions 是本编译器识别的 extension namespace 及其支持的 version 集合。required 或
-// semantic 的 extension 只有落在该表内且 version 受支持时才允许编译。这是 pre-freeze 的最小注册表，
-// 目前仅用于身份识别与校验，behavioral 消费属于未来阶段；namespace 集合尚未冻结。
+// semantic 的 extension 只有落在该表内且 version 受支持时才允许编译。这是阶段 2 已闭环、但仍
+// 保持 pre-freeze 的最小注册表；行为消费仍限制在受控内置实现，不授予任意 host 权限。
 var supportedExtensions = map[string]map[string]struct{}{
 	"gallery.identity": {"1": {}},
+}
+
+var extensionDescriptors = map[string]ExtensionDescriptor{
+	"gallery.identity": {Namespace: "gallery.identity", Versions: []string{"1"}, Semantic: true, Required: false},
+}
+
+// RegisterExtension 为测试、发行包和未来受控内置 extension 提供显式注册入口。
+// 注册不会改变已经持久化的 RuleVersion；调用方必须把 registry version 纳入新的 Rule IR 身份。
+func RegisterExtension(descriptor ExtensionDescriptor) error {
+	if descriptor.Namespace == "" || len(descriptor.Versions) == 0 {
+		return fmt.Errorf("extension descriptor 不完整")
+	}
+	versions := make(map[string]struct{}, len(descriptor.Versions))
+	for _, version := range descriptor.Versions {
+		if version == "" {
+			return fmt.Errorf("extension %q version 为空", descriptor.Namespace)
+		}
+		versions[version] = struct{}{}
+	}
+	extensionRegistryMu.Lock()
+	defer extensionRegistryMu.Unlock()
+	supportedExtensions[descriptor.Namespace] = versions
+	descriptor.Versions = append([]string(nil), descriptor.Versions...)
+	extensionDescriptors[descriptor.Namespace] = descriptor
+	return nil
+}
+
+func ExtensionDescriptors() []ExtensionDescriptor {
+	extensionRegistryMu.RLock()
+	defer extensionRegistryMu.RUnlock()
+	result := make([]ExtensionDescriptor, 0, len(supportedExtensions))
+	for namespace, versions := range supportedExtensions {
+		values := make([]string, 0, len(versions))
+		for version := range versions {
+			values = append(values, version)
+		}
+		sort.Strings(values)
+		descriptor := extensionDescriptors[namespace]
+		descriptor.Namespace = namespace
+		descriptor.Versions = values
+		result = append(result, descriptor)
+	}
+	sort.Slice(result, func(i, j int) bool { return result[i].Namespace < result[j].Namespace })
+	return result
 }
 
 // extensionEntry 是分类后的 extension 声明。
@@ -73,6 +132,8 @@ func classifyExtensions(raw json.RawMessage) (map[string]json.RawMessage, error)
 }
 
 func checkExtensionSupported(namespace string, entry extensionEntry) error {
+	extensionRegistryMu.RLock()
+	defer extensionRegistryMu.RUnlock()
 	versions, ok := supportedExtensions[namespace]
 	if !ok {
 		return withField("/extensions/"+namespace, fmt.Errorf("不支持的 extension namespace %q", namespace))
@@ -84,6 +145,29 @@ func checkExtensionSupported(namespace string, entry extensionEntry) error {
 		return withField("/extensions/"+namespace, fmt.Errorf("extension %q 不支持 version %q", namespace, entry.Version))
 	}
 	return nil
+}
+
+// compileExtensionPayload 执行 gallery.identity 的真实、受限行为：可选地给 work
+// stable key 增加声明式前缀。payload 只允许小对象和字符串字段，不能表达 host 调用。
+func compileExtensionPayload(namespace string, entry extensionEntry) (map[string]any, error) {
+	if namespace != "gallery.identity" || !entry.Semantic {
+		return nil, nil
+	}
+	var payload map[string]any
+	if len(bytes.TrimSpace(entry.Payload)) == 0 || string(bytes.TrimSpace(entry.Payload)) == "null" {
+		return map[string]any{}, nil
+	}
+	if err := strictDecode(entry.Payload, &payload); err != nil {
+		return nil, fmt.Errorf("extension %q payload 无效: %w", namespace, err)
+	}
+	if prefix, ok := payload["stable_key_prefix"]; ok {
+		value, ok := prefix.(string)
+		if !ok || len(value) > 256 {
+			return nil, fmt.Errorf("extension %q stable_key_prefix 无效", namespace)
+		}
+		payload["stable_key_prefix"] = value
+	}
+	return payload, nil
 }
 
 func objectFields(value json.RawMessage) (map[string]json.RawMessage, bool) {
