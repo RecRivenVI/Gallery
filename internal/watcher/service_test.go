@@ -246,6 +246,60 @@ func TestWatcherManagerAddsRestartsRebuildsAndStopsSources(t *testing.T) {
 	close(changedEvents)
 }
 
+func TestWatcherAvailabilityIsNotLostDuringPeriodicReconciliation(t *testing.T) {
+	ctx := context.Background()
+	dirs := appdirs.UnderRoot(filepath.Join(t.TempDir(), "app"))
+	if err := dirs.Ensure(filesystem.OS{}); err != nil {
+		t.Fatal(err)
+	}
+	store, err := storage.Open(ctx, dirs)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	now := clock.Fixed{Time: time.Date(2026, 7, 18, 7, 0, 0, 0, time.UTC)}
+	ids := identity.NewGenerator(now)
+	resources, _ := application.NewResources(store.Control.SQL(), dirs, filesystem.OS{}, now, ids)
+	library, _ := resources.CreateLibrary(ctx, "watch-state-race")
+	root := filepath.Join(t.TempDir(), "source")
+	if err := os.MkdirAll(root, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	source, _ := resources.CreateSource(ctx, library.ID, "source", root)
+	jobStore, _ := jobs.NewStore(store.Control.SQL(), now, ids)
+	scanner := &fakeScanner{jobs: jobStore}
+	service, err := watcherservice.New(ctx, store.Control.SQL(), resources, jobStore, scanner, nil, now, time.Hour)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := service.HandleEvent(ctx, source.ID, ports.WatchEvent{Kind: ports.WatchModified, At: now.Now()}); err != nil {
+		t.Fatal(err)
+	}
+	start := make(chan struct{})
+	done := make(chan error, 2)
+	go func() {
+		<-start
+		done <- service.ReconcileSource(ctx, source.ID)
+	}()
+	go func() {
+		<-start
+		done <- service.HandleEvent(ctx, source.ID, ports.WatchEvent{Kind: ports.WatchModified, At: now.Now()})
+	}()
+	close(start)
+	for range 2 {
+		if err := <-done; err != nil {
+			t.Fatal(err)
+		}
+	}
+	state, err := service.GetState(ctx, source.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if state.Status != "online" || !state.Dirty && state.CurrentJobID == "" {
+		t.Fatalf("并发状态更新丢失: %+v", state)
+	}
+}
+
 func waitWatcherAvailable(t *testing.T, ctx context.Context, service *watcherservice.Service, sourceID string) {
 	t.Helper()
 	deadline := time.NewTimer(5 * time.Second)
