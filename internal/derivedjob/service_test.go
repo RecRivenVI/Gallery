@@ -4,6 +4,7 @@ import (
 	"context"
 	"io"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -75,6 +76,40 @@ func TestExecutePublishesDerivedAssetThroughPersistentJob(t *testing.T) {
 		Parameters:       []byte(`{"width":128}`),
 	}, resolverGenerator()); err != nil {
 		t.Fatalf("已发布 DerivedAsset 不可复用: %v", err)
+	}
+}
+
+func TestCreateRejectsUnavailableResolverWithoutPersistingJob(t *testing.T) {
+	ctx := context.Background()
+	dirs := appdirs.UnderRoot(filepath.Join(t.TempDir(), "app"))
+	if err := dirs.Ensure(filesystem.OS{}); err != nil {
+		t.Fatal(err)
+	}
+	store, err := storage.Open(ctx, dirs)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	now := clock.Fixed{Time: time.Date(2026, 7, 18, 5, 0, 0, 0, time.UTC)}
+	jobStore, _ := jobs.NewStore(store.Control.SQL(), now, identity.NewGenerator(now))
+	assets, _ := derived.New(store.Catalog.SQL(), dirs.Cache, now, nil)
+	service, _ := derivedjob.New(jobStore, assets, nil)
+	if service.Available() {
+		t.Fatal("未配置 resolver 时错误报告为可用")
+	}
+	_, err = service.Create(ctx, derivedjob.Request{
+		BlobAlgorithm: "sha256-v1", BlobDigest: strings.Repeat("0", 64),
+		TransformID: "thumbnail", TransformVersion: "v1", Parameters: []byte(`{}`),
+	}, "owner")
+	if err == nil {
+		t.Fatal("未配置 resolver 仍创建了必然失败的 Job")
+	}
+	var count int
+	if err := store.Control.SQL().QueryRowContext(ctx, "SELECT COUNT(*) FROM jobs").Scan(&count); err != nil {
+		t.Fatal(err)
+	}
+	if count != 0 {
+		t.Fatalf("不可用请求污染了 Job 表: %d", count)
 	}
 }
 
