@@ -2,6 +2,8 @@
 
 本目录是 Gallery（中文名“画廊”、代码代号 `gallery`）未来正式实现的唯一工程文档入口。这里保存当前规范、实施指南、验证证据和架构决策，不保存调研过程、阶段汇报或已完成任务清单。
 
+当前实现状态：阶段 0、Walking Skeleton、Architecture Proof 正确性切片、阶段 1「领域和数据所有权」和阶段 2「规则闭环」已完成 Correctness 实现；下一条正式垂直切片是阶段 3「扫描、任务和 Catalog」。阶段 2 在既有有限原语/CEL/Rule IR 基础上提供 RulePackage 生命周期、参数/Binding 快照、严格导入、Explain/Trace/Impact、diff/回滚和内置示例 API，但不代表完整产品、性能、平台或发行门禁已经完成。
+
 ## 如何使用
 
 没有参与前期设计的开发者应按以下顺序阅读：
@@ -21,7 +23,7 @@
 | 规范 | [02 系统架构与模块边界](规范/02-系统架构与模块边界.md) | 技术基础、模块职责、依赖和部署形态 |
 | 规范 | [03 领域模型与数据所有权](规范/03-领域模型与数据所有权.md) | 实体所有权、稳定引用、Binding、Overlay 和媒体生命周期 |
 | 规范 | [04 扫描、Catalog 与任务](规范/04-扫描-Catalog与任务.md) | `query_publication_id`、Catalog/Overlay 快照、Saga、GC 与恢复 |
-| 规范 | [05 规则系统](规范/05-规则系统.md) | Schema 感知规范化、package/semantic/IR hash、编译、解释和测试 |
+| 规范 | [05 规则系统](规范/05-规则系统.md) | Schema 感知规范化、RulePackage 生命周期、package/semantic/IR hash、编译、解释和测试 |
 | 规范 | [06 查询、搜索与排序](规范/06-查询-搜索与排序.md) | 搜索、排序、`query_publication_id` 快照和实时附加状态 |
 | 规范 | [07 API、实时协议与安全](规范/07-API-实时协议与安全.md) | REST/OpenAPI、WebSocket、认证、授权和部署模式 |
 | 规范 | [08 文件系统与媒体处理](规范/08-文件系统与媒体处理.md) | 只读根、路径安全、媒体读取、派生资源和离线语义 |
