@@ -98,6 +98,10 @@ func New(mode config.Mode, store *storage.Store, clock ports.Clock, personal *au
 	mux.HandleFunc("POST /api/v1/binding-issues/{issueId}/resolve", server.resolveBindingIssue)
 	mux.HandleFunc("POST /api/v1/binding-issues/{issueId}/dismiss", server.dismissBindingIssue)
 	mux.HandleFunc("POST /api/v1/binding-issues/{issueId}/reopen", server.reopenBindingIssue)
+	mux.HandleFunc("POST /api/v1/binding-issues/{issueId}/resolve-structure", server.resolveSourceStructureIssue)
+	mux.HandleFunc("GET /api/v1/source-structure-decisions", server.listSourceStructureDecisions)
+	mux.HandleFunc("GET /api/v1/source-structure-decisions/{decisionId}", server.getSourceStructureDecision)
+	mux.HandleFunc("POST /api/v1/source-structure-decisions/{decisionId}/undo", server.undoSourceStructureDecision)
 	mux.HandleFunc("POST /api/v1/binding-actions/unbind-work", server.unbindWork)
 	mux.HandleFunc("POST /api/v1/binding-actions/unbind-media", server.unbindMedia)
 	mux.HandleFunc("POST /api/v1/binding-actions/undo-unbind", server.undoManualUnbind)
@@ -865,6 +869,116 @@ func (s *Server) decideOrphanCandidate(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+func (s *Server) resolveSourceStructureIssue(w http.ResponseWriter, r *http.Request) {
+	session, err := s.requireCapability(r, "bindings.write")
+	if err != nil {
+		s.writeRequestError(w, err)
+		return
+	}
+	if err := auth.ValidateMutation(r, session.CSRFToken); err != nil {
+		s.writeRequestError(w, err)
+		return
+	}
+	var request api.SourceStructureDecisionRequest
+	if err := decodeJSON(r, &request); err != nil {
+		s.writeRequestError(w, fault.WithField(fault.CodeValidation, "body", err))
+		return
+	}
+	targetSourceKey, targetWorkID := "", ""
+	if request.TargetSourceKey != nil {
+		targetSourceKey = *request.TargetSourceKey
+	}
+	if request.TargetWorkId != nil {
+		targetWorkID = *request.TargetWorkId
+	}
+	decision, err := s.data.ResolveSourceStructureIssue(r.Context(), r.PathValue("issueId"), session.PrincipalID,
+		string(request.Action), targetSourceKey, targetWorkID, request.Version)
+	if err != nil {
+		s.writeRequestError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, structureDecisionDTO(decision))
+}
+
+func (s *Server) listSourceStructureDecisions(w http.ResponseWriter, r *http.Request) {
+	if _, err := s.requireCapability(r, "bindings.read"); err != nil {
+		s.writeRequestError(w, err)
+		return
+	}
+	limit := 0
+	if raw := r.URL.Query().Get("limit"); raw != "" {
+		parsed, err := strconv.Atoi(raw)
+		if err != nil {
+			s.writeRequestError(w, fault.WithField(fault.CodeValidation, "limit", err))
+			return
+		}
+		limit = parsed
+	}
+	decisions, err := s.data.ListSourceStructureDecisions(r.Context(), r.URL.Query().Get("sourceId"),
+		r.URL.Query().Get("status"), limit)
+	if err != nil {
+		s.writeRequestError(w, err)
+		return
+	}
+	items := make([]api.SourceStructureDecision, 0, len(decisions))
+	for _, decision := range decisions {
+		items = append(items, structureDecisionDTO(decision))
+	}
+	writeJSON(w, http.StatusOK, api.SourceStructureDecisionListResponse{Decisions: items})
+}
+
+func (s *Server) getSourceStructureDecision(w http.ResponseWriter, r *http.Request) {
+	if _, err := s.requireCapability(r, "bindings.read"); err != nil {
+		s.writeRequestError(w, err)
+		return
+	}
+	decision, err := s.data.GetSourceStructureDecision(r.Context(), r.PathValue("decisionId"))
+	if err != nil {
+		s.writeRequestError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, structureDecisionDTO(decision))
+}
+
+func (s *Server) undoSourceStructureDecision(w http.ResponseWriter, r *http.Request) {
+	session, err := s.requireCapability(r, "bindings.write")
+	if err != nil {
+		s.writeRequestError(w, err)
+		return
+	}
+	if err := auth.ValidateMutation(r, session.CSRFToken); err != nil {
+		s.writeRequestError(w, err)
+		return
+	}
+	var request api.BindingIssueVersionRequest
+	if err := decodeJSON(r, &request); err != nil {
+		s.writeRequestError(w, fault.WithField(fault.CodeValidation, "body", err))
+		return
+	}
+	decision, err := s.data.UndoSourceStructureDecision(r.Context(), r.PathValue("decisionId"), session.PrincipalID, request.Version)
+	if err != nil {
+		s.writeRequestError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, structureDecisionDTO(decision))
+}
+
+func structureDecisionDTO(value application.SourceStructureDecision) api.SourceStructureDecision {
+	result := api.SourceStructureDecision{
+		DecisionId: value.DecisionID, IssueId: value.IssueID, SourceId: value.SourceID,
+		Kind: api.SourceStructureDecisionKind(value.Kind), Action: api.SourceStructureDecisionAction(value.Action),
+		Status: api.SourceStructureDecisionStatus(value.Status), Version: value.Version,
+		CreatedAt: value.CreatedAt, UpdatedAt: value.UpdatedAt,
+	}
+	if value.TargetSourceKey != "" {
+		result.TargetSourceKey = &value.TargetSourceKey
+	}
+	if value.TargetWorkID != "" {
+		result.TargetWorkId = &value.TargetWorkID
+	}
+	return result
+}
+
 func orphanCandidateDTO(value application.OrphanCandidate) api.OrphanCandidate {
 	return api.OrphanCandidate{
 		BindingId: value.BindingID, EntityType: api.OrphanCandidateEntityType(value.EntityType),
@@ -1329,6 +1443,10 @@ func bindingIssueDTO(value application.BindingIssue) api.BindingIssue {
 		Status: api.BindingIssueStatus(value.Status), Version: value.Version,
 		CreatedAt: value.CreatedAt, UpdatedAt: value.UpdatedAt,
 		Candidates: make([]api.BindingIssueCandidate, 0, len(value.Candidates)),
+	}
+	if value.StructureKind != "" {
+		structureKind := api.BindingIssueStructureKind(value.StructureKind)
+		result.StructureKind = &structureKind
 	}
 	if value.WorkSourceKey != "" {
 		result.WorkSourceKey = &value.WorkSourceKey
