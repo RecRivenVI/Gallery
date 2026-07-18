@@ -16,7 +16,9 @@ type Polling struct {
 
 func NewPolling(interval time.Duration, maxEvents int) *Polling {
 	if interval <= 0 {
-		interval = 2 * time.Second
+		// Polling 是原生 Watcher 不可用时的低频完整校验 fallback，默认不得在 HDD/NAS
+		// 上形成高频递归全树 I/O。
+		interval = 5 * time.Minute
 	}
 	if maxEvents < 1 {
 		maxEvents = 4096

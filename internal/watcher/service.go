@@ -45,9 +45,22 @@ type Service struct {
 	clock     ports.Clock
 	interval  time.Duration
 
-	mu      sync.Mutex
-	started bool
-	wait    sync.WaitGroup
+	mu       sync.Mutex
+	started  bool
+	managed  map[string]*managedWatcher
+	retryMin time.Duration
+	retryMax time.Duration
+	wait     sync.WaitGroup
+}
+
+type managedWatcher struct {
+	root   string
+	cancel context.CancelFunc
+}
+
+type sourceDescriptor struct {
+	id   string
+	root string
 }
 
 func New(ctx context.Context, control *sql.DB, resources *application.Resources, jobStore *jobs.Store, scannerService ScanScheduler, fileWatcher ports.FileWatcher, clock ports.Clock, interval time.Duration) (*Service, error) {
@@ -57,7 +70,19 @@ func New(ctx context.Context, control *sql.DB, resources *application.Resources,
 	if interval <= 0 {
 		interval = 30 * time.Second
 	}
-	return &Service{context: ctx, control: control, resources: resources, jobs: jobStore, scanner: scannerService, watcher: fileWatcher, clock: clock, interval: interval}, nil
+	return &Service{context: ctx, control: control, resources: resources, jobs: jobStore, scanner: scannerService,
+		watcher: fileWatcher, clock: clock, interval: interval, managed: make(map[string]*managedWatcher),
+		retryMin: time.Second, retryMax: time.Minute}, nil
+}
+
+// SetRetryPolicy 配置 Watcher 失败重启退避；属于 pre-freeze 运行参数。
+func (s *Service) SetRetryPolicy(minimum, maximum time.Duration) {
+	if minimum <= 0 || maximum < minimum {
+		return
+	}
+	s.mu.Lock()
+	s.retryMin, s.retryMax = minimum, maximum
+	s.mu.Unlock()
 }
 
 func (s *Service) Start(ctx context.Context) {
@@ -81,17 +106,9 @@ func (s *Service) Start(ctx context.Context) {
 func (s *Service) Wait() { s.wait.Wait() }
 
 func (s *Service) run(ctx context.Context) {
-	ids, _ := s.sourceIDs(ctx)
-	for _, sourceID := range ids {
-		_ = s.ReconcileSource(ctx, sourceID)
-		if s.watcher != nil {
-			s.wait.Add(1)
-			go func(id string) {
-				defer s.wait.Done()
-				s.watchSource(ctx, id)
-			}(sourceID)
-		}
-	}
+	defer s.stopManaged()
+	_ = s.syncManaged(ctx)
+	_ = s.ReconcileAll(ctx)
 	ticker := time.NewTicker(s.interval)
 	defer ticker.Stop()
 	for {
@@ -99,6 +116,7 @@ func (s *Service) run(ctx context.Context) {
 		case <-ctx.Done():
 			return
 		case <-ticker.C:
+			_ = s.syncManaged(ctx)
 			ids, err := s.sourceIDs(ctx)
 			if err != nil {
 				continue
@@ -110,26 +128,98 @@ func (s *Service) run(ctx context.Context) {
 	}
 }
 
-func (s *Service) watchSource(ctx context.Context, sourceID string) {
-	source, err := s.resources.GetSource(ctx, sourceID)
-	if err != nil {
-		return
-	}
-	events, err := s.watcher.Watch(ctx, source.RootPath)
-	if err != nil {
+func (s *Service) watchSource(ctx context.Context, sourceID, root string) {
+	backoff := s.retryMin
+	for {
+		if ctx.Err() != nil {
+			return
+		}
+		events, err := s.watcher.Watch(ctx, root)
+		if err == nil {
+			_ = s.updateState(ctx, sourceID, func(state *State) {
+				state.Status = "online"
+				state.WatcherAvailable = true
+				state.BlockingIssueCode = ""
+			})
+			backoff = s.retryMin
+			for {
+				select {
+				case <-ctx.Done():
+					return
+				case event, ok := <-events:
+					if !ok {
+						err = errors.New("Watcher event channel 已关闭")
+						goto restart
+					}
+					_ = s.HandleEvent(ctx, sourceID, event)
+				}
+			}
+		}
+	restart:
 		_ = s.updateState(ctx, sourceID, func(state *State) {
-			state.Status = "offline"
 			state.WatcherAvailable = false
 			state.Dirty = true
 			state.BlockingIssueCode = string(fault.CodeSourceUnavailable)
 		})
-		return
+		timer := time.NewTimer(backoff)
+		select {
+		case <-ctx.Done():
+			timer.Stop()
+			return
+		case <-timer.C:
+		}
+		if backoff < s.retryMax {
+			backoff *= 2
+			if backoff > s.retryMax {
+				backoff = s.retryMax
+			}
+		}
 	}
-	_ = s.updateState(ctx, sourceID, func(state *State) { state.WatcherAvailable = true })
-	for event := range events {
-		_ = s.HandleEvent(ctx, sourceID, event)
+}
+
+func (s *Service) syncManaged(ctx context.Context) error {
+	if s.watcher == nil {
+		return nil
 	}
-	_ = s.updateState(ctx, sourceID, func(state *State) { state.WatcherAvailable = false })
+	descriptors, err := s.sourceDescriptors(ctx)
+	if err != nil {
+		return err
+	}
+	wanted := make(map[string]string, len(descriptors))
+	for _, item := range descriptors {
+		wanted[item.id] = item.root
+	}
+	s.mu.Lock()
+	for id, current := range s.managed {
+		root, exists := wanted[id]
+		if !exists || root != current.root {
+			current.cancel()
+			delete(s.managed, id)
+		}
+	}
+	for _, item := range descriptors {
+		if _, exists := s.managed[item.id]; exists {
+			continue
+		}
+		watchContext, cancel := context.WithCancel(ctx)
+		s.managed[item.id] = &managedWatcher{root: item.root, cancel: cancel}
+		s.wait.Add(1)
+		go func(sourceID, root string) {
+			defer s.wait.Done()
+			s.watchSource(watchContext, sourceID, root)
+		}(item.id, item.root)
+	}
+	s.mu.Unlock()
+	return nil
+}
+
+func (s *Service) stopManaged() {
+	s.mu.Lock()
+	for id, current := range s.managed {
+		current.cancel()
+		delete(s.managed, id)
+	}
+	s.mu.Unlock()
 }
 
 func (s *Service) HandleEvent(ctx context.Context, sourceID string, event ports.WatchEvent) error {
@@ -297,6 +387,23 @@ func (s *Service) sourceIDs(ctx context.Context) ([]string, error) {
 			return nil, fault.New(fault.CodeInternal, true, err)
 		}
 		result = append(result, id)
+	}
+	return result, rows.Err()
+}
+
+func (s *Service) sourceDescriptors(ctx context.Context) ([]sourceDescriptor, error) {
+	rows, err := s.control.QueryContext(ctx, "SELECT source_id, root_path FROM sources ORDER BY source_id")
+	if err != nil {
+		return nil, fault.New(fault.CodeInternal, true, err)
+	}
+	defer rows.Close()
+	var result []sourceDescriptor
+	for rows.Next() {
+		var item sourceDescriptor
+		if err := rows.Scan(&item.id, &item.root); err != nil {
+			return nil, fault.New(fault.CodeInternal, true, err)
+		}
+		result = append(result, item)
 	}
 	return result, rows.Err()
 }
