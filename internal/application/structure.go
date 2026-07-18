@@ -382,10 +382,8 @@ type structureFingerprintPayload struct {
 // 交集形成的新→原映射；不包含绝对路径、标题、扫描顺序、map 遍历顺序、Catalog row ID 或临时 revision。
 // 相同证据（含不同输入顺序）产生相同指纹；source_key 相同但 Blob 集合或映射变化产生不同指纹。
 func structureFingerprint(cluster structureCluster) string {
-	origins := append([]string(nil), cluster.originSourceKeys...)
-	news := append([]string(nil), cluster.newSourceKeys...)
-	sort.Strings(origins)
-	sort.Strings(news)
+	origins := sortedCopy(cluster.originSourceKeys)
+	news := sortedCopy(cluster.newSourceKeys)
 
 	workIDByKey := make(map[string]string, len(cluster.originSourceKeys))
 	for index, key := range cluster.originSourceKeys {
@@ -410,10 +408,8 @@ func structureFingerprint(cluster structureCluster) string {
 // legacyStructureFingerprint 复算历史（v1）指纹格式，仅用于识别升级前遗留 issue 是否在旧判据下与
 // 当前结构相同，以便原位升级到 v2 而不误报 superseded。
 func legacyStructureFingerprint(cluster structureCluster) string {
-	origins := append([]string(nil), cluster.originSourceKeys...)
-	news := append([]string(nil), cluster.newSourceKeys...)
-	sort.Strings(origins)
-	sort.Strings(news)
+	origins := sortedCopy(cluster.originSourceKeys)
+	news := sortedCopy(cluster.newSourceKeys)
 	return cluster.kind + "|" + strings.Join(origins, "\x00") + "|" + strings.Join(news, "\x00")
 }
 
@@ -424,10 +420,16 @@ func isLegacyStructureFingerprint(value string) bool {
 func sortedCopy(values []string) []string {
 	result := append([]string(nil), values...)
 	sort.Strings(result)
-	if result == nil {
+	if len(result) == 0 {
 		return []string{}
 	}
-	return result
+	unique := result[:1]
+	for _, value := range result[1:] {
+		if value != unique[len(unique)-1] {
+			unique = append(unique, value)
+		}
+	}
+	return unique
 }
 
 // SourceStructureDecision 汇报一次拆分/合并人工决策的结果，供 API 返回与查询。
