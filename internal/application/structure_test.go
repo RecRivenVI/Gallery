@@ -393,10 +393,23 @@ func TestStructureDecisionUndoConflictAfterRescan(t *testing.T) {
 	if _, err := f.resources.EnsureCanonical(f.ctx, f.source.ID, split); err != nil {
 		t.Fatalf("决策后重扫应成功: %v", err)
 	}
+	inheritedWork := f.activeWorkID(t, "wkA1")
 	// 撤销应返回 CONFLICT。
 	_, err = f.resources.UndoSourceStructureDecision(f.ctx, decision.DecisionID, "owner", decision.Version)
 	if err == nil || asStructured(t, err).Code != fault.CodeConflict {
 		t.Fatalf("已消费决策撤销应冲突: %v", err)
+	}
+	// 冲突不得部分修改决策、issue 或 Binding。
+	after, err := f.resources.GetSourceStructureDecision(f.ctx, decision.DecisionID)
+	if err != nil || after.Status != "applied" || after.Version != decision.Version {
+		t.Fatalf("冲突后决策被部分修改: %+v %v", after, err)
+	}
+	reissue, err := f.resources.GetBindingIssue(f.ctx, issue.ID)
+	if err != nil || reissue.Status != "resolved" {
+		t.Fatalf("冲突后 issue 被改动: %+v %v", reissue, err)
+	}
+	if got := f.activeWorkID(t, "wkA1"); got != inheritedWork {
+		t.Fatalf("冲突后 active Binding 被改动: got=%s want=%s", got, inheritedWork)
 	}
 }
 
