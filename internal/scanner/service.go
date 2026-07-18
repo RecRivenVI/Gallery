@@ -15,6 +15,7 @@ import (
 	"github.com/RecRivenVI/gallery/internal/application"
 	"github.com/RecRivenVI/gallery/internal/catalog"
 	"github.com/RecRivenVI/gallery/internal/contract/fault"
+	"github.com/RecRivenVI/gallery/internal/hashjob"
 	"github.com/RecRivenVI/gallery/internal/jobs"
 	"github.com/RecRivenVI/gallery/internal/media"
 	"github.com/RecRivenVI/gallery/internal/rules"
@@ -46,10 +47,15 @@ type Service struct {
 	notifier   Notifier
 	wait       sync.WaitGroup
 	dispatcher Dispatcher
+	hash       *hashjob.Service
 }
 
 // SetDispatcher 注入中央调度器；注入后 Start 通过调度器领取执行并接受其 context 取消。
 func (s *Service) SetDispatcher(d Dispatcher) { s.dispatcher = d }
+
+// SetHashService 将完整内容哈希交给独立 hash 资源池。未注入时保留同步 fallback，方便
+// 仅验证 Catalog 语义的单元测试；正式 bootstrap 始终注入持久 Hash Job Service。
+func (s *Service) SetHashService(service *hashjob.Service) { s.hash = service }
 
 func New(ctx context.Context, resources *application.Resources, jobStore *jobs.Store, catalogStore *catalog.Store, notifier Notifier) (*Service, error) {
 	if ctx == nil || resources == nil || jobStore == nil || catalogStore == nil {
@@ -62,6 +68,10 @@ func New(ctx context.Context, resources *application.Resources, jobStore *jobs.S
 }
 
 func (s *Service) CreateScan(ctx context.Context, sourceID, createdBy string) (jobs.Job, error) {
+	return s.CreateScanWithIdempotency(ctx, sourceID, createdBy, "")
+}
+
+func (s *Service) CreateScanWithIdempotency(ctx context.Context, sourceID, createdBy, idempotencyKey string) (jobs.Job, error) {
 	if _, err := s.resources.GetSource(ctx, sourceID); err != nil {
 		return jobs.Job{}, err
 	}
@@ -79,7 +89,7 @@ func (s *Service) CreateScan(ctx context.Context, sourceID, createdBy string) (j
 		CompilerVersion: rules.CompilerVersion, CELProfileVersion: rules.CELProfileVersion,
 		ExtensionRegistryVersion: version.IR.ExtensionRegistryVersion,
 	}
-	job, err := s.jobs.CreateScanWithRuleSnapshot(ctx, sourceID, createdBy, "", snapshot)
+	job, err := s.jobs.CreateScanWithOptions(ctx, sourceID, createdBy, "", snapshot, jobs.CreateOptions{ResourceClass: jobs.ResourceScan, IdempotencyKey: idempotencyKey})
 	if err == nil {
 		s.notifier.JobChanged(job)
 	}
@@ -154,7 +164,26 @@ func (s *Service) Execute(ctx context.Context, jobID string) error {
 			default:
 			}
 			item := &discovered[workIndex].Media[mediaIndex]
-			hashed, hashErr := media.HashSourceFile(source.RootPath, item.RelativePath, nil)
+			var hashed media.HashResult
+			var hashErr error
+			if s.hash != nil {
+				hashJob, createErr := s.hash.Create(ctx, hashjob.Request{SourceID: source.ID, RelativePath: item.RelativePath,
+					ExpectedSize: item.ExpectedSize, ExpectedModTimeNanos: item.ExpectedModTimeNanos,
+					HasExpectedIdentity: item.HasExpectedIdentity, ParentJobID: job.ID}, job.CreatedBy)
+				if createErr == nil && (hashJob.Status == jobs.StatusFailed || hashJob.Status == jobs.StatusCancelled || hashJob.Status == jobs.StatusNeedsRepair) {
+					hashJob, createErr = s.jobs.Retry(ctx, hashJob.ID, job.CreatedBy)
+				}
+				if createErr == nil && hashJob.Status != jobs.StatusCompleted {
+					s.hash.Start(hashJob.ID)
+				}
+				if createErr == nil {
+					hashed, hashErr = s.hash.WaitResult(ctx, hashJob.ID)
+				} else {
+					hashErr = createErr
+				}
+			} else {
+				hashed, hashErr = media.HashSourceFile(source.RootPath, item.RelativePath, nil)
+			}
 			if hashErr != nil {
 				return s.fail(ctx, job.ID, hashErr)
 			}
@@ -325,8 +354,20 @@ func (s *Service) Reconcile(ctx context.Context) error {
 }
 
 func (s *Service) fail(ctx context.Context, jobID string, cause error) error {
+	current, _ := s.jobs.Get(context.Background(), jobID)
+	if current.CancelRequested || errors.Is(ctx.Err(), context.Canceled) {
+		if cancelled, cancelErr := s.jobs.FinalizeCancelled(context.Background(), jobID); cancelErr == nil {
+			s.notifier.JobChanged(cancelled)
+			return cause
+		}
+	}
 	code := faultCode(cause)
-	failed, err := s.jobs.Fail(ctx, jobID, string(code))
+	retryable := true
+	var structured *fault.Error
+	if errors.As(cause, &structured) {
+		retryable = structured.Retryable
+	}
+	failed, err := s.jobs.FailWithRetryable(ctx, jobID, string(code), retryable)
 	if err == nil {
 		s.notifier.JobChanged(failed)
 	}
@@ -356,6 +397,9 @@ type discoveredWork struct {
 }
 type discoveredMedia struct {
 	SourceKey, RuleKey, RelativePath, Kind, MIME string
+	ExpectedSize                                 int64
+	ExpectedModTimeNanos                         int64
+	HasExpectedIdentity                          bool
 	Hash                                         media.HashResult
 }
 
@@ -448,8 +492,16 @@ func discover(ctx context.Context, root string, ir rules.RuleIR, parameters []by
 			if _, err := media.ValidateRelativePath(mediaRelative); err != nil {
 				return err
 			}
+			mediaPath := filepath.Join(root, filepath.FromSlash(mediaRelative))
+			info, infoErr := os.Stat(mediaPath)
+			if infoErr != nil {
+				return infoErr
+			}
 			work.Media = append(work.Media, discoveredMedia{SourceKey: path.Join(work.SourceKey, item.StableKey),
 				RuleKey: item.StableKey, RelativePath: mediaRelative, Kind: item.Kind, MIME: item.MIME})
+			work.Media[len(work.Media)-1].ExpectedSize = info.Size()
+			work.Media[len(work.Media)-1].ExpectedModTimeNanos = info.ModTime().UnixNano()
+			work.Media[len(work.Media)-1].HasExpectedIdentity = true
 		}
 		if len(work.Media) > 0 {
 			result = append(result, work)
