@@ -30,7 +30,7 @@ func openTestStore(t *testing.T) (*Store, appdirs.Dirs) {
 
 func TestIndependentWALMigrationsAndBackup(t *testing.T) {
 	store, dirs := openTestStore(t)
-	wantVersions := map[Role]int{RoleControl: 17, RoleCatalog: 7}
+	wantVersions := map[Role]int{RoleControl: 18, RoleCatalog: 7}
 	for _, database := range []*Database{store.Control, store.Catalog} {
 		var version int
 		if err := database.db.QueryRow("PRAGMA user_version").Scan(&version); err != nil {
@@ -261,7 +261,7 @@ VALUES ('decision_existing', 'issue_existing', 'src_existing', 'split', 'split_c
 	if err := upgraded.db.QueryRowContext(ctx, "PRAGMA user_version").Scan(&version); err != nil {
 		t.Fatal(err)
 	}
-	if version != 17 {
+	if version != 18 {
 		t.Fatalf("v15 数据升级后的 user_version = %d", version)
 	}
 	var issueFingerprint, decisionFingerprint string
