@@ -15,7 +15,7 @@
 - 代码、仓库、包、命令和服务代号：`gallery`。
 - 建议后端命令：`galleryd`；建议 CLI：`galleryctl`。
 - Gallery 是独立的净室产品，不以任何旧 Gallery 的数据库、配置、API、目录结构或行为作为兼容、迁移或对拍目标。
-- 当前仓库已有正式产品代码（`cmd/`、`internal/`、`pkg/`）。阶段 0 契约骨架、Walking Skeleton、Architecture Proof 正确性切片与**阶段 1「领域和数据所有权」均已完成**；当前准备进入**阶段 2「规则闭环」**。已落地并配套 API 的能力包括：Personal 配对/Session/capability、Library/Source/RuleVersion/SourceRuleBinding、持久 Scan Job 与完整 SHA-256 publication、双 revision `query_publication_id` 查询/FTS5/自然排序/签名游标、Overlay 同步写与异步重投影、Catalog 删除重建与稳定重绑、八点强杀恢复、CanonicalCreator 合并/撤销、Work/Media/Creator Binding issue 人工修复、Source-derived active/inactive/orphan_candidate/orphaned 保留窗口与人工审查、AppDirs 进程独占锁、有界 Job 调度器、规则 extension 身份分类、control.db 产品级备份/恢复与升级失败回滚、Catalog 全量重建后人工决策恢复端到端门禁、SourceWork 拆分/合并检测（ContentBlob digest 证据）与人工决策/撤销（复用 Binding issue 与 pre-seed WorkBinding，`source_structure_decisions` 记录）、阶段 1 Schema Freeze Gate（`schema_freeze` 表逐项分类身份与唯一约束）。尚未完成：阶段 2+ 的规则闭环/查询/媒体/安全/Web/平台发行。
+- 当前仓库已有正式产品代码（`cmd/`、`internal/`、`pkg/`）。阶段 0 契约骨架、Walking Skeleton、Architecture Proof 正确性切片与**阶段 1「领域和数据所有权」均已完成**；当前准备进入**阶段 2「规则闭环」**。已落地并配套 API 的能力包括：Personal 配对/Session/capability、Library/Source/RuleVersion/SourceRuleBinding、持久 Scan Job 与完整 SHA-256 publication、双 revision `query_publication_id` 查询/FTS5/自然排序/签名游标、Overlay 同步写与异步重投影、Catalog 删除重建与稳定重绑、八点强杀恢复、CanonicalCreator 合并/撤销、Work/Media/Creator Binding issue 人工修复、Source-derived active/inactive/orphan_candidate/orphaned 保留窗口与人工审查、AppDirs 进程独占锁、有界 Job 调度器、规则 extension 身份分类、control.db 产品级备份/恢复与升级失败回滚、Catalog 全量重建后人工决策恢复端到端门禁、SourceWork 拆分/合并检测（ContentBlob digest 证据）与人工决策及仅限未消费决策的撤回（复用 Binding issue 与 pre-seed WorkBinding，`source_structure_decisions` 记录）、阶段 1 Schema Freeze Gate（`schema_freeze` 表逐项分类身份与唯一约束）。尚未完成：阶段 2+ 的规则闭环/查询/媒体/安全/Web/平台发行。
 - 本文件是需要随真实开发状态持续维护的 Agent 规则；发现与代码、有效 ADR 或规范不一致时应更新本文件，但不得放宽安全、只读 Source、Git、签名或测试要求，也不得把临时实装写成已冻结决策。
 
 ## 权威资料与阅读顺序
@@ -111,7 +111,7 @@
 3. Architecture Proof：补齐快照分页、Overlay、FTS、Catalog 重建、强杀恢复和多客户端边界后，再冻结数据库与 API。**（正确性切片已完成；物理 Schema 与完整 API 仍未冻结）**
 4. 按领域/规则/扫描/查询与媒体/安全/Web/PWA/平台发行的顺序扩展。**（阶段 1 领域和数据所有权已完成；下一步阶段 2 规则闭环）**
 
-阶段 1 已完成：SourceWork 拆分/合并检测/决策/撤销落地，阶段 1 Schema Freeze Gate 已执行，`(source_id, source_key) WHERE status='active'`、`(work_id, ordinal)`、CanonicalWork 持久 ID 身份、同 Blob 多 occurrence、结构决策 fingerprint 唯一等已在 control 迁移 `00016_schema_freeze_phase1` 的 `schema_freeze` 表中冻结（FROZEN）；orphan 阈值、external ID 冲突策略、RuleVersion 身份命名空间、WorkOrigin 模型、FileLocation 唯一约束等保持 COMPATIBILITY_BASELINE/PRE_FREEZE/DEFERRED，仍可经 forward-only migration 演进。**下一阶段是阶段 2 规则闭环**（有限原语、CEL Profile、编译缓存、Rule IR、表单/Dry Run/Explain/Impact/版本 diff/回滚）。修改标记 FROZEN 的约束前须新增或修订 ADR。不要据此提前展开前端、LAN 完整账户、桌面壳或发行。
+阶段 1 已完成。阶段 1 Schema Freeze Gate 冻结的是**核心领域身份与唯一约束**（不是最终物理数据库唯一约束）：`(source_id, source_key) WHERE status='active'`、`(work_id, ordinal)`、CanonicalWork 持久 ID 身份、Work/Creator/Media Binding 的 active/inactive/manual_unbound/orphan_candidate/orphaned 生命周期、同 Blob 多 occurrence、SourceWork 拆分/合并检测与结构决策 fingerprint 唯一、多 Source 隔离、Binding issue 指纹去重，登记于 control 迁移 `00016_schema_freeze_phase1` 的 `schema_freeze` 表（FROZEN）。SourceWork 决策的撤回仅适用于尚未被扫描消费的 pre-seed Binding；消费后返回结构化 `CONFLICT`，不执行已生效结构变化的完整反向操作。仍保持 pre-freeze/compatibility-baseline/deferred（未完成，但**不因此重开阶段 1**）：FileLocation 在 SMB/inode/无 FileID 下的最终唯一约束、超大文件持久哈希 Job、句柄式文件打开与 TOCTOU 进一步收紧、Blob 哈希算法升级、external ID 冲突最终策略、RuleVersion/extension 身份命名空间最终冻结、WorkOrigin 独立模型、完整 REST/过滤/排序/排名/高亮与 cursor 内部格式、显式且可撤销的 CanonicalWork merge/split、`split.bind_existing` 等已延后分支。这些最终物理约束的整体冻结属于「领域 Schema 最终冻结门禁」，见 `Documents/指南/02-测试与发布门禁.md`。**下一阶段是阶段 2 规则闭环**（有限原语、CEL Profile、编译缓存、Rule IR、表单/Dry Run/Explain/Impact/版本 diff/回滚）。修改标记 FROZEN 的约束前须新增或修订 ADR。不要据此提前展开前端、LAN 完整账户、桌面壳或发行。
 
 Walking Skeleton 功能可以少，但基础模型不能是临时替代品：
 
@@ -151,7 +151,7 @@ Walking Skeleton 功能可以少，但基础模型不能是临时替代品：
 
 ## 构建、依赖和发行
 
-- 正式产品尚无根级构建命令；建立实现时应为 `galleryd`、`galleryctl`、Web/PWA 和可选壳提供明确、可重复的独立命令。
+- 仓库已有正式构建与检查入口：根级 `Check.ps1`（委托 `scripts/Check.ps1`）执行 `go mod tidy -diff`、OpenAPI 生成一致性（`go generate ./...`）、gofmt、`go vet ./...`、`CGO_ENABLED=0 go test ./...` 与 `go build ./cmd/...`，`Check.ps1 -Race` 追加 `go test -race ./...`；也可直接运行 `go test ./...`、`go vet ./...`、`go build ./cmd/...`（`galleryd`/`galleryctl`）与 `govulncheck ./...`。Windows 本机 race 有 `WaitOnAddress` 限制，race 门禁在 Linux/WSL 执行。`go` 不在 PATH 时用 `GALLERY_GO` 指定工具链。不要另建重复脚本；Web/PWA 与可选壳的独立命令待相应阶段补充。
 - ffmpeg/ffprobe 等外部工具必须经 ToolDiscovery、版本允许列表、参数数组、超时和资源限制调用，不能拼接 shell 命令。
 - 程序资源与用户 AppDirs 分离；覆盖升级不得删除用户数据。数据升级前优先备份 control，Catalog 不兼容时可重建。
 - 发行前完成 OpenAPI/WS/规则/数据版本、许可证、SBOM、依赖安全、签名和升级/降级说明。
