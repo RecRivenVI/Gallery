@@ -358,8 +358,10 @@ const (
 	DATABASEOPENFAILED            ErrorCode = "DATABASE_OPEN_FAILED"
 	DERIVEDASSETFAILED            ErrorCode = "DERIVED_ASSET_FAILED"
 	DERIVEDASSETINVALID           ErrorCode = "DERIVED_ASSET_INVALID"
+	DERIVEDASSETUNAVAILABLE       ErrorCode = "DERIVED_ASSET_UNAVAILABLE"
 	DISKSPACEINSUFFICIENT         ErrorCode = "DISK_SPACE_INSUFFICIENT"
 	EXTERNALTOOLFAILED            ErrorCode = "EXTERNAL_TOOL_FAILED"
+	EXTERNALTOOLUNAVAILABLE       ErrorCode = "EXTERNAL_TOOL_UNAVAILABLE"
 	FORBIDDEN                     ErrorCode = "FORBIDDEN"
 	HOSTREJECTED                  ErrorCode = "HOST_REJECTED"
 	INTERNALERROR                 ErrorCode = "INTERNAL_ERROR"
@@ -451,9 +453,13 @@ func (e ErrorCode) Valid() bool {
 		return true
 	case DERIVEDASSETINVALID:
 		return true
+	case DERIVEDASSETUNAVAILABLE:
+		return true
 	case DISKSPACEINSUFFICIENT:
 		return true
 	case EXTERNALTOOLFAILED:
+		return true
+	case EXTERNALTOOLUNAVAILABLE:
 		return true
 	case FORBIDDEN:
 		return true
@@ -1255,6 +1261,36 @@ func (e SourceStructureDecisionRequestAction) Valid() bool {
 	}
 }
 
+// Defines values for SpaceEstimateOperation.
+const (
+	SpaceEstimateOperationCatalogCheckpoint SpaceEstimateOperation = "catalog_checkpoint"
+	SpaceEstimateOperationCatalogGc         SpaceEstimateOperation = "catalog_gc"
+	SpaceEstimateOperationCatalogStaging    SpaceEstimateOperation = "catalog_staging"
+	SpaceEstimateOperationCatalogVacuum     SpaceEstimateOperation = "catalog_vacuum"
+	SpaceEstimateOperationControlBackup     SpaceEstimateOperation = "control_backup"
+	SpaceEstimateOperationDerivedGc         SpaceEstimateOperation = "derived_gc"
+)
+
+// Valid indicates whether the value is a known member of the SpaceEstimateOperation enum.
+func (e SpaceEstimateOperation) Valid() bool {
+	switch e {
+	case SpaceEstimateOperationCatalogCheckpoint:
+		return true
+	case SpaceEstimateOperationCatalogGc:
+		return true
+	case SpaceEstimateOperationCatalogStaging:
+		return true
+	case SpaceEstimateOperationCatalogVacuum:
+		return true
+	case SpaceEstimateOperationControlBackup:
+		return true
+	case SpaceEstimateOperationDerivedGc:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for WorkListResponseSortProtocolVersion.
 const (
 	WorkListResponseSortProtocolVersionN1 WorkListResponseSortProtocolVersion = 1
@@ -1831,8 +1867,13 @@ type LibraryId = string
 // MaintenanceGCRequest defines model for MaintenanceGCRequest.
 type MaintenanceGCRequest struct {
 	DryRun           *bool  `json:"dryRun,omitempty"`
-	RequiredBytes    *int64 `json:"requiredBytes,omitempty"`
 	RetentionSeconds *int64 `json:"retentionSeconds,omitempty"`
+}
+
+// MaintenanceJobResponse defines model for MaintenanceJobResponse.
+type MaintenanceJobResponse struct {
+	Job           Job           `json:"job"`
+	SpaceEstimate SpaceEstimate `json:"spaceEstimate"`
 }
 
 // MediaListResponse defines model for MediaListResponse.
@@ -2411,6 +2452,18 @@ type SourceStructureDecisionRequest struct {
 
 // SourceStructureDecisionRequestAction defines model for SourceStructureDecisionRequest.Action.
 type SourceStructureDecisionRequestAction string
+
+// SpaceEstimate defines model for SpaceEstimate.
+type SpaceEstimate struct {
+	AvailableBytes int64                  `json:"availableBytes"`
+	Conservative   bool                   `json:"conservative"`
+	Operation      SpaceEstimateOperation `json:"operation"`
+	RequiredBytes  int64                  `json:"requiredBytes"`
+	Sufficient     bool                   `json:"sufficient"`
+}
+
+// SpaceEstimateOperation defines model for SpaceEstimate.Operation.
+type SpaceEstimateOperation string
 
 // WorkListResponse defines model for WorkListResponse.
 type WorkListResponse struct {
@@ -10101,7 +10154,7 @@ func (r VerifyControlRestoreResponse) ContentType() string {
 type CreateCatalogCheckpointJobResponse struct {
 	Body         []byte
 	HTTPResponse *http.Response
-	JSON202      *Job
+	JSON202      *MaintenanceJobResponse
 	JSON401      *UnauthenticatedError
 	JSON403      *ForbiddenError
 	JSON409      *ConflictError
@@ -10134,7 +10187,7 @@ func (r CreateCatalogCheckpointJobResponse) ContentType() string {
 type CreateCatalogGCJobResponse struct {
 	Body         []byte
 	HTTPResponse *http.Response
-	JSON202      *Job
+	JSON202      *MaintenanceJobResponse
 	JSON401      *UnauthenticatedError
 	JSON403      *ForbiddenError
 	JSON409      *ConflictError
@@ -10167,7 +10220,7 @@ func (r CreateCatalogGCJobResponse) ContentType() string {
 type CreateCatalogVacuumJobResponse struct {
 	Body         []byte
 	HTTPResponse *http.Response
-	JSON202      *Job
+	JSON202      *MaintenanceJobResponse
 	JSON401      *UnauthenticatedError
 	JSON403      *ForbiddenError
 	JSON409      *ConflictError
@@ -14385,7 +14438,7 @@ func ParseCreateCatalogCheckpointJobResponse(rsp *http.Response) (*CreateCatalog
 
 	switch {
 	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 202:
-		var dest Job
+		var dest MaintenanceJobResponse
 		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
 			return nil, err
 		}
@@ -14432,7 +14485,7 @@ func ParseCreateCatalogGCJobResponse(rsp *http.Response) (*CreateCatalogGCJobRes
 
 	switch {
 	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 202:
-		var dest Job
+		var dest MaintenanceJobResponse
 		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
 			return nil, err
 		}
@@ -14479,7 +14532,7 @@ func ParseCreateCatalogVacuumJobResponse(rsp *http.Response) (*CreateCatalogVacu
 
 	switch {
 	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 202:
-		var dest Job
+		var dest MaintenanceJobResponse
 		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
 			return nil, err
 		}
