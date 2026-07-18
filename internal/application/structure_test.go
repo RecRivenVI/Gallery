@@ -161,3 +161,181 @@ func TestUnrelatedDisappearanceNotFlagged(t *testing.T) {
 		t.Fatalf("普通删除误报结构 issue: %+v", got)
 	}
 }
+
+// activeWorkID 返回某 source_key 当前 active WorkBinding 指向的 CanonicalWork ID（无则空）。
+func (f *issueFixture) activeWorkID(t *testing.T, sourceKey string) string {
+	t.Helper()
+	var workID string
+	err := f.control.QueryRowContext(f.ctx, `SELECT work_id FROM work_bindings
+WHERE source_id=? AND source_key=? AND status='active'`, f.source.ID, sourceKey).Scan(&workID)
+	if err != nil {
+		return ""
+	}
+	return workID
+}
+
+func (f *issueFixture) bindingStatus(t *testing.T, sourceKey string) string {
+	t.Helper()
+	var status string
+	err := f.control.QueryRowContext(f.ctx, `SELECT status FROM work_bindings
+WHERE source_id=? AND source_key=? ORDER BY CASE status WHEN 'active' THEN 0 ELSE 1 END LIMIT 1`,
+		f.source.ID, sourceKey).Scan(&status)
+	if err != nil {
+		return ""
+	}
+	return status
+}
+
+// seedSplit 跑扫描 1 建立 wkA(m1,m2,m3)，扫描 2 触发拆分并返回 open issue 与原 CanonicalWork ID。
+func (f *issueFixture) seedSplit(t *testing.T) (application.BindingIssue, string, []application.DiscoveredWork) {
+	t.Helper()
+	if _, err := f.resources.EnsureCanonical(f.ctx, f.source.ID, []application.DiscoveredWork{
+		work("wkA", "作品甲", blob("wkA/m1", "d1", 0), blob("wkA/m2", "d2", 1), blob("wkA/m3", "d3", 2)),
+	}); err != nil {
+		t.Fatalf("扫描 1: %v", err)
+	}
+	origin := f.activeWorkID(t, "wkA")
+	split := []application.DiscoveredWork{
+		work("wkA1", "作品甲一", blob("wkA1/m1", "d1", 0), blob("wkA1/m2", "d2", 1)),
+		work("wkA2", "作品甲二", blob("wkA2/m3", "d3", 0)),
+	}
+	if _, err := f.resources.EnsureCanonical(f.ctx, f.source.ID, split); err == nil {
+		t.Fatal("拆分应阻塞")
+	}
+	open := f.openIssues(t)
+	if len(open) != 1 {
+		t.Fatalf("期望一个拆分 issue: %+v", open)
+	}
+	return open[0], origin, split
+}
+
+func TestSplitInheritAppliedByRescan(t *testing.T) {
+	f := newIssueFixture(t)
+	issue, origin, split := f.seedSplit(t)
+	if _, err := f.resources.ResolveSourceStructureIssue(f.ctx, issue.ID, "owner", "split_inherit", "wkA1", "", issue.Version); err != nil {
+		t.Fatalf("决策应成功: %v", err)
+	}
+	resolved, err := f.resources.GetBindingIssue(f.ctx, issue.ID)
+	if err != nil || resolved.Status != "resolved" {
+		t.Fatalf("issue 未标 resolved: %+v %v", resolved, err)
+	}
+	// 决策应用后重扫应成功。
+	if _, err := f.resources.EnsureCanonical(f.ctx, f.source.ID, split); err != nil {
+		t.Fatalf("决策后重扫应成功: %v", err)
+	}
+	if got := f.activeWorkID(t, "wkA1"); got != origin {
+		t.Fatalf("wkA1 未继承原 CanonicalWork: got=%s origin=%s", got, origin)
+	}
+	other := f.activeWorkID(t, "wkA2")
+	if other == "" || other == origin {
+		t.Fatalf("wkA2 应绑定新 CanonicalWork: got=%s", other)
+	}
+	// 继承作品应经 rule_key 复用原 CanonicalMedia（m1,m2 仍在原 work）。
+	var kept int
+	if err := f.control.QueryRowContext(f.ctx, `SELECT count(DISTINCT media_id) FROM media_bindings
+WHERE source_id=? AND work_id=? AND status='active'`, f.source.ID, origin).Scan(&kept); err != nil {
+		t.Fatal(err)
+	}
+	if kept != 2 {
+		t.Fatalf("原 work 应保留 2 个媒体 occurrence: got=%d", kept)
+	}
+}
+
+func TestSplitCreateNewAppliedByRescan(t *testing.T) {
+	f := newIssueFixture(t)
+	issue, origin, split := f.seedSplit(t)
+	if _, err := f.resources.ResolveSourceStructureIssue(f.ctx, issue.ID, "owner", "split_create_new", "", "", issue.Version); err != nil {
+		t.Fatalf("决策应成功: %v", err)
+	}
+	if _, err := f.resources.EnsureCanonical(f.ctx, f.source.ID, split); err != nil {
+		t.Fatalf("决策后重扫应成功: %v", err)
+	}
+	w1, w2 := f.activeWorkID(t, "wkA1"), f.activeWorkID(t, "wkA2")
+	if w1 == "" || w2 == "" || w1 == origin || w2 == origin || w1 == w2 {
+		t.Fatalf("拆分应各自创建新 CanonicalWork: w1=%s w2=%s origin=%s", w1, w2, origin)
+	}
+	// 原 CanonicalWork 仍保留（用户事实不删除），其 wkA 绑定退为非 active。
+	var exists int
+	if err := f.control.QueryRowContext(f.ctx, `SELECT count(*) FROM canonical_works WHERE work_id=?`, origin).Scan(&exists); err != nil {
+		t.Fatal(err)
+	}
+	if exists != 1 {
+		t.Fatal("原 CanonicalWork 不应被删除")
+	}
+	if status := f.bindingStatus(t, "wkA"); status == "active" {
+		t.Fatalf("原 source_key 绑定不应仍为 active: %s", status)
+	}
+}
+
+func (f *issueFixture) seedMerge(t *testing.T) (application.BindingIssue, string, string, []application.DiscoveredWork) {
+	t.Helper()
+	if _, err := f.resources.EnsureCanonical(f.ctx, f.source.ID, []application.DiscoveredWork{
+		work("wkA", "作品甲", blob("wkA/m1", "d1", 0)),
+		work("wkB", "作品乙", blob("wkB/m1", "d2", 0)),
+	}); err != nil {
+		t.Fatalf("扫描 1: %v", err)
+	}
+	x, y := f.activeWorkID(t, "wkA"), f.activeWorkID(t, "wkB")
+	merge := []application.DiscoveredWork{
+		work("wkC", "合并作品", blob("wkC/m1", "d1", 0), blob("wkC/m2", "d2", 1)),
+	}
+	if _, err := f.resources.EnsureCanonical(f.ctx, f.source.ID, merge); err == nil {
+		t.Fatal("合并应阻塞")
+	}
+	open := f.openIssues(t)
+	if len(open) != 1 {
+		t.Fatalf("期望一个合并 issue: %+v", open)
+	}
+	return open[0], x, y, merge
+}
+
+func TestMergeBindExistingAppliedByRescan(t *testing.T) {
+	f := newIssueFixture(t)
+	issue, x, y, merge := f.seedMerge(t)
+	if _, err := f.resources.ResolveSourceStructureIssue(f.ctx, issue.ID, "owner", "merge_bind_existing", "", x, issue.Version); err != nil {
+		t.Fatalf("决策应成功: %v", err)
+	}
+	if _, err := f.resources.EnsureCanonical(f.ctx, f.source.ID, merge); err != nil {
+		t.Fatalf("决策后重扫应成功: %v", err)
+	}
+	if got := f.activeWorkID(t, "wkC"); got != x {
+		t.Fatalf("wkC 未绑定选定 CanonicalWork: got=%s x=%s", got, x)
+	}
+	// 另一原 CanonicalWork Y 保留。
+	var exists int
+	if err := f.control.QueryRowContext(f.ctx, `SELECT count(*) FROM canonical_works WHERE work_id=?`, y).Scan(&exists); err != nil {
+		t.Fatal(err)
+	}
+	if exists != 1 {
+		t.Fatal("另一原 CanonicalWork 应保留")
+	}
+}
+
+func TestMergeCreateNewAppliedByRescan(t *testing.T) {
+	f := newIssueFixture(t)
+	issue, x, y, merge := f.seedMerge(t)
+	if _, err := f.resources.ResolveSourceStructureIssue(f.ctx, issue.ID, "owner", "merge_create_new", "", "", issue.Version); err != nil {
+		t.Fatalf("决策应成功: %v", err)
+	}
+	if _, err := f.resources.EnsureCanonical(f.ctx, f.source.ID, merge); err != nil {
+		t.Fatalf("决策后重扫应成功: %v", err)
+	}
+	got := f.activeWorkID(t, "wkC")
+	if got == "" || got == x || got == y {
+		t.Fatalf("wkC 应绑定新 CanonicalWork: got=%s x=%s y=%s", got, x, y)
+	}
+}
+
+func TestStructureResolveVersionConflictAndKindMismatch(t *testing.T) {
+	f := newIssueFixture(t)
+	issue, _, _ := f.seedSplit(t)
+	if _, err := f.resources.ResolveSourceStructureIssue(f.ctx, issue.ID, "owner", "split_inherit", "wkA1", "", issue.Version+1); err == nil ||
+		asStructured(t, err).Code != fault.CodeConflict {
+		t.Fatalf("版本不匹配应冲突: %v", err)
+	}
+	// 对拆分 issue 使用合并动作应被拒绝。
+	if _, err := f.resources.ResolveSourceStructureIssue(f.ctx, issue.ID, "owner", "merge_create_new", "", "", issue.Version); err == nil ||
+		asStructured(t, err).Code != fault.CodeValidation {
+		t.Fatalf("kind 不匹配应校验失败: %v", err)
+	}
+}

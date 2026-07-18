@@ -3,9 +3,11 @@ package application
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"sort"
 	"strings"
+	"time"
 
 	"github.com/RecRivenVI/gallery/internal/contract/fault"
 	"github.com/RecRivenVI/gallery/internal/domain"
@@ -317,6 +319,285 @@ func structureFingerprint(cluster structureCluster) string {
 	sort.Strings(origins)
 	sort.Strings(news)
 	return cluster.kind + "|" + strings.Join(origins, "\x00") + "|" + strings.Join(news, "\x00")
+}
+
+// SourceStructureDecision 汇报一次拆分/合并人工决策的结果，供 API 返回与查询。
+type SourceStructureDecision struct {
+	DecisionID      string
+	IssueID         string
+	SourceID        string
+	Kind            string
+	Action          string
+	TargetSourceKey string
+	TargetWorkID    string
+	Status          string
+	Version         int
+	CreatedAt       time.Time
+	UpdatedAt       time.Time
+}
+
+// structureActionKind 返回某决策动作所属的结构类别，非法动作返回空串。
+func structureActionKind(action string) string {
+	switch action {
+	case "split_inherit", "split_keep_same", "split_create_new":
+		return "split"
+	case "merge_bind_existing", "merge_create_new":
+		return "merge"
+	}
+	return ""
+}
+
+func structureResolutionSummary(action string) string {
+	switch action {
+	case "split_create_new", "merge_create_new":
+		return "create_new"
+	default:
+		return "bind_existing"
+	}
+}
+
+// ResolveSourceStructureIssue 对一个 SOURCE_WORK_SPLIT/MERGE_REVIEW_REQUIRED 审查 issue 应用人工
+// 决策。决策不直接改写 Canonical 用户事实，而是以 control.db 的 pre-seed WorkBinding 表达（继承写
+// inactive，排除写 manual_unbound）；下一次扫描据此复用既有解析机制得到正确 Source→Canonical 映射。
+// 决策与其 pre-seed Binding 溯源持久化在 source_structure_decisions，支持乐观并发与可靠撤销。
+func (r *Resources) ResolveSourceStructureIssue(ctx context.Context, issueID, decidedBy, action, targetSourceKey, targetWorkID string, version int) (SourceStructureDecision, error) {
+	if strings.TrimSpace(decidedBy) == "" {
+		return SourceStructureDecision{}, fault.New(fault.CodeValidation, false, nil)
+	}
+	kind := structureActionKind(action)
+	if kind == "" {
+		return SourceStructureDecision{}, fault.WithField(fault.CodeValidation, "action", nil)
+	}
+	if _, err := domain.ParseID(domain.IDBindingIssue, issueID); err != nil {
+		return SourceStructureDecision{}, fault.New(fault.CodeNotFound, false, nil)
+	}
+	tx, err := r.control.BeginTx(ctx, nil)
+	if err != nil {
+		return SourceStructureDecision{}, fault.New(fault.CodeInternal, true, err)
+	}
+	defer tx.Rollback()
+
+	var srcID, status, structureKind string
+	var currentVersion int
+	err = tx.QueryRowContext(ctx, `SELECT source_id, status, COALESCE(structure_kind, ''), version
+FROM binding_issues WHERE issue_id=?`, issueID).Scan(&srcID, &status, &structureKind, &currentVersion)
+	if errors.Is(err, sql.ErrNoRows) {
+		return SourceStructureDecision{}, fault.New(fault.CodeNotFound, false, nil)
+	}
+	if err != nil {
+		return SourceStructureDecision{}, fault.New(fault.CodeInternal, true, err)
+	}
+	if structureKind == "" {
+		return SourceStructureDecision{}, fault.New(fault.CodeNotFound, false, nil)
+	}
+	if structureKind != kind {
+		return SourceStructureDecision{}, fault.WithField(fault.CodeValidation, "action", nil)
+	}
+	if currentVersion != version {
+		return SourceStructureDecision{}, fault.New(fault.CodeConflict, false, nil)
+	}
+	if status != "open" && status != "dismissed" {
+		return SourceStructureDecision{}, fault.New(fault.CodeConflict, false, nil)
+	}
+
+	originWorkIDs, originSourceKeys, newSourceKeys, err := structureCandidates(ctx, tx, issueID)
+	if err != nil {
+		return SourceStructureDecision{}, err
+	}
+	now := r.clock.Now().UTC().Unix()
+
+	decisionID, err := r.ids.New(domain.IDStructureDecision)
+	if err != nil {
+		return SourceStructureDecision{}, fault.New(fault.CodeInternal, true, err)
+	}
+	plan, err := planStructureSeeds(action, originWorkIDs, originSourceKeys, newSourceKeys, targetSourceKey, targetWorkID)
+	if err != nil {
+		return SourceStructureDecision{}, err
+	}
+
+	// 先插入决策父行，再插入 pre-seed Binding 溯源，满足外键顺序。
+	fingerprint := structureFingerprint(structureCluster{kind: kind, originSourceKeys: originSourceKeys, newSourceKeys: newSourceKeys})
+	if _, err := tx.ExecContext(ctx, `INSERT INTO source_structure_decisions
+(decision_id, issue_id, source_id, kind, action, fingerprint, origin_source_keys, origin_work_ids,
+ new_source_keys, target_source_key, target_work_id, decided_by, status, version, created_at, updated_at)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'applied', 1, ?, ?)`,
+		decisionID.String(), issueID, srcID, kind, action, fingerprint,
+		encodeStringList(originSourceKeys), encodeStringList(originWorkIDs), encodeStringList(newSourceKeys),
+		plan.targetSourceKey, plan.targetWorkID, decidedBy, now, now); err != nil {
+		return SourceStructureDecision{}, bindConflict(err)
+	}
+	for _, seed := range plan.seeds {
+		bindingID, err := r.seedWorkBinding(ctx, tx, srcID, seed.sourceKey, seed.workID, seed.status, now)
+		if err != nil {
+			return SourceStructureDecision{}, err
+		}
+		if _, err := tx.ExecContext(ctx, `INSERT INTO source_structure_decision_bindings
+(decision_id, entity_type, binding_id, seed_kind) VALUES (?, 'work', ?, ?)`,
+			decisionID.String(), bindingID, seed.seedKind); err != nil {
+			return SourceStructureDecision{}, fault.New(fault.CodeInternal, true, err)
+		}
+	}
+	if _, err := tx.ExecContext(ctx, `UPDATE binding_issues SET status='resolved', resolution=?,
+resolved_target_id=?, resolved_by=?, version=version+1, updated_at=?, resolved_at=? WHERE issue_id=? AND version=?`,
+		structureResolutionSummary(action), nullString(plan.targetWorkID), decidedBy, now, now, issueID, version); err != nil {
+		return SourceStructureDecision{}, fault.New(fault.CodeInternal, true, err)
+	}
+	if err := tx.Commit(); err != nil {
+		return SourceStructureDecision{}, fault.New(fault.CodeInternal, true, err)
+	}
+	return SourceStructureDecision{DecisionID: decisionID.String(), IssueID: issueID, SourceID: srcID,
+		Kind: kind, Action: action, TargetSourceKey: plan.targetSourceKey, TargetWorkID: plan.targetWorkID,
+		Status: "applied", Version: 1, CreatedAt: time.Unix(now, 0).UTC(), UpdatedAt: time.Unix(now, 0).UTC()}, nil
+}
+
+type structureSeed struct {
+	sourceKey string
+	workID    string
+	status    string // 'inactive' | 'manual_unbound'
+	seedKind  string // 'seed_inherit' | 'seed_exclude'
+}
+
+type structurePlan struct {
+	seeds           []structureSeed
+	targetSourceKey string
+	targetWorkID    string
+}
+
+func inheritSeed(sourceKey, workID string) structureSeed {
+	return structureSeed{sourceKey: sourceKey, workID: workID, status: "inactive", seedKind: "seed_inherit"}
+}
+
+func excludeSeed(sourceKey, workID string) structureSeed {
+	return structureSeed{sourceKey: sourceKey, workID: workID, status: "manual_unbound", seedKind: "seed_exclude"}
+}
+
+// planStructureSeeds 依据决策动作把结构簇翻译为一组 pre-seed WorkBinding。继承写 inactive，使下一次
+// 扫描按 source_key 命中并复用原 CanonicalWork；排除写 manual_unbound，阻止新 source_key 经任何证据
+// 命中被排除的 CanonicalWork，从而创建新的 CanonicalWork。
+func planStructureSeeds(action string, originWorkIDs, originSourceKeys, newSourceKeys []string, targetSourceKey, targetWorkID string) (structurePlan, error) {
+	plan := structurePlan{}
+	switch action {
+	case "split_inherit":
+		if len(originWorkIDs) != 1 {
+			return structurePlan{}, fault.New(fault.CodeConflict, false, nil)
+		}
+		if !containsString(newSourceKeys, targetSourceKey) {
+			return structurePlan{}, fault.WithField(fault.CodeValidation, "targetSourceKey", nil)
+		}
+		originWork := originWorkIDs[0]
+		for _, key := range newSourceKeys {
+			if key == targetSourceKey {
+				plan.seeds = append(plan.seeds, inheritSeed(key, originWork))
+			} else {
+				plan.seeds = append(plan.seeds, excludeSeed(key, originWork))
+			}
+		}
+		plan.targetSourceKey, plan.targetWorkID = targetSourceKey, originWork
+	case "split_keep_same":
+		if len(originWorkIDs) != 1 {
+			return structurePlan{}, fault.New(fault.CodeConflict, false, nil)
+		}
+		originWork := originWorkIDs[0]
+		for _, key := range newSourceKeys {
+			plan.seeds = append(plan.seeds, inheritSeed(key, originWork))
+		}
+		plan.targetWorkID = originWork
+	case "split_create_new":
+		if len(originWorkIDs) != 1 {
+			return structurePlan{}, fault.New(fault.CodeConflict, false, nil)
+		}
+		originWork := originWorkIDs[0]
+		for _, key := range newSourceKeys {
+			plan.seeds = append(plan.seeds, excludeSeed(key, originWork))
+		}
+	case "merge_bind_existing":
+		if len(newSourceKeys) != 1 {
+			return structurePlan{}, fault.New(fault.CodeConflict, false, nil)
+		}
+		if !containsString(originWorkIDs, targetWorkID) {
+			return structurePlan{}, fault.WithField(fault.CodeValidation, "targetWorkId", nil)
+		}
+		newKey := newSourceKeys[0]
+		for _, workID := range originWorkIDs {
+			if workID == targetWorkID {
+				plan.seeds = append(plan.seeds, inheritSeed(newKey, workID))
+			} else {
+				plan.seeds = append(plan.seeds, excludeSeed(newKey, workID))
+			}
+		}
+		plan.targetSourceKey, plan.targetWorkID = newKey, targetWorkID
+	case "merge_create_new":
+		if len(newSourceKeys) != 1 {
+			return structurePlan{}, fault.New(fault.CodeConflict, false, nil)
+		}
+		newKey := newSourceKeys[0]
+		for _, workID := range originWorkIDs {
+			plan.seeds = append(plan.seeds, excludeSeed(newKey, workID))
+		}
+		plan.targetSourceKey = newKey
+	default:
+		return structurePlan{}, fault.WithField(fault.CodeValidation, "action", nil)
+	}
+	return plan, nil
+}
+
+// seedWorkBinding 为某 source_key 插入一条非 active 的 pre-seed WorkBinding，返回其 binding_id。
+func (r *Resources) seedWorkBinding(ctx context.Context, tx *sql.Tx, sourceID, sourceKey, workID, status string, now int64) (string, error) {
+	id, err := r.ids.New(domain.IDWorkBinding)
+	if err != nil {
+		return "", fault.New(fault.CodeInternal, true, err)
+	}
+	if _, err := tx.ExecContext(ctx, `INSERT INTO work_bindings
+(binding_id, source_id, source_key, work_id, identity_version, status, last_seen_generation, created_at, updated_at)
+VALUES (?, ?, ?, ?, 1, ?, 0, ?, ?)`, id.String(), sourceID, sourceKey, workID, status, now, now); err != nil {
+		return "", bindConflict(err)
+	}
+	return id.String(), nil
+}
+
+// structureCandidates 从 issue 候选还原 origin CanonicalWork ID、origin source_key 与新 source_key。
+func structureCandidates(ctx context.Context, tx *sql.Tx, issueID string) (originWorkIDs, originSourceKeys, newSourceKeys []string, err error) {
+	rows, err := tx.QueryContext(ctx, `SELECT candidate_id, match_signal, match_value FROM binding_issue_candidates
+WHERE issue_id=? ORDER BY ordinal`, issueID)
+	if err != nil {
+		return nil, nil, nil, fault.New(fault.CodeInternal, true, err)
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var candidateID, signal, value string
+		if err := rows.Scan(&candidateID, &signal, &value); err != nil {
+			return nil, nil, nil, fault.New(fault.CodeInternal, true, err)
+		}
+		switch signal {
+		case signalOriginCanonical:
+			originWorkIDs = append(originWorkIDs, candidateID)
+			originSourceKeys = append(originSourceKeys, value)
+		case signalNewSourceWork:
+			newSourceKeys = append(newSourceKeys, candidateID)
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return nil, nil, nil, fault.New(fault.CodeInternal, true, err)
+	}
+	return originWorkIDs, originSourceKeys, newSourceKeys, nil
+}
+
+func encodeStringList(values []string) string {
+	data, _ := json.Marshal(values)
+	return string(data)
+}
+
+func decodeStringList(value string) []string {
+	var result []string
+	_ = json.Unmarshal([]byte(value), &result)
+	return result
+}
+
+func nullString(value string) any {
+	if value == "" {
+		return nil
+	}
+	return value
 }
 
 func intersects(a, b map[string]struct{}) bool {
