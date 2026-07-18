@@ -15,7 +15,7 @@
 - 代码、仓库、包、命令和服务代号：`gallery`。
 - 建议后端命令：`galleryd`；建议 CLI：`galleryctl`。
 - Gallery 是独立的净室产品，不以任何旧 Gallery 的数据库、配置、API、目录结构或行为作为兼容、迁移或对拍目标。
-- 当前仓库已有正式产品代码（`cmd/`、`internal/`、`pkg/`）。阶段 0 契约骨架、Walking Skeleton、Architecture Proof 正确性切片与**阶段 1「领域和数据所有权」均已完成**；当前准备进入**阶段 2「规则闭环」**。已落地并配套 API 的能力包括：Personal 配对/Session/capability、Library/Source/RuleVersion/SourceRuleBinding、持久 Scan Job 与完整 SHA-256 publication、双 revision `query_publication_id` 查询/FTS5/自然排序/签名游标、Overlay 同步写与异步重投影、Catalog 删除重建与稳定重绑、八点强杀恢复、CanonicalCreator 合并/撤销、Work/Media/Creator Binding issue 人工修复、Source-derived active/inactive/orphan_candidate/orphaned 保留窗口与人工审查、AppDirs 进程独占锁、有界 Job 调度器、规则 extension 身份分类、control.db 产品级备份/恢复与升级失败回滚、Catalog 全量重建后人工决策恢复端到端门禁、SourceWork 拆分/合并检测（ContentBlob digest 证据）与人工决策及仅限未消费决策的撤回（复用 Binding issue 与 pre-seed WorkBinding，`source_structure_decisions` 记录）、阶段 1 Schema Freeze Gate（`schema_freeze` 表逐项分类身份与唯一约束）。尚未完成：阶段 2+ 的规则闭环/查询/媒体/安全/Web/平台发行。
+- 当前仓库已有正式产品代码（`cmd/`、`internal/`、`pkg/`）。阶段 0 契约骨架、Walking Skeleton、Architecture Proof 正确性切片、阶段 1「领域和数据所有权」与阶段 2「规则闭环」均已完成 Correctness 实现；当前进入阶段 3「扫描、任务和 Catalog」。已落地并配套 API 的能力包括：Personal 配对/Session/capability、Library/Source/RuleVersion/SourceRuleBinding、持久 Scan Job 与完整 SHA-256 publication、双 revision `query_publication_id` 查询/FTS5/自然排序/签名游标、Overlay 同步写与异步重投影、Catalog 删除重建与稳定重绑、八点强杀恢复、CanonicalCreator 合并/撤销、Work/Media/Creator Binding issue 人工修复、Source-derived active/inactive/orphan_candidate/orphaned 保留窗口与人工审查、AppDirs 进程独占锁、有界 Job 调度器、规则 extension 身份分类、control.db 产品级备份/恢复与升级失败回滚、Catalog 全量重建后人工决策恢复端到端门禁、SourceWork 拆分/合并检测（ContentBlob digest 证据）与人工决策及仅限未消费决策的撤回（复用 Binding issue 与 pre-seed WorkBinding，`source_structure_decisions` 记录）、阶段 1 Schema Freeze Gate、RulePackage/Draft/RuleVersion/Parameter 生命周期、严格 JSON/YAML/TOML 导入、Schema/UI metadata、Explain/Trace/Impact/diff/回滚、内置规则示例 API、参数与 Binding revision、扫描 Job 规则执行快照、阶段 2 Schema/API Freeze Gate。尚未完成：查询/媒体/安全/Web/平台发行等后续阶段能力。
 - 本文件是需要随真实开发状态持续维护的 Agent 规则；发现与代码、有效 ADR 或规范不一致时应更新本文件，但不得放宽安全、只读 Source、Git、签名或测试要求，也不得把临时实装写成已冻结决策。
 
 ## 权威资料与阅读顺序
@@ -66,7 +66,7 @@
 ### 当前限定的暂定行为
 
 - **Overlay 查询影响是当前实现，不是字段永久分类**：TitleOverride/ManualTag/Hidden/CustomCover 目前属于 query-affecting snapshot，Favorite/ReadingProgress 属于实时附加。某字段未来一旦参与过滤、排序、搜索或集合成员判断，必须进入当前查询的 dependency set 与 revision。
-- **SourceRuleBinding 目前只执行优先级最高的一条有效 Binding**：尚未支持多规则链、Provider 路由组合或多 Binding 合并执行，这些属于阶段 2 待冻结语义，不得声称已支持。
+- **SourceRuleBinding 当前正式兼容基线是单生效规则**：按 active、受限条件匹配、priority、binding_id 稳定选择一条；同一 Source 同一 priority 由数据库拒绝，未匹配时返回稳定错误。多规则链、Provider 路由组合和多 Binding 合并执行仍未冻结，不得声称已支持。
 - 已实装但未冻结的常量与选择集中登记在 `Documents/指南/01-v1实施计划.md` 的「暂定实装决策」表，修改前先查该表的冻结阶段与重新审议门禁。
 
 ## 不可违反的产品边界
@@ -109,9 +109,9 @@
 1. 阶段 0：正式领域 ID、两库迁移/备份骨架、OpenAPI、错误 code、WebSocket 信封、规则 Schema 和 AppDirs 写入守卫。**（已完成）**
 2. Walking Skeleton：用一个作品和一个媒体的合成只读 Source 打通 Personal 配对、Library/Source、规则绑定、完整哈希、最小 publication、REST、媒体 Range 和 WebSocket Job。**（已完成）**
 3. Architecture Proof：补齐快照分页、Overlay、FTS、Catalog 重建、强杀恢复和多客户端边界后，再冻结数据库与 API。**（正确性切片已完成；物理 Schema 与完整 API 仍未冻结）**
-4. 按领域/规则/扫描/查询与媒体/安全/Web/PWA/平台发行的顺序扩展。**（阶段 1 领域和数据所有权已完成；下一步阶段 2 规则闭环）**
+4. 按领域/规则/扫描/查询与媒体/安全/Web/PWA/平台发行的顺序扩展。**（阶段 1、阶段 2 已完成；下一步阶段 3 扫描、任务和 Catalog）**
 
-阶段 1 已完成。阶段 1 Schema Freeze Gate 冻结的是**核心领域身份与唯一约束**（不是最终物理数据库唯一约束）：`(source_id, source_key) WHERE status='active'`、`(work_id, ordinal)`、CanonicalWork 持久 ID 身份、Work/Creator/Media Binding 的 active/inactive/manual_unbound/orphan_candidate/orphaned 生命周期、同 Blob 多 occurrence、SourceWork 拆分/合并检测与结构决策 fingerprint 唯一、多 Source 隔离、Binding issue 指纹去重，登记于 control 迁移 `00016_schema_freeze_phase1` 的 `schema_freeze` 表（FROZEN）。SourceWork 决策的撤回仅适用于尚未被扫描消费的 pre-seed Binding；消费后返回结构化 `CONFLICT`，不执行已生效结构变化的完整反向操作。仍保持 pre-freeze/compatibility-baseline/deferred（未完成，但**不因此重开阶段 1**）：FileLocation 在 SMB/inode/无 FileID 下的最终唯一约束、超大文件持久哈希 Job、句柄式文件打开与 TOCTOU 进一步收紧、Blob 哈希算法升级、external ID 冲突最终策略、RuleVersion/extension 身份命名空间最终冻结、WorkOrigin 独立模型、完整 REST/过滤/排序/排名/高亮与 cursor 内部格式、显式且可撤销的 CanonicalWork merge/split、`split.bind_existing` 等已延后分支。这些最终物理约束的整体冻结属于「领域 Schema 最终冻结门禁」，见 `Documents/指南/02-测试与发布门禁.md`。**下一阶段是阶段 2 规则闭环**（有限原语、CEL Profile、编译缓存、Rule IR、表单/Dry Run/Explain/Impact/版本 diff/回滚）。修改标记 FROZEN 的约束前须新增或修订 ADR。不要据此提前展开前端、LAN 完整账户、桌面壳或发行。
+阶段 1 已完成。阶段 1 Schema Freeze Gate 冻结的是**核心领域身份与唯一约束**（不是最终物理数据库唯一约束）：`(source_id, source_key) WHERE status='active'`、`(work_id, ordinal)`、CanonicalWork 持久 ID 身份、Work/Creator/Media Binding 的 active/inactive/manual_unbound/orphan_candidate/orphaned 生命周期、同 Blob 多 occurrence、SourceWork 拆分/合并检测与结构决策 fingerprint 唯一、多 Source 隔离、Binding issue 指纹去重，登记于 control 迁移 `00016_schema_freeze_phase1` 的 `schema_freeze` 表（FROZEN）。SourceWork 决策的撤回仅适用于尚未被扫描消费的 pre-seed Binding；消费后返回结构化 `CONFLICT`，不执行已生效结构变化的完整反向操作。阶段 2 的 RulePackage canonical JSON 所有权、已发布版本不可变、草稿 revision CAS 和 Job 规则执行快照登记于 `00017_rules_lifecycle` 的 `schema_freeze` 表；Rule extension 注册表、单生效 Binding、参数最终命名空间、Impact 调度联动和完整表单 UI 保持 compatibility baseline。仍保持 pre-freeze/compatibility-baseline/deferred（未完成，但**不因此重开阶段 1 或阶段 2**）：FileLocation 在 SMB/inode/无 FileID 下的最终唯一约束、超大文件持久哈希 Job、句柄式文件打开与 TOCTOU 进一步收紧、Blob 哈希算法升级、external ID 冲突最终策略、WorkOrigin 独立模型、完整 REST/过滤/排序/排名/高亮与 cursor 内部格式、显式且可撤销的 CanonicalWork merge/split、`split.bind_existing` 等已延后分支。这些最终物理约束的整体冻结属于「领域 Schema 最终冻结门禁」，见 `Documents/指南/02-测试与发布门禁.md`。阶段 2 已在既有有限原语/CEL/Rule IR 基础上完成规则产品闭环，不得重复实现第二套引擎。**下一阶段是阶段 3 扫描、任务和 Catalog**。修改标记 FROZEN 的约束前须新增或修订 ADR。不要据此提前展开前端、LAN 完整账户、桌面壳或发行。
 
 Walking Skeleton 功能可以少，但基础模型不能是临时替代品：
 
@@ -307,4 +307,4 @@ docs(agents): 采用 Markdown 提交正文格式
 
 ## 当前可开工结论
 
-阶段 0、Walking Skeleton、Architecture Proof 正确性切片与阶段 1「领域和数据所有权」已完成（含 SourceWork 拆分/合并与阶段 1 Schema Freeze Gate）。搜索排名/高亮/精确总数、游标租约、FileLocation 最终唯一约束、HDD/NAS 性能、Wails/Tauri、Linux/macOS/Docker 支持等仍是后续冻结或发行门禁。下一条正式垂直切片是阶段 2 规则闭环；不要提前展开前端、LAN 完整账户、桌面壳或发行。
+阶段 0、Walking Skeleton、Architecture Proof 正确性切片、阶段 1「领域和数据所有权」与阶段 2「规则闭环」已完成（含 SourceWork 拆分/合并、阶段 1/2 Schema Freeze Gate、RulePackage 生命周期、参数/Binding 快照和规则调试契约）。搜索排名/高亮/精确总数、游标租约、FileLocation 最终唯一约束、HDD/NAS 性能、Wails/Tauri、Linux/macOS/Docker 支持等仍是后续冻结或发行门禁。下一条正式垂直切片是阶段 3 扫描、任务和 Catalog；不要提前展开前端、LAN 完整账户、桌面壳或发行。

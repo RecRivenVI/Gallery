@@ -21,13 +21,17 @@ OpenAPI v1 至少覆盖：
 | libraries/sources/providers | 查询范围、Source 配置和 Provider 注册表 |
 | creators/works/media | CanonicalCreator/CanonicalWork/CanonicalMedia、Origin、有效字段和 publication 元数据 |
 | search/query | 过滤、搜索、排序、快照游标 |
-| rules | RuleSet/Version、validate、compile、Dry Run、Explain、Impact |
+| rules | RulePackage/Draft/Version/ParameterSet/Binding 生命周期、JSON/YAML/TOML 导入导出、Schema/UI metadata、validate/compile、Dry Run、Trace、Explain、Impact、diff、rollback、内置示例测试和审计 |
 | jobs | 创建、状态、issue、取消、重试和关联 publication |
 | overlays | Override、标签操作、收藏、隐藏、进度、备注和封面选择 |
 | shares | 最小 scope、过期、吊销和固定/跟随版本语义 |
 | administration | 账户、token、session、grants、备份和诊断 |
 
 最终细粒度路由在 API Schema 门禁中冻结，本文不规定具体控制器或表结构。
+
+阶段 2 的规则 API 已形成以下稳定边界：规则编辑器从 `/api/v1/rules/schema` 读取同一 JSON Schema/UI metadata；`RuleDraft` 保存和验证使用 revision 或 `If-Match`，冲突返回 `RULE_DRAFT_CONFLICT`；只有 `rules.publish` 可发布、弃用或回滚，Viewer 不能改变当前 RuleVersion；`RuleVersion` 读取、diff、canonical JSON 导出和审计读取使用 `rules.read`。`/api/v1/rules/examples` 只列出仓库内嵌的三类合成样本，示例测试使用 `rules.debug` 且只执行受限 Dry Run。
+
+规则 API 不接受服务器任意文件路径，不把 YAML/TOML 作为持久执行格式，也不返回数据库表结构。短小的 validate、compile、import、diff、Explain 和受限示例 Dry Run 可同步完成并受大小/成本上限约束；多 Source Impact、规则发布后的重扫、重投影和黄金测试批次必须复用持久 Job/Scheduler，并返回 job ID。
 
 ## 查询响应与实时附加状态
 
@@ -80,7 +84,7 @@ library.read[:libraryId]
 media.read
 media.download
 scan.run[:sourceId]
-rules.read / rules.write / rules.debug
+rules.read / rules.write / rules.publish / rules.debug
 overlays.write
 creators.write
 bindings.read / bindings.write
