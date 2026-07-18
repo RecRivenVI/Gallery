@@ -35,25 +35,46 @@ type Source struct {
 }
 
 type RuleVersion struct {
-	RuleSetID    string
-	Version      string
-	PackageHash  string
-	SemanticHash string
-	RuleIRHash   string
-	Canonical    []byte
-	IR           rules.RuleIR
-	CreatedAt    time.Time
+	ID                            string
+	PackageID                     string
+	RuleSetID                     string
+	Version                       string
+	PackageHash                   string
+	SemanticHash                  string
+	RuleIRHash                    string
+	Canonical                     []byte
+	IR                            rules.RuleIR
+	Status                        string
+	NormalizationAlgorithmVersion string
+	CELProfileVersion             string
+	ParameterSchema               []byte
+	Tests                         []byte
+	Extensions                    []byte
+	ParentSemanticHash            string
+	CreatedBy                     string
+	PublishedAt                   *time.Time
+	DeprecatedAt                  *time.Time
+	Executable                    bool
+	CompileError                  string
+	CreatedAt                     time.Time
 }
 
 type SourceRuleBinding struct {
-	ID           string
-	SourceID     string
-	SemanticHash string
-	Parameters   []byte
-	Priority     int
-	RuleIRHash   string
-	IR           rules.RuleIR
-	CreatedAt    time.Time
+	ID                string
+	SourceID          string
+	SemanticHash      string
+	Parameters        []byte
+	Priority          int
+	RuleIRHash        string
+	IR                rules.RuleIR
+	ParameterID       string
+	ParameterRevision int
+	ParameterHash     string
+	Override          []byte
+	Condition         []byte
+	Status            string
+	UpdatedAt         time.Time
+	CreatedAt         time.Time
 }
 
 type CanonicalWork struct {
@@ -241,13 +262,20 @@ VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`, compiled.SemanticHash, compiled.RuleSetID, 
 
 func (r *Resources) GetRuleVersion(ctx context.Context, semanticHash string) (RuleVersion, error) {
 	var result RuleVersion
+	var packageID, status, normalizationVersion, celProfileVersion, parameterSchema, tests, extensions, parentHash, createdBy, compileError sql.NullString
 	var canonical, irJSON string
-	var createdAt int64
+	var createdAt, publishedAt, deprecatedAt sql.NullInt64
+	var executable int
 	err := r.control.QueryRowContext(ctx, `
-SELECT rule_set_id, version, package_hash, semantic_hash, rule_ir_hash, canonical_json, compiled_ir_json, created_at
+SELECT semantic_hash, package_id, rule_set_id, version, package_hash, semantic_hash, rule_ir_hash,
+       canonical_json, compiled_ir_json, status, normalization_algorithm_version, cel_profile_version,
+       parameter_schema_json, tests_json, extensions_json, parent_semantic_hash, created_by,
+       published_at, deprecated_at, executable, compile_error, created_at
 FROM rule_versions WHERE semantic_hash = ?`, semanticHash).Scan(
-		&result.RuleSetID, &result.Version, &result.PackageHash, &result.SemanticHash,
-		&result.RuleIRHash, &canonical, &irJSON, &createdAt,
+		&result.ID, &packageID, &result.RuleSetID, &result.Version, &result.PackageHash, &result.SemanticHash,
+		&result.RuleIRHash, &canonical, &irJSON, &status, &normalizationVersion, &celProfileVersion,
+		&parameterSchema, &tests, &extensions, &parentHash, &createdBy, &publishedAt, &deprecatedAt,
+		&executable, &compileError, &createdAt,
 	)
 	if errors.Is(err, sql.ErrNoRows) {
 		return RuleVersion{}, fault.New(fault.CodeNotFound, false, nil)
@@ -260,11 +288,28 @@ FROM rule_versions WHERE semantic_hash = ?`, semanticHash).Scan(
 		return RuleVersion{}, fault.New(fault.CodeInternal, false, err)
 	}
 	result.Canonical = []byte(canonical)
-	result.CreatedAt = time.Unix(createdAt, 0).UTC()
+	result.PackageID, result.Status = packageID.String, status.String
+	result.NormalizationAlgorithmVersion, result.CELProfileVersion = normalizationVersion.String, celProfileVersion.String
+	result.ParameterSchema, result.Tests, result.Extensions = []byte(parameterSchema.String), []byte(tests.String), []byte(extensions.String)
+	result.ParentSemanticHash, result.CreatedBy, result.CompileError = parentHash.String, createdBy.String, compileError.String
+	result.Executable = executable != 0
+	result.CreatedAt = time.Unix(createdAt.Int64, 0).UTC()
+	if publishedAt.Valid {
+		value := time.Unix(publishedAt.Int64, 0).UTC()
+		result.PublishedAt = &value
+	}
+	if deprecatedAt.Valid {
+		value := time.Unix(deprecatedAt.Int64, 0).UTC()
+		result.DeprecatedAt = &value
+	}
 	return result, nil
 }
 
 func (r *Resources) CreateSourceRuleBinding(ctx context.Context, sourceID, semanticHash string, parameters []byte, priority int) (SourceRuleBinding, error) {
+	return r.createSourceRuleBinding(ctx, sourceID, semanticHash, parameters, priority, "", 0, "", []byte("{}"), []byte("{}"))
+}
+
+func (r *Resources) createSourceRuleBinding(ctx context.Context, sourceID, semanticHash string, parameters []byte, priority int, parameterID string, parameterRevision int, baseParameterHash string, override, condition []byte) (SourceRuleBinding, error) {
 	if priority < 0 || priority > 10000 {
 		return SourceRuleBinding{}, fault.WithField(fault.CodeValidation, "priority", nil)
 	}
@@ -275,11 +320,26 @@ func (r *Resources) CreateSourceRuleBinding(ctx context.Context, sourceID, seman
 	if err != nil {
 		return SourceRuleBinding{}, err
 	}
+	if version.Status == RuleVersionDeprecated || !version.Executable {
+		return SourceRuleBinding{}, fault.New(fault.CodeRuleVersionInUse, false, nil)
+	}
 	compiled, err := rules.CompilePackage(version.Canonical)
 	if err != nil {
 		return SourceRuleBinding{}, fault.New(fault.CodeRuleSchemaInvalid, false, err)
 	}
-	ir, irHash, canonicalParameters, err := rules.CompileBinding(compiled, parameters)
+	canonicalOverride, err := canonicalObjectOrEmpty(override)
+	if err != nil {
+		return SourceRuleBinding{}, fault.WithField(fault.CodeRuleParameterInvalid, "override", err)
+	}
+	canonicalCondition, err := canonicalBindingCondition(condition)
+	if err != nil {
+		return SourceRuleBinding{}, fault.WithField(fault.CodeValidation, "condition", err)
+	}
+	effectiveParameters, err := mergeRuleParameters(parameters, canonicalOverride)
+	if err != nil {
+		return SourceRuleBinding{}, fault.WithField(fault.CodeRuleParameterInvalid, "parameters", err)
+	}
+	ir, irHash, canonicalParameters, err := rules.CompileBinding(compiled, effectiveParameters)
 	if err != nil {
 		return SourceRuleBinding{}, fault.New(fault.CodeRuleParameterInvalid, false, err)
 	}
@@ -290,13 +350,21 @@ func (r *Resources) CreateSourceRuleBinding(ctx context.Context, sourceID, seman
 	}
 	result := SourceRuleBinding{
 		ID: id.String(), SourceID: sourceID, SemanticHash: semanticHash, Parameters: canonicalParameters,
-		Priority: priority, RuleIRHash: irHash, IR: ir, CreatedAt: r.clock.Now().UTC(),
+		Priority: priority, RuleIRHash: irHash, IR: ir, ParameterID: parameterID, ParameterRevision: parameterRevision,
+		ParameterHash: baseParameterHash, Override: canonicalOverride, Condition: canonicalCondition,
+		Status: RuleBindingActive, CreatedAt: r.clock.Now().UTC(),
 	}
+	result.UpdatedAt = result.CreatedAt
 	if _, err := r.control.ExecContext(ctx, `
 INSERT INTO source_rule_bindings
-(binding_id, source_id, semantic_hash, parameters_json, priority, rule_ir_hash, compiled_ir_json, created_at)
-VALUES (?, ?, ?, ?, ?, ?, ?, ?)`, result.ID, result.SourceID, result.SemanticHash, string(result.Parameters),
-		result.Priority, result.RuleIRHash, string(irJSON), result.CreatedAt.Unix()); err != nil {
+(binding_id, source_id, semantic_hash, parameters_json, priority, rule_ir_hash, compiled_ir_json,
+ parameter_id, parameter_revision, parameter_hash, override_json, condition_json, status, created_at, updated_at)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`, result.ID, result.SourceID, result.SemanticHash, string(result.Parameters),
+		result.Priority, result.RuleIRHash, string(irJSON), nullableText(result.ParameterID), result.ParameterRevision,
+		result.ParameterHash, string(result.Override), string(result.Condition), result.Status, result.CreatedAt.Unix(), result.UpdatedAt.Unix()); err != nil {
+		if strings.Contains(strings.ToLower(err.Error()), "source_rule_bindings.source_id, source_rule_bindings.priority") {
+			return SourceRuleBinding{}, fault.New(fault.CodeRuleBindingConflict, false, err)
+		}
 		return SourceRuleBinding{}, fault.New(fault.CodeConflict, false, err)
 	}
 	return result, nil
@@ -307,13 +375,15 @@ func (r *Resources) GetSourceRuleBinding(ctx context.Context, id string) (Source
 		return SourceRuleBinding{}, fault.New(fault.CodeNotFound, false, nil)
 	}
 	var result SourceRuleBinding
-	var parameters, irJSON string
-	var createdAt int64
+	var parameters, irJSON, parameterID, parameterHash, override, condition, status sql.NullString
+	var createdAt, updatedAt sql.NullInt64
 	err := r.control.QueryRowContext(ctx, `
-SELECT binding_id, source_id, semantic_hash, parameters_json, priority, rule_ir_hash, compiled_ir_json, created_at
+SELECT binding_id, source_id, semantic_hash, parameters_json, priority, rule_ir_hash, compiled_ir_json,
+       parameter_id, parameter_revision, parameter_hash, override_json, condition_json, status, created_at, updated_at
 FROM source_rule_bindings WHERE binding_id = ?`, id).Scan(
 		&result.ID, &result.SourceID, &result.SemanticHash, &parameters, &result.Priority,
-		&result.RuleIRHash, &irJSON, &createdAt,
+		&result.RuleIRHash, &irJSON, &parameterID, &result.ParameterRevision, &parameterHash, &override,
+		&condition, &status, &createdAt, &updatedAt,
 	)
 	if errors.Is(err, sql.ErrNoRows) {
 		return SourceRuleBinding{}, fault.New(fault.CodeNotFound, false, nil)
@@ -321,27 +391,61 @@ FROM source_rule_bindings WHERE binding_id = ?`, id).Scan(
 	if err != nil {
 		return SourceRuleBinding{}, fault.New(fault.CodeInternal, true, err)
 	}
-	result.Parameters = []byte(parameters)
-	result.IR, err = rules.DecodeIR([]byte(irJSON))
+	result.Parameters = []byte(parameters.String)
+	result.ParameterID, result.ParameterHash, result.Override, result.Condition, result.Status = parameterID.String, parameterHash.String, []byte(override.String), []byte(condition.String), status.String
+	result.IR, err = rules.DecodeIR([]byte(irJSON.String))
 	if err != nil {
 		return SourceRuleBinding{}, fault.New(fault.CodeInternal, false, err)
 	}
-	result.CreatedAt = time.Unix(createdAt, 0).UTC()
+	result.CreatedAt = time.Unix(createdAt.Int64, 0).UTC()
+	if updatedAt.Valid && updatedAt.Int64 != 0 {
+		result.UpdatedAt = time.Unix(updatedAt.Int64, 0).UTC()
+	} else {
+		result.UpdatedAt = result.CreatedAt
+	}
 	return result, nil
 }
 
 func (r *Resources) BindingForSource(ctx context.Context, sourceID string) (SourceRuleBinding, error) {
-	var id string
-	err := r.control.QueryRowContext(ctx,
-		"SELECT binding_id FROM source_rule_bindings WHERE source_id = ? ORDER BY priority, binding_id LIMIT 1", sourceID,
-	).Scan(&id)
-	if errors.Is(err, sql.ErrNoRows) {
-		return SourceRuleBinding{}, fault.New(fault.CodeNotFound, false, nil)
+	source, err := r.GetSource(ctx, sourceID)
+	if err != nil {
+		return SourceRuleBinding{}, err
 	}
+	rows, err := r.control.QueryContext(ctx, `SELECT binding_id, priority, condition_json
+FROM source_rule_bindings WHERE source_id=? AND status='active' ORDER BY priority, binding_id`, sourceID)
 	if err != nil {
 		return SourceRuleBinding{}, fault.New(fault.CodeInternal, true, err)
 	}
-	return r.GetSourceRuleBinding(ctx, id)
+	defer rows.Close()
+	type candidate struct {
+		id       string
+		priority int
+	}
+	var candidates []candidate
+	for rows.Next() {
+		var item candidate
+		var condition string
+		if err := rows.Scan(&item.id, &item.priority, &condition); err != nil {
+			return SourceRuleBinding{}, fault.New(fault.CodeInternal, true, err)
+		}
+		matches, matchErr := bindingConditionMatches([]byte(condition), source)
+		if matchErr != nil {
+			return SourceRuleBinding{}, fault.WithField(fault.CodeRuleBindingConflict, "condition", matchErr)
+		}
+		if matches {
+			candidates = append(candidates, item)
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return SourceRuleBinding{}, fault.New(fault.CodeInternal, true, err)
+	}
+	if len(candidates) == 0 {
+		return SourceRuleBinding{}, fault.New(fault.CodeNotFound, false, nil)
+	}
+	if len(candidates) > 1 && candidates[0].priority == candidates[1].priority {
+		return SourceRuleBinding{}, fault.WithField(fault.CodeRuleBindingConflict, "priority", fmt.Errorf("Source 存在多个同优先级 active Binding"))
+	}
+	return r.GetSourceRuleBinding(ctx, candidates[0].id)
 }
 
 func (r *Resources) EnsureCanonical(ctx context.Context, sourceID string, discovered []DiscoveredWork) (map[string]CanonicalWork, error) {

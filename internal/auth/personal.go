@@ -41,6 +41,7 @@ var PersonalOwnerCapabilities = []string{
 	"overlays.write",
 	"rules.read",
 	"rules.write",
+	"rules.publish",
 	"rules.debug",
 	"scan.run",
 }
