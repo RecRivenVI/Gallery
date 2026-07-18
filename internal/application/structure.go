@@ -2,7 +2,9 @@ package application
 
 import (
 	"context"
+	"crypto/sha256"
 	"database/sql"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"sort"
@@ -28,10 +30,16 @@ const (
 
 type structureCluster struct {
 	kind             string // "split" | "merge"
+	sourceID         string
 	representative   string // 去重键：split 用 origin source_key，merge 用 new source_key
 	originSourceKeys []string
 	originWorkIDs    []string
 	newSourceKeys    []string
+	// 结构证据，用于稳定确定性指纹：origin/new 各自的排序去重媒体 digest，以及由 Blob 交集形成的
+	// 新 SourceWork → 原 SourceWork 映射。这些字段不参与去重键，只参与 fingerprint 计算。
+	originDigests map[string][]string // origin source_key -> 排序去重的 "algorithm:digest"
+	newDigests    map[string][]string // new source_key -> 排序去重的 "algorithm:digest"
+	mapping       map[string][]string // new source_key -> 排序去重的关联 origin source_key
 }
 
 type priorWorkFacts struct {
@@ -114,13 +122,23 @@ func (r *Resources) detectSourceStructureChange(ctx context.Context, tx *sql.Tx,
 	}
 
 	// 优先处理拆分（一个原 SourceWork → 多个新 SourceWork），再处理合并，保证确定性。
-	if cluster, ok := firstSplitCluster(originToNews, missingByKey(missing)); ok {
+	if cluster, ok := firstSplitCluster(sourceID, originToNews, missingByKey(missing), discoveredDigests); ok {
 		return true, r.recordStructureIssue(ctx, tx, sourceID, cluster, now)
 	}
-	if cluster, ok := firstMergeCluster(newToOrigins); ok {
+	if cluster, ok := firstMergeCluster(sourceID, newToOrigins, discoveredDigests); ok {
 		return true, r.recordStructureIssue(ctx, tx, sourceID, cluster, now)
 	}
 	return false, nil
+}
+
+// sortedDigestSlice 把 digest 集合转成排序去重切片，供确定性指纹使用。
+func sortedDigestSlice(set map[string]struct{}) []string {
+	result := make([]string, 0, len(set))
+	for value := range set {
+		result = append(result, value)
+	}
+	sort.Strings(result)
+	return result
 }
 
 func (r *Resources) priorLiveWorks(ctx context.Context, tx *sql.Tx, sourceID string) ([]priorWorkFacts, error) {
@@ -186,8 +204,8 @@ func missingByKey(missing []priorWorkFacts) map[string]priorWorkFacts {
 }
 
 // firstSplitCluster 返回按 origin source_key 字典序的第一个拆分簇（一个原 SourceWork 关联 ≥2 个
-// 新 SourceWork）。
-func firstSplitCluster(originToNews map[string]map[string]struct{}, missing map[string]priorWorkFacts) (structureCluster, bool) {
+// 新 SourceWork），并填充其 origin/new 媒体 digest 证据与 new→origin 映射供确定性指纹使用。
+func firstSplitCluster(sourceID string, originToNews map[string]map[string]struct{}, missing map[string]priorWorkFacts, discoveredDigests map[string]map[string]struct{}) (structureCluster, bool) {
 	origins := make([]string, 0, len(originToNews))
 	for origin, news := range originToNews {
 		if len(news) >= 2 {
@@ -200,16 +218,24 @@ func firstSplitCluster(originToNews map[string]map[string]struct{}, missing map[
 	sort.Strings(origins)
 	origin := origins[0]
 	news := sortedKeys(originToNews[origin])
-	return structureCluster{
-		kind: "split", representative: origin,
+	cluster := structureCluster{
+		kind: "split", sourceID: sourceID, representative: origin,
 		originSourceKeys: []string{origin}, originWorkIDs: []string{missing[origin].workID},
 		newSourceKeys: news,
-	}, true
+		originDigests: map[string][]string{origin: sortedDigestSlice(missing[origin].digests)},
+		newDigests:    make(map[string][]string, len(news)),
+		mapping:       make(map[string][]string, len(news)),
+	}
+	for _, nk := range news {
+		cluster.newDigests[nk] = sortedDigestSlice(discoveredDigests[nk])
+		cluster.mapping[nk] = []string{origin}
+	}
+	return cluster, true
 }
 
 // firstMergeCluster 返回按 new source_key 字典序的第一个合并簇（一个新 SourceWork 关联 ≥2 个原
-// SourceWork）。
-func firstMergeCluster(newToOrigins map[string]map[string]priorWorkFacts) (structureCluster, bool) {
+// SourceWork），并填充其 origin/new 媒体 digest 证据与 new→origin 映射供确定性指纹使用。
+func firstMergeCluster(sourceID string, newToOrigins map[string]map[string]priorWorkFacts, discoveredDigests map[string]map[string]struct{}) (structureCluster, bool) {
 	newKeys := make([]string, 0, len(newToOrigins))
 	for nk, origins := range newToOrigins {
 		if len(origins) >= 2 {
@@ -223,13 +249,18 @@ func firstMergeCluster(newToOrigins map[string]map[string]priorWorkFacts) (struc
 	nk := newKeys[0]
 	originKeys := sortedKeys(keysOf(newToOrigins[nk]))
 	workIDs := make([]string, 0, len(originKeys))
+	originDigests := make(map[string][]string, len(originKeys))
 	for _, key := range originKeys {
 		workIDs = append(workIDs, newToOrigins[nk][key].workID)
+		originDigests[key] = sortedDigestSlice(newToOrigins[nk][key].digests)
 	}
 	return structureCluster{
-		kind: "merge", representative: nk,
+		kind: "merge", sourceID: sourceID, representative: nk,
 		originSourceKeys: originKeys, originWorkIDs: workIDs,
 		newSourceKeys: []string{nk},
+		originDigests: originDigests,
+		newDigests:    map[string][]string{nk: sortedDigestSlice(discoveredDigests[nk])},
+		mapping:       map[string][]string{nk: append([]string(nil), originKeys...)},
 	}, true
 }
 
@@ -252,6 +283,15 @@ ORDER BY created_at DESC, issue_id DESC LIMIT 1`, srcID, code, cluster.represent
 	if err == nil {
 		if existingFingerprint == fingerprint {
 			if _, err := tx.ExecContext(ctx, `UPDATE binding_issues SET updated_at=? WHERE issue_id=?`, now, existingID); err != nil {
+				return fault.New(fault.CodeInternal, true, err)
+			}
+			return r.commitStructureIssue(tx, cluster.kind)
+		}
+		// 兼容升级：遗留（v1）指纹在旧判据下与当前结构相同的，原位升级为 v2 指纹并保留其状态
+		// （不重开被 dismissed 的历史 issue），避免升级引发一次性 superseded 抖动或静默重解释历史值。
+		if isLegacyStructureFingerprint(existingFingerprint) && existingFingerprint == legacyStructureFingerprint(cluster) {
+			if _, err := tx.ExecContext(ctx, `UPDATE binding_issues SET candidate_fingerprint=?, updated_at=? WHERE issue_id=?`,
+				fingerprint, now, existingID); err != nil {
 				return fault.New(fault.CodeInternal, true, err)
 			}
 			return r.commitStructureIssue(tx, cluster.kind)
@@ -313,12 +353,81 @@ func (r *Resources) commitStructureIssue(tx *sql.Tx, kind string) error {
 	return fault.WithField(fault.CodeBindingReviewRequired, field, nil)
 }
 
+// structureFingerprintVersion 是结构证据指纹的格式版本。历史（v1）指纹为无前缀的
+// "kind|origins|news" 字符串；当前（v2）指纹为 "sf2:" + 完整证据规范 JSON 的 SHA-256。
+const structureFingerprintPrefix = "sf2:"
+
+type originFingerprint struct {
+	SourceKey string   `json:"sourceKey"`
+	WorkID    string   `json:"workId"`
+	Digests   []string `json:"digests"`
+}
+
+type newFingerprint struct {
+	SourceKey     string   `json:"sourceKey"`
+	Digests       []string `json:"digests"`
+	LinkedOrigins []string `json:"linkedOrigins"`
+}
+
+type structureFingerprintPayload struct {
+	Version  int                 `json:"version"`
+	SourceID string              `json:"sourceId"`
+	Kind     string              `json:"kind"`
+	Origins  []originFingerprint `json:"origins"`
+	News     []newFingerprint    `json:"news"`
+}
+
+// structureFingerprint 计算稳定、确定性的结构证据指纹（v2）。它覆盖格式版本、source_id、结构类别、
+// 排序去重的原/新 source_key、每个 SourceWork 的稳定媒体证据（algorithm+完整 digest）以及由 Blob
+// 交集形成的新→原映射；不包含绝对路径、标题、扫描顺序、map 遍历顺序、Catalog row ID 或临时 revision。
+// 相同证据（含不同输入顺序）产生相同指纹；source_key 相同但 Blob 集合或映射变化产生不同指纹。
 func structureFingerprint(cluster structureCluster) string {
 	origins := append([]string(nil), cluster.originSourceKeys...)
 	news := append([]string(nil), cluster.newSourceKeys...)
 	sort.Strings(origins)
 	sort.Strings(news)
+
+	workIDByKey := make(map[string]string, len(cluster.originSourceKeys))
+	for index, key := range cluster.originSourceKeys {
+		if index < len(cluster.originWorkIDs) {
+			workIDByKey[key] = cluster.originWorkIDs[index]
+		}
+	}
+	payload := structureFingerprintPayload{Version: 2, SourceID: cluster.sourceID, Kind: cluster.kind}
+	for _, key := range origins {
+		payload.Origins = append(payload.Origins, originFingerprint{
+			SourceKey: key, WorkID: workIDByKey[key], Digests: sortedCopy(cluster.originDigests[key])})
+	}
+	for _, key := range news {
+		payload.News = append(payload.News, newFingerprint{
+			SourceKey: key, Digests: sortedCopy(cluster.newDigests[key]), LinkedOrigins: sortedCopy(cluster.mapping[key])})
+	}
+	encoded, _ := json.Marshal(payload)
+	sum := sha256.Sum256(encoded)
+	return structureFingerprintPrefix + hex.EncodeToString(sum[:])
+}
+
+// legacyStructureFingerprint 复算历史（v1）指纹格式，仅用于识别升级前遗留 issue 是否在旧判据下与
+// 当前结构相同，以便原位升级到 v2 而不误报 superseded。
+func legacyStructureFingerprint(cluster structureCluster) string {
+	origins := append([]string(nil), cluster.originSourceKeys...)
+	news := append([]string(nil), cluster.newSourceKeys...)
+	sort.Strings(origins)
+	sort.Strings(news)
 	return cluster.kind + "|" + strings.Join(origins, "\x00") + "|" + strings.Join(news, "\x00")
+}
+
+func isLegacyStructureFingerprint(value string) bool {
+	return !strings.HasPrefix(value, structureFingerprintPrefix)
+}
+
+func sortedCopy(values []string) []string {
+	result := append([]string(nil), values...)
+	sort.Strings(result)
+	if result == nil {
+		return []string{}
+	}
+	return result
 }
 
 // SourceStructureDecision 汇报一次拆分/合并人工决策的结果，供 API 返回与查询。
@@ -377,10 +486,10 @@ func (r *Resources) ResolveSourceStructureIssue(ctx context.Context, issueID, de
 	}
 	defer tx.Rollback()
 
-	var srcID, status, structureKind string
+	var srcID, status, structureKind, issueFingerprint string
 	var currentVersion int
-	err = tx.QueryRowContext(ctx, `SELECT source_id, status, COALESCE(structure_kind, ''), version
-FROM binding_issues WHERE issue_id=?`, issueID).Scan(&srcID, &status, &structureKind, &currentVersion)
+	err = tx.QueryRowContext(ctx, `SELECT source_id, status, COALESCE(structure_kind, ''), candidate_fingerprint, version
+FROM binding_issues WHERE issue_id=?`, issueID).Scan(&srcID, &status, &structureKind, &issueFingerprint, &currentVersion)
 	if errors.Is(err, sql.ErrNoRows) {
 		return SourceStructureDecision{}, fault.New(fault.CodeNotFound, false, nil)
 	}
@@ -415,8 +524,10 @@ FROM binding_issues WHERE issue_id=?`, issueID).Scan(&srcID, &status, &structure
 		return SourceStructureDecision{}, err
 	}
 
-	// 先插入决策父行，再插入 pre-seed Binding 溯源，满足外键顺序。
-	fingerprint := structureFingerprint(structureCluster{kind: kind, originSourceKeys: originSourceKeys, newSourceKeys: newSourceKeys})
+	// 先插入决策父行，再插入 pre-seed Binding 溯源，满足外键顺序。决策指纹直接采用 issue 已存的
+	// 结构证据指纹，保证决策与其审查依据的证据一致，并让 (source_id, fingerprint) 唯一索引以完整
+	// Blob 证据为身份。
+	fingerprint := issueFingerprint
 	if _, err := tx.ExecContext(ctx, `INSERT INTO source_structure_decisions
 (decision_id, issue_id, source_id, kind, action, fingerprint, origin_source_keys, origin_work_ids,
  new_source_keys, target_source_key, target_work_id, decided_by, status, version, created_at, updated_at)
