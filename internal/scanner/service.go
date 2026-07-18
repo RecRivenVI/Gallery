@@ -65,10 +65,21 @@ func (s *Service) CreateScan(ctx context.Context, sourceID, createdBy string) (j
 	if _, err := s.resources.GetSource(ctx, sourceID); err != nil {
 		return jobs.Job{}, err
 	}
-	if _, err := s.resources.BindingForSource(ctx, sourceID); err != nil {
+	binding, err := s.resources.BindingForSource(ctx, sourceID)
+	if err != nil {
 		return jobs.Job{}, err
 	}
-	job, err := s.jobs.CreateScan(ctx, sourceID, createdBy, "")
+	version, err := s.resources.GetRuleVersion(ctx, binding.SemanticHash)
+	if err != nil {
+		return jobs.Job{}, err
+	}
+	snapshot := &jobs.RuleExecutionSnapshot{
+		SemanticHash: binding.SemanticHash, Parameters: append([]byte(nil), binding.Parameters...),
+		ParametersHash: application.RuleParameterHash(binding.Parameters), RuleIRHash: binding.RuleIRHash,
+		CompilerVersion: rules.CompilerVersion, CELProfileVersion: rules.CELProfileVersion,
+		ExtensionRegistryVersion: version.IR.ExtensionRegistryVersion,
+	}
+	job, err := s.jobs.CreateScanWithRuleSnapshot(ctx, sourceID, createdBy, "", snapshot)
 	if err == nil {
 		s.notifier.JobChanged(job)
 	}
@@ -96,9 +107,29 @@ func (s *Service) Execute(ctx context.Context, jobID string) error {
 	if err != nil {
 		return s.fail(ctx, job.ID, err)
 	}
-	binding, err := s.resources.BindingForSource(ctx, source.ID)
-	if err != nil {
-		return s.fail(ctx, job.ID, err)
+	var binding application.SourceRuleBinding
+	if job.RuleSemanticHash != "" {
+		version, snapshotErr := s.resources.GetRuleVersion(ctx, job.RuleSemanticHash)
+		if snapshotErr != nil {
+			return s.fail(ctx, job.ID, snapshotErr)
+		}
+		compiled, compileErr := rules.CompilePackage(version.Canonical)
+		if compileErr != nil {
+			return s.fail(ctx, job.ID, compileErr)
+		}
+		ir, irHash, parameters, compileErr := rules.CompileBinding(compiled, job.RuleParameters)
+		if compileErr != nil || irHash != job.RuleIRHash {
+			if compileErr == nil {
+				compileErr = fmt.Errorf("Job 规则快照 RuleIRHash 不匹配")
+			}
+			return s.fail(ctx, job.ID, compileErr)
+		}
+		binding = application.SourceRuleBinding{SourceID: source.ID, SemanticHash: job.RuleSemanticHash, Parameters: parameters, RuleIRHash: irHash, IR: ir}
+	} else {
+		binding, err = s.resources.BindingForSource(ctx, source.ID)
+		if err != nil {
+			return s.fail(ctx, job.ID, err)
+		}
 	}
 	discovered, err := discover(ctx, source.RootPath, binding.IR, binding.Parameters)
 	if err != nil {

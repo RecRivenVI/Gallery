@@ -78,6 +78,47 @@ func TestPersistentJobTransitionsAndActiveScanConflict(t *testing.T) {
 	}
 }
 
+func TestScanJobPersistsRuleExecutionSnapshot(t *testing.T) {
+	dirs := appdirs.UnderRoot(filepath.Join(t.TempDir(), "app"))
+	if err := dirs.Ensure(filesystem.OS{}); err != nil {
+		t.Fatal(err)
+	}
+	store, err := storage.Open(context.Background(), dirs)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	now := clock.Fixed{Time: time.Date(2026, 7, 18, 0, 0, 0, 0, time.UTC)}
+	generator := identity.NewGenerator(now)
+	resources, err := application.NewResources(store.Control.SQL(), dirs, filesystem.OS{}, now, generator)
+	if err != nil {
+		t.Fatal(err)
+	}
+	library, err := resources.CreateLibrary(context.Background(), "snapshot")
+	if err != nil {
+		t.Fatal(err)
+	}
+	sourceID := createSource(t, resources, library.ID)
+	jobStore, err := jobs.NewStore(store.Control.SQL(), now, generator)
+	if err != nil {
+		t.Fatal(err)
+	}
+	job, err := jobStore.CreateScanWithRuleSnapshot(context.Background(), sourceID, "owner", "", &jobs.RuleExecutionSnapshot{
+		SemanticHash: "semantic", Parameters: []byte(`{"minimumSize":1}`), ParametersHash: "parameters", RuleIRHash: "ir",
+		CompilerVersion: "compiler", CELProfileVersion: "cel", ExtensionRegistryVersion: "extensions",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	reloaded, err := jobStore.Get(context.Background(), job.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if reloaded.RuleSemanticHash != "semantic" || string(reloaded.RuleParameters) != `{"minimumSize":1}` || reloaded.RuleIRHash != "ir" || reloaded.ExtensionRegistryVersion != "extensions" {
+		t.Fatalf("规则执行快照未持久化: %+v", reloaded)
+	}
+}
+
 func createSource(t *testing.T, resources *application.Resources, libraryID string) string {
 	t.Helper()
 	root := filepath.Join(t.TempDir(), "source")

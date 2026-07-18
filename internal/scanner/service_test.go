@@ -153,13 +153,20 @@ func TestReconciliationRepairsBothCrossDatabaseStates(t *testing.T) {
 
 func TestCatalogDeleteRebuildPreservesCanonicalOverlayAndMediaURL(t *testing.T) {
 	fixture := []byte("catalog rebuild stable media")
-	_, jobStore, catalogStore, service, source, store := setup(t, fixture)
+	resources, jobStore, catalogStore, service, source, store := setup(t, fixture)
 	ctx := context.Background()
 	firstJob, err := service.CreateScan(ctx, source.ID, "personal-owner")
 	if err != nil {
 		t.Fatal(err)
 	}
 	if err := service.Execute(ctx, firstJob.ID); err != nil {
+		t.Fatal(err)
+	}
+	if firstJob.RuleSemanticHash == "" || firstJob.RuleIRHash == "" || len(firstJob.RuleParameters) == 0 {
+		t.Fatalf("扫描 Job 未冻结规则执行输入: %+v", firstJob)
+	}
+	initialBinding, err := resources.BindingForSource(ctx, source.ID)
+	if err != nil {
 		t.Fatal(err)
 	}
 	_, works, err := catalogStore.ListWorks(ctx)
@@ -226,6 +233,10 @@ WHERE source_id=? AND status='active'`, source.ID).Scan(&oldCreatorID); err != n
 	}
 	if err := rebuiltScanner.Execute(ctx, rebuildJob.ID); err != nil {
 		t.Fatal(err)
+	}
+	rebuiltBinding, err := rebuiltResources.BindingForSource(ctx, source.ID)
+	if err != nil || rebuiltBinding.SemanticHash != initialBinding.SemanticHash || rebuiltBinding.RuleIRHash != initialBinding.RuleIRHash {
+		t.Fatalf("Catalog 重建后规则 Binding 未恢复: initial=%+v rebuilt=%+v err=%v", initialBinding, rebuiltBinding, err)
 	}
 	newPublication, rebuiltWorks, err := rebuiltCatalog.ListWorks(ctx)
 	if err != nil || len(rebuiltWorks) != 1 || rebuiltWorks[0].ID != workID || rebuiltWorks[0].Title != "重建后标题" {
