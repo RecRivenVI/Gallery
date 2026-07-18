@@ -2,7 +2,7 @@
 
 本目录是 Gallery（中文名“画廊”、代码代号 `gallery`）未来正式实现的唯一工程文档入口。这里保存当前规范、实施指南、验证证据和架构决策，不保存调研过程、阶段汇报或已完成任务清单。
 
-当前实现状态：阶段 0、Walking Skeleton、Architecture Proof 正确性切片、阶段 1「领域和数据所有权」和阶段 2「规则闭环」已完成 Correctness 实现；下一条正式垂直切片是阶段 3「扫描、任务和 Catalog」。阶段 2 在既有有限原语/CEL/Rule IR 基础上提供 RulePackage 生命周期、参数/Binding 快照、严格导入、Explain/Trace/Impact、diff/回滚和内置示例 API，但不代表完整产品、性能、平台或发行门禁已经完成。
+当前实现状态：阶段 0、Walking Skeleton、Architecture Proof 正确性切片、阶段 1「领域和数据所有权」、阶段 2「规则闭环」和阶段 3「扫描、任务和 Catalog」已完成代码与合成 Correctness 实现。阶段 3 覆盖持久 Job/attempt、独立资源池、完整 SHA-256 Hash Job、Watcher 收敛、staging/publication、维护与 GC、DerivedAsset/外部工具执行边界及对应 REST/OpenAPI 契约；真实 HDD、SMB/NAS、网络挂载和正式 Reference/Degradation Performance Gate 留待下一轮实测，不代表完整产品、平台或发行门禁已经完成。
 
 ## 如何使用
 
