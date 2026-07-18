@@ -26,26 +26,45 @@ const (
 )
 
 type Job struct {
-	ID                string
-	Type              string
-	SourceID          string
-	CreatedBy         string
-	Status            Status
-	Stage             string
-	ProgressCurrent   int64
-	ProgressTotal     int64
-	ProgressSequence  uint64
-	IssueCode         string
-	PublicationID     string
-	RetryOf           string
-	Attempt           int
-	CreatedAt         time.Time
-	StartedAt         *time.Time
-	FinishedAt        *time.Time
-	UpdatedAt         time.Time
-	TargetWatermark   int64
-	TargetCatalogID   string
-	BasePublicationID string
+	ID                       string
+	Type                     string
+	SourceID                 string
+	CreatedBy                string
+	Status                   Status
+	Stage                    string
+	ProgressCurrent          int64
+	ProgressTotal            int64
+	ProgressSequence         uint64
+	IssueCode                string
+	PublicationID            string
+	RetryOf                  string
+	Attempt                  int
+	CreatedAt                time.Time
+	StartedAt                *time.Time
+	FinishedAt               *time.Time
+	UpdatedAt                time.Time
+	TargetWatermark          int64
+	TargetCatalogID          string
+	BasePublicationID        string
+	RuleSemanticHash         string
+	RuleParameters           []byte
+	RuleParametersHash       string
+	RuleIRHash               string
+	CompilerVersion          string
+	CELProfileVersion        string
+	ExtensionRegistryVersion string
+}
+
+// RuleExecutionSnapshot 是扫描 Job 入队时冻结的规则执行输入。运行期间不得重新读取
+// SourceRuleBinding 作为事实来源，否则用户修改 Binding 会让同一个 Job 跨代执行。
+type RuleExecutionSnapshot struct {
+	SemanticHash             string
+	Parameters               []byte
+	ParametersHash           string
+	RuleIRHash               string
+	CompilerVersion          string
+	CELProfileVersion        string
+	ExtensionRegistryVersion string
 }
 
 type OverlayEnqueueResult struct {
@@ -67,8 +86,15 @@ func NewStore(db *sql.DB, clock ports.Clock, ids ports.IDGenerator) (*Store, err
 }
 
 func (s *Store) CreateScan(ctx context.Context, sourceID, createdBy, retryOf string) (Job, error) {
+	return s.CreateScanWithRuleSnapshot(ctx, sourceID, createdBy, retryOf, nil)
+}
+
+func (s *Store) CreateScanWithRuleSnapshot(ctx context.Context, sourceID, createdBy, retryOf string, snapshot *RuleExecutionSnapshot) (Job, error) {
 	if _, err := domain.ParseID(domain.IDSource, sourceID); err != nil || strings.TrimSpace(createdBy) == "" {
 		return Job{}, fault.New(fault.CodeValidation, false, nil)
+	}
+	if snapshot != nil && (snapshot.SemanticHash == "" || snapshot.RuleIRHash == "" || len(snapshot.Parameters) == 0) {
+		return Job{}, fault.WithField(fault.CodeValidation, "ruleSnapshot", nil)
 	}
 	attempt := 1
 	if retryOf != "" {
@@ -91,15 +117,27 @@ func (s *Store) CreateScan(ctx context.Context, sourceID, createdBy, retryOf str
 		Status: StatusQueued, Stage: "queued", ProgressSequence: 1, RetryOf: retryOf,
 		Attempt: attempt, CreatedAt: now, UpdatedAt: now,
 	}
+	if snapshot != nil {
+		job.RuleSemanticHash = snapshot.SemanticHash
+		job.RuleParameters = append([]byte(nil), snapshot.Parameters...)
+		job.RuleParametersHash = snapshot.ParametersHash
+		job.RuleIRHash = snapshot.RuleIRHash
+		job.CompilerVersion = snapshot.CompilerVersion
+		job.CELProfileVersion = snapshot.CELProfileVersion
+		job.ExtensionRegistryVersion = snapshot.ExtensionRegistryVersion
+	}
 	var retry any
 	if retryOf != "" {
 		retry = retryOf
 	}
 	_, err = s.db.ExecContext(ctx, `
 INSERT INTO jobs
-(job_id, job_type, source_id, created_by, status, stage, progress_sequence, retry_of, attempt, created_at, updated_at)
-VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`, job.ID, job.Type, job.SourceID, job.CreatedBy,
-		job.Status, job.Stage, job.ProgressSequence, retry, job.Attempt, now.Unix(), now.Unix())
+(job_id, job_type, source_id, created_by, status, stage, progress_sequence, retry_of, attempt, created_at, updated_at,
+ rule_semantic_hash, rule_parameters_json, rule_parameters_hash, rule_ir_hash, compiler_version, cel_profile_version, extension_registry_version)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`, job.ID, job.Type, job.SourceID, job.CreatedBy,
+		job.Status, job.Stage, job.ProgressSequence, retry, job.Attempt, now.Unix(), now.Unix(),
+		nullableString(job.RuleSemanticHash), nullableBytes(job.RuleParameters), nullableString(job.RuleParametersHash),
+		nullableString(job.RuleIRHash), nullableString(job.CompilerVersion), nullableString(job.CELProfileVersion), nullableString(job.ExtensionRegistryVersion))
 	if err != nil {
 		if strings.Contains(strings.ToLower(err.Error()), "unique") {
 			return Job{}, fault.New(fault.CodeScanAlreadyRunning, true, nil)
@@ -198,18 +236,22 @@ func (s *Store) Get(ctx context.Context, id string) (Job, error) {
 	}
 	var job Job
 	var sourceID, issueCode, publicationID, retryOf, targetCatalogID, basePublicationID sql.NullString
+	var ruleSemanticHash, ruleParameters, ruleParametersHash, ruleIRHash, compilerVersion, celProfileVersion, extensionRegistryVersion sql.NullString
 	var startedAt, finishedAt, targetWatermark sql.NullInt64
 	var createdAt, updatedAt int64
 	err := s.db.QueryRowContext(ctx, `
 SELECT job_id, job_type, source_id, created_by, status, stage,
        progress_current, progress_total, progress_sequence, issue_code, publication_id,
        retry_of, attempt, created_at, started_at, finished_at, updated_at,
-       target_watermark, target_catalog_revision_id, base_query_publication_id
+       target_watermark, target_catalog_revision_id, base_query_publication_id,
+       rule_semantic_hash, rule_parameters_json, rule_parameters_hash, rule_ir_hash, compiler_version,
+       cel_profile_version, extension_registry_version
 FROM jobs WHERE job_id = ?`, id).Scan(
 		&job.ID, &job.Type, &sourceID, &job.CreatedBy, &job.Status, &job.Stage,
 		&job.ProgressCurrent, &job.ProgressTotal, &job.ProgressSequence, &issueCode, &publicationID,
 		&retryOf, &job.Attempt, &createdAt, &startedAt, &finishedAt, &updatedAt,
-		&targetWatermark, &targetCatalogID, &basePublicationID,
+		&targetWatermark, &targetCatalogID, &basePublicationID, &ruleSemanticHash, &ruleParameters,
+		&ruleParametersHash, &ruleIRHash, &compilerVersion, &celProfileVersion, &extensionRegistryVersion,
 	)
 	if errors.Is(err, sql.ErrNoRows) {
 		return Job{}, fault.New(fault.CodeNotFound, false, nil)
@@ -220,6 +262,8 @@ FROM jobs WHERE job_id = ?`, id).Scan(
 	job.SourceID, job.IssueCode, job.PublicationID, job.RetryOf = sourceID.String, issueCode.String, publicationID.String, retryOf.String
 	job.TargetWatermark = targetWatermark.Int64
 	job.TargetCatalogID, job.BasePublicationID = targetCatalogID.String, basePublicationID.String
+	job.RuleSemanticHash, job.RuleParameters, job.RuleParametersHash = ruleSemanticHash.String, []byte(ruleParameters.String), ruleParametersHash.String
+	job.RuleIRHash, job.CompilerVersion, job.CELProfileVersion, job.ExtensionRegistryVersion = ruleIRHash.String, compilerVersion.String, celProfileVersion.String, extensionRegistryVersion.String
 	job.CreatedAt, job.UpdatedAt = time.Unix(createdAt, 0).UTC(), time.Unix(updatedAt, 0).UTC()
 	job.StartedAt = nullableTime(startedAt)
 	job.FinishedAt = nullableTime(finishedAt)
@@ -458,4 +502,18 @@ func nullableTime(value sql.NullInt64) *time.Time {
 	}
 	result := time.Unix(value.Int64, 0).UTC()
 	return &result
+}
+
+func nullableString(value string) any {
+	if value == "" {
+		return nil
+	}
+	return value
+}
+
+func nullableBytes(value []byte) any {
+	if len(value) == 0 {
+		return nil
+	}
+	return string(value)
 }
