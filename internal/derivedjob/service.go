@@ -26,10 +26,15 @@ type Resolver interface {
 	Resolve(ctx context.Context, transformID, transformVersion string) (derived.Generator, error)
 }
 
+type SpaceGate interface {
+	CheckSpace(ctx context.Context, operation string, additionalBytes int64) error
+}
+
 type Service struct {
 	jobs     *jobs.Store
 	assets   *derived.Service
 	resolver Resolver
+	space    SpaceGate
 }
 
 func New(jobStore *jobs.Store, assetService *derived.Service, resolver Resolver) (*Service, error) {
@@ -46,12 +51,24 @@ func (s *Service) Create(ctx context.Context, request Request, createdBy string)
 	if _, err := domain.ParseContentBlobRef(request.BlobAlgorithm, request.BlobDigest); err != nil {
 		return jobs.Job{}, fault.New(fault.CodeDerivedAssetInvalid, false, err)
 	}
+	if s.resolver == nil {
+		return jobs.Job{}, fault.New(fault.CodeDerivedAssetUnavailable, false, nil)
+	}
+	if s.space != nil {
+		if err := s.space.CheckSpace(ctx, "derived_asset", 0); err != nil {
+			return jobs.Job{}, err
+		}
+	}
 	payload, err := json.Marshal(request)
 	if err != nil {
 		return jobs.Job{}, fault.New(fault.CodeInternal, true, err)
 	}
 	return s.jobs.CreateWithOptions(ctx, "derived", "", createdBy, jobs.CreateOptions{ResourceClass: jobs.ResourceDerived, RequestJSON: payload})
 }
+
+func (s *Service) Available() bool { return s != nil && s.resolver != nil }
+
+func (s *Service) SetSpaceGate(gate SpaceGate) { s.space = gate }
 
 func (s *Service) Execute(ctx context.Context, jobID string) error {
 	job, err := s.jobs.StartStage(ctx, jobID, "deriving")
@@ -63,7 +80,7 @@ func (s *Service) Execute(ctx context.Context, jobID string) error {
 		return s.fail(ctx, jobID, fault.New(fault.CodeDerivedAssetInvalid, false, err))
 	}
 	if s.resolver == nil {
-		return s.fail(ctx, jobID, fault.New(fault.CodeDerivedAssetFailed, false, errors.New("Derived transform resolver 未配置")))
+		return s.fail(ctx, jobID, fault.New(fault.CodeDerivedAssetUnavailable, false, errors.New("Derived transform resolver 未配置")))
 	}
 	generator, err := s.resolver.Resolve(ctx, request.TransformID, request.TransformVersion)
 	if err != nil {

@@ -6,7 +6,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io/fs"
 	"os"
 	"path/filepath"
 	"strings"
@@ -21,23 +20,27 @@ import (
 )
 
 type Request struct {
-	RetentionSeconds int64 `json:"retentionSeconds"`
-	DryRun           bool  `json:"dryRun"`
-	RequiredBytes    int64 `json:"requiredBytes"`
+	RetentionSeconds int64       `json:"retentionSeconds"`
+	DryRun           bool        `json:"dryRun"`
+	Operation        string      `json:"operation"`
+	Space            SpaceReport `json:"space"`
 }
 
 type SpaceReport struct {
-	Path          string
-	RequiredBytes int64
-	FreeBytes     int64
-	Sufficient    bool
+	Operation     string `json:"operation"`
+	Path          string `json:"-"`
+	RequiredBytes int64  `json:"requiredBytes"`
+	FreeBytes     int64  `json:"availableBytes"`
+	Sufficient    bool   `json:"sufficient"`
+	Conservative  bool   `json:"conservative"`
 }
 
 type GCReport struct {
-	Catalog        catalog.GCResult
-	DerivedRemoved int
-	TempRemoved    int
-	DryRun         bool
+	Catalog            catalog.GCResult
+	DerivedRemoved     int
+	TempRemoved        int
+	TempOrphansRemoved int
+	DryRun             bool
 }
 
 type Service struct {
@@ -49,19 +52,37 @@ type Service struct {
 	dirs    appdirs.Dirs
 	space   ports.SpaceChecker
 	clock   ports.Clock
+	temp    *jobs.TempStore
+	coord   *Coordinator
 }
 
 func New(ctx context.Context, control *sql.DB, catalogStore *catalog.Store, jobStore *jobs.Store, derivedService *derived.Service, dirs appdirs.Dirs, space ports.SpaceChecker, clock ports.Clock) (*Service, error) {
 	if ctx == nil || control == nil || catalogStore == nil || jobStore == nil || clock == nil {
 		return nil, fmt.Errorf("Maintenance Service 缺少依赖")
 	}
-	return &Service{context: ctx, control: control, catalog: catalogStore, jobs: jobStore, derived: derivedService, dirs: dirs, space: space, clock: clock}, nil
+	tempStore, err := jobs.NewTempStore(control, dirs.Temp, clock)
+	if err != nil {
+		return nil, err
+	}
+	return &Service{context: ctx, control: control, catalog: catalogStore, jobs: jobStore, derived: derivedService,
+		dirs: dirs, space: space, clock: clock, temp: tempStore, coord: NewCoordinator()}, nil
+}
+
+func (s *Service) SetCoordinator(coordinator *Coordinator) {
+	if coordinator != nil {
+		s.coord = coordinator
+	}
 }
 
 func (s *Service) CreateGC(ctx context.Context, createdBy string, request Request) (jobs.Job, error) {
-	if request.RetentionSeconds < 0 || request.RequiredBytes < 0 {
+	if request.RetentionSeconds < 0 {
 		return jobs.Job{}, fault.New(fault.CodeValidation, false, nil)
 	}
+	space, err := s.Estimate(ctx, "catalog_gc")
+	if err != nil {
+		return jobs.Job{}, err
+	}
+	request.Operation, request.Space = "catalog_gc", space
 	payload, err := json.Marshal(request)
 	if err != nil {
 		return jobs.Job{}, fault.New(fault.CodeInternal, true, err)
@@ -70,6 +91,22 @@ func (s *Service) CreateGC(ctx context.Context, createdBy string, request Reques
 	if err != nil {
 		return jobs.Job{}, err
 	}
+	if _, err := s.jobs.SetRequest(ctx, job.ID, payload); err != nil {
+		return jobs.Job{}, err
+	}
+	return s.jobs.Get(ctx, job.ID)
+}
+
+func (s *Service) Create(ctx context.Context, jobType, createdBy string) (jobs.Job, error) {
+	space, err := s.Estimate(ctx, jobType)
+	if err != nil {
+		return jobs.Job{}, err
+	}
+	job, err := s.jobs.CreateMaintenance(ctx, jobType, createdBy)
+	if err != nil {
+		return jobs.Job{}, err
+	}
+	payload, _ := json.Marshal(Request{Operation: jobType, Space: space})
 	if _, err := s.jobs.SetRequest(ctx, job.ID, payload); err != nil {
 		return jobs.Job{}, err
 	}
@@ -87,19 +124,23 @@ func (s *Service) Execute(ctx context.Context, jobID string) error {
 		if err := json.Unmarshal(job.RequestJSON, &request); err != nil {
 			return s.fail(ctx, jobID, fault.New(fault.CodeValidation, false, err))
 		}
-		if request.RequiredBytes > 0 {
-			if _, err := s.Preflight(ctx, request.RequiredBytes); err != nil {
-				return s.fail(ctx, jobID, err)
-			}
+		if _, err := s.Estimate(ctx, "catalog_gc"); err != nil {
+			return s.fail(ctx, jobID, err)
 		}
 		if _, err := s.RunGC(ctx, time.Duration(request.RetentionSeconds)*time.Second, request.DryRun); err != nil {
 			return s.fail(ctx, jobID, err)
 		}
 	case "catalog_checkpoint":
+		if _, err := s.Estimate(ctx, "catalog_checkpoint"); err != nil {
+			return s.fail(ctx, jobID, err)
+		}
 		if err := s.Checkpoint(ctx); err != nil {
 			return s.fail(ctx, jobID, err)
 		}
 	case "catalog_vacuum":
+		if _, err := s.Estimate(ctx, "catalog_vacuum"); err != nil {
+			return s.fail(ctx, jobID, err)
+		}
 		if err := s.Vacuum(ctx); err != nil {
 			return s.fail(ctx, jobID, err)
 		}
@@ -115,25 +156,13 @@ func (s *Service) Execute(ctx context.Context, jobID string) error {
 }
 
 func (s *Service) Reconcile(ctx context.Context, start func(string)) error {
-	items, err := s.jobs.ListByStatuses(ctx, jobs.StatusQueued, jobs.StatusRunning, jobs.StatusPublishing)
-	if err != nil {
-		return err
-	}
-	for _, job := range items {
-		if job.Type != "catalog_gc" && job.Type != "catalog_checkpoint" && job.Type != "catalog_vacuum" && job.Type != "derived_gc" {
-			continue
-		}
-		if job.Status == jobs.StatusQueued && start != nil {
-			start(job.ID)
-		}
-		if job.Status == jobs.StatusRunning || job.Status == jobs.StatusPublishing {
-			_, _ = s.jobs.FailWithRetryable(ctx, job.ID, string(fault.CodeProcessInterrupted), true)
-		}
-	}
+	// queued 提交与 running 租约回收由 jobs.Reconciler 统一处理。
 	return nil
 }
 
 func (s *Service) RunGC(ctx context.Context, retention time.Duration, dryRun bool) (GCReport, error) {
+	release := s.coord.AcquireMaintenance()
+	defer release()
 	active, err := s.jobs.ListByStatuses(ctx, jobs.StatusQueued, jobs.StatusRunning, jobs.StatusPublishing, jobs.StatusCancelling)
 	if err != nil {
 		return GCReport{}, err
@@ -152,10 +181,18 @@ func (s *Service) RunGC(ctx context.Context, retention time.Duration, dryRun boo
 		if err != nil {
 			return GCReport{}, err
 		}
-		report.TempRemoved, err = sweepTemp(s.dirs.Temp)
+	}
+	if !dryRun {
+		grace := retention
+		if grace < 24*time.Hour {
+			grace = 24 * time.Hour
+		}
+		tempReport, sweepErr := s.temp.Sweep(ctx, grace, 7*24*time.Hour)
+		err = sweepErr
 		if err != nil {
 			return GCReport{}, err
 		}
+		report.TempRemoved, report.TempOrphansRemoved = tempReport.TerminalRemoved, tempReport.OrphanRemoved
 	}
 	return report, nil
 }
@@ -166,20 +203,64 @@ func (s *Service) Preflight(ctx context.Context, requiredBytes int64) (SpaceRepo
 	}
 	path := s.dirs.Data
 	if s.space == nil {
-		return SpaceReport{Path: path, RequiredBytes: requiredBytes, Sufficient: true}, nil
+		return SpaceReport{Path: path, RequiredBytes: requiredBytes, Sufficient: true, Conservative: true}, nil
 	}
 	free, err := s.space.FreeBytes(path)
 	if err != nil {
 		return SpaceReport{}, fault.New(fault.CodeInternal, true, err)
 	}
-	report := SpaceReport{Path: path, RequiredBytes: requiredBytes, FreeBytes: free, Sufficient: free >= requiredBytes}
+	report := SpaceReport{Path: path, RequiredBytes: requiredBytes, FreeBytes: free, Sufficient: free >= requiredBytes, Conservative: true}
 	if !report.Sufficient {
 		return report, fault.New(fault.CodeDiskSpaceInsufficient, true, nil)
 	}
 	return report, nil
 }
 
+// Estimate 由服务端按操作类型生成保守空间预算；客户端不能提供 requiredBytes 绕过门禁。
+func (s *Service) Estimate(ctx context.Context, operation string) (SpaceReport, error) {
+	controlSize := fileSize(filepath.Join(s.dirs.Data, "control.db"))
+	catalogSize := fileSize(filepath.Join(s.dirs.Data, "catalog.db"))
+	controlWAL := fileSize(filepath.Join(s.dirs.Data, "control.db-wal"))
+	catalogWAL := fileSize(filepath.Join(s.dirs.Data, "catalog.db-wal"))
+	var required int64
+	switch operation {
+	case "catalog_gc", "derived_gc":
+		required = 4 << 20
+	case "derived_asset":
+		required = 64 << 20
+	case "external_tool":
+		required = 128 << 20
+	case "catalog_checkpoint":
+		required = controlWAL + catalogWAL + (4 << 20)
+	case "catalog_vacuum":
+		required = controlSize + catalogSize + controlWAL + catalogWAL + (16 << 20)
+	case "catalog_staging":
+		required = catalogSize + catalogWAL + catalogSize/4 + (16 << 20)
+	case "control_backup":
+		required = controlSize + controlWAL + (4 << 20)
+	default:
+		return SpaceReport{}, fault.New(fault.CodeValidation, false, nil)
+	}
+	report, err := s.Preflight(ctx, required)
+	report.Operation = operation
+	return report, err
+}
+
+func (s *Service) CheckSpace(ctx context.Context, operation string, additionalBytes int64) error {
+	if additionalBytes < 0 {
+		return fault.New(fault.CodeValidation, false, nil)
+	}
+	report, err := s.Estimate(ctx, operation)
+	if err != nil {
+		return err
+	}
+	_, err = s.Preflight(ctx, report.RequiredBytes+additionalBytes)
+	return err
+}
+
 func (s *Service) Checkpoint(ctx context.Context) error {
+	release := s.coord.AcquireMaintenance()
+	defer release()
 	if _, err := s.control.ExecContext(ctx, "PRAGMA wal_checkpoint(TRUNCATE)"); err != nil {
 		return maintenanceFault(err)
 	}
@@ -187,6 +268,8 @@ func (s *Service) Checkpoint(ctx context.Context) error {
 }
 
 func (s *Service) Vacuum(ctx context.Context) error {
+	release := s.coord.AcquireMaintenance()
+	defer release()
 	if _, err := s.control.ExecContext(ctx, "VACUUM"); err != nil {
 		return maintenanceFault(err)
 	}
@@ -219,29 +302,10 @@ func faultCode(err error) fault.Code {
 	return fault.CodeInternal
 }
 
-func sweepTemp(root string) (int, error) {
-	if root == "" {
-		return 0, nil
+func fileSize(path string) int64 {
+	info, err := os.Stat(path)
+	if err != nil || !info.Mode().IsRegular() {
+		return 0
 	}
-	removed := 0
-	err := filepath.WalkDir(root, func(path string, entry fs.DirEntry, walkErr error) error {
-		if walkErr != nil {
-			if errors.Is(walkErr, fs.ErrNotExist) {
-				return nil
-			}
-			return walkErr
-		}
-		if entry.IsDir() || entry.Type()&fs.ModeSymlink != 0 {
-			return nil
-		}
-		name := entry.Name()
-		if strings.HasSuffix(name, ".tmp") || strings.HasPrefix(name, "gallery-") {
-			if err := os.Remove(path); err != nil && !errors.Is(err, os.ErrNotExist) {
-				return err
-			}
-			removed++
-		}
-		return nil
-	})
-	return removed, err
+	return info.Size()
 }

@@ -137,38 +137,51 @@ func (s *Scheduler) finish(target *schedulerClass, item scheduledItem, completed
 	item.cancel()
 }
 
-// Submit 不阻塞；同一 jobID 在调度器内只能有一个排队或运行实例。
-func (s *Scheduler) Submit(class, jobID string) {
+// Submit 不阻塞；同一 jobID 在调度器内只能有一个排队或运行实例。返回 false 表示本次
+// 没有入队（队列满、类别不可用、重复提交或服务关闭），持久 Job 仍由 reconciliation 重提。
+func (s *Scheduler) Submit(class, jobID string) bool {
 	if jobID == "" {
-		return
+		return false
 	}
 	s.mu.Lock()
 	if s.closed {
 		s.mu.Unlock()
-		return
+		return false
 	}
 	target, ok := s.classes[class]
 	if !ok {
 		s.mu.Unlock()
-		return
+		return false
 	}
 	if _, running := s.inflight[jobID]; running {
 		s.mu.Unlock()
-		return
+		return false
 	}
 	jobCtx, cancel := context.WithCancel(s.rootCtx)
 	item := scheduledItem{jobID: jobID, ctx: jobCtx, cancel: cancel}
 	s.inflight[jobID] = &item
-	target.submitted++
 	s.mu.Unlock()
 	select {
 	case target.queue <- item:
+		s.mu.Lock()
+		target.submitted++
+		s.mu.Unlock()
+		return true
 	case <-s.rootCtx.Done():
 		s.mu.Lock()
 		delete(s.inflight, jobID)
 		target.cancelled++
 		s.mu.Unlock()
 		cancel()
+		return false
+	default:
+		s.mu.Lock()
+		if current, exists := s.inflight[jobID]; exists && current.ctx == item.ctx {
+			delete(s.inflight, jobID)
+		}
+		s.mu.Unlock()
+		cancel()
+		return false
 	}
 }
 

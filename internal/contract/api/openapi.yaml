@@ -1205,7 +1205,7 @@ paths:
   /api/v1/jobs/{jobId}/retry:
     post:
       operationId: retryJob
-      summary: 为可重试终态创建新的 Job attempt
+      summary: 在同一逻辑 Job 上创建新的 Attempt
       parameters:
         - name: jobId
           in: path
@@ -1214,7 +1214,7 @@ paths:
         - $ref: "#/components/parameters/CSRFHeader"
       responses:
         "202":
-          description: 重试 Job 已排队
+          description: 原 Job ID 保持不变并已增加 Attempt
           content:
             application/json:
               schema: {$ref: "#/components/schemas/Job"}
@@ -1274,7 +1274,7 @@ paths:
           description: GC Job 已排队
           content:
             application/json:
-              schema: {$ref: "#/components/schemas/Job"}
+              schema: {$ref: "#/components/schemas/MaintenanceJobResponse"}
         "401": {$ref: "#/components/responses/UnauthenticatedError"}
         "403": {$ref: "#/components/responses/ForbiddenError"}
         "409": {$ref: "#/components/responses/ConflictError"}
@@ -1289,7 +1289,7 @@ paths:
           description: checkpoint Job 已排队
           content:
             application/json:
-              schema: {$ref: "#/components/schemas/Job"}
+              schema: {$ref: "#/components/schemas/MaintenanceJobResponse"}
         "401": {$ref: "#/components/responses/UnauthenticatedError"}
         "403": {$ref: "#/components/responses/ForbiddenError"}
         "409": {$ref: "#/components/responses/ConflictError"}
@@ -1304,7 +1304,7 @@ paths:
           description: vacuum Job 已排队
           content:
             application/json:
-              schema: {$ref: "#/components/schemas/Job"}
+              schema: {$ref: "#/components/schemas/MaintenanceJobResponse"}
         "401": {$ref: "#/components/responses/UnauthenticatedError"}
         "403": {$ref: "#/components/responses/ForbiddenError"}
         "409": {$ref: "#/components/responses/ConflictError"}
@@ -2381,7 +2381,9 @@ components:
         - BINDING_REVIEW_REQUIRED
         - DERIVED_ASSET_INVALID
         - DERIVED_ASSET_FAILED
+        - DERIVED_ASSET_UNAVAILABLE
         - EXTERNAL_TOOL_FAILED
+        - EXTERNAL_TOOL_UNAVAILABLE
         - RULE_SCHEMA_INVALID
         - RULE_COMPILE_ERROR
         - RULE_CEL_LIMIT
@@ -2491,6 +2493,7 @@ components:
           allOf:
             - $ref: "#/components/schemas/JobId"
           nullable: true
+          description: v18 及更早历史子 Job 的兼容来源；新 retry 不再写入
         attempt:
           type: integer
           minimum: 1
@@ -2528,6 +2531,10 @@ components:
           type: boolean
         cancelRequested:
           type: boolean
+        nextAttemptAt:
+          type: string
+          format: date-time
+          nullable: true
 
     JobListResponse:
       type: object
@@ -2598,7 +2605,25 @@ components:
       properties:
         retentionSeconds: {type: integer, format: int64, minimum: 0, default: 86400}
         dryRun: {type: boolean, default: false}
-        requiredBytes: {type: integer, format: int64, minimum: 0, default: 0}
+    SpaceEstimate:
+      type: object
+      additionalProperties: false
+      required: [operation, requiredBytes, availableBytes, sufficient, conservative]
+      properties:
+        operation:
+          type: string
+          enum: [catalog_gc, catalog_checkpoint, catalog_vacuum, catalog_staging, control_backup, derived_gc]
+        requiredBytes: {type: integer, format: int64, minimum: 0}
+        availableBytes: {type: integer, format: int64, minimum: 0}
+        sufficient: {type: boolean}
+        conservative: {type: boolean}
+    MaintenanceJobResponse:
+      type: object
+      additionalProperties: false
+      required: [job, spaceEstimate]
+      properties:
+        job: {$ref: "#/components/schemas/Job"}
+        spaceEstimate: {$ref: "#/components/schemas/SpaceEstimate"}
     ControlBackupManifest:
       type: object
       additionalProperties: false

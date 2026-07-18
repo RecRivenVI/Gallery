@@ -3,6 +3,7 @@ package jobs
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"strings"
@@ -77,6 +78,8 @@ type Job struct {
 	LeaseExpiresAt           *time.Time
 	ResultJSON               []byte
 	FailureRetryable         bool
+	NextAttemptAt            *time.Time
+	RetryRequestedBy         string
 	ProgressPhase            string
 	ProgressUnit             string
 	ProgressMessage          string
@@ -173,6 +176,10 @@ func (s *Store) CreateScanWithOptions(ctx context.Context, sourceID, createdBy, 
 	if options.ResourceClass == "" {
 		options.ResourceClass = ResourceScan
 	}
+	if options.MaxRetries == 0 && len(options.RetryPolicyJSON) == 0 {
+		options.MaxRetries = 3
+		options.RetryPolicyJSON = []byte(`{"kind":"exponential","baseMs":1000,"maxMs":30000}`)
+	}
 	if options.MaxRetries < 0 {
 		return Job{}, fault.WithField(fault.CodeValidation, "maxRetries", nil)
 	}
@@ -207,7 +214,12 @@ func (s *Store) CreateScanWithOptions(ctx context.Context, sourceID, createdBy, 
 	if retryOf != "" {
 		retry = retryOf
 	}
-	_, err = s.db.ExecContext(ctx, `
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return Job{}, fault.New(fault.CodeInternal, true, err)
+	}
+	defer tx.Rollback()
+	_, err = tx.ExecContext(ctx, `
 INSERT INTO jobs
 (job_id, job_type, source_id, created_by, status, stage, progress_sequence, retry_of, attempt, created_at, updated_at,
  rule_semantic_hash, rule_parameters_json, rule_parameters_hash, rule_ir_hash, compiler_version, cel_profile_version, extension_registry_version,
@@ -222,6 +234,12 @@ VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 
 		if strings.Contains(strings.ToLower(err.Error()), "unique") {
 			return Job{}, fault.New(fault.CodeScanAlreadyRunning, true, nil)
 		}
+		return Job{}, fault.New(fault.CodeInternal, true, err)
+	}
+	if err := insertQueuedAttempt(ctx, tx, job, now); err != nil {
+		return Job{}, err
+	}
+	if err := tx.Commit(); err != nil {
 		return Job{}, fault.New(fault.CodeInternal, true, err)
 	}
 	return job, nil
@@ -260,7 +278,12 @@ func (s *Store) CreateWithOptions(ctx context.Context, jobType, sourceID, create
 		TargetResource: options.TargetResource, RequestJSON: defaultJSON(options.RequestJSON),
 		IdempotencyKey: options.IdempotencyKey, MaxRetries: options.MaxRetries,
 		RetryPolicyJSON: defaultJSON(options.RetryPolicyJSON), ProgressUnit: "items"}
-	_, err = s.db.ExecContext(ctx, `INSERT INTO jobs
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return Job{}, fault.New(fault.CodeInternal, true, err)
+	}
+	defer tx.Rollback()
+	_, err = tx.ExecContext(ctx, `INSERT INTO jobs
 (job_id, job_type, source_id, created_by, status, stage, progress_sequence, attempt, created_at, updated_at,
  resource_class, target_resource, request_json, idempotency_key, max_retries, retry_policy_json, progress_unit)
 VALUES (?, ?, NULLIF(?, ''), ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`, job.ID, job.Type, job.SourceID, job.CreatedBy,
@@ -274,6 +297,12 @@ VALUES (?, ?, NULLIF(?, ''), ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`, job.ID,
 			}
 			return Job{}, fault.New(fault.CodeJobStateConflict, true, nil)
 		}
+		return Job{}, fault.New(fault.CodeInternal, true, err)
+	}
+	if err := insertQueuedAttempt(ctx, tx, job, now); err != nil {
+		return Job{}, err
+	}
+	if err := tx.Commit(); err != nil {
 		return Job{}, fault.New(fault.CodeInternal, true, err)
 	}
 	return job, nil
@@ -334,15 +363,29 @@ func (s *Store) CreateMaintenance(ctx context.Context, jobType, createdBy string
 		ID: id.String(), Type: jobType, CreatedBy: createdBy,
 		Status: StatusQueued, Stage: "queued", ProgressSequence: 1, Attempt: 1,
 		CreatedAt: now, UpdatedAt: now, ResourceClass: ResourceMaintenance, ProgressUnit: "items",
+		MaxRetries: 2, RetryPolicyJSON: []byte(`{"kind":"fixed","baseMs":2000,"maxMs":2000}`),
 	}
-	_, err = s.db.ExecContext(ctx, `
-INSERT INTO jobs (job_id, job_type, created_by, status, stage, progress_sequence, attempt, created_at, updated_at, resource_class, progress_unit)
-VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`, job.ID, job.Type, job.CreatedBy,
-		job.Status, job.Stage, job.ProgressSequence, job.Attempt, now.Unix(), now.Unix(), job.ResourceClass, job.ProgressUnit)
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return Job{}, fault.New(fault.CodeInternal, true, err)
+	}
+	defer tx.Rollback()
+	_, err = tx.ExecContext(ctx, `
+INSERT INTO jobs (job_id, job_type, created_by, status, stage, progress_sequence, attempt, created_at, updated_at,
+ resource_class, progress_unit, max_retries, retry_policy_json)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`, job.ID, job.Type, job.CreatedBy,
+		job.Status, job.Stage, job.ProgressSequence, job.Attempt, now.Unix(), now.Unix(), job.ResourceClass,
+		job.ProgressUnit, job.MaxRetries, string(job.RetryPolicyJSON))
 	if err != nil {
 		if strings.Contains(strings.ToLower(err.Error()), "unique") {
 			return Job{}, fault.New(fault.CodeJobStateConflict, true, nil)
 		}
+		return Job{}, fault.New(fault.CodeInternal, true, err)
+	}
+	if err := insertQueuedAttempt(ctx, tx, job, now); err != nil {
+		return Job{}, err
+	}
+	if err := tx.Commit(); err != nil {
 		return Job{}, fault.New(fault.CodeInternal, true, err)
 	}
 	return job, nil
@@ -415,6 +458,13 @@ VALUES (?, 'overlay_projection', NULL, ?, 'queued', 'queued', 1, 1, ?, ?, ?, ?, 
 	if err != nil {
 		return OverlayEnqueueResult{}, fault.New(fault.CodeInternal, true, err)
 	}
+	if _, err := tx.ExecContext(ctx, `UPDATE jobs SET max_retries=3,
+retry_policy_json='{"kind":"exponential","baseMs":1000,"maxMs":30000}' WHERE job_id=?`, id.String()); err != nil {
+		return OverlayEnqueueResult{}, fault.New(fault.CodeInternal, true, err)
+	}
+	if err := insertQueuedAttempt(ctx, tx, Job{ID: id.String(), Attempt: 1, ResourceClass: ResourceOverlay}, now); err != nil {
+		return OverlayEnqueueResult{}, err
+	}
 	return OverlayEnqueueResult{JobID: id.String(), Created: true}, nil
 }
 
@@ -425,9 +475,9 @@ func (s *Store) Get(ctx context.Context, id string) (Job, error) {
 	var job Job
 	var sourceID, issueCode, publicationID, retryOf, targetCatalogID, basePublicationID sql.NullString
 	var ruleSemanticHash, ruleParameters, ruleParametersHash, ruleIRHash, compilerVersion, celProfileVersion, extensionRegistryVersion sql.NullString
-	var resourceClass, targetResource, requestJSON, idempotencyKey, retryPolicyJSON, leaseOwner, resultJSON sql.NullString
+	var resourceClass, targetResource, requestJSON, idempotencyKey, retryPolicyJSON, leaseOwner, resultJSON, retryRequestedBy sql.NullString
 	var progressPhase, progressUnit, progressMessage sql.NullString
-	var startedAt, finishedAt, targetWatermark, cancelRequestedAt, heartbeatAt, leaseExpiresAt, lastErrorAt sql.NullInt64
+	var startedAt, finishedAt, targetWatermark, cancelRequestedAt, heartbeatAt, leaseExpiresAt, lastErrorAt, nextAttemptAt sql.NullInt64
 	var maxRetries, cancelRequested, failureRetryable, progressEstimated sql.NullInt64
 	var progressBytes, progressEntities sql.NullInt64
 	var createdAt, updatedAt int64
@@ -441,7 +491,7 @@ SELECT job_id, job_type, source_id, created_by, status, stage,
        resource_class, target_resource, request_json, idempotency_key, max_retries, retry_policy_json,
        cancel_requested, cancel_requested_at, heartbeat_at, lease_owner, lease_expires_at, result_json,
        failure_retryable, progress_phase, progress_unit, progress_message, progress_bytes, progress_entities,
-       progress_estimated, last_error_at
+       progress_estimated, last_error_at, next_attempt_at, retry_requested_by
 FROM jobs WHERE job_id = ?`, id).Scan(
 		&job.ID, &job.Type, &sourceID, &job.CreatedBy, &job.Status, &job.Stage,
 		&job.ProgressCurrent, &job.ProgressTotal, &job.ProgressSequence, &issueCode, &publicationID,
@@ -451,7 +501,7 @@ FROM jobs WHERE job_id = ?`, id).Scan(
 		&resourceClass, &targetResource, &requestJSON, &idempotencyKey, &maxRetries, &retryPolicyJSON,
 		&cancelRequested, &cancelRequestedAt, &heartbeatAt, &leaseOwner, &leaseExpiresAt, &resultJSON,
 		&failureRetryable, &progressPhase, &progressUnit, &progressMessage, &progressBytes, &progressEntities,
-		&progressEstimated, &lastErrorAt,
+		&progressEstimated, &lastErrorAt, &nextAttemptAt, &retryRequestedBy,
 	)
 	if errors.Is(err, sql.ErrNoRows) {
 		return Job{}, fault.New(fault.CodeNotFound, false, nil)
@@ -460,7 +510,7 @@ FROM jobs WHERE job_id = ?`, id).Scan(
 		return Job{}, fault.New(fault.CodeInternal, true, err)
 	}
 	rawStatus := job.Status
-	if rawStatus == StatusRunning && cancelRequested.Int64 != 0 {
+	if (rawStatus == StatusRunning || rawStatus == StatusPublishing) && cancelRequested.Int64 != 0 {
 		job.Status = StatusCancelling
 	} else if rawStatus == StatusCancelled && job.Stage == "superseded" {
 		job.Status = StatusSuperseded
@@ -480,6 +530,7 @@ FROM jobs WHERE job_id = ?`, id).Scan(
 	job.StartedAt = nullableTime(startedAt)
 	job.FinishedAt = nullableTime(finishedAt)
 	job.CancelRequestedAt, job.HeartbeatAt, job.LeaseExpiresAt, job.LastErrorAt = nullableTime(cancelRequestedAt), nullableTime(heartbeatAt), nullableTime(leaseExpiresAt), nullableTime(lastErrorAt)
+	job.NextAttemptAt, job.RetryRequestedBy = nullableTime(nextAttemptAt), retryRequestedBy.String
 	return job, nil
 }
 
@@ -498,8 +549,9 @@ func (s *Store) StartStage(ctx context.Context, id, stage string) (Job, error) {
 	}
 	defer tx.Rollback()
 	result, err := tx.ExecContext(ctx, `UPDATE jobs SET status='running', stage=?, started_at=COALESCE(started_at, ?),
-heartbeat_at=?, lease_expires_at=?, progress_sequence=progress_sequence+1, updated_at=?
-WHERE job_id=? AND status='queued' AND cancel_requested=0`, stage, now.Unix(), now.Unix(), now.Add(2*time.Minute).Unix(), now.Unix(), id)
+heartbeat_at=?, lease_expires_at=?, next_attempt_at=NULL, progress_sequence=progress_sequence+1, updated_at=?
+WHERE job_id=? AND status='queued' AND cancel_requested=0
+  AND (next_attempt_at IS NULL OR next_attempt_at<=?)`, stage, now.Unix(), now.Unix(), now.Add(2*time.Minute).Unix(), now.Unix(), id, now.Unix())
 	if err != nil {
 		return Job{}, fault.New(fault.CodeInternal, true, err)
 	}
@@ -579,6 +631,8 @@ WHERE job_id=? AND job_type='overlay_projection' AND status IN ('queued', 'runni
 	if err := requireOne(result); err != nil {
 		return Job{}, err
 	}
+	_, _ = s.db.ExecContext(ctx, `UPDATE job_attempts SET status='cancelled', error_code='OVERLAY_SUPERSEDED',
+finished_at=?, updated_at=? WHERE job_id=? AND status IN ('queued','running')`, now.Unix(), now.Unix(), id)
 	return s.Get(ctx, id)
 }
 
@@ -630,6 +684,9 @@ WHERE job_id = ? AND status = 'running' AND cancel_requested=0`, update.Stage, u
 	if err := requireOne(result); err != nil {
 		return Job{}, err
 	}
+	_, _ = s.db.ExecContext(ctx, `UPDATE job_attempts SET progress_sequence=progress_sequence+1,
+heartbeat_at=?, lease_expires_at=?, updated_at=? WHERE job_id=? AND status='running'`,
+		now.Unix(), now.Add(2*time.Minute).Unix(), now.Unix(), id)
 	return s.Get(ctx, id)
 }
 
@@ -716,7 +773,14 @@ func (s *Store) Complete(ctx context.Context, id, publicationID string) (Job, er
 		return Job{}, fault.New(fault.CodeValidation, false, nil)
 	}
 	now := s.clock.Now().UTC()
-	return s.transition(ctx, id, StatusPublishing, StatusCompleted, "completed", `publication_id = ?, finished_at = ?,`, []any{publicationID, now.Unix()}, now)
+	job, err := s.transition(ctx, id, StatusPublishing, StatusCompleted, "completed",
+		`publication_id = ?, finished_at = ?, heartbeat_at=NULL, lease_expires_at=NULL,`,
+		[]any{publicationID, now.Unix()}, now)
+	if err == nil {
+		_, _ = s.db.ExecContext(ctx, `UPDATE job_attempts SET status='completed', finished_at=?, updated_at=?
+WHERE job_id=? AND status='running'`, now.Unix(), now.Unix(), id)
+	}
+	return job, err
 }
 
 func (s *Store) RecoverCompleted(ctx context.Context, id, publicationID string) (Job, error) {
@@ -748,11 +812,20 @@ func (s *Store) FailWithRetryable(ctx context.Context, id, issueCode string, ret
 		return Job{}, fault.New(fault.CodeValidation, false, nil)
 	}
 	now := s.clock.Now().UTC()
+	current, getErr := s.Get(ctx, id)
+	if getErr != nil {
+		return Job{}, getErr
+	}
+	var nextAttempt any
+	if retryable && current.MaxRetries > 0 && current.Attempt <= current.MaxRetries {
+		nextAttempt = now.Add(retryDelay(current)).Unix()
+	}
 	result, err := s.db.ExecContext(ctx, `
 UPDATE jobs SET status = ?, stage = 'failed', issue_code = ?, finished_at = ?,
                 failure_retryable=?, last_error_at=?, heartbeat_at=NULL, lease_expires_at=NULL,
-                progress_sequence = progress_sequence + 1, updated_at = ?
-WHERE job_id = ? AND status IN (?, ?, ?)`, StatusFailed, issueCode, now.Unix(), boolInt(retryable), now.Unix(), now.Unix(), id, StatusQueued, StatusRunning, StatusPublishing)
+                next_attempt_at=?, progress_sequence = progress_sequence + 1, updated_at = ?
+WHERE job_id = ? AND status IN (?, ?, ?)`, StatusFailed, issueCode, now.Unix(), boolInt(retryable),
+		now.Unix(), nextAttempt, now.Unix(), id, StatusQueued, StatusRunning, StatusPublishing)
 	if err != nil {
 		return Job{}, fault.New(fault.CodeInternal, true, err)
 	}
@@ -791,39 +864,129 @@ func (s *Store) Retry(ctx context.Context, id, createdBy string) (Job, error) {
 	if err != nil {
 		return Job{}, err
 	}
-	if previous.Status != StatusFailed && previous.Status != StatusCancelled && previous.Status != StatusNeedsRepair && previous.Status != StatusSuperseded {
+	if previous.Status != StatusFailed && previous.Status != StatusNeedsRepair {
+		return Job{}, fault.New(fault.CodeJobStateConflict, false, nil)
+	}
+	if !previous.FailureRetryable {
 		return Job{}, fault.New(fault.CodeJobStateConflict, false, nil)
 	}
 	if previous.MaxRetries > 0 && previous.Attempt >= previous.MaxRetries+1 {
 		return Job{}, fault.New(fault.CodeJobRetryExhausted, false, nil)
 	}
+	if previous.MaxRetries == 0 {
+		return Job{}, fault.New(fault.CodeJobRetryExhausted, false, nil)
+	}
 	if strings.TrimSpace(createdBy) == "" {
 		createdBy = previous.CreatedBy
 	}
-	options := CreateOptions{ResourceClass: previous.ResourceClass, TargetResource: previous.TargetResource,
-		RequestJSON: previous.RequestJSON, IdempotencyKey: "", MaxRetries: previous.MaxRetries, RetryPolicyJSON: previous.RetryPolicyJSON}
-	var next Job
-	if previous.Type == "scan" {
-		var snapshot *RuleExecutionSnapshot
-		if previous.RuleSemanticHash != "" && len(previous.RuleParameters) > 0 {
-			snapshot = &RuleExecutionSnapshot{SemanticHash: previous.RuleSemanticHash, Parameters: previous.RuleParameters,
-				ParametersHash: previous.RuleParametersHash, RuleIRHash: previous.RuleIRHash, CompilerVersion: previous.CompilerVersion,
-				CELProfileVersion: previous.CELProfileVersion, ExtensionRegistryVersion: previous.ExtensionRegistryVersion}
-		}
-		next, err = s.CreateScanWithOptions(ctx, previous.SourceID, createdBy, previous.ID, snapshot, options)
-	} else {
-		next, err = s.CreateWithOptions(ctx, previous.Type, previous.SourceID, createdBy, options)
-		if err == nil {
-			_, err = s.db.ExecContext(ctx, "UPDATE jobs SET retry_of=?, attempt=? WHERE job_id=?", previous.ID, previous.Attempt+1, next.ID)
-			if err == nil {
-				next, err = s.Get(ctx, next.ID)
-			}
-		}
-	}
+	return s.retrySameJob(ctx, previous, createdBy, false)
+}
+
+func (s *Store) retrySameJob(ctx context.Context, previous Job, actor string, dueOnly bool) (Job, error) {
+	now := s.clock.Now().UTC()
+	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
+		return Job{}, fault.New(fault.CodeInternal, true, err)
+	}
+	defer tx.Rollback()
+	query := `UPDATE jobs SET status='queued', stage='retry_queued', attempt=attempt+1,
+started_at=NULL, finished_at=NULL, issue_code=NULL, publication_id=NULL,
+cancel_requested=0, cancel_requested_at=NULL, heartbeat_at=NULL, lease_owner=NULL,
+lease_expires_at=NULL, result_json=NULL, failure_retryable=0, progress_phase='',
+progress_message='', progress_current=0, progress_total=0, progress_bytes=0,
+progress_entities=0, progress_estimated=0, next_attempt_at=NULL, retry_requested_by=?,
+progress_sequence=progress_sequence+1, updated_at=?
+WHERE job_id=? AND status IN ('failed','needs_repair') AND failure_retryable=1
+  AND attempt<=max_retries`
+	args := []any{actor, now.Unix(), previous.ID}
+	if dueOnly {
+		query += " AND next_attempt_at IS NOT NULL AND next_attempt_at<=?"
+		args = append(args, now.Unix())
+	}
+	result, err := tx.ExecContext(ctx, query, args...)
+	if err != nil {
+		return Job{}, fault.New(fault.CodeInternal, true, err)
+	}
+	if err := requireOne(result); err != nil {
 		return Job{}, err
 	}
-	return next, nil
+	next := previous
+	next.Attempt++
+	next.Status = StatusQueued
+	next.ResourceClass = previous.ResourceClass
+	if err := insertQueuedAttempt(ctx, tx, next, now); err != nil {
+		return Job{}, err
+	}
+	if err := tx.Commit(); err != nil {
+		return Job{}, fault.New(fault.CodeInternal, true, err)
+	}
+	return s.Get(ctx, previous.ID)
+}
+
+// RequeueDueFailures 把达到退避时间的 retryable 终态转换为同一 Job 的下一个 Attempt。
+func (s *Store) RequeueDueFailures(ctx context.Context) ([]Job, error) {
+	now := s.clock.Now().UTC().Unix()
+	rows, err := s.db.QueryContext(ctx, `SELECT job_id FROM jobs
+WHERE status IN ('failed','needs_repair') AND failure_retryable=1
+  AND max_retries>0 AND attempt<=max_retries
+  AND next_attempt_at IS NOT NULL AND next_attempt_at<=?
+ORDER BY next_attempt_at, created_at, job_id`, now)
+	if err != nil {
+		return nil, fault.New(fault.CodeInternal, true, err)
+	}
+	var ids []string
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			rows.Close()
+			return nil, fault.New(fault.CodeInternal, true, err)
+		}
+		ids = append(ids, id)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, fault.New(fault.CodeInternal, true, err)
+	}
+	result := make([]Job, 0, len(ids))
+	for _, id := range ids {
+		job, err := s.Get(ctx, id)
+		if err != nil {
+			return nil, err
+		}
+		next, err := s.retrySameJob(ctx, job, "system-recovery", true)
+		if err != nil {
+			if isJobStateConflict(err) {
+				continue
+			}
+			return nil, err
+		}
+		result = append(result, next)
+	}
+	return result, nil
+}
+
+// ListRunnable 返回当前已到期且尚未被 Scheduler 接管的持久 queued Job。
+func (s *Store) ListRunnable(ctx context.Context) ([]Job, error) {
+	rows, err := s.db.QueryContext(ctx, `SELECT job_id FROM jobs
+WHERE status='queued' AND cancel_requested=0
+  AND (next_attempt_at IS NULL OR next_attempt_at<=?)
+ORDER BY created_at, job_id`, s.clock.Now().UTC().Unix())
+	if err != nil {
+		return nil, fault.New(fault.CodeInternal, true, err)
+	}
+	defer rows.Close()
+	var result []Job
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			return nil, fault.New(fault.CodeInternal, true, err)
+		}
+		job, err := s.Get(ctx, id)
+		if err != nil {
+			return nil, err
+		}
+		result = append(result, job)
+	}
+	return result, rows.Err()
 }
 
 func (s *Store) ListAttempts(ctx context.Context, jobID string) ([]Attempt, error) {
@@ -993,6 +1156,56 @@ func defaultJSON(value []byte) []byte {
 		return []byte("{}")
 	}
 	return append([]byte(nil), value...)
+}
+
+type contextExecutor interface {
+	ExecContext(context.Context, string, ...any) (sql.Result, error)
+}
+
+func insertQueuedAttempt(ctx context.Context, executor contextExecutor, job Job, now time.Time) error {
+	resourceClass := job.ResourceClass
+	if resourceClass == "" {
+		resourceClass = ResourceScan
+	}
+	_, err := executor.ExecContext(ctx, `INSERT INTO job_attempts
+(attempt_id, job_id, attempt, resource_class, status, progress_sequence, created_at, updated_at)
+VALUES (?, ?, ?, ?, 'queued', 1, ?, ?)`,
+		fmt.Sprintf("%s:%d", job.ID, job.Attempt), job.ID, job.Attempt, resourceClass, now.Unix(), now.Unix())
+	if err != nil {
+		return fault.New(fault.CodeInternal, true, err)
+	}
+	return nil
+}
+
+type persistedRetryPolicy struct {
+	Kind   string `json:"kind"`
+	BaseMS int64  `json:"baseMs"`
+	MaxMS  int64  `json:"maxMs"`
+}
+
+func retryDelay(job Job) time.Duration {
+	policy := persistedRetryPolicy{Kind: "fixed", BaseMS: 1000, MaxMS: 30000}
+	_ = json.Unmarshal(job.RetryPolicyJSON, &policy)
+	if policy.BaseMS <= 0 {
+		policy.BaseMS = 1000
+	}
+	if policy.MaxMS <= 0 {
+		policy.MaxMS = 30000
+	}
+	delay := policy.BaseMS
+	if policy.Kind == "exponential" {
+		for attempt := 1; attempt < job.Attempt && delay < policy.MaxMS; attempt++ {
+			if delay > policy.MaxMS/2 {
+				delay = policy.MaxMS
+				break
+			}
+			delay *= 2
+		}
+	}
+	if delay > policy.MaxMS {
+		delay = policy.MaxMS
+	}
+	return time.Duration(delay) * time.Millisecond
 }
 
 func boolInt(value bool) int {

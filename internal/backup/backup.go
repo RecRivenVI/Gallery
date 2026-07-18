@@ -52,7 +52,11 @@ func (nopNotifier) JobChanged(jobs.Job) {}
 
 // Dispatcher 把 Job 交给中央有界调度器执行。未注入时回退到自管理 goroutine（供单元测试使用）。
 type Dispatcher interface {
-	Submit(jobID string)
+	Submit(jobID string) bool
+}
+
+type SpaceGate interface {
+	CheckSpace(ctx context.Context, operation string, additionalBytes int64) error
 }
 
 // FileEntry 描述备份内某个物理文件的身份。
@@ -109,6 +113,7 @@ type Service struct {
 	appVersion string
 	notifier   Notifier
 	dispatcher Dispatcher
+	space      SpaceGate
 	wait       sync.WaitGroup
 }
 
@@ -127,6 +132,8 @@ func New(ctx context.Context, control *storage.Database, jobStore *jobs.Store, d
 
 // SetDispatcher 注入中央调度器；注入后 Start 通过调度器领取执行并接受其 context 取消。
 func (s *Service) SetDispatcher(d Dispatcher) { s.dispatcher = d }
+
+func (s *Service) SetSpaceGate(gate SpaceGate) { s.space = gate }
 
 func (s *Service) backupRoot() string { return filepath.Join(s.dirs.State, "backups") }
 
@@ -158,6 +165,11 @@ func (s *Service) Execute(ctx context.Context, jobID string) error {
 		return err
 	}
 	s.notifier.JobChanged(job)
+	if s.space != nil {
+		if err := s.space.CheckSpace(ctx, "control_backup", 0); err != nil {
+			return s.fail(ctx, jobID, err)
+		}
+	}
 
 	backupID, err := s.ids.New(domain.IDControlBackup)
 	if err != nil {
@@ -167,7 +179,7 @@ func (s *Service) Execute(ctx context.Context, jobID string) error {
 	if err := os.MkdirAll(root, 0o700); err != nil {
 		return s.fail(ctx, jobID, fault.New(fault.CodeBackupFailed, false, err))
 	}
-	staging := filepath.Join(root, stagingPrefix+backupID.String())
+	staging := filepath.Join(root, stagingPrefix+jobID+"--"+backupID.String())
 	final := filepath.Join(root, backupID.String())
 	_ = os.RemoveAll(staging)
 	if err := os.MkdirAll(staging, 0o700); err != nil {
@@ -282,38 +294,40 @@ func (s *Service) Get(ctx context.Context, backupID string) (Manifest, error) {
 	return manifest, nil
 }
 
-// Reconcile 在启动时收敛遗留备份 Job 并清理半成品临时目录。中断的备份因原子发布不会污染
-// 已发布集合；未完成的 queued Job 重新入队，running/publishing Job 标记为中断。
+// Reconcile 保留备份发布集合的启动检查；Job 的 queued 提交和 running 租约回收统一由
+// jobs.Reconciler 处理，避免启动时把尚未到期的 Attempt 提前判死。
 func (s *Service) Reconcile(ctx context.Context) error {
-	s.gcStaging()
-	nonterminal, err := s.jobs.ListByStatuses(ctx, jobs.StatusQueued, jobs.StatusRunning, jobs.StatusPublishing)
-	if err != nil {
-		return err
-	}
-	for _, job := range nonterminal {
-		if job.Type != JobTypeBackup {
-			continue
-		}
-		if job.Status == jobs.StatusQueued {
-			s.Start(job.ID)
-			continue
-		}
-		failed, failErr := s.jobs.Fail(ctx, job.ID, string(fault.CodeProcessInterrupted))
-		if failErr != nil {
-			return failErr
-		}
-		s.notifier.JobChanged(failed)
-	}
+	s.gcStaging(ctx)
 	return nil
 }
 
-func (s *Service) gcStaging() {
+func (s *Service) gcStaging(ctx context.Context) {
+	active, err := s.jobs.ListByStatuses(ctx, jobs.StatusQueued, jobs.StatusRunning, jobs.StatusPublishing, jobs.StatusCancelling)
+	if err != nil {
+		return
+	}
+	activePrefixes := make([]string, 0, len(active))
+	for _, job := range active {
+		if job.Type == "control_backup" {
+			activePrefixes = append(activePrefixes, stagingPrefix+job.ID+"--")
+		}
+	}
 	entries, err := os.ReadDir(s.backupRoot())
 	if err != nil {
 		return
 	}
 	for _, entry := range entries {
 		if entry.IsDir() && strings.HasPrefix(entry.Name(), stagingPrefix) {
+			ownedByActive := false
+			for _, prefix := range activePrefixes {
+				if strings.HasPrefix(entry.Name(), prefix) {
+					ownedByActive = true
+					break
+				}
+			}
+			if ownedByActive {
+				continue
+			}
 			_ = os.RemoveAll(filepath.Join(s.backupRoot(), entry.Name()))
 		}
 	}
