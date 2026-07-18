@@ -1757,6 +1757,7 @@ func jobDTO(value jobs.Job) api.Job {
 		Stage: value.Stage, Attempt: value.Attempt, CreatedAt: value.CreatedAt, StartedAt: value.StartedAt,
 		FinishedAt: value.FinishedAt, UpdatedAt: value.UpdatedAt,
 	}
+	result.NextAttemptAt = value.NextAttemptAt
 	if value.SourceID != "" {
 		sourceID := api.SourceId(value.SourceID)
 		result.SourceId = &sourceID

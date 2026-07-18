@@ -1205,7 +1205,7 @@ paths:
   /api/v1/jobs/{jobId}/retry:
     post:
       operationId: retryJob
-      summary: 为可重试终态创建新的 Job attempt
+      summary: 在同一逻辑 Job 上创建新的 Attempt
       parameters:
         - name: jobId
           in: path
@@ -1214,7 +1214,7 @@ paths:
         - $ref: "#/components/parameters/CSRFHeader"
       responses:
         "202":
-          description: 重试 Job 已排队
+          description: 原 Job ID 保持不变并已增加 Attempt
           content:
             application/json:
               schema: {$ref: "#/components/schemas/Job"}
@@ -1274,7 +1274,7 @@ paths:
           description: GC Job 已排队
           content:
             application/json:
-              schema: {$ref: "#/components/schemas/Job"}
+              schema: {$ref: "#/components/schemas/MaintenanceJobResponse"}
         "401": {$ref: "#/components/responses/UnauthenticatedError"}
         "403": {$ref: "#/components/responses/ForbiddenError"}
         "409": {$ref: "#/components/responses/ConflictError"}
@@ -1289,7 +1289,7 @@ paths:
           description: checkpoint Job 已排队
           content:
             application/json:
-              schema: {$ref: "#/components/schemas/Job"}
+              schema: {$ref: "#/components/schemas/MaintenanceJobResponse"}
         "401": {$ref: "#/components/responses/UnauthenticatedError"}
         "403": {$ref: "#/components/responses/ForbiddenError"}
         "409": {$ref: "#/components/responses/ConflictError"}
@@ -1304,7 +1304,7 @@ paths:
           description: vacuum Job 已排队
           content:
             application/json:
-              schema: {$ref: "#/components/schemas/Job"}
+              schema: {$ref: "#/components/schemas/MaintenanceJobResponse"}
         "401": {$ref: "#/components/responses/UnauthenticatedError"}
         "403": {$ref: "#/components/responses/ForbiddenError"}
         "409": {$ref: "#/components/responses/ConflictError"}
