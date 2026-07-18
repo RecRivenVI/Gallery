@@ -25,6 +25,28 @@ type FileSystem interface {
 	Stat(path string) (fs.FileInfo, error)
 }
 
+type WatchEventKind string
+
+const (
+	WatchCreated  WatchEventKind = "created"
+	WatchModified WatchEventKind = "modified"
+	WatchRemoved  WatchEventKind = "removed"
+	WatchRenamed  WatchEventKind = "renamed"
+	WatchOverflow WatchEventKind = "overflow"
+)
+
+type WatchEvent struct {
+	RelativePath string
+	Kind         WatchEventKind
+	At           time.Time
+	Overflow     bool
+}
+
+// FileWatcher 是平台适配器边界。Watcher 只提供低延迟 dirty hint；周期性全量收敛仍是事实源。
+type FileWatcher interface {
+	Watch(ctx context.Context, root string) (<-chan WatchEvent, error)
+}
+
 type Command struct {
 	Path   string
 	Args   []string
