@@ -79,13 +79,43 @@ func New(mode config.Mode, store *storage.Store, clock ports.Clock, personal *au
 	mux.HandleFunc("POST /api/v1/sources", server.createSource)
 	mux.HandleFunc("GET /api/v1/sources/{sourceId}", server.getSource)
 	mux.HandleFunc("POST /api/v1/rules/validate", server.validateRulePackage)
+	mux.HandleFunc("GET /api/v1/rules/schema", server.getRulePackageSchema)
 	mux.HandleFunc("POST /api/v1/rules/compile", server.compileRulePackage)
 	mux.HandleFunc("POST /api/v1/rules/dry-run", server.dryRunRulePackage)
 	mux.HandleFunc("POST /api/v1/rules/impact", server.analyzeRuleImpact)
+	mux.HandleFunc("POST /api/v1/rules/import", server.importRulePackage)
+	mux.HandleFunc("POST /api/v1/rules/diff", server.diffRulePackages)
+	mux.HandleFunc("POST /api/v1/rules/explain", server.explainRulePackage)
+	mux.HandleFunc("POST /api/v1/rules/trace", server.traceRulePackage)
+	mux.HandleFunc("GET /api/v1/rules/examples", server.listRuleExamples)
+	mux.HandleFunc("POST /api/v1/rules/examples/{exampleId}/test", server.testRuleExample)
+	mux.HandleFunc("GET /api/v1/rule-packages", server.listRulePackages)
+	mux.HandleFunc("POST /api/v1/rule-packages", server.createRulePackage)
+	mux.HandleFunc("GET /api/v1/rule-packages/{packageId}", server.getRulePackage)
+	mux.HandleFunc("GET /api/v1/rule-packages/{packageId}/draft", server.getRuleDraft)
+	mux.HandleFunc("PUT /api/v1/rule-packages/{packageId}/draft", server.saveRuleDraft)
+	mux.HandleFunc("POST /api/v1/rule-packages/{packageId}/draft/validate", server.validateRuleDraft)
+	mux.HandleFunc("POST /api/v1/rule-packages/{packageId}/publish", server.publishRuleDraft)
+	mux.HandleFunc("POST /api/v1/rule-packages/{packageId}/deprecate", server.deprecateRulePackage)
+	mux.HandleFunc("DELETE /api/v1/rule-packages/{packageId}", server.deleteRulePackage)
+	mux.HandleFunc("GET /api/v1/rule-packages/{packageId}/audits", server.listRuleAudits)
+	mux.HandleFunc("GET /api/v1/rule-packages/{packageId}/versions", server.listRuleVersions)
+	mux.HandleFunc("POST /api/v1/rule-packages/{packageId}/rollback", server.rollbackRulePackage)
 	mux.HandleFunc("POST /api/v1/rule-versions", server.createRuleVersion)
 	mux.HandleFunc("GET /api/v1/rule-versions/{semanticHash}", server.getRuleVersion)
+	mux.HandleFunc("POST /api/v1/rule-versions/diff", server.diffRuleVersions)
+	mux.HandleFunc("GET /api/v1/rule-versions/{semanticHash}/export", server.exportRuleVersion)
+	mux.HandleFunc("POST /api/v1/rule-versions/{semanticHash}/deprecate", server.deprecateRuleVersion)
+	mux.HandleFunc("POST /api/v1/rule-parameters", server.createRuleParameterSet)
+	mux.HandleFunc("GET /api/v1/rule-parameters/{parameterId}", server.getRuleParameterSet)
+	mux.HandleFunc("PUT /api/v1/rule-parameters/{parameterId}", server.updateRuleParameterSet)
+	mux.HandleFunc("POST /api/v1/rule-parameters/{parameterId}/copy", server.copyRuleParameterSet)
+	mux.HandleFunc("POST /api/v1/rule-parameters/{parameterId}/deprecate", server.deprecateRuleParameterSet)
+	mux.HandleFunc("POST /api/v1/rule-parameters/{parameterId}/impact", server.impactRuleParameterSet)
 	mux.HandleFunc("POST /api/v1/source-rule-bindings", server.createSourceRuleBinding)
 	mux.HandleFunc("GET /api/v1/source-rule-bindings/{bindingId}", server.getSourceRuleBinding)
+	mux.HandleFunc("PATCH /api/v1/source-rule-bindings/{bindingId}", server.updateSourceRuleBinding)
+	mux.HandleFunc("GET /api/v1/sources/{sourceId}/effective-rule-binding", server.getEffectiveRuleBinding)
 	mux.HandleFunc("POST /api/v1/sources/{sourceId}/scan-jobs", server.createScanJob)
 	mux.HandleFunc("GET /api/v1/jobs/{jobId}", server.getJob)
 	mux.HandleFunc("GET /api/v1/creators", server.listCreators)
@@ -134,6 +164,16 @@ func New(mode config.Mode, store *storage.Store, clock ports.Clock, personal *au
 	return requestLog(logger, hostGuard(mux))
 }
 
+func (s *Server) getRulePackageSchema(w http.ResponseWriter, r *http.Request) {
+	if _, err := s.requireCapability(r, "rules.read"); err != nil {
+		s.writeRequestError(w, err)
+		return
+	}
+	w.Header().Set("Content-Type", "application/schema+json")
+	w.WriteHeader(http.StatusOK)
+	_, _ = w.Write(rules.RulePackageSchema())
+}
+
 func (s *Server) validateRulePackage(w http.ResponseWriter, r *http.Request) {
 	session, err := s.requireCapability(r, "rules.write")
 	if err != nil {
@@ -177,7 +217,7 @@ func (s *Server) compileRulePackage(w http.ResponseWriter, r *http.Request) {
 		s.writeRequestError(w, fault.WithField(fault.CodeRuleCompile, "body", err))
 		return
 	}
-	result, err := s.rules.Compile(request.Package, request.Parameters)
+	result, err := s.data.CompileRulePackage(r.Context(), request.Package, request.Parameters)
 	if err != nil {
 		s.writeRequestError(w, ruleRequestFault(fault.CodeRuleCompile, "package", err))
 		return
@@ -492,12 +532,20 @@ func (s *Server) createSourceRuleBinding(w http.ResponseWriter, r *http.Request)
 		SemanticHash string          `json:"semanticHash"`
 		Parameters   json.RawMessage `json:"parameters"`
 		Priority     int             `json:"priority"`
+		ParameterID  string          `json:"parameterId"`
+		Override     json.RawMessage `json:"override"`
+		Condition    json.RawMessage `json:"condition"`
 	}
 	if err := decodeJSON(r, &request); err != nil {
 		s.writeRequestError(w, fault.WithField(fault.CodeValidation, "body", err))
 		return
 	}
-	result, err := s.data.CreateSourceRuleBinding(r.Context(), request.SourceID, request.SemanticHash, request.Parameters, request.Priority)
+	var result application.SourceRuleBinding
+	if request.ParameterID != "" {
+		result, err = s.data.CreateSourceRuleBindingFromParameterSet(r.Context(), request.SourceID, request.ParameterID, request.Priority, request.Override, request.Condition)
+	} else {
+		result, err = s.data.CreateSourceRuleBinding(r.Context(), request.SourceID, request.SemanticHash, request.Parameters, request.Priority)
+	}
 	if err != nil {
 		s.writeRequestError(w, err)
 		return
@@ -1374,7 +1422,50 @@ func sourceDTO(value application.Source, available bool) api.Source {
 }
 
 func ruleVersionDTO(value application.RuleVersion) api.RuleVersion {
-	return api.RuleVersion{RuleSetId: value.RuleSetID, Version: value.Version, PackageHash: value.PackageHash, SemanticHash: value.SemanticHash, RuleIrHash: value.RuleIRHash, CreatedAt: value.CreatedAt}
+	result := api.RuleVersion{RuleSetId: value.RuleSetID, Version: value.Version, PackageHash: value.PackageHash, SemanticHash: value.SemanticHash, RuleIrHash: value.RuleIRHash, CreatedAt: value.CreatedAt}
+	if value.ID != "" {
+		result.Id = &value.ID
+	}
+	if value.PackageID != "" {
+		result.PackageId = &value.PackageID
+	}
+	if value.Status != "" {
+		status := api.RuleVersionStatus(value.Status)
+		result.Status = &status
+	}
+	if value.NormalizationAlgorithmVersion != "" {
+		result.NormalizationAlgorithmVersion = &value.NormalizationAlgorithmVersion
+	}
+	if value.CELProfileVersion != "" {
+		result.CelProfileVersion = &value.CELProfileVersion
+	}
+	if value.CreatedBy != "" {
+		result.CreatedBy = &value.CreatedBy
+	}
+	if value.ParentSemanticHash != "" {
+		result.ParentSemanticHash = &value.ParentSemanticHash
+	}
+	if value.CompileError != "" {
+		result.CompileError = &value.CompileError
+	}
+	if metadata := jsonObjectPointer(value.ParameterSchema); metadata != nil {
+		result.ParameterSchema = metadata
+	}
+	if tests := jsonObjectSlicePointer(value.Tests); tests != nil {
+		result.Tests = tests
+	}
+	if extensions := jsonObjectPointer(value.Extensions); extensions != nil {
+		result.Extensions = extensions
+	}
+	if value.PublishedAt != nil {
+		result.PublishedAt = value.PublishedAt
+	}
+	if value.DeprecatedAt != nil {
+		result.DeprecatedAt = value.DeprecatedAt
+	}
+	executable := value.Executable
+	result.Executable = &executable
+	return result
 }
 
 func sourceRuleBindingDTO(value application.SourceRuleBinding) api.SourceRuleBinding {
@@ -1382,7 +1473,56 @@ func sourceRuleBindingDTO(value application.SourceRuleBinding) api.SourceRuleBin
 	decoder := json.NewDecoder(io.LimitReader(bytes.NewReader(value.Parameters), 1<<20))
 	decoder.UseNumber()
 	_ = decoder.Decode(&parameters)
-	return api.SourceRuleBinding{Id: value.ID, SourceId: value.SourceID, SemanticHash: value.SemanticHash, Parameters: parameters, Priority: value.Priority, RuleIrHash: value.RuleIRHash, CreatedAt: value.CreatedAt}
+	result := api.SourceRuleBinding{Id: value.ID, SourceId: value.SourceID, SemanticHash: value.SemanticHash, Parameters: parameters, Priority: value.Priority, RuleIrHash: value.RuleIRHash, CreatedAt: value.CreatedAt}
+	if value.ParameterID != "" {
+		result.ParameterId = &value.ParameterID
+	}
+	if value.ParameterRevision != 0 {
+		result.ParameterRevision = &value.ParameterRevision
+	}
+	if value.ParameterHash != "" {
+		result.ParameterHash = &value.ParameterHash
+	}
+	if value.Status != "" {
+		status := api.SourceRuleBindingStatus(value.Status)
+		result.Status = &status
+	}
+	if override := jsonObjectPointer(value.Override); override != nil {
+		result.Override = override
+	}
+	if condition := jsonObjectPointer(value.Condition); condition != nil {
+		result.Condition = condition
+	}
+	if !value.UpdatedAt.IsZero() {
+		result.UpdatedAt = &value.UpdatedAt
+	}
+	return result
+}
+
+func jsonObjectPointer(raw []byte) *map[string]interface{} {
+	if len(raw) == 0 {
+		return nil
+	}
+	value := map[string]interface{}{}
+	decoder := json.NewDecoder(bytes.NewReader(raw))
+	decoder.UseNumber()
+	if err := decoder.Decode(&value); err != nil {
+		return nil
+	}
+	return &value
+}
+
+func jsonObjectSlicePointer(raw []byte) *[]map[string]interface{} {
+	if len(raw) == 0 {
+		return nil
+	}
+	value := []map[string]interface{}{}
+	decoder := json.NewDecoder(bytes.NewReader(raw))
+	decoder.UseNumber()
+	if err := decoder.Decode(&value); err != nil {
+		return nil
+	}
+	return &value
 }
 
 func jobDTO(value jobs.Job) api.Job {
@@ -1406,6 +1546,24 @@ func jobDTO(value jobs.Job) api.Job {
 	if value.RetryOf != "" {
 		retry := api.JobId(value.RetryOf)
 		result.RetryOf = &retry
+	}
+	if value.RuleSemanticHash != "" {
+		result.RuleSemanticHash = &value.RuleSemanticHash
+	}
+	if value.RuleParametersHash != "" {
+		result.RuleParametersHash = &value.RuleParametersHash
+	}
+	if value.RuleIRHash != "" {
+		result.RuleIrHash = &value.RuleIRHash
+	}
+	if value.CompilerVersion != "" {
+		result.CompilerVersion = &value.CompilerVersion
+	}
+	if value.CELProfileVersion != "" {
+		result.CelProfileVersion = &value.CELProfileVersion
+	}
+	if value.ExtensionRegistryVersion != "" {
+		result.ExtensionRegistryVersion = &value.ExtensionRegistryVersion
 	}
 	return result
 }
@@ -1611,6 +1769,8 @@ func statusForFault(err error) int {
 		fault.CodeRuleSchemaInvalid, fault.CodeRuleParameterInvalid, fault.CodeRuleCompile,
 		fault.CodeRuleCELLimit, fault.CodeRuleDryRun, fault.CodeRuleImpact, fault.CodeRuleEval:
 		return http.StatusBadRequest
+	case fault.CodeRuleImportInvalid:
+		return http.StatusBadRequest
 	case fault.CodeUnauthenticated, fault.CodePairingInvalid, fault.CodePairingExpired:
 		return http.StatusUnauthorized
 	case fault.CodeForbidden, fault.CodeHostRejected, fault.CodeOriginRejected, fault.CodeCSRFInvalid:
@@ -1619,7 +1779,9 @@ func statusForFault(err error) int {
 		return http.StatusNotFound
 	case fault.CodeBackupCorrupt, fault.CodeBackupIncompatible:
 		return http.StatusConflict
-	case fault.CodeConflict:
+	case fault.CodeConflict, fault.CodeRuleDraftConflict, fault.CodeRulePackageConflict,
+		fault.CodeRuleParameterConflict, fault.CodeRulePublishBlocked, fault.CodeRuleRollbackBlocked,
+		fault.CodeRuleVersionInUse, fault.CodeRuleBindingConflict:
 		return http.StatusConflict
 	case fault.CodeJobStateConflict, fault.CodeScanAlreadyRunning, fault.CodeCatalogCandidateInvalid:
 		return http.StatusConflict

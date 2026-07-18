@@ -69,6 +69,54 @@ func TestRuleLifecycleIsAvailableThroughAuthenticatedAPI(t *testing.T) {
 	}
 }
 
+func TestPersistentRulePackageAPIUsesRevisionAndPublishCapability(t *testing.T) {
+	server, client, csrf := pairedRuleServer(t)
+	packageJSON, err := os.ReadFile(filepath.Join("..", "..", "rules", "testdata", "minimal-rule-package.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var packageValue map[string]any
+	if err := json.Unmarshal(packageJSON, &packageValue); err != nil {
+		t.Fatal(err)
+	}
+	pkg := requestRuleJSON(t, client, server.URL, csrf, http.MethodPost, "/api/v1/rule-packages", map[string]any{"name": "API 规则包"}, http.StatusCreated)
+	draft := requestRuleJSON(t, client, server.URL, csrf, http.MethodPut, "/api/v1/rule-packages/"+pkg["id"].(string)+"/draft", map[string]any{"format": "json", "content": packageValue, "expectedRevision": 0}, http.StatusOK)
+	if draft["validationStatus"] != "validated" {
+		t.Fatalf("草稿未校验: %+v", draft)
+	}
+	version := requestRuleJSON(t, client, server.URL, csrf, http.MethodPost, "/api/v1/rule-packages/"+pkg["id"].(string)+"/publish", map[string]any{"expectedRevision": int(draft["revision"].(float64)), "reason": "API 发布"}, http.StatusCreated)
+	if version["semanticHash"] == "" {
+		t.Fatalf("发布响应缺少 semanticHash: %+v", version)
+	}
+	versions := requestRuleJSON(t, client, server.URL, csrf, http.MethodGet, "/api/v1/rule-packages/"+pkg["id"].(string)+"/versions", nil, http.StatusOK)
+	if len(versions["items"].([]any)) != 1 {
+		t.Fatalf("版本列表错误: %+v", versions)
+	}
+	trace := requestRuleJSON(t, client, server.URL, csrf, http.MethodPost, "/api/v1/rules/trace", map[string]any{
+		"semanticHash": version["semanticHash"], "parameters": map[string]any{}, "sample": map[string]any{"path": "work", "metadata": map[string]any{}, "files": []any{map[string]any{"path": "media.bin", "size": 1}}},
+	}, http.StatusOK)
+	if trace["trace"] == nil {
+		t.Fatalf("Trace 响应缺少 trace: %+v", trace)
+	}
+}
+
+func TestBuiltInRuleExamplesAndExecutionAPI(t *testing.T) {
+	server, client, csrf := pairedRuleServer(t)
+	response := requestRuleJSON(t, client, server.URL, csrf, http.MethodGet, "/api/v1/rules/examples", nil, http.StatusOK)
+	items, ok := response["items"].([]any)
+	if !ok || len(items) != 3 {
+		t.Fatalf("内置示例列表错误: %+v", response)
+	}
+	for _, raw := range items {
+		item := raw.(map[string]any)
+		id := item["id"].(string)
+		result := requestRuleJSON(t, client, server.URL, csrf, http.MethodPost, "/api/v1/rules/examples/"+id+"/test", map[string]any{"parameters": map[string]any{}}, http.StatusOK)
+		if result["semanticHash"] == "" || result["result"] == nil {
+			t.Fatalf("内置示例执行响应错误: %+v", result)
+		}
+	}
+}
+
 func pairedRuleServer(t *testing.T) (*httptest.Server, *http.Client, string) {
 	t.Helper()
 	dirs := appdirs.UnderRoot(filepath.Join(t.TempDir(), "app"))
@@ -135,6 +183,42 @@ func postRuleJSON(t *testing.T, client *http.Client, baseURL, csrf, path string,
 	content, _ := io.ReadAll(response.Body)
 	if response.StatusCode != http.StatusOK {
 		t.Fatalf("%s status=%d body=%s", path, response.StatusCode, content)
+	}
+	var result map[string]any
+	if err := json.Unmarshal(content, &result); err != nil {
+		t.Fatal(err)
+	}
+	return result
+}
+
+func requestRuleJSON(t *testing.T, client *http.Client, baseURL, csrf, method, path string, body any, wantStatus int) map[string]any {
+	t.Helper()
+	var reader io.Reader
+	if body != nil {
+		encoded, err := json.Marshal(body)
+		if err != nil {
+			t.Fatal(err)
+		}
+		reader = bytes.NewReader(encoded)
+	}
+	request, err := http.NewRequest(method, baseURL+path, reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	request.Header.Set("Content-Type", "application/json")
+	request.Header.Set("Origin", baseURL)
+	request.Header.Set("Sec-Fetch-Site", "same-origin")
+	if method != http.MethodGet {
+		request.Header.Set("X-Gallery-CSRF", csrf)
+	}
+	response, err := client.Do(request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer response.Body.Close()
+	content, _ := io.ReadAll(response.Body)
+	if response.StatusCode != wantStatus {
+		t.Fatalf("%s %s status=%d body=%s", method, path, response.StatusCode, content)
 	}
 	var result map[string]any
 	if err := json.Unmarshal(content, &result); err != nil {
