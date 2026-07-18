@@ -243,6 +243,20 @@ paths:
         "400": {$ref: "#/components/responses/ValidationError"}
         "401": {$ref: "#/components/responses/UnauthenticatedError"}
         "403": {$ref: "#/components/responses/ForbiddenError"}
+  /api/v1/rules/schema:
+    get:
+      operationId: getRulePackageSchema
+      summary: 读取规则包 JSON Schema 与表单元数据契约
+      responses:
+        "200":
+          description: 规则包 Schema
+          content:
+            application/schema+json:
+              schema:
+                type: object
+                additionalProperties: true
+        "401": {$ref: "#/components/responses/UnauthenticatedError"}
+        "403": {$ref: "#/components/responses/ForbiddenError"}
   /api/v1/rules/compile:
     post:
       operationId: compileRulePackage
@@ -309,6 +323,416 @@ paths:
         "400": {$ref: "#/components/responses/ValidationError"}
         "401": {$ref: "#/components/responses/UnauthenticatedError"}
         "403": {$ref: "#/components/responses/ForbiddenError"}
+  /api/v1/rules/import:
+    post:
+      operationId: importRulePackage
+      summary: 将 JSON、YAML 或 TOML 导入同一份规范 JSON
+      parameters:
+        - $ref: "#/components/parameters/CSRFHeader"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/RuleImportRequest"
+      responses:
+        "200":
+          description: 导入结果
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/RuleImportResult"
+        "400": {$ref: "#/components/responses/ValidationError"}
+        "401": {$ref: "#/components/responses/UnauthenticatedError"}
+        "403": {$ref: "#/components/responses/ForbiddenError"}
+  /api/v1/rules/diff:
+    post:
+      operationId: diffRulePackages
+      summary: 返回规则包结构化 diff 与影响分类
+      parameters:
+        - $ref: "#/components/parameters/CSRFHeader"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/RulePackageDiffRequest"
+      responses:
+        "200":
+          description: RuleVersion diff
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/RuleVersionDiff"
+        "400": {$ref: "#/components/responses/ValidationError"}
+        "401": {$ref: "#/components/responses/UnauthenticatedError"}
+        "403": {$ref: "#/components/responses/ForbiddenError"}
+  /api/v1/rules/explain:
+    post:
+      operationId: explainRulePackage
+      summary: 对合成输入解释字段来源与候选决策
+      parameters:
+        - $ref: "#/components/parameters/CSRFHeader"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/RuleDebugRequest"
+      responses:
+        "200":
+          description: Explain 结果
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/RuleExplainResult"
+        "400": {$ref: "#/components/responses/ValidationError"}
+        "401": {$ref: "#/components/responses/UnauthenticatedError"}
+        "403": {$ref: "#/components/responses/ForbiddenError"}
+  /api/v1/rules/trace:
+    post:
+      operationId: traceRulePackage
+      summary: 对合成输入返回脱敏 Trace
+      parameters:
+        - $ref: "#/components/parameters/CSRFHeader"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/RuleDebugRequest"
+      responses:
+        "200":
+          description: Trace 结果
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+        "400": {$ref: "#/components/responses/ValidationError"}
+        "401": {$ref: "#/components/responses/UnauthenticatedError"}
+        "403": {$ref: "#/components/responses/ForbiddenError"}
+  /api/v1/rules/examples:
+    get:
+      operationId: listRuleExamples
+      summary: 列出仓库内置的脱敏规则示例
+      responses:
+        "200":
+          description: 内置规则示例
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: false
+                required: [items]
+                properties:
+                  items: {type: array, items: {$ref: "#/components/schemas/RuleExample"}}
+        "401": {$ref: "#/components/responses/UnauthenticatedError"}
+        "403": {$ref: "#/components/responses/ForbiddenError"}
+  /api/v1/rules/examples/{exampleId}/test:
+    post:
+      operationId: testRuleExample
+      summary: 执行一个内置规则示例的受限 Dry Run
+      parameters:
+        - name: exampleId
+          in: path
+          required: true
+          schema: {type: string, pattern: "^[a-z0-9-]+$"}
+        - $ref: "#/components/parameters/CSRFHeader"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/RuleExampleTestRequest"
+      responses:
+        "200":
+          description: 示例执行结果
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/RuleExampleTestResult"
+        "400": {$ref: "#/components/responses/ValidationError"}
+        "401": {$ref: "#/components/responses/UnauthenticatedError"}
+        "403": {$ref: "#/components/responses/ForbiddenError"}
+        "404": {$ref: "#/components/responses/NotFoundError"}
+  /api/v1/rule-packages:
+    get:
+      operationId: listRulePackages
+      summary: 列出规则包
+      responses:
+        "200":
+          description: 规则包列表
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: false
+                required: [items]
+                properties:
+                  items:
+                    type: array
+                    items: {$ref: "#/components/schemas/RulePackage"}
+        "401": {$ref: "#/components/responses/UnauthenticatedError"}
+        "403": {$ref: "#/components/responses/ForbiddenError"}
+    post:
+      operationId: createRulePackage
+      summary: 创建规则包
+      parameters:
+        - $ref: "#/components/parameters/CSRFHeader"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/RulePackageCreateRequest"
+      responses:
+        "201":
+          description: 规则包已创建
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/RulePackage"}
+        "400": {$ref: "#/components/responses/ValidationError"}
+        "401": {$ref: "#/components/responses/UnauthenticatedError"}
+        "403": {$ref: "#/components/responses/ForbiddenError"}
+        "409": {$ref: "#/components/responses/ConflictError"}
+  /api/v1/rule-packages/{packageId}:
+    get:
+      operationId: getRulePackage
+      summary: 读取规则包
+      parameters:
+        - name: packageId
+          in: path
+          required: true
+          schema: {$ref: "#/components/schemas/RulePackageId"}
+      responses:
+        "200":
+          description: 规则包
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/RulePackage"}
+        "401": {$ref: "#/components/responses/UnauthenticatedError"}
+        "403": {$ref: "#/components/responses/ForbiddenError"}
+        "404": {$ref: "#/components/responses/NotFoundError"}
+  /api/v1/rule-packages/{packageId}/draft:
+    get:
+      operationId: getRuleDraft
+      summary: 读取规则包草稿
+      parameters:
+        - name: packageId
+          in: path
+          required: true
+          schema: {$ref: "#/components/schemas/RulePackageId"}
+      responses:
+        "200":
+          description: 草稿
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/RuleDraft"}
+        "401": {$ref: "#/components/responses/UnauthenticatedError"}
+        "403": {$ref: "#/components/responses/ForbiddenError"}
+        "404": {$ref: "#/components/responses/NotFoundError"}
+    put:
+      operationId: saveRuleDraft
+      summary: 按 revision 保存规则包草稿
+      parameters:
+        - name: packageId
+          in: path
+          required: true
+          schema: {$ref: "#/components/schemas/RulePackageId"}
+        - $ref: "#/components/parameters/CSRFHeader"
+        - $ref: "#/components/parameters/IfMatch"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: "#/components/schemas/RuleDraftSaveRequest"}
+      responses:
+        "200":
+          description: 草稿已保存
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/RuleDraft"}
+        "400": {$ref: "#/components/responses/ValidationError"}
+        "401": {$ref: "#/components/responses/UnauthenticatedError"}
+        "403": {$ref: "#/components/responses/ForbiddenError"}
+        "409": {$ref: "#/components/responses/ConflictError"}
+  /api/v1/rule-packages/{packageId}/draft/validate:
+    post:
+      operationId: validateRuleDraft
+      summary: 校验并更新草稿诊断
+      parameters:
+        - name: packageId
+          in: path
+          required: true
+          schema: {$ref: "#/components/schemas/RulePackageId"}
+        - $ref: "#/components/parameters/CSRFHeader"
+        - $ref: "#/components/parameters/IfMatch"
+      responses:
+        "200":
+          description: 校验结果
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/RuleDraftValidationResult"}
+        "400": {$ref: "#/components/responses/ValidationError"}
+        "401": {$ref: "#/components/responses/UnauthenticatedError"}
+        "403": {$ref: "#/components/responses/ForbiddenError"}
+        "409": {$ref: "#/components/responses/ConflictError"}
+  /api/v1/rule-packages/{packageId}/publish:
+    post:
+      operationId: publishRuleDraft
+      summary: 将已验证草稿发布为不可变 RuleVersion
+      parameters:
+        - name: packageId
+          in: path
+          required: true
+          schema: {$ref: "#/components/schemas/RulePackageId"}
+        - $ref: "#/components/parameters/CSRFHeader"
+        - $ref: "#/components/parameters/IfMatch"
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema: {$ref: "#/components/schemas/RulePublishRequest"}
+      responses:
+        "201":
+          description: RuleVersion 已发布
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/RuleVersion"}
+        "400": {$ref: "#/components/responses/ValidationError"}
+        "401": {$ref: "#/components/responses/UnauthenticatedError"}
+        "403": {$ref: "#/components/responses/ForbiddenError"}
+        "409": {$ref: "#/components/responses/ConflictError"}
+  /api/v1/rule-packages/{packageId}/deprecate:
+    post:
+      operationId: deprecateRulePackage
+      summary: 弃用规则包
+      parameters:
+        - name: packageId
+          in: path
+          required: true
+          schema: {$ref: "#/components/schemas/RulePackageId"}
+        - $ref: "#/components/parameters/CSRFHeader"
+        - $ref: "#/components/parameters/IfMatch"
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              properties:
+                reason: {type: string, maxLength: 4096}
+      responses:
+        "200":
+          description: 规则包已弃用
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/RulePackage"}
+        "401": {$ref: "#/components/responses/UnauthenticatedError"}
+        "403": {$ref: "#/components/responses/ForbiddenError"}
+        "404": {$ref: "#/components/responses/NotFoundError"}
+    delete:
+      operationId: deleteRulePackage
+      summary: 软删除没有已发布版本的规则包
+      parameters:
+        - name: packageId
+          in: path
+          required: true
+          schema: {$ref: "#/components/schemas/RulePackageId"}
+        - $ref: "#/components/parameters/CSRFHeader"
+        - $ref: "#/components/parameters/IfMatch"
+      responses:
+        "200":
+          description: 规则包已软删除
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/RulePackage"}
+        "401": {$ref: "#/components/responses/UnauthenticatedError"}
+        "403": {$ref: "#/components/responses/ForbiddenError"}
+        "404": {$ref: "#/components/responses/NotFoundError"}
+        "409": {$ref: "#/components/responses/ConflictError"}
+  /api/v1/rule-packages/{packageId}/audits:
+    get:
+      operationId: listRuleAudits
+      summary: 读取规则包发布、回滚和状态审计
+      parameters:
+        - name: packageId
+          in: path
+          required: true
+          schema: {$ref: "#/components/schemas/RulePackageId"}
+      responses:
+        "200":
+          description: 审计列表
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: false
+                required: [items]
+                properties:
+                  items:
+                    type: array
+                    items: {type: object, additionalProperties: true}
+        "401": {$ref: "#/components/responses/UnauthenticatedError"}
+        "403": {$ref: "#/components/responses/ForbiddenError"}
+        "404": {$ref: "#/components/responses/NotFoundError"}
+  /api/v1/rule-packages/{packageId}/versions:
+    get:
+      operationId: listRuleVersions
+      summary: 列出规则包的不可变版本
+      parameters:
+        - name: packageId
+          in: path
+          required: true
+          schema: {$ref: "#/components/schemas/RulePackageId"}
+        - name: status
+          in: query
+          required: false
+          schema: {type: string}
+      responses:
+        "200":
+          description: 版本列表
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: false
+                required: [items]
+                properties:
+                  items:
+                    type: array
+                    items: {$ref: "#/components/schemas/RuleVersion"}
+        "401": {$ref: "#/components/responses/UnauthenticatedError"}
+        "403": {$ref: "#/components/responses/ForbiddenError"}
+        "404": {$ref: "#/components/responses/NotFoundError"}
+  /api/v1/rule-packages/{packageId}/rollback:
+    post:
+      operationId: rollbackRulePackage
+      summary: 按影响确认将当前指针回滚到既有版本
+      parameters:
+        - name: packageId
+          in: path
+          required: true
+          schema: {$ref: "#/components/schemas/RulePackageId"}
+        - $ref: "#/components/parameters/CSRFHeader"
+        - $ref: "#/components/parameters/IfMatch"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: "#/components/schemas/RuleRollbackRequest"}
+      responses:
+        "200":
+          description: 当前版本指针已回滚
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/RuleVersion"}
+        "400": {$ref: "#/components/responses/ValidationError"}
+        "401": {$ref: "#/components/responses/UnauthenticatedError"}
+        "403": {$ref: "#/components/responses/ForbiddenError"}
+        "409": {$ref: "#/components/responses/ConflictError"}
   /api/v1/rule-versions:
     post:
       operationId: createRuleVersion
@@ -359,6 +783,230 @@ paths:
           $ref: "#/components/responses/ForbiddenError"
         "404":
           $ref: "#/components/responses/NotFoundError"
+  /api/v1/rule-versions/diff:
+    post:
+      operationId: diffRuleVersions
+      summary: 比较两个已持久化 RuleVersion
+      parameters:
+        - $ref: "#/components/parameters/CSRFHeader"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [oldSemanticHash, newSemanticHash]
+              properties:
+                oldSemanticHash: {$ref: "#/components/schemas/SHA256Digest"}
+                newSemanticHash: {$ref: "#/components/schemas/SHA256Digest"}
+      responses:
+        "200":
+          description: RuleVersion diff
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/RuleVersionDiff"}
+        "400": {$ref: "#/components/responses/ValidationError"}
+        "401": {$ref: "#/components/responses/UnauthenticatedError"}
+        "403": {$ref: "#/components/responses/ForbiddenError"}
+  /api/v1/rule-versions/{semanticHash}/export:
+    get:
+      operationId: exportRuleVersion
+      summary: 导出 RuleVersion 的规范 JSON
+      parameters:
+        - name: semanticHash
+          in: path
+          required: true
+          schema: {$ref: "#/components/schemas/SHA256Digest"}
+        - name: format
+          in: query
+          required: false
+          schema: {type: string, enum: [json]}
+      responses:
+        "200":
+          description: 规范 JSON
+          content:
+            application/json:
+              schema: {type: object, additionalProperties: true}
+        "401": {$ref: "#/components/responses/UnauthenticatedError"}
+        "403": {$ref: "#/components/responses/ForbiddenError"}
+        "404": {$ref: "#/components/responses/NotFoundError"}
+  /api/v1/rule-versions/{semanticHash}/deprecate:
+    post:
+      operationId: deprecateRuleVersion
+      summary: 弃用非当前 RuleVersion
+      parameters:
+        - name: semanticHash
+          in: path
+          required: true
+          schema: {$ref: "#/components/schemas/SHA256Digest"}
+        - $ref: "#/components/parameters/CSRFHeader"
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              properties:
+                reason: {type: string, maxLength: 4096}
+      responses:
+        "200":
+          description: RuleVersion 已弃用
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/RuleVersion"}
+        "401": {$ref: "#/components/responses/UnauthenticatedError"}
+        "403": {$ref: "#/components/responses/ForbiddenError"}
+        "404": {$ref: "#/components/responses/NotFoundError"}
+        "409": {$ref: "#/components/responses/ConflictError"}
+  /api/v1/rule-parameters:
+    post:
+      operationId: createRuleParameterSet
+      summary: 为 RuleVersion 创建参数集
+      parameters:
+        - $ref: "#/components/parameters/CSRFHeader"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: "#/components/schemas/RuleParameterCreateRequest"}
+      responses:
+        "201":
+          description: 参数集已创建
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/RuleParameterSet"}
+        "400": {$ref: "#/components/responses/ValidationError"}
+        "401": {$ref: "#/components/responses/UnauthenticatedError"}
+        "403": {$ref: "#/components/responses/ForbiddenError"}
+        "409": {$ref: "#/components/responses/ConflictError"}
+  /api/v1/rule-parameters/{parameterId}:
+    get:
+      operationId: getRuleParameterSet
+      summary: 读取参数集当前 revision
+      parameters:
+        - name: parameterId
+          in: path
+          required: true
+          schema: {$ref: "#/components/schemas/RuleParameterId"}
+      responses:
+        "200":
+          description: 参数集
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/RuleParameterSet"}
+        "401": {$ref: "#/components/responses/UnauthenticatedError"}
+        "403": {$ref: "#/components/responses/ForbiddenError"}
+        "404": {$ref: "#/components/responses/NotFoundError"}
+    put:
+      operationId: updateRuleParameterSet
+      summary: 按 revision 更新参数集
+      parameters:
+        - name: parameterId
+          in: path
+          required: true
+          schema: {$ref: "#/components/schemas/RuleParameterId"}
+        - $ref: "#/components/parameters/CSRFHeader"
+        - $ref: "#/components/parameters/IfMatch"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [parameters]
+              properties:
+                parameters: {type: object, additionalProperties: true}
+                expectedRevision: {type: integer, minimum: 1}
+      responses:
+        "200":
+          description: 参数集已更新
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/RuleParameterSet"}
+        "400": {$ref: "#/components/responses/ValidationError"}
+        "401": {$ref: "#/components/responses/UnauthenticatedError"}
+        "403": {$ref: "#/components/responses/ForbiddenError"}
+        "409": {$ref: "#/components/responses/ConflictError"}
+  /api/v1/rule-parameters/{parameterId}/copy:
+    post:
+      operationId: copyRuleParameterSet
+      summary: 复制参数集
+      parameters:
+        - name: parameterId
+          in: path
+          required: true
+          schema: {$ref: "#/components/schemas/RuleParameterId"}
+        - $ref: "#/components/parameters/CSRFHeader"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [name]
+              properties:
+                name: {type: string, minLength: 1, maxLength: 256}
+      responses:
+        "201":
+          description: 参数集副本
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/RuleParameterSet"}
+        "401": {$ref: "#/components/responses/UnauthenticatedError"}
+        "403": {$ref: "#/components/responses/ForbiddenError"}
+  /api/v1/rule-parameters/{parameterId}/deprecate:
+    post:
+      operationId: deprecateRuleParameterSet
+      summary: 弃用参数集
+      parameters:
+        - name: parameterId
+          in: path
+          required: true
+          schema: {$ref: "#/components/schemas/RuleParameterId"}
+        - $ref: "#/components/parameters/CSRFHeader"
+      responses:
+        "200":
+          description: 参数集已弃用
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/RuleParameterSet"}
+        "401": {$ref: "#/components/responses/UnauthenticatedError"}
+        "403": {$ref: "#/components/responses/ForbiddenError"}
+        "404": {$ref: "#/components/responses/NotFoundError"}
+  /api/v1/rule-parameters/{parameterId}/impact:
+    post:
+      operationId: impactRuleParameterSet
+      summary: 分析共享参数变更及受影响 Source
+      parameters:
+        - name: parameterId
+          in: path
+          required: true
+          schema: {$ref: "#/components/schemas/RuleParameterId"}
+        - $ref: "#/components/parameters/CSRFHeader"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [parameters]
+              properties:
+                parameters: {type: object, additionalProperties: true}
+      responses:
+        "200":
+          description: 参数影响
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/RuleImpactResult"}
+        "400": {$ref: "#/components/responses/ValidationError"}
+        "401": {$ref: "#/components/responses/UnauthenticatedError"}
+        "403": {$ref: "#/components/responses/ForbiddenError"}
+        "404": {$ref: "#/components/responses/NotFoundError"}
   /api/v1/source-rule-bindings:
     post:
       operationId: createSourceRuleBinding
@@ -411,6 +1059,53 @@ paths:
           $ref: "#/components/responses/ForbiddenError"
         "404":
           $ref: "#/components/responses/NotFoundError"
+    patch:
+      operationId: updateSourceRuleBinding
+      summary: 暂停、恢复或标记 SourceRuleBinding
+      parameters:
+        - name: bindingId
+          in: path
+          required: true
+          schema: {$ref: "#/components/schemas/SourceRuleBindingId"}
+        - $ref: "#/components/parameters/CSRFHeader"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [status]
+              properties:
+                status: {type: string, enum: [active, paused, invalid]}
+      responses:
+        "200":
+          description: Binding 状态已更新
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/SourceRuleBinding"}
+        "400": {$ref: "#/components/responses/ValidationError"}
+        "401": {$ref: "#/components/responses/UnauthenticatedError"}
+        "403": {$ref: "#/components/responses/ForbiddenError"}
+        "404": {$ref: "#/components/responses/NotFoundError"}
+  /api/v1/sources/{sourceId}/effective-rule-binding:
+    get:
+      operationId: getEffectiveRuleBinding
+      summary: 读取 Source 当前最高优先级有效 Binding
+      parameters:
+        - name: sourceId
+          in: path
+          required: true
+          schema: {$ref: "#/components/schemas/SourceId"}
+      responses:
+        "200":
+          description: 有效 Binding
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/SourceRuleBinding"}
+        "401": {$ref: "#/components/responses/UnauthenticatedError"}
+        "403": {$ref: "#/components/responses/ForbiddenError"}
+        "404": {$ref: "#/components/responses/NotFoundError"}
   /api/v1/sources/{sourceId}/scan-jobs:
     post:
       operationId: createScanJob
@@ -1353,6 +2048,13 @@ components:
         type: string
         minLength: 32
         maxLength: 256
+    IfMatch:
+      name: If-Match
+      in: header
+      required: false
+      schema:
+        type: string
+        pattern: '^"?[0-9]+"?$'
   responses:
     InternalError:
       description: 内部失败；不返回堆栈、路径或数据库文本
@@ -1534,6 +2236,14 @@ components:
         - PAIRING_EXPIRED
         - SOURCE_PATH_INVALID
         - RULE_PARAMETER_INVALID
+        - RULE_DRAFT_CONFLICT
+        - RULE_PACKAGE_CONFLICT
+        - RULE_PARAMETER_CONFLICT
+        - RULE_PUBLISH_BLOCKED
+        - RULE_ROLLBACK_BLOCKED
+        - RULE_VERSION_IN_USE
+        - RULE_IMPORT_INVALID
+        - RULE_BINDING_CONFLICT
         - JOB_STATE_CONFLICT
         - SCAN_ALREADY_RUNNING
         - SOURCE_UNAVAILABLE
@@ -1611,6 +2321,18 @@ components:
         updatedAt:
           type: string
           format: date-time
+        ruleSemanticHash:
+          $ref: "#/components/schemas/SHA256Digest"
+        ruleParametersHash:
+          $ref: "#/components/schemas/SHA256Digest"
+        ruleIrHash:
+          $ref: "#/components/schemas/SHA256Digest"
+        compilerVersion:
+          type: string
+        celProfileVersion:
+          type: string
+        extensionRegistryVersion:
+          type: string
     ControlBackupManifest:
       type: object
       additionalProperties: false
@@ -2347,8 +3069,10 @@ components:
     RuleDryRunResult:
       type: object
       additionalProperties: false
-      required: [work, trace, issues]
+      required: [ruleVersion, ruleIrHash, work, trace, issues]
       properties:
+        ruleVersion: {$ref: "#/components/schemas/SHA256Digest"}
+        ruleIrHash: {$ref: "#/components/schemas/SHA256Digest"}
         work: {type: object, additionalProperties: true}
         trace:
           type: array
@@ -2356,6 +3080,33 @@ components:
         issues:
           type: array
           items: {type: object, additionalProperties: true}
+    RuleExample:
+      type: object
+      additionalProperties: false
+      required: [id, name, category, packageHash, semanticHash, package]
+      properties:
+        id: {type: string, pattern: "^[a-z0-9-]+$"}
+        name: {type: string}
+        category: {type: string, enum: [hierarchical, direct, messy]}
+        packageHash: {$ref: "#/components/schemas/SHA256Digest"}
+        semanticHash: {$ref: "#/components/schemas/SHA256Digest"}
+        package: {type: object, additionalProperties: true}
+    RuleExampleTestRequest:
+      type: object
+      additionalProperties: false
+      required: [parameters]
+      properties:
+        parameters: {type: object, additionalProperties: true}
+        sample: {$ref: "#/components/schemas/RuleDryRunSample"}
+    RuleExampleTestResult:
+      type: object
+      additionalProperties: false
+      required: [example, packageHash, semanticHash, result]
+      properties:
+        example: {$ref: "#/components/schemas/RuleExample"}
+        packageHash: {$ref: "#/components/schemas/SHA256Digest"}
+        semanticHash: {$ref: "#/components/schemas/SHA256Digest"}
+        result: {$ref: "#/components/schemas/RuleDryRunResult"}
     RuleImpactRequest:
       type: object
       additionalProperties: false
@@ -2366,11 +3117,22 @@ components:
     RuleImpactResult:
       type: object
       additionalProperties: false
-      required: [fields, actions, fullRescan, reproject, rebuildSearch, rebuildDerived, bindingReview]
+      required: [category, reasonCodes, fields, actions, affectedSources, entityTypes, blockPublish, manualConfirmation, fullRescan, partialRescan, reproject, rebuildSearch, rebuildDerived, bindingReview]
       properties:
+        category: {type: string, enum: [NO_ACTION, REPROJECT, RESCAN_PARTIAL, RESCAN_FULL, BINDING_REVIEW, INVALID]}
+        reasonCodes: {type: array, items: {type: string}, uniqueItems: true}
         fields: {type: array, items: {type: string}, uniqueItems: true}
         actions: {type: array, items: {type: string}, uniqueItems: true}
+        affectedSources: {type: array, items: {$ref: "#/components/schemas/SourceId"}, uniqueItems: true}
+        entityTypes: {type: array, items: {type: string}, uniqueItems: true}
+        blockPublish: {type: boolean}
+        manualConfirmation: {type: boolean}
+        estimatedJob: {type: string}
+        oldHash: {$ref: "#/components/schemas/SHA256Digest"}
+        newHash: {$ref: "#/components/schemas/SHA256Digest"}
+        traceSummary: {type: array, items: {type: string}}
         fullRescan: {type: boolean}
+        partialRescan: {type: boolean}
         reproject: {type: boolean}
         rebuildSearch: {type: boolean}
         rebuildDerived: {type: boolean}
@@ -2388,6 +3150,8 @@ components:
       additionalProperties: false
       required: [ruleSetId, version, packageHash, semanticHash, ruleIrHash, createdAt]
       properties:
+        id: {type: string}
+        packageId: {$ref: "#/components/schemas/RulePackageId", nullable: true}
         ruleSetId:
           type: string
           pattern: "^rset_[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
@@ -2399,6 +3163,18 @@ components:
           $ref: "#/components/schemas/SHA256Digest"
         ruleIrHash:
           $ref: "#/components/schemas/SHA256Digest"
+        status: {type: string, enum: [published, deprecated]}
+        normalizationAlgorithmVersion: {type: string}
+        celProfileVersion: {type: string}
+        parameterSchema: {type: object, additionalProperties: true}
+        tests: {type: array, items: {type: object, additionalProperties: true}}
+        extensions: {type: object, additionalProperties: true}
+        parentSemanticHash: {$ref: "#/components/schemas/SHA256Digest", nullable: true}
+        createdBy: {type: string}
+        publishedAt: {type: string, format: date-time, nullable: true}
+        deprecatedAt: {type: string, format: date-time, nullable: true}
+        executable: {type: boolean}
+        compileError: {type: string, nullable: true}
         createdAt:
           type: string
           format: date-time
@@ -2411,6 +3187,8 @@ components:
           $ref: "#/components/schemas/SourceId"
         semanticHash:
           $ref: "#/components/schemas/SHA256Digest"
+        parameterId:
+          $ref: "#/components/schemas/RuleParameterId"
         parameters:
           type: object
           additionalProperties: true
@@ -2418,6 +3196,12 @@ components:
           type: integer
           minimum: 0
           maximum: 10000
+        override:
+          type: object
+          additionalProperties: true
+        condition:
+          type: object
+          additionalProperties: true
     SourceRuleBinding:
       type: object
       additionalProperties: false
@@ -2439,6 +3223,212 @@ components:
         createdAt:
           type: string
           format: date-time
+        updatedAt:
+          type: string
+          format: date-time
+        status:
+          type: string
+          enum: [active, paused, invalid]
+        parameterId:
+          type: string
+        parameterRevision:
+          type: integer
+        parameterHash:
+          $ref: "#/components/schemas/SHA256Digest"
+        override:
+          type: object
+          additionalProperties: true
+        condition:
+          type: object
+          additionalProperties: true
+    RuleImportRequest:
+      type: object
+      additionalProperties: false
+      required: [format, content]
+      properties:
+        format:
+          type: string
+          enum: [json, yaml, toml]
+        content: {}
+    RuleImportResult:
+      type: object
+      additionalProperties: false
+      required: [format, canonicalJson, diagnostics]
+      properties:
+        format: {type: string}
+        canonicalJson: {type: object, additionalProperties: true}
+        diagnostics:
+          type: array
+          items:
+            type: object
+            additionalProperties: false
+            required: [path, message]
+            properties:
+              path: {type: string}
+              message: {type: string}
+              line: {type: integer}
+              column: {type: integer}
+    RulePackageCreateRequest:
+      type: object
+      additionalProperties: false
+      required: [name]
+      properties:
+        ruleSetId: {type: string}
+        name: {type: string, minLength: 1, maxLength: 256}
+        description: {type: string, maxLength: 4096}
+    RulePackage:
+      type: object
+      additionalProperties: false
+      required: [id, ruleSetId, name, description, status, revision, createdBy, createdAt, updatedAt]
+      properties:
+        id: {$ref: "#/components/schemas/RulePackageId"}
+        ruleSetId:
+          type: string
+          pattern: "^rset_[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+        name: {type: string}
+        description: {type: string}
+        status: {type: string, enum: [active, deprecated, deleted]}
+        currentSemanticHash: {$ref: "#/components/schemas/SHA256Digest", nullable: true}
+        latestValidSemanticHash: {$ref: "#/components/schemas/SHA256Digest", nullable: true}
+        draftId: {$ref: "#/components/schemas/RuleDraftId", nullable: true}
+        extensionRequirements: {type: object, additionalProperties: true}
+        createdBy: {type: string}
+        revision: {type: integer, minimum: 1}
+        createdAt: {type: string, format: date-time}
+        updatedAt: {type: string, format: date-time}
+    RuleDraftSaveRequest:
+      type: object
+      additionalProperties: false
+      required: [content, format]
+      properties:
+        content: {}
+        format: {type: string, enum: [json, yaml, toml]}
+        baseSemanticHash: {$ref: "#/components/schemas/SHA256Digest"}
+        expectedRevision: {type: integer, minimum: 0}
+    RuleDraft:
+      type: object
+      additionalProperties: false
+      required: [id, packageId, content, format, validationStatus, diagnostics, revision, savedBy, createdAt, updatedAt]
+      properties:
+        id: {$ref: "#/components/schemas/RuleDraftId"}
+        packageId: {$ref: "#/components/schemas/RulePackageId"}
+        baseSemanticHash: {$ref: "#/components/schemas/SHA256Digest", nullable: true}
+        content: {}
+        format: {type: string, enum: [json, yaml, toml]}
+        validationStatus: {type: string, enum: [draft, validated, invalid]}
+        diagnostics: {type: array, items: {type: object, additionalProperties: true}}
+        revision: {type: integer, minimum: 1}
+        savedBy: {type: string}
+        createdAt: {type: string, format: date-time}
+        updatedAt: {type: string, format: date-time}
+    RuleDraftValidationResult:
+      type: object
+      additionalProperties: false
+      required: [draft, valid, diagnostics]
+      properties:
+        draft: {$ref: "#/components/schemas/RuleDraft"}
+        valid: {type: boolean}
+        diagnostics: {type: array, items: {type: object, additionalProperties: true}}
+        validation: {type: object, nullable: true, additionalProperties: true}
+    RulePublishRequest:
+      type: object
+      additionalProperties: false
+      properties:
+        expectedRevision: {type: integer, minimum: 1}
+        reason: {type: string, maxLength: 4096}
+    RuleRollbackRequest:
+      type: object
+      additionalProperties: false
+      required: [targetSemanticHash, reason]
+      properties:
+        targetSemanticHash: {$ref: "#/components/schemas/SHA256Digest"}
+        expectedRevision: {type: integer, minimum: 1}
+        reason: {type: string, minLength: 1, maxLength: 4096}
+        confirmImpact: {type: boolean, default: false}
+    RulePackageDiffRequest:
+      type: object
+      additionalProperties: false
+      required: [before, after]
+      properties:
+        before: {type: object, additionalProperties: true}
+        after: {type: object, additionalProperties: true}
+    RuleDebugRequest:
+      type: object
+      additionalProperties: false
+      required: [parameters, sample]
+      properties:
+        package: {type: object, additionalProperties: true}
+        semanticHash: {$ref: "#/components/schemas/SHA256Digest"}
+        parameters: {type: object, additionalProperties: true}
+        sample: {$ref: "#/components/schemas/RuleDryRunSample"}
+    RuleVersionDiff:
+      type: object
+      additionalProperties: false
+      required: [oldSemanticHash, newSemanticHash, oldPackageHash, newPackageHash, category, parameterCompatible, bindingReview, entries]
+      properties:
+        oldSemanticHash: {$ref: "#/components/schemas/SHA256Digest"}
+        newSemanticHash: {$ref: "#/components/schemas/SHA256Digest"}
+        oldPackageHash: {$ref: "#/components/schemas/SHA256Digest"}
+        newPackageHash: {$ref: "#/components/schemas/SHA256Digest"}
+        category: {type: string, enum: [NO_ACTION, REPROJECT, RESCAN_PARTIAL, RESCAN_FULL, BINDING_REVIEW, INVALID]}
+        parameterCompatible: {type: boolean}
+        bindingReview: {type: boolean}
+        entries: {type: array, items: {$ref: "#/components/schemas/RuleDiffEntry"}}
+    RuleDiffEntry:
+      type: object
+      additionalProperties: false
+      required: [path, change, impactCategory, parameterCompatible, bindingReview, requiresRescan, requiresReprojection]
+      properties:
+        path: {type: string}
+        change: {type: string, enum: [added, removed, modified]}
+        oldSummary: {type: string}
+        newSummary: {type: string}
+        impactCategory: {type: string, enum: [NO_ACTION, REPROJECT, RESCAN_PARTIAL, RESCAN_FULL, BINDING_REVIEW, INVALID]}
+        parameterCompatible: {type: boolean}
+        bindingReview: {type: boolean}
+        requiresRescan: {type: boolean}
+        requiresReprojection: {type: boolean}
+    RuleExplainResult:
+      type: object
+      additionalProperties: false
+      required: [ruleVersion, ruleIrHash, fields, trace]
+      properties:
+        ruleVersion: {$ref: "#/components/schemas/SHA256Digest"}
+        ruleIrHash: {$ref: "#/components/schemas/SHA256Digest"}
+        fields: {type: array, items: {type: object, additionalProperties: true}}
+        trace: {type: array, items: {type: object, additionalProperties: true}}
+    RuleParameterCreateRequest:
+      type: object
+      additionalProperties: false
+      required: [name, semanticHash, parameters]
+      properties:
+        name: {type: string, minLength: 1, maxLength: 256}
+        semanticHash: {$ref: "#/components/schemas/SHA256Digest"}
+        parameters: {type: object, additionalProperties: true}
+    RuleParameterSet:
+      type: object
+      additionalProperties: false
+      required: [id, name, semanticHash, currentRevision, currentHash, status, parameters, createdBy, createdAt, updatedAt]
+      properties:
+        id: {$ref: "#/components/schemas/RuleParameterId"}
+        name: {type: string}
+        semanticHash: {$ref: "#/components/schemas/SHA256Digest"}
+        currentRevision: {type: integer, minimum: 1}
+        currentHash: {$ref: "#/components/schemas/SHA256Digest"}
+        status: {type: string, enum: [active, deprecated]}
+        parameters: {type: object, additionalProperties: true}
+        createdBy: {type: string}
+        createdAt: {type: string, format: date-time}
+        updatedAt: {type: string, format: date-time}
+    RulePackageId:
+      type: string
+      pattern: "^rpack_[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+    RuleDraftId:
+      type: string
+      pattern: "^rdraft_[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+    RuleParameterId:
+      type: string
+      pattern: "^rparam_[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
     SHA256Digest:
       type: string
       pattern: "^[0-9a-f]{64}$"
