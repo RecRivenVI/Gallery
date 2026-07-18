@@ -16,6 +16,7 @@ import (
 	"github.com/RecRivenVI/gallery/internal/creators"
 	"github.com/RecRivenVI/gallery/internal/domain"
 	"github.com/RecRivenVI/gallery/internal/jobs"
+	"github.com/RecRivenVI/gallery/internal/maintenance"
 	"github.com/RecRivenVI/gallery/internal/ports"
 	"golang.org/x/text/unicode/norm"
 )
@@ -68,21 +69,26 @@ func (nopNotifier) PublicationPublished(catalog.Publication) {}
 
 // Dispatcher 把 Job 交给中央有界调度器执行。未注入时 Service 回退到自管理 goroutine。
 type Dispatcher interface {
-	Submit(jobID string)
+	Submit(jobID string) bool
 }
 
 type Service struct {
-	context    context.Context
-	control    *sql.DB
-	jobs       *jobs.Store
-	catalog    *catalog.Store
-	clock      ports.Clock
-	notifier   Notifier
-	wait       sync.WaitGroup
-	dispatcher Dispatcher
+	context     context.Context
+	control     *sql.DB
+	jobs        *jobs.Store
+	catalog     *catalog.Store
+	clock       ports.Clock
+	notifier    Notifier
+	wait        sync.WaitGroup
+	dispatcher  Dispatcher
+	maintenance *maintenance.Coordinator
 
 	// faultInjector 只供同包恢复测试设置；生产路径始终为 nil。
 	faultInjector func(stage string) error
+}
+
+func (s *Service) SetMaintenanceCoordinator(coordinator *maintenance.Coordinator) {
+	s.maintenance = coordinator
 }
 
 func New(ctx context.Context, control *sql.DB, jobStore *jobs.Store, catalogStore *catalog.Store, clock ports.Clock, notifier Notifier) (*Service, error) {
@@ -255,6 +261,9 @@ func (s *Service) Execute(ctx context.Context, jobID string) error {
 	if err != nil {
 		return err
 	}
+	if err := s.catalog.AbortOverlayCandidatesForJob(ctx, jobID); err != nil {
+		return s.fail(ctx, job, err)
+	}
 	s.notifier.JobChanged(job)
 	for {
 		job, err = s.jobs.Get(ctx, jobID)
@@ -347,7 +356,9 @@ func (s *Service) Execute(ctx context.Context, jobID string) error {
 			s.notifier.JobChanged(job)
 			continue
 		}
+		releasePublication := s.maintenance.AcquirePublication()
 		publication, err := s.catalog.PublishOverlay(ctx, candidate)
+		releasePublication()
 		if err != nil {
 			_ = s.catalog.FinishOverlayCandidate(ctx, candidate, "superseded")
 			if isCode(err, fault.CodeConflict) {
@@ -404,17 +415,11 @@ func (s *Service) Reconcile(ctx context.Context) error {
 		if !isCode(publicationErr, fault.CodeNotFound) {
 			return publicationErr
 		}
-		if err := s.catalog.AbortOverlayCandidatesForJob(ctx, job.ID); err != nil {
-			return err
+		if job.Status == jobs.StatusQueued {
+			s.Start(job.ID)
 		}
-		if job.Status != jobs.StatusQueued {
-			job, err = s.jobs.RequeueInterruptedOverlay(ctx, job.ID)
-			if err != nil {
-				return err
-			}
-			s.notifier.JobChanged(job)
-		}
-		s.Start(job.ID)
+		// 无 publication 的 queued Job 由中央循环提交；running/publishing Job 必须等租约
+		// 过期后再形成同一 Job 的新 Attempt。
 	}
 	completed, err := s.jobs.ListByStatuses(ctx, jobs.StatusCompleted)
 	if err != nil {

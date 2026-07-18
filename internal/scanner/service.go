@@ -17,6 +17,7 @@ import (
 	"github.com/RecRivenVI/gallery/internal/contract/fault"
 	"github.com/RecRivenVI/gallery/internal/hashjob"
 	"github.com/RecRivenVI/gallery/internal/jobs"
+	"github.com/RecRivenVI/gallery/internal/maintenance"
 	"github.com/RecRivenVI/gallery/internal/media"
 	"github.com/RecRivenVI/gallery/internal/rules"
 )
@@ -36,18 +37,24 @@ func (nopNotifier) PublicationPublished(catalog.Publication) {}
 // Dispatcher 把 Job 交给中央有界调度器执行。未注入时 Service 回退到自管理 goroutine（供不涉及
 // 调度器的单元测试使用）。
 type Dispatcher interface {
-	Submit(jobID string)
+	Submit(jobID string) bool
+}
+
+type SpaceGate interface {
+	CheckSpace(ctx context.Context, operation string, additionalBytes int64) error
 }
 
 type Service struct {
-	context    context.Context
-	resources  *application.Resources
-	jobs       *jobs.Store
-	catalog    *catalog.Store
-	notifier   Notifier
-	wait       sync.WaitGroup
-	dispatcher Dispatcher
-	hash       *hashjob.Service
+	context     context.Context
+	resources   *application.Resources
+	jobs        *jobs.Store
+	catalog     *catalog.Store
+	notifier    Notifier
+	wait        sync.WaitGroup
+	dispatcher  Dispatcher
+	hash        *hashjob.Service
+	maintenance *maintenance.Coordinator
+	space       SpaceGate
 }
 
 // SetDispatcher 注入中央调度器；注入后 Start 通过调度器领取执行并接受其 context 取消。
@@ -56,6 +63,12 @@ func (s *Service) SetDispatcher(d Dispatcher) { s.dispatcher = d }
 // SetHashService 将完整内容哈希交给独立 hash 资源池。未注入时保留同步 fallback，方便
 // 仅验证 Catalog 语义的单元测试；正式 bootstrap 始终注入持久 Hash Job Service。
 func (s *Service) SetHashService(service *hashjob.Service) { s.hash = service }
+
+func (s *Service) SetMaintenanceCoordinator(coordinator *maintenance.Coordinator) {
+	s.maintenance = coordinator
+}
+
+func (s *Service) SetSpaceGate(gate SpaceGate) { s.space = gate }
 
 func New(ctx context.Context, resources *application.Resources, jobStore *jobs.Store, catalogStore *catalog.Store, notifier Notifier) (*Service, error) {
 	if ctx == nil || resources == nil || jobStore == nil || catalogStore == nil {
@@ -112,7 +125,15 @@ func (s *Service) Execute(ctx context.Context, jobID string) error {
 	if err != nil {
 		return err
 	}
+	// 同一逻辑 Job 的新 Attempt 复用 Job ID；先清理上次未发布候选，避免把中断的 staging
+	// 当成本次输入。活动 publication 不受影响。
+	_ = s.catalog.AbortCandidate(ctx, jobID)
 	s.notifier.JobChanged(job)
+	if s.space != nil {
+		if err := s.space.CheckSpace(ctx, "catalog_staging", 0); err != nil {
+			return s.fail(ctx, job.ID, err)
+		}
+	}
 	source, err := s.resources.GetSource(ctx, job.SourceID)
 	if err != nil {
 		return s.fail(ctx, job.ID, err)
@@ -280,7 +301,9 @@ func (s *Service) Execute(ctx context.Context, jobID string) error {
 		return err
 	}
 	s.notifier.JobChanged(job)
+	releasePublication := s.maintenance.AcquirePublication()
 	publication, err := s.catalog.Publish(ctx, candidate)
+	releasePublication()
 	if err != nil {
 		_ = s.catalog.AbortCandidate(ctx, job.ID)
 		return s.fail(ctx, job.ID, err)
@@ -307,7 +330,6 @@ func (s *Service) Reconcile(ctx context.Context) error {
 			continue
 		}
 		if job.Status == jobs.StatusQueued {
-			s.Start(job.ID)
 			continue
 		}
 		publication, publicationErr := s.catalog.PublicationForJob(ctx, job.ID)
@@ -325,12 +347,8 @@ func (s *Service) Reconcile(ctx context.Context) error {
 		if publicationErr != nil && !isNotFound(publicationErr) {
 			return publicationErr
 		}
-		_ = s.catalog.AbortCandidate(ctx, job.ID)
-		failed, failErr := s.jobs.Fail(ctx, job.ID, IssueProcessInterrupted)
-		if failErr != nil {
-			return failErr
-		}
-		s.notifier.JobChanged(failed)
+		// 未发布的 running/publishing Job 由中央租约回收循环在 lease 真正过期后收敛；
+		// 启动时 lease 尚有效不能提前判死。
 	}
 	completed, err := s.jobs.ListByStatuses(ctx, jobs.StatusCompleted)
 	if err != nil {
@@ -348,6 +366,15 @@ func (s *Service) Reconcile(ctx context.Context) error {
 			s.notifier.JobChanged(repaired)
 		} else if publicationErr != nil {
 			return publicationErr
+		}
+	}
+	terminal, err := s.jobs.ListByStatuses(ctx, jobs.StatusFailed, jobs.StatusCancelled, jobs.StatusNeedsRepair)
+	if err != nil {
+		return err
+	}
+	for _, job := range terminal {
+		if job.Type == "scan" {
+			_ = s.catalog.AbortCandidate(ctx, job.ID)
 		}
 	}
 	return nil

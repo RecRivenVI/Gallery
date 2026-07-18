@@ -35,25 +35,42 @@ type Result struct {
 }
 
 type Dispatcher interface {
-	Submit(jobID string)
+	Submit(jobID string) bool
 }
 
 type Service struct {
-	context    context.Context
-	resources  *application.Resources
-	jobs       *jobs.Store
-	dispatcher Dispatcher
-	wait       sync.WaitGroup
+	context           context.Context
+	resources         *application.Resources
+	jobs              *jobs.Store
+	dispatcher        Dispatcher
+	wait              sync.WaitGroup
+	progressBytes     int64
+	progressInterval  time.Duration
+	heartbeatInterval time.Duration
 }
 
 func New(ctx context.Context, resources *application.Resources, jobStore *jobs.Store) (*Service, error) {
 	if ctx == nil || resources == nil || jobStore == nil {
 		return nil, fmt.Errorf("Hash Job Service 缺少依赖")
 	}
-	return &Service{context: ctx, resources: resources, jobs: jobStore}, nil
+	return &Service{context: ctx, resources: resources, jobs: jobStore,
+		progressBytes: 16 << 20, progressInterval: time.Second, heartbeatInterval: 30 * time.Second}, nil
 }
 
 func (s *Service) SetDispatcher(dispatcher Dispatcher) { s.dispatcher = dispatcher }
+
+// SetProgressPolicy 只用于运行配置与确定性测试；阈值属于 pre-freeze 调优项，不进入协议。
+func (s *Service) SetProgressPolicy(bytes int64, interval, heartbeat time.Duration) {
+	if bytes > 0 {
+		s.progressBytes = bytes
+	}
+	if interval > 0 {
+		s.progressInterval = interval
+	}
+	if heartbeat > 0 {
+		s.heartbeatInterval = heartbeat
+	}
+}
 
 func (s *Service) Create(ctx context.Context, request Request, createdBy string) (jobs.Job, error) {
 	if request.SourceID == "" || strings.TrimSpace(createdBy) == "" {
@@ -71,7 +88,13 @@ func (s *Service) Create(ctx context.Context, request Request, createdBy string)
 	if err != nil {
 		return jobs.Job{}, fault.New(fault.CodeInternal, true, err)
 	}
-	key := fmt.Sprintf("hash:%s:%s:%d:%d", request.SourceID, request.RelativePath, request.ExpectedSize, request.ExpectedModTimeNanos)
+	// completed digest 只在同一父 Scan Job 内复用。没有父扫描上下文的独立 Hash 请求不设置
+	// 幂等键，因此绝不会仅凭 path/size/mtime 跨扫描永久复用结果。
+	key := ""
+	if request.ParentJobID != "" {
+		key = fmt.Sprintf("hash:sha256-v1:%s:%s:%s:%d:%d:%t", request.ParentJobID, request.SourceID,
+			request.RelativePath, request.ExpectedSize, request.ExpectedModTimeNanos, request.HasExpectedIdentity)
+	}
 	return s.jobs.CreateWithOptions(ctx, "hash", request.SourceID, createdBy, jobs.CreateOptions{
 		ResourceClass: jobs.ResourceHash, TargetResource: request.RelativePath, RequestJSON: payload,
 		IdempotencyKey: key, MaxRetries: 3, RetryPolicyJSON: []byte(`{"kind":"exponential","baseMs":250,"maxMs":30000}`),
@@ -90,18 +113,7 @@ func (s *Service) Start(jobID string) {
 func (s *Service) Wait() { s.wait.Wait() }
 
 func (s *Service) Reconcile(ctx context.Context) error {
-	items, err := s.jobs.ListByStatuses(ctx, jobs.StatusQueued, jobs.StatusRunning)
-	if err != nil {
-		return err
-	}
-	for _, job := range items {
-		if job.Type != "hash" {
-			continue
-		}
-		if job.Status == jobs.StatusQueued {
-			s.Start(job.ID)
-		}
-	}
+	// 所有资源类别统一由 jobs.Reconciler 提交；保留方法作为兼容调用点。
 	return nil
 }
 
@@ -119,17 +131,53 @@ func (s *Service) Execute(ctx context.Context, jobID string) error {
 		return s.fail(ctx, jobID, err)
 	}
 	var progressErr error
+	var latestBytes, persistedBytes int64
+	lastPersistedAt := time.Now()
+	heartbeatContext, stopHeartbeat := context.WithCancel(ctx)
+	var heartbeatWait sync.WaitGroup
+	heartbeatWait.Add(1)
+	go func() {
+		defer heartbeatWait.Done()
+		ticker := time.NewTicker(s.heartbeatInterval)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-heartbeatContext.Done():
+				return
+			case <-ticker.C:
+				_, _ = s.jobs.Heartbeat(context.Background(), jobID)
+			}
+		}
+	}()
 	hashed, hashErr := media.HashSourceFileWithOptions(source.RootPath, request.RelativePath, media.HashOptions{
 		Context: ctx, ExpectedSize: request.ExpectedSize, ExpectedModTimeNanos: request.ExpectedModTimeNanos,
 		HasExpectedIdentity: request.HasExpectedIdentity,
 		Progress: func(bytes int64) {
+			latestBytes = bytes
 			if progressErr != nil {
+				return
+			}
+			if bytes-persistedBytes < s.progressBytes && time.Since(lastPersistedAt) < s.progressInterval {
 				return
 			}
 			_, progressErr = s.jobs.ProgressDetailed(ctx, jobID, jobs.ProgressUpdate{Stage: "hashing", Current: bytes,
 				Total: request.ExpectedSize, Bytes: bytes, Unit: "bytes", Estimated: request.ExpectedSize == 0})
+			if progressErr == nil {
+				persistedBytes, lastPersistedAt = bytes, time.Now()
+			}
 		},
 	})
+	stopHeartbeat()
+	heartbeatWait.Wait()
+	// 终态前强制刷新最后观测字节；取消请求可能使更新被拒绝，此时终态仍优先。
+	if latestBytes > persistedBytes {
+		_, flushErr := s.jobs.ProgressDetailed(context.Background(), jobID, jobs.ProgressUpdate{Stage: "hashing",
+			Current: latestBytes, Total: request.ExpectedSize, Bytes: latestBytes, Unit: "bytes",
+			Estimated: request.ExpectedSize == 0})
+		if progressErr == nil && flushErr != nil {
+			progressErr = flushErr
+		}
+	}
 	if progressErr != nil {
 		hashErr = progressErr
 	}
@@ -143,6 +191,10 @@ func (s *Service) Execute(ctx context.Context, jobID string) error {
 		code, retryable := faultCode(hashErr), true
 		if structured := new(fault.Error); errors.As(hashErr, &structured) {
 			retryable = structured.Retryable
+		}
+		if code == fault.CodeContentChangedDuringHash || code == fault.CodeContentDisappeared {
+			// 旧输入已失效，必须由 Scanner 重新发现，不能盲目重跑相同 stat 快照。
+			retryable = false
 		}
 		_, _ = s.jobs.FailWithRetryable(context.Background(), jobID, string(code), retryable)
 		return hashErr
@@ -173,6 +225,9 @@ func (s *Service) WaitResult(ctx context.Context, jobID string) (media.HashResul
 			}
 			return media.HashResult{Blob: resultBlob(result), Size: result.Size, LocationKey: result.LocationKey, RelativePath: result.RelativePath}, nil
 		case jobs.StatusFailed:
+			if job.FailureRetryable && job.NextAttemptAt != nil {
+				break
+			}
 			return media.HashResult{}, fault.New(fault.Code(job.IssueCode), job.FailureRetryable, nil)
 		case jobs.StatusCancelled, jobs.StatusCancelling, jobs.StatusSuperseded:
 			return media.HashResult{}, fault.New(fault.CodeProcessInterrupted, true, nil)

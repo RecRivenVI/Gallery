@@ -32,6 +32,7 @@ import (
 	"github.com/RecRivenVI/gallery/internal/platform/lock"
 	platformprocess "github.com/RecRivenVI/gallery/internal/platform/process"
 	platformwatcher "github.com/RecRivenVI/gallery/internal/platform/watcher"
+	"github.com/RecRivenVI/gallery/internal/recovery"
 	"github.com/RecRivenVI/gallery/internal/scanner"
 	"github.com/RecRivenVI/gallery/internal/storage"
 	"github.com/RecRivenVI/gallery/internal/toolrunner"
@@ -49,6 +50,10 @@ const (
 	derivedConcurrency      = 1
 	externalToolConcurrency = 1
 	maintenanceConcurrency  = 1
+	recoveryInterval        = 30 * time.Second
+	jobLeaseTimeout         = 2 * time.Minute
+	pollingWatcherInterval  = 5 * time.Minute
+	sourceReconcileInterval = 30 * time.Second
 )
 
 // classDispatcher 把某个资源类别的 Submit 适配为服务侧的 Dispatcher，避免服务依赖调度器具体类型。
@@ -57,7 +62,7 @@ type classDispatcher struct {
 	class     string
 }
 
-func (d classDispatcher) Submit(jobID string) { d.scheduler.Submit(d.class, jobID) }
+func (d classDispatcher) Submit(jobID string) bool { return d.scheduler.Submit(d.class, jobID) }
 
 // Run 启动 galleryd 并在服务退出后返回。外部进程使用 runtime descriptor 发现服务；测试或
 // 需要显式生命周期同步的内部调用方可使用 RunWithReady 获取同一份已发布 descriptor。
@@ -178,8 +183,13 @@ func run(ctx context.Context, cfg config.Config, logger *slog.Logger, ready chan
 	if err != nil {
 		return err
 	}
+	jobTempStore, err := jobs.NewTempStore(store.Control.SQL(), cfg.AppDirs.Temp, systemClock)
+	if err != nil {
+		return err
+	}
+	toolService.SetTempStore(jobTempStore)
 	watcherService, err := watcherservice.New(ctx, store.Control.SQL(), resources, jobStore, scannerService,
-		platformwatcher.NewPolling(2*time.Second, 4096), systemClock, 30*time.Second)
+		platformwatcher.NewPolling(pollingWatcherInterval, 4096), systemClock, sourceReconcileInterval)
 	if err != nil {
 		return err
 	}
@@ -187,10 +197,18 @@ func run(ctx context.Context, cfg config.Config, logger *slog.Logger, ready chan
 	if err != nil {
 		return err
 	}
+	maintenanceCoordinator := maintenance.NewCoordinator()
+	maintenanceService.SetCoordinator(maintenanceCoordinator)
+	scannerService.SetMaintenanceCoordinator(maintenanceCoordinator)
+	overlayService.SetMaintenanceCoordinator(maintenanceCoordinator)
 	backupService, err := backup.New(ctx, store.Control, jobStore, cfg.AppDirs, systemClock, identity.NewGenerator(systemClock), version.Version, hub)
 	if err != nil {
 		return err
 	}
+	scannerService.SetSpaceGate(maintenanceService)
+	backupService.SetSpaceGate(maintenanceService)
+	derivedJobService.SetSpaceGate(maintenanceService)
+	toolService.SetSpaceGate(maintenanceService)
 	// 中央有界调度器替代业务服务直接启动 goroutine：每类资源独立并发上限，取消随 context 传播，
 	// 关闭时取消在执行 Job 并等待退出（未完成 Job 由启动 reconciliation 重新入队）。
 	scheduler := jobs.NewScheduler(ctx)
@@ -215,6 +233,15 @@ func run(ctx context.Context, cfg config.Config, logger *slog.Logger, ready chan
 	overlayService.SetDispatcher(classDispatcher{scheduler: scheduler, class: jobs.ResourceOverlay})
 	backupService.SetDispatcher(classDispatcher{scheduler: scheduler, class: jobs.ResourceMaintenance})
 	defer scheduler.Shutdown()
+	jobReconciler, err := recovery.New(jobStore, scheduler, recoveryInterval, jobLeaseTimeout)
+	if err != nil {
+		return err
+	}
+	recoveryContext, stopRecovery := context.WithCancel(ctx)
+	defer func() {
+		stopRecovery()
+		jobReconciler.Wait()
+	}()
 
 	if err := scannerService.Reconcile(ctx); err != nil {
 		return err
@@ -225,15 +252,10 @@ func run(ctx context.Context, cfg config.Config, logger *slog.Logger, ready chan
 	if err := backupService.Reconcile(ctx); err != nil {
 		return err
 	}
-	if err := jobStore.ReconcileAttempts(ctx, 2*time.Minute); err != nil {
+	if err := jobReconciler.ReconcileOnce(ctx); err != nil {
 		return err
 	}
-	if err := hashService.Reconcile(ctx); err != nil {
-		return err
-	}
-	if err := maintenanceService.Reconcile(ctx, func(jobID string) { scheduler.Submit(jobs.ResourceMaintenance, jobID) }); err != nil {
-		return err
-	}
+	jobReconciler.Start(recoveryContext)
 	watcherService.Start(ctx)
 	creatorsService, err := creators.New(ctx, store.Control.SQL(), jobStore, catalogStore, systemClock, identity.NewGenerator(systemClock), overlayService)
 	if err != nil {
