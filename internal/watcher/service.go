@@ -50,6 +50,7 @@ type Service struct {
 	managed  map[string]*managedWatcher
 	retryMin time.Duration
 	retryMax time.Duration
+	stateMu  sync.Mutex
 	wait     sync.WaitGroup
 }
 
@@ -251,6 +252,8 @@ func (s *Service) ReconcileAll(ctx context.Context) error {
 }
 
 func (s *Service) ReconcileSource(ctx context.Context, sourceID string) error {
+	s.stateMu.Lock()
+	defer s.stateMu.Unlock()
 	source, err := s.resources.GetSource(ctx, sourceID)
 	if err != nil {
 		return err
@@ -332,6 +335,8 @@ FROM source_scan_states WHERE source_id=?`, sourceID).Scan(&state.SourceID, &sta
 }
 
 func (s *Service) updateState(ctx context.Context, sourceID string, mutate func(*State)) error {
+	s.stateMu.Lock()
+	defer s.stateMu.Unlock()
 	state, err := s.GetState(ctx, sourceID)
 	if err != nil {
 		return err
