@@ -48,7 +48,32 @@ type classDispatcher struct {
 
 func (d classDispatcher) Submit(jobID string) { d.scheduler.Submit(d.class, jobID) }
 
-func Run(ctx context.Context, cfg config.Config, logger *slog.Logger) error {
+// Run 启动 galleryd 并在服务退出后返回。外部进程使用 runtime descriptor 发现服务；测试或
+// 需要显式生命周期同步的内部调用方可使用 RunWithReady 获取同一份已发布 descriptor。
+func Run(ctx context.Context, cfg config.Config, logger *slog.Logger) (err error) {
+	return run(ctx, cfg, logger, nil)
+}
+
+// RunWithReady 与 Run 使用相同的启动、服务和关闭语义，并在 runtime descriptor 已原子发布、
+// listener 已建立且服务进入可观察状态后发送 ready。ready 只用于进程内生命周期同步，不改变
+// HTTP/API 契约；调用方应提供可接收的 channel，并在收到信号后再访问 descriptor 或服务。
+func RunWithReady(ctx context.Context, cfg config.Config, logger *slog.Logger, ready chan<- descriptor.Descriptor) (err error) {
+	return run(ctx, cfg, logger, ready)
+}
+
+func run(ctx context.Context, cfg config.Config, logger *slog.Logger, ready chan<- descriptor.Descriptor) (err error) {
+	// serving 在进入服务循环前为 false。启动阶段若父 ctx 已被取消（正常关闭请求恰好在启动中到达），
+	// 由 ctx 取消派生的错误视为干净关闭而非失败；进入服务循环后不再屏蔽，server.Shutdown 超时等
+	// 真实错误照常返回。非取消派生的启动错误（如监听失败、迁移失败）也不受影响。
+	serving := false
+	defer func() {
+		if err != nil && !serving && ctx.Err() != nil &&
+			(errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded)) {
+			logger.Info("galleryd_startup_cancelled")
+			err = nil
+		}
+	}()
+
 	if err := cfg.Validate(); err != nil {
 		return err
 	}
@@ -96,16 +121,6 @@ func Run(ctx context.Context, cfg config.Config, logger *slog.Logger) error {
 		return fmt.Errorf("监听失败: %w", err)
 	}
 	defer listener.Close()
-
-	runtimeDescriptor, err := descriptor.New(listener.Addr().String())
-	if err != nil {
-		return err
-	}
-	descriptorPath, err := descriptor.Publish(cfg.AppDirs.Runtime, runtimeDescriptor)
-	if err != nil {
-		return err
-	}
-	defer descriptor.RemoveIfOwned(descriptorPath, runtimeDescriptor.StartupNonce)
 
 	systemClock := clock.System{}
 	personal, err := auth.NewPersonal(store.Control.SQL(), systemClock, identity.NewGenerator(systemClock), nil)
@@ -174,8 +189,29 @@ func Run(ctx context.Context, cfg config.Config, logger *slog.Logger) error {
 	}
 	serveError := make(chan error, 1)
 	go func() { serveError <- server.Serve(listener) }()
-	logger.Info("galleryd_started", "address", listener.Addr().String(), "mode", cfg.Mode)
 
+	// runtime descriptor 是外部可观察的就绪信号。只有在数据库、迁移、恢复、reconciliation 与全部
+	// 服务装配完成、监听已开始服务后才发布，使「descriptor 存在」等价于「已进入服务状态」；此后
+	// 收到的取消都会落到下面的 select 走优雅关闭路径，而不是在启动中被误报为失败。
+	runtimeDescriptor, err := descriptor.New(listener.Addr().String())
+	if err != nil {
+		return err
+	}
+	descriptorPath, err := descriptor.Publish(cfg.AppDirs.Runtime, runtimeDescriptor)
+	if err != nil {
+		return err
+	}
+	defer descriptor.RemoveIfOwned(descriptorPath, runtimeDescriptor.StartupNonce)
+	logger.Info("galleryd_started", "address", listener.Addr().String(), "mode", cfg.Mode)
+	if ready != nil {
+		select {
+		case ready <- runtimeDescriptor:
+		case <-ctx.Done():
+			return ctx.Err()
+		}
+	}
+
+	serving = true
 	select {
 	case <-ctx.Done():
 		shutdownContext, cancel := context.WithTimeout(context.Background(), 10*time.Second)
