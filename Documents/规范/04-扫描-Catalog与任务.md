@@ -107,6 +107,7 @@ startup: reconcile publications ↔ jobs
 - 增量扫描可复用未变化 Source 分区或候选，但最终仍发布完整查询 revision。
 - 目录签名精度必须到规则可观察的容器层；规则、metadata 或内容身份变化必须使相关候选失效。
 - SourceRuleBinding 的 RuleVersion 或影响索引的参数变化必须经过 RuleImpact 决定重扫范围，不能靠 UI 猜测。
+- 新扫描或新 RuleVersion 下 SourceWork 结构发生拆分（一个原 SourceWork 的媒体分散到多个新 SourceWork）或合并（多个原 SourceWork 的媒体汇聚到一个新 SourceWork）时，扫描按稳定来源证据（ContentBlob digest 集合关系）检测，无法安全自动处理即复用 Binding issue（`SOURCE_WORK_SPLIT/MERGE_REVIEW_REQUIRED`）阻塞该 Source publication，等待人工决策；不得据结构变化静默改写 Canonical 用户事实。语义详见 [领域模型与数据所有权](03-领域模型与数据所有权.md#sourcework-拆分与合并)。
 
 ## 任务模型
 
