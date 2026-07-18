@@ -1155,7 +1155,13 @@ paths:
   /api/v1/source-structure-decisions/{decisionId}/undo:
     post:
       operationId: undoSourceStructureDecision
-      summary: 撤销尚未被扫描消费的拆分/合并决策，已消费时返回 CONFLICT
+      summary: 撤回尚未被扫描消费的拆分/合并决策
+      description: >-
+        这是「撤回尚未应用的结构决策」，不是对已生效结构变化的完整反向操作。仅当决策的 pre-seed Binding
+        尚未被下一次扫描消费（新 source_key 尚未产生 active Binding）时才清除 pre-seed Binding 并重开审查
+        issue；一旦决策已被扫描消费并产生实际 Binding（可能已有 Overlay/Favorite/Progress 依赖），返回稳定
+        CONFLICT 且不部分修改决策、issue 或 Binding。若需反转已生效的结构变化，应通过新的人工决策或未来补偿
+        流程处理。
       parameters:
         - name: decisionId
           in: path
@@ -1173,7 +1179,7 @@ paths:
               $ref: "#/components/schemas/BindingIssueVersionRequest"
       responses:
         "200":
-          description: 已撤销
+          description: 已撤回（决策标记 undone、pre-seed Binding 清除、审查 issue 重开）
           content:
             application/json:
               schema:
