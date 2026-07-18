@@ -492,3 +492,73 @@ func TestSplitThenMergeSequence(t *testing.T) {
 		t.Fatalf("合并后 wkM 未绑定 X: got=%s origin=%s", got, origin)
 	}
 }
+
+// TestStructureBlobEvidenceChangeSupersedes 验证 source_key 不变但 Blob 证据变化时旧 issue 被
+// superseded、新建 issue，而非被错误当作相同证据复用。
+func TestStructureBlobEvidenceChangeSupersedes(t *testing.T) {
+	f := newIssueFixture(t)
+	if _, err := f.resources.EnsureCanonical(f.ctx, f.source.ID, []application.DiscoveredWork{
+		work("wkA", "作品甲", blob("wkA/m1", "d1", 0), blob("wkA/m2", "d2", 1), blob("wkA/m3", "d3", 2)),
+	}); err != nil {
+		t.Fatalf("scan1: %v", err)
+	}
+	// 拆分尝试 1：wkA1(d1,d2)、wkA2(d3)。
+	if _, err := f.resources.EnsureCanonical(f.ctx, f.source.ID, []application.DiscoveredWork{
+		work("wkA1", "作品甲一", blob("wkA1/m1", "d1", 0), blob("wkA1/m2", "d2", 1)),
+		work("wkA2", "作品甲二", blob("wkA2/m3", "d3", 0)),
+	}); err == nil {
+		t.Fatal("拆分应阻塞")
+	}
+	first := f.openIssues(t)
+	if len(first) != 1 {
+		t.Fatalf("期望一个 open issue: %+v", first)
+	}
+	firstID := first[0].ID
+
+	// 拆分尝试 2：相同 source_key 但 wkA1 的 Blob 归属变化（d2→d4）。
+	if _, err := f.resources.EnsureCanonical(f.ctx, f.source.ID, []application.DiscoveredWork{
+		work("wkA1", "作品甲一", blob("wkA1/m1", "d1", 0), blob("wkA1/m4", "d4", 1)),
+		work("wkA2", "作品甲二", blob("wkA2/m3", "d3", 0)),
+	}); err == nil {
+		t.Fatal("变化后仍应阻塞")
+	}
+	open := f.openIssues(t)
+	if len(open) != 1 || open[0].ID == firstID {
+		t.Fatalf("Blob 证据变化应产生新 open issue: %+v", open)
+	}
+	superseded, err := f.resources.ListBindingIssues(f.ctx, application.BindingIssueFilter{SourceID: f.source.ID, Status: "superseded"}, "", 50)
+	if err != nil || len(superseded.Items) != 1 || superseded.Items[0].ID != firstID {
+		t.Fatalf("旧 issue 未 superseded: %+v %v", superseded.Items, err)
+	}
+}
+
+// TestStructureInputOrderReusesIssue 验证相同语义、不同输入顺序（作品与媒体顺序打乱）复用同一 issue。
+func TestStructureInputOrderReusesIssue(t *testing.T) {
+	f := newIssueFixture(t)
+	if _, err := f.resources.EnsureCanonical(f.ctx, f.source.ID, []application.DiscoveredWork{
+		work("wkA", "作品甲", blob("wkA/m1", "d1", 0), blob("wkA/m2", "d2", 1), blob("wkA/m3", "d3", 2)),
+	}); err != nil {
+		t.Fatalf("scan1: %v", err)
+	}
+	if _, err := f.resources.EnsureCanonical(f.ctx, f.source.ID, []application.DiscoveredWork{
+		work("wkA1", "作品甲一", blob("wkA1/m1", "d1", 0), blob("wkA1/m2", "d2", 1)),
+		work("wkA2", "作品甲二", blob("wkA2/m3", "d3", 0)),
+	}); err == nil {
+		t.Fatal("拆分应阻塞")
+	}
+	first := f.openIssues(t)
+	if len(first) != 1 {
+		t.Fatalf("期望一个 open issue: %+v", first)
+	}
+	// 打乱作品与媒体顺序重扫：语义相同，应复用同一 issue。
+	if _, err := f.resources.EnsureCanonical(f.ctx, f.source.ID, []application.DiscoveredWork{
+		work("wkA2", "作品甲二", blob("wkA2/m3", "d3", 0)),
+		work("wkA1", "作品甲一", blob("wkA1/m2", "d2", 1), blob("wkA1/m1", "d1", 0)),
+	}); err == nil {
+		t.Fatal("拆分应阻塞")
+	}
+	open := f.openIssues(t)
+	if len(open) != 1 || open[0].ID != first[0].ID {
+		t.Fatalf("不同输入顺序未复用同一 issue: first=%s open=%+v", first[0].ID, open)
+	}
+}
