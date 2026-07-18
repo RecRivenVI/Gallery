@@ -30,6 +30,7 @@ const (
 
 var PersonalOwnerCapabilities = []string{
 	"admin.backup",
+	"admin.maintenance",
 	"admin.restore",
 	"bindings.read",
 	"bindings.write",

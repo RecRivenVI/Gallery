@@ -19,25 +19,36 @@ import (
 	"github.com/RecRivenVI/gallery/internal/contract/realtime"
 	"github.com/RecRivenVI/gallery/internal/creators"
 	"github.com/RecRivenVI/gallery/internal/derived"
+	"github.com/RecRivenVI/gallery/internal/derivedjob"
+	"github.com/RecRivenVI/gallery/internal/hashjob"
 	"github.com/RecRivenVI/gallery/internal/jobs"
+	"github.com/RecRivenVI/gallery/internal/maintenance"
 	"github.com/RecRivenVI/gallery/internal/overlay"
 	"github.com/RecRivenVI/gallery/internal/platform/clock"
 	"github.com/RecRivenVI/gallery/internal/platform/descriptor"
+	"github.com/RecRivenVI/gallery/internal/platform/disk"
 	"github.com/RecRivenVI/gallery/internal/platform/filesystem"
 	"github.com/RecRivenVI/gallery/internal/platform/identity"
 	"github.com/RecRivenVI/gallery/internal/platform/lock"
+	platformprocess "github.com/RecRivenVI/gallery/internal/platform/process"
+	platformwatcher "github.com/RecRivenVI/gallery/internal/platform/watcher"
 	"github.com/RecRivenVI/gallery/internal/scanner"
 	"github.com/RecRivenVI/gallery/internal/storage"
+	"github.com/RecRivenVI/gallery/internal/toolrunner"
 	"github.com/RecRivenVI/gallery/internal/transport/httpapi"
+	watcherservice "github.com/RecRivenVI/gallery/internal/watcher"
 	version "github.com/RecRivenVI/gallery/pkg/galleryversion"
 )
 
 // 各资源类别的默认并发上限。scan 允许少量不同 Source 并行；overlay 单活跃投影 Job，取 1 与其
 // 单活跃 Job 数据库约束一致。这些值属于运行配置的暂定实装决策，尚未冻结。
 const (
-	scanConcurrency        = 2
-	overlayConcurrency     = 1
-	maintenanceConcurrency = 1
+	scanConcurrency         = 2
+	hashConcurrency         = 2
+	overlayConcurrency      = 1
+	derivedConcurrency      = 1
+	externalToolConcurrency = 1
+	maintenanceConcurrency  = 1
 )
 
 // classDispatcher 把某个资源类别的 Submit 适配为服务侧的 Dispatcher，避免服务依赖调度器具体类型。
@@ -151,6 +162,27 @@ func run(ctx context.Context, cfg config.Config, logger *slog.Logger, ready chan
 	if err != nil {
 		return err
 	}
+	hashService, err := hashjob.New(ctx, resources, jobStore)
+	if err != nil {
+		return err
+	}
+	maintenanceService, err := maintenance.New(ctx, store.Control.SQL(), catalogStore, jobStore, derivedService, cfg.AppDirs, disk.OS{}, systemClock)
+	if err != nil {
+		return err
+	}
+	derivedJobService, err := derivedjob.New(jobStore, derivedService, nil)
+	if err != nil {
+		return err
+	}
+	toolService, err := toolrunner.New(jobStore, platformprocess.Controller{}, nil)
+	if err != nil {
+		return err
+	}
+	watcherService, err := watcherservice.New(ctx, store.Control.SQL(), resources, jobStore, scannerService,
+		platformwatcher.NewPolling(2*time.Second, 4096), systemClock, 30*time.Second)
+	if err != nil {
+		return err
+	}
 	overlayService, err := overlay.New(ctx, store.Control.SQL(), jobStore, catalogStore, systemClock, hub)
 	if err != nil {
 		return err
@@ -162,12 +194,26 @@ func run(ctx context.Context, cfg config.Config, logger *slog.Logger, ready chan
 	// 中央有界调度器替代业务服务直接启动 goroutine：每类资源独立并发上限，取消随 context 传播，
 	// 关闭时取消在执行 Job 并等待退出（未完成 Job 由启动 reconciliation 重新入队）。
 	scheduler := jobs.NewScheduler(ctx)
-	scheduler.Register("scan", scanConcurrency, scannerService.Execute)
-	scheduler.Register("overlay", overlayConcurrency, overlayService.Execute)
-	scheduler.Register("maintenance", maintenanceConcurrency, backupService.Execute)
-	scannerService.SetDispatcher(classDispatcher{scheduler: scheduler, class: "scan"})
-	overlayService.SetDispatcher(classDispatcher{scheduler: scheduler, class: "overlay"})
-	backupService.SetDispatcher(classDispatcher{scheduler: scheduler, class: "maintenance"})
+	scheduler.Register(jobs.ResourceScan, scanConcurrency, scannerService.Execute)
+	scheduler.Register(jobs.ResourceHash, hashConcurrency, hashService.Execute)
+	scheduler.Register(jobs.ResourceOverlay, overlayConcurrency, overlayService.Execute)
+	scheduler.Register(jobs.ResourceDerived, derivedConcurrency, derivedJobService.Execute)
+	scheduler.Register(jobs.ResourceExternalTool, externalToolConcurrency, toolService.Execute)
+	scheduler.Register(jobs.ResourceMaintenance, maintenanceConcurrency, func(runCtx context.Context, jobID string) error {
+		job, getErr := jobStore.Get(runCtx, jobID)
+		if getErr != nil {
+			return getErr
+		}
+		if job.Type == "control_backup" || job.Type == "control_restore" {
+			return backupService.Execute(runCtx, jobID)
+		}
+		return maintenanceService.Execute(runCtx, jobID)
+	})
+	scannerService.SetDispatcher(classDispatcher{scheduler: scheduler, class: jobs.ResourceScan})
+	scannerService.SetHashService(hashService)
+	hashService.SetDispatcher(classDispatcher{scheduler: scheduler, class: jobs.ResourceHash})
+	overlayService.SetDispatcher(classDispatcher{scheduler: scheduler, class: jobs.ResourceOverlay})
+	backupService.SetDispatcher(classDispatcher{scheduler: scheduler, class: jobs.ResourceMaintenance})
 	defer scheduler.Shutdown()
 
 	if err := scannerService.Reconcile(ctx); err != nil {
@@ -179,11 +225,22 @@ func run(ctx context.Context, cfg config.Config, logger *slog.Logger, ready chan
 	if err := backupService.Reconcile(ctx); err != nil {
 		return err
 	}
+	if err := jobStore.ReconcileAttempts(ctx, 2*time.Minute); err != nil {
+		return err
+	}
+	if err := hashService.Reconcile(ctx); err != nil {
+		return err
+	}
+	if err := maintenanceService.Reconcile(ctx, func(jobID string) { scheduler.Submit(jobs.ResourceMaintenance, jobID) }); err != nil {
+		return err
+	}
+	watcherService.Start(ctx)
 	creatorsService, err := creators.New(ctx, store.Control.SQL(), jobStore, catalogStore, systemClock, identity.NewGenerator(systemClock), overlayService)
 	if err != nil {
 		return err
 	}
-	handler := httpapi.New(cfg.Mode, store, systemClock, personal, resources, jobStore, catalogStore, scannerService, overlayService, creatorsService, backupService, hub, logger)
+	handler := httpapi.New(cfg.Mode, store, systemClock, personal, resources, jobStore, catalogStore, scannerService, overlayService, creatorsService, backupService, hub, logger,
+		httpapi.Options{Maintenance: maintenanceService, Watcher: watcherService, Scheduler: scheduler})
 	server := &http.Server{
 		Handler: handler, ReadHeaderTimeout: 10 * time.Second, IdleTimeout: 60 * time.Second,
 	}
