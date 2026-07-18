@@ -6,7 +6,6 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
-	"io"
 	"math/big"
 	"mime"
 	"regexp"
@@ -22,28 +21,38 @@ const PrimitiveRegistryVersion = "gallery-primitives-v1"
 var jsonNumberPattern = regexp.MustCompile(`^(-?)(0|[1-9][0-9]*)(?:\.([0-9]+))?(?:[eE]([+-]?[0-9]+))?$`)
 
 type CompiledPackage struct {
-	RuleSetID    string
-	Version      string
-	PackageHash  string
-	SemanticHash string
-	RuleIRHash   string
-	Canonical    []byte
-	IR           RuleIR
-	ParameterSQL []byte
+	RuleSetID                string
+	Version                  string
+	PackageHash              string
+	SemanticHash             string
+	RuleIRHash               string
+	Canonical                []byte
+	IR                       RuleIR
+	ParameterSQL             []byte
+	ParameterSchema          []byte
+	ExtensionRegistryVersion string
 }
 
 type RuleIR struct {
-	CompilerVersion          string         `json:"compilerVersion"`
-	PrimitiveRegistryVersion string         `json:"primitiveRegistryVersion"`
-	WorkDirectoryGlob        string         `json:"workDirectoryGlob"`
-	WorkTitle                string         `json:"workTitle"`
-	WorkStableKey            string         `json:"workStableKey"`
-	MetadataFile             string         `json:"metadataFile,omitempty"`
-	MediaGlob                string         `json:"mediaGlob"`
-	MediaKind                string         `json:"mediaKind"`
-	MediaMIME                string         `json:"mediaMime"`
-	Primitives               []IRPrimitive  `json:"primitives"`
-	CELExpressions           []IRExpression `json:"celExpressions"`
+	CompilerVersion          string                `json:"compilerVersion"`
+	PrimitiveRegistryVersion string                `json:"primitiveRegistryVersion"`
+	ExtensionRegistryVersion string                `json:"extensionRegistryVersion"`
+	WorkDirectoryGlob        string                `json:"workDirectoryGlob"`
+	WorkTitle                string                `json:"workTitle"`
+	WorkStableKey            string                `json:"workStableKey"`
+	MetadataFile             string                `json:"metadataFile,omitempty"`
+	MediaGlob                string                `json:"mediaGlob"`
+	MediaKind                string                `json:"mediaKind"`
+	MediaMIME                string                `json:"mediaMime"`
+	Primitives               []IRPrimitive         `json:"primitives"`
+	CELExpressions           []IRExpression        `json:"celExpressions"`
+	Extensions               []IRCompiledExtension `json:"extensions,omitempty"`
+}
+
+type IRCompiledExtension struct {
+	Namespace string         `json:"namespace"`
+	Version   string         `json:"version"`
+	Payload   map[string]any `json:"payload,omitempty"`
 }
 
 type IRPrimitive struct {
@@ -64,6 +73,7 @@ type rawPackage struct {
 	ParameterSchema json.RawMessage `json:"parameter_schema"`
 	Primitives      []rawPrimitive  `json:"primitives"`
 	CELExpressions  []IRExpression  `json:"cel_expressions"`
+	Extensions      json.RawMessage `json:"extensions"`
 }
 
 type rawPrimitive struct {
@@ -113,6 +123,9 @@ func CompilePackage(input []byte) (CompiledPackage, error) {
 
 	semantic := cloneRawObject(root)
 	delete(semantic, "tests")
+	// UI 元数据只描述表单、分组和帮助文本，不属于执行语义；仍保留在
+	// package_hash/canonical 中，以便编辑器数据可无损往返。
+	delete(semantic, "ui_metadata")
 	semanticExtensions, err := classifyExtensions(root["extensions"])
 	if err != nil {
 		return CompiledPackage{}, err
@@ -149,15 +162,22 @@ func CompilePackage(input []byte) (CompiledPackage, error) {
 	if err != nil {
 		return CompiledPackage{}, err
 	}
+	ir.Extensions, err = compileSemanticExtensions(root["extensions"])
+	if err != nil {
+		return CompiledPackage{}, err
+	}
+	ir.ExtensionRegistryVersion = ExtensionRegistryVersion
 	irJSON, err := CanonicalJSON(mustJSON(ir))
 	if err != nil {
 		return CompiledPackage{}, err
 	}
-	irHash := prefixedHash("gallery-rule-ir\x00v1\x00", append([]byte(semanticHash+"\x00"), irJSON...))
+	irHashInput := append([]byte(semanticHash+"\x00"+ExtensionRegistryVersion+"\x00"), irJSON...)
+	irHash := prefixedHash("gallery-rule-ir\x00v1\x00", irHashInput)
 	return CompiledPackage{
 		RuleSetID: parsed.RuleSetID, Version: parsed.Version, PackageHash: packageHash,
 		SemanticHash: semanticHash, RuleIRHash: irHash, Canonical: canonical, IR: ir,
-		ParameterSQL: append([]byte(nil), parsed.ParameterSchema...),
+		ParameterSQL: append([]byte(nil), parsed.ParameterSchema...), ParameterSchema: append([]byte(nil), parsed.ParameterSchema...),
+		ExtensionRegistryVersion: ExtensionRegistryVersion,
 	}, nil
 }
 
@@ -184,7 +204,7 @@ func CompileBinding(rule CompiledPackage, parameters []byte) (RuleIR, string, []
 	if err != nil {
 		return RuleIR{}, "", nil, err
 	}
-	hashInput := []byte(rule.SemanticHash + "\x00" + CompilerVersion + "\x00" + CELProfileVersion + "\x00" + PrimitiveRegistryVersion + "\x00")
+	hashInput := []byte(rule.SemanticHash + "\x00" + CompilerVersion + "\x00" + CELProfileVersion + "\x00" + PrimitiveRegistryVersion + "\x00" + ExtensionRegistryVersion + "\x00")
 	hashInput = append(hashInput, canonical...)
 	hashInput = append(hashInput, '\x00')
 	hashInput = append(hashInput, irJSON...)
@@ -198,6 +218,11 @@ func DecodeIR(input []byte) (RuleIR, error) {
 	if err := decoder.Decode(&ir); err != nil {
 		return RuleIR{}, err
 	}
+	// 00017 之前保存的编译 IR 没有 extension registry 字段；按当时唯一的
+	// registry 版本补齐读取视图，不改写历史 RuleVersion 的 hash 或 canonical。
+	if ir.ExtensionRegistryVersion == "" {
+		ir.ExtensionRegistryVersion = ExtensionRegistryVersion
+	}
 	if err := validateIR(ir); err != nil {
 		return RuleIR{}, err
 	}
@@ -205,17 +230,9 @@ func DecodeIR(input []byte) (RuleIR, error) {
 }
 
 func CanonicalJSON(input []byte) ([]byte, error) {
-	decoder := json.NewDecoder(bytes.NewReader(input))
-	decoder.UseNumber()
-	var value any
-	if err := decoder.Decode(&value); err != nil {
-		return nil, fmt.Errorf("解析 JSON: %w", err)
-	}
-	var trailing any
-	if err := decoder.Decode(&trailing); err == nil {
-		return nil, fmt.Errorf("JSON 包含多个值")
-	} else if err != io.EOF {
-		return nil, fmt.Errorf("JSON 尾部无效: %w", err)
+	value, err := decodeAny(input)
+	if err != nil {
+		return nil, err
 	}
 	var output bytes.Buffer
 	if err := writeCanonical(&output, value); err != nil {
@@ -225,7 +242,7 @@ func CanonicalJSON(input []byte) ([]byte, error) {
 }
 
 func compilePrimitives(primitives []rawPrimitive, expressions []IRExpression) (RuleIR, error) {
-	ir := RuleIR{CompilerVersion: CompilerVersion, PrimitiveRegistryVersion: PrimitiveRegistryVersion, CELExpressions: expressions}
+	ir := RuleIR{CompilerVersion: CompilerVersion, PrimitiveRegistryVersion: PrimitiveRegistryVersion, ExtensionRegistryVersion: ExtensionRegistryVersion, CELExpressions: expressions}
 	for index, primitive := range primitives {
 		canonicalConfig, err := CanonicalJSON(primitive.Config)
 		if err != nil {
@@ -270,10 +287,41 @@ func compilePrimitives(primitives []rawPrimitive, expressions []IRExpression) (R
 }
 
 func validateIR(ir RuleIR) error {
-	if ir.CompilerVersion != CompilerVersion || ir.PrimitiveRegistryVersion != PrimitiveRegistryVersion || ir.WorkDirectoryGlob == "" || ir.MediaGlob == "" {
+	if ir.CompilerVersion != CompilerVersion || ir.PrimitiveRegistryVersion != PrimitiveRegistryVersion || ir.ExtensionRegistryVersion != ExtensionRegistryVersion || ir.WorkDirectoryGlob == "" || ir.MediaGlob == "" {
 		return fmt.Errorf("规则缺少最小 work_directory/media_classify 执行计划")
 	}
 	return nil
+}
+
+func compileSemanticExtensions(raw json.RawMessage) ([]IRCompiledExtension, error) {
+	if len(bytes.TrimSpace(raw)) == 0 {
+		return nil, nil
+	}
+	var extensions map[string]json.RawMessage
+	if err := json.Unmarshal(raw, &extensions); err != nil {
+		return nil, err
+	}
+	result := make([]IRCompiledExtension, 0, len(extensions))
+	for namespace, value := range extensions {
+		fields, object := objectFields(value)
+		if !object || fields["semantic"] == nil {
+			continue
+		}
+		var entry extensionEntry
+		if err := strictDecode(value, &entry); err != nil {
+			return nil, withField("/extensions/"+namespace, err)
+		}
+		if !entry.Semantic {
+			continue
+		}
+		payload, err := compileExtensionPayload(namespace, entry)
+		if err != nil {
+			return nil, withField("/extensions/"+namespace+"/payload", err)
+		}
+		result = append(result, IRCompiledExtension{Namespace: namespace, Version: entry.Version, Payload: payload})
+	}
+	sort.Slice(result, func(i, j int) bool { return result[i].Namespace < result[j].Namespace })
+	return result, nil
 }
 
 func validateExtendedPrimitive(primitive rawPrimitive) error {

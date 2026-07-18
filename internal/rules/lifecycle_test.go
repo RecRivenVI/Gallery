@@ -110,6 +110,22 @@ func TestCELProfileRejectsUnknownHostFunction(t *testing.T) {
 	}
 }
 
+func TestUIMetadataDoesNotChangeRuntimeIdentity(t *testing.T) {
+	base := readRulePackage(t)
+	withUI := bytes.Replace(base, []byte(`"extensions": {}`), []byte(`"extensions": {}, "ui_metadata": {"group":"basic","help":"synthetic"}`), 1)
+	left, err := rules.CompilePackage(base)
+	if err != nil {
+		t.Fatal(err)
+	}
+	right, err := rules.CompilePackage(withUI)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if left.SemanticHash != right.SemanticHash || left.PackageHash == right.PackageHash {
+		t.Fatalf("UI 元数据身份分类错误: left=%+v right=%+v", left, right)
+	}
+}
+
 func readRulePackage(t *testing.T) []byte {
 	t.Helper()
 	value, err := os.ReadFile(filepath.Join("testdata", "minimal-rule-package.json"))
