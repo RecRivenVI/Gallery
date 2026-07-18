@@ -60,7 +60,7 @@ type Server struct {
 }
 
 type JobController interface {
-	Submit(class, jobID string)
+	Submit(class, jobID string) bool
 	Cancel(jobID string) bool
 }
 
