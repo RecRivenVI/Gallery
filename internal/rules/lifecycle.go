@@ -45,9 +45,11 @@ type DryRunFile struct {
 }
 
 type DryRunResult struct {
-	Work   DryRunWork  `json:"work"`
-	Trace  []TraceStep `json:"trace"`
-	Issues []RuleIssue `json:"issues"`
+	RuleVersion string      `json:"ruleVersion,omitempty"`
+	RuleIRHash  string      `json:"ruleIrHash,omitempty"`
+	Work        DryRunWork  `json:"work"`
+	Trace       []TraceStep `json:"trace"`
+	Issues      []RuleIssue `json:"issues"`
 }
 
 type DryRunWork struct {
@@ -73,14 +75,18 @@ type DryRunMedia struct {
 }
 
 type TraceStep struct {
-	ID             string `json:"id"`
-	Kind           string `json:"kind"`
-	InputPointer   string `json:"inputPointer,omitempty"`
-	CandidateCount int    `json:"candidateCount"`
-	Selected       bool   `json:"selected"`
-	ReasonCode     string `json:"reasonCode"`
-	Cost           uint64 `json:"cost"`
-	DurationMicros int64  `json:"durationMicros"`
+	ID             string   `json:"id"`
+	Kind           string   `json:"kind"`
+	InputPointer   string   `json:"inputPointer,omitempty"`
+	InputSummary   string   `json:"inputSummary,omitempty"`
+	OutputSummary  string   `json:"outputSummary,omitempty"`
+	CandidateCount int      `json:"candidateCount"`
+	Selected       bool     `json:"selected"`
+	ReasonCode     string   `json:"reasonCode"`
+	Cost           uint64   `json:"cost"`
+	DurationMicros int64    `json:"durationMicros"`
+	Warnings       []string `json:"warnings,omitempty"`
+	ErrorPath      string   `json:"errorPath,omitempty"`
 }
 
 type RuleIssue struct {
@@ -90,13 +96,24 @@ type RuleIssue struct {
 }
 
 type ImpactResult struct {
-	Fields         []string `json:"fields"`
-	Actions        []string `json:"actions"`
-	FullRescan     bool     `json:"fullRescan"`
-	Reproject      bool     `json:"reproject"`
-	RebuildSearch  bool     `json:"rebuildSearch"`
-	RebuildDerived bool     `json:"rebuildDerived"`
-	BindingReview  bool     `json:"bindingReview"`
+	Category        string   `json:"category"`
+	ReasonCodes     []string `json:"reasonCodes"`
+	Fields          []string `json:"fields"`
+	Actions         []string `json:"actions"`
+	AffectedSources []string `json:"affectedSources"`
+	EntityTypes     []string `json:"entityTypes"`
+	BlockPublish    bool     `json:"blockPublish"`
+	ManualConfirm   bool     `json:"manualConfirmation"`
+	EstimatedJob    string   `json:"estimatedJob,omitempty"`
+	PartialRescan   bool     `json:"partialRescan"`
+	OldHash         string   `json:"oldHash,omitempty"`
+	NewHash         string   `json:"newHash,omitempty"`
+	TraceSummary    []string `json:"traceSummary"`
+	FullRescan      bool     `json:"fullRescan"`
+	Reproject       bool     `json:"reproject"`
+	RebuildSearch   bool     `json:"rebuildSearch"`
+	RebuildDerived  bool     `json:"rebuildDerived"`
+	BindingReview   bool     `json:"bindingReview"`
 }
 
 func NewLifecycle() (*Lifecycle, error) {
@@ -144,7 +161,12 @@ func (l *Lifecycle) DryRun(ctx context.Context, input, parameters []byte, sample
 	if err := validateDryRunInput(sample); err != nil {
 		return DryRunResult{}, withField("/sample", err)
 	}
-	return l.evaluate(ctx, compiled.IR, params, sample)
+	result, err := l.evaluate(ctx, compiled.IR, params, sample)
+	if err != nil {
+		return DryRunResult{}, err
+	}
+	result.RuleVersion, result.RuleIRHash = compiled.SemanticHash, compiled.RuleIRHash
+	return result, nil
 }
 
 func (l *Lifecycle) EvaluateIR(ctx context.Context, ir RuleIR, parameters []byte, sample DryRunInput) (DryRunResult, error) {
@@ -170,32 +192,73 @@ func (l *Lifecycle) Impact(before, after []byte) (ImpactResult, error) {
 	if err != nil {
 		return ImpactResult{}, err
 	}
+	result := ImpactResult{OldHash: left.SemanticHash, NewHash: right.SemanticHash, TraceSummary: []string{}}
 	if left.SemanticHash == right.SemanticHash {
-		return ImpactResult{Actions: []string{"none"}}, nil
+		result.Category = "NO_ACTION"
+		result.ReasonCodes = []string{"runtime_identity_unchanged"}
+		result.Actions = []string{"none"}
+		return result, nil
 	}
-	result := ImpactResult{}
-	if left.IR.WorkDirectoryGlob != right.IR.WorkDirectoryGlob || left.IR.WorkStableKey != right.IR.WorkStableKey {
+	if !bytes.Equal(left.ParameterSchema, right.ParameterSchema) {
+		result.Fields = append(result.Fields, "parameter_schema")
+		result.BindingReview = true
+		result.EntityTypes = append(result.EntityTypes, "binding", "work", "media")
+		result.ReasonCodes = append(result.ReasonCodes, "parameter_schema_changed")
+	}
+	leftPackage, _ := decodeObject(left.Canonical)
+	rightPackage, _ := decodeObject(right.Canonical)
+	if !bytes.Equal(mustJSON(leftPackage["provider_namespaces"]), mustJSON(rightPackage["provider_namespaces"])) {
+		result.Fields = append(result.Fields, "provider_namespaces")
+		result.BindingReview = true
+		result.EntityTypes = append(result.EntityTypes, "work", "creator", "media")
+		result.ReasonCodes = append(result.ReasonCodes, "provider_identity_changed")
+	}
+	if left.IR.WorkDirectoryGlob != right.IR.WorkDirectoryGlob || left.IR.WorkStableKey != right.IR.WorkStableKey || primitiveKindsChanged(left.IR, right.IR, "path_match", "stable_key") {
 		result.Fields = append(result.Fields, "source_identity")
 		result.FullRescan, result.BindingReview = true, true
+		result.EntityTypes = append(result.EntityTypes, "work", "creator", "media")
+		result.ReasonCodes = append(result.ReasonCodes, "stable_source_identity_changed")
 	}
 	if left.IR.WorkTitle != right.IR.WorkTitle || primitiveKindsChanged(left.IR, right.IR, "selector", "fallback", "metadata_map") {
 		result.Fields = append(result.Fields, "effective_fields")
 		result.Reproject, result.RebuildSearch = true, true
+		result.EntityTypes = append(result.EntityTypes, "work", "creator")
+		result.ReasonCodes = append(result.ReasonCodes, "query_projection_changed")
 	}
-	if left.IR.MediaGlob != right.IR.MediaGlob || left.IR.MediaKind != right.IR.MediaKind || left.IR.MediaMIME != right.IR.MediaMIME || primitiveKindsChanged(left.IR, right.IR, "media_classify", "media_order", "condition") {
+	if left.IR.MediaGlob != right.IR.MediaGlob || left.IR.MediaKind != right.IR.MediaKind || left.IR.MediaMIME != right.IR.MediaMIME || primitiveKindsChanged(left.IR, right.IR, "media_classify", "condition") {
 		result.Fields = append(result.Fields, "media")
 		result.FullRescan, result.Reproject = true, true
+		result.EntityTypes = append(result.EntityTypes, "media")
+		result.ReasonCodes = append(result.ReasonCodes, "media_execution_changed")
+	}
+	if primitiveKindsChanged(left.IR, right.IR, "media_order") {
+		result.Fields = append(result.Fields, "media_order")
+		result.PartialRescan, result.Reproject = true, true
+		result.EntityTypes = append(result.EntityTypes, "media")
+		result.ReasonCodes = append(result.ReasonCodes, "media_order_changed")
 	}
 	if primitiveKindsChanged(left.IR, right.IR, "cover_candidate") {
 		result.Fields = append(result.Fields, "cover")
 		result.Reproject, result.RebuildDerived = true, true
+		result.EntityTypes = append(result.EntityTypes, "work", "media")
+		result.ReasonCodes = append(result.ReasonCodes, "cover_selection_changed")
+	}
+	if !bytes.Equal(mustJSON(left.IR.Extensions), mustJSON(right.IR.Extensions)) {
+		result.Fields = append(result.Fields, "extensions")
+		result.EntityTypes = append(result.EntityTypes, "work")
+		result.ReasonCodes = append(result.ReasonCodes, "semantic_extension_changed")
+		result.FullRescan = true
 	}
 	if len(result.Fields) == 0 {
 		result.Fields = append(result.Fields, "runtime_semantics")
 		result.FullRescan = true
+		result.ReasonCodes = append(result.ReasonCodes, "runtime_semantics_changed")
 	}
 	if result.FullRescan {
 		result.Actions = append(result.Actions, "full_rescan")
+	}
+	if result.PartialRescan && !result.FullRescan {
+		result.Actions = append(result.Actions, "partial_rescan")
 	}
 	if result.BindingReview {
 		result.Actions = append(result.Actions, "binding_review")
@@ -209,7 +272,59 @@ func (l *Lifecycle) Impact(before, after []byte) (ImpactResult, error) {
 	if result.RebuildDerived {
 		result.Actions = append(result.Actions, "rebuild_derived")
 	}
+	if result.BindingReview {
+		result.Category, result.BlockPublish, result.ManualConfirm = "BINDING_REVIEW", true, true
+		result.EstimatedJob = "manual_binding_review"
+	} else if result.FullRescan {
+		result.Category, result.ManualConfirm = "RESCAN_FULL", false
+		result.EstimatedJob = "scan_all_sources"
+	} else if result.PartialRescan {
+		result.Category = "RESCAN_PARTIAL"
+		result.EstimatedJob = "scan_media_occurrences"
+	} else if result.Reproject {
+		result.Category = "REPROJECT"
+		result.EstimatedJob = "reproject_query"
+	} else {
+		result.Category = "NO_ACTION"
+	}
+	result.TraceSummary = append(result.TraceSummary, result.ReasonCodes...)
 	sort.Strings(result.Fields)
+	sort.Strings(result.EntityTypes)
+	sort.Strings(result.ReasonCodes)
+	sort.Strings(result.TraceSummary)
+	return result, nil
+}
+
+// ImpactParameters 判断同一 RuleVersion 的参数快照变化。参数值本身不改变 RuleVersion
+// semantic identity，但会改变 Binding 执行身份，因此必须显式进入 Binding review 和可追踪的
+// 重扫计划，不能被当成普通配置覆盖。
+func (l *Lifecycle) ImpactParameters(packageJSON, before, after []byte) (ImpactResult, error) {
+	compiled, err := l.compilePackage(packageJSON)
+	if err != nil {
+		return ImpactResult{}, err
+	}
+	_, _, left, err := CompileBinding(compiled, before)
+	if err != nil {
+		return ImpactResult{}, withField("/beforeParameters", err)
+	}
+	_, _, right, err := CompileBinding(compiled, after)
+	if err != nil {
+		return ImpactResult{}, withField("/afterParameters", err)
+	}
+	result := ImpactResult{OldHash: prefixedHash("gallery-rule-parameters\x00v1\x00", left), NewHash: prefixedHash("gallery-rule-parameters\x00v1\x00", right), TraceSummary: []string{}}
+	if bytes.Equal(left, right) {
+		result.Category, result.ReasonCodes, result.Actions = "NO_ACTION", []string{"parameter_identity_unchanged"}, []string{"none"}
+		return result, nil
+	}
+	result.Category = "BINDING_REVIEW"
+	result.Fields = []string{"parameters"}
+	result.EntityTypes = []string{"binding", "work", "media"}
+	result.ReasonCodes = []string{"parameter_value_changed"}
+	result.Actions = []string{"binding_review", "full_rescan", "reproject"}
+	result.TraceSummary = append(result.TraceSummary, result.ReasonCodes...)
+	result.FullRescan, result.Reproject, result.BindingReview = true, true, true
+	result.ManualConfirm = true
+	result.EstimatedJob = "scan_and_reproject"
 	return result, nil
 }
 
@@ -252,6 +367,7 @@ func (l *Lifecycle) evaluate(ctx context.Context, ir RuleIR, params map[string]a
 			}
 		}
 	}
+	applyIdentityExtensions(ir, &result)
 	for _, file := range sample.Files {
 		media, matched, err := l.classifyFile(ctx, ir, expressions, params, sample, file, &result)
 		if err != nil {
@@ -271,6 +387,21 @@ func (l *Lifecycle) evaluate(ctx context.Context, ir RuleIR, params map[string]a
 		}
 	}
 	return result, nil
+}
+
+func applyIdentityExtensions(ir RuleIR, result *DryRunResult) {
+	for _, extension := range ir.Extensions {
+		if extension.Namespace != "gallery.identity" || extension.Payload == nil {
+			continue
+		}
+		if prefix, ok := extension.Payload["stable_key_prefix"].(string); ok && prefix != "" {
+			result.Work.StableKey = prefix + result.Work.StableKey
+		}
+		result.Trace = append(result.Trace, TraceStep{
+			ID: extension.Namespace, Kind: "extension", Selected: true,
+			ReasonCode: "extension_applied", OutputSummary: "stable_key_transformed",
+		})
+	}
 }
 
 func (l *Lifecycle) classifyFile(ctx context.Context, ir RuleIR, expressions map[string]IRExpression, params map[string]any, sample DryRunInput, file DryRunFile, result *DryRunResult) (DryRunMedia, bool, error) {
@@ -404,14 +535,14 @@ func applySelector(primitive IRPrimitive, metadata any, result *DryRunResult) er
 	required := boolConfig(config, "required")
 	if selected == nil {
 		result.Issues = append(result.Issues, RuleIssue{Code: "RULE_SELECTOR_MISSING", Path: firstString(pointers), Required: required})
-		result.Trace = append(result.Trace, TraceStep{ID: primitive.ID, Kind: primitive.Kind, InputPointer: firstString(pointers), CandidateCount: len(pointers), ReasonCode: "missing"})
+		result.Trace = append(result.Trace, TraceStep{ID: primitive.ID, Kind: primitive.Kind, InputPointer: firstString(pointers), InputSummary: fmt.Sprintf("candidates=%d", len(pointers)), CandidateCount: len(pointers), ReasonCode: "missing"})
 		if required {
 			return fmt.Errorf("selector %s 缺少必需字段", primitive.ID)
 		}
 		return nil
 	}
 	assignTarget(&result.Work, target, selected)
-	result.Trace = append(result.Trace, TraceStep{ID: primitive.ID, Kind: primitive.Kind, InputPointer: selectedPointer, CandidateCount: len(pointers), Selected: true, ReasonCode: "selected"})
+	result.Trace = append(result.Trace, TraceStep{ID: primitive.ID, Kind: primitive.Kind, InputPointer: selectedPointer, InputSummary: fmt.Sprintf("candidates=%d", len(pointers)), OutputSummary: "field=" + target, CandidateCount: len(pointers), Selected: true, ReasonCode: "selected"})
 	return nil
 }
 
@@ -428,7 +559,7 @@ func applyMetadataMap(primitive IRPrimitive, metadata any, result *DryRunResult)
 		for _, pointer := range pointers {
 			if value, ok := resolvePointer(metadata, pointer); ok {
 				assignTarget(&result.Work, target, value)
-				result.Trace = append(result.Trace, TraceStep{ID: primitive.ID + ":" + target, Kind: primitive.Kind, InputPointer: pointer, CandidateCount: len(pointers), Selected: true, ReasonCode: "selected"})
+				result.Trace = append(result.Trace, TraceStep{ID: primitive.ID + ":" + target, Kind: primitive.Kind, InputPointer: pointer, InputSummary: fmt.Sprintf("candidates=%d", len(pointers)), OutputSummary: "field=" + target, CandidateCount: len(pointers), Selected: true, ReasonCode: "selected"})
 				break
 			}
 		}
@@ -444,6 +575,7 @@ func applyStableKey(primitive IRPrimitive, metadata any, result *DryRunResult) {
 	if pointer := stringConfig(config, "pointer"); pointer != "" {
 		if value, ok := resolvePointer(metadata, pointer); ok && fmt.Sprint(value) != "" {
 			result.Work.StableKey = stringConfig(config, "prefix") + fmt.Sprint(value)
+			result.Trace = append(result.Trace, TraceStep{ID: primitive.ID, Kind: primitive.Kind, InputPointer: pointer, InputSummary: "pointer_resolved", OutputSummary: "field=work.stable_key", CandidateCount: 1, Selected: true, ReasonCode: "selected"})
 		}
 	}
 }
@@ -479,8 +611,19 @@ func orderMedia(ir RuleIR, media []DryRunMedia) {
 }
 
 func validateDryRunInput(input DryRunInput) error {
-	if input.Path == "" || strings.HasPrefix(input.Path, "/") || strings.Contains(input.Path, "..") {
+	if !safeSamplePath(input.Path) {
 		return fmt.Errorf("Dry Run path 无效")
+	}
+	if len(input.Files) > 10000 {
+		return fmt.Errorf("RULE_SAMPLE_LIMIT")
+	}
+	for index, file := range input.Files {
+		if !safeSamplePath(file.Path) {
+			return fmt.Errorf("Dry Run file path 无效: %d", index)
+		}
+		if file.Size < 0 {
+			return fmt.Errorf("Dry Run file size 无效: %d", index)
+		}
 	}
 	encoded, err := json.Marshal(input.Metadata)
 	if err != nil {
@@ -493,6 +636,18 @@ func validateDryRunInput(input DryRunInput) error {
 		return fmt.Errorf("CEL_ARRAY_LIMIT")
 	}
 	return nil
+}
+
+func safeSamplePath(value string) bool {
+	if value == "" || path.IsAbs(value) || strings.ContainsAny(value, `\\:`) {
+		return false
+	}
+	for _, part := range strings.Split(value, "/") {
+		if part == ".." || part == "." || part == "" {
+			return false
+		}
+	}
+	return true
 }
 
 func exceedsArrayLimit(value any) bool {

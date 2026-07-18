@@ -73,6 +73,50 @@
       "additionalProperties": true,
       "default": {}
     },
+    "ui_metadata": {
+      "type": "object",
+      "description": "仅供 Schema 表单和编辑器使用的非执行元数据",
+      "properties": {
+        "title": {"type": "string", "maxLength": 512},
+        "description": {"type": "string", "maxLength": 4096},
+        "order": {"type": "array", "items": {"type": "string"}, "uniqueItems": true},
+        "groups": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "object",
+            "properties": {
+              "title": {"type": "string"},
+              "description": {"type": "string"},
+              "order": {"type": "integer"}
+            },
+            "additionalProperties": true
+          }
+        },
+        "fields": {
+          "type": "object",
+          "description": "按 JSON Pointer 索引的表单字段元数据",
+          "additionalProperties": {
+            "type": "object",
+            "properties": {
+              "title": {"type": "string"},
+              "description": {"type": "string"},
+              "group": {"type": "string"},
+              "order": {"type": "integer"},
+              "advanced": {"type": "boolean"},
+              "sensitive": {"type": "boolean"},
+              "readOnly": {"type": "boolean"},
+              "computed": {"type": "boolean"},
+              "default": {},
+              "enum": {"type": "array"},
+              "visibleWhen": {"type": "object", "additionalProperties": true},
+              "items": {"type": "object", "additionalProperties": true}
+            },
+            "additionalProperties": true
+          }
+        }
+      },
+      "additionalProperties": true
+    },
     "package_hash": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
     "semantic_hash": {"type": "string", "pattern": "^[0-9a-f]{64}$"}
   }

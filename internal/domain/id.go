@@ -31,6 +31,12 @@ const (
 	IDControlBackup     IDKind = "bkp"
 	IDControlRestore    IDKind = "rst"
 	IDStructureDecision IDKind = "swd"
+	IDRulePackage       IDKind = "rpack"
+	IDRuleDraft         IDKind = "rdraft"
+	IDRuleParameter     IDKind = "rparam"
+	IDRuleTestCase      IDKind = "rtest"
+	IDRuleExample       IDKind = "rexample"
+	IDRuleAudit         IDKind = "raudit"
 )
 
 var validIDKinds = map[IDKind]struct{}{
@@ -39,6 +45,7 @@ var validIDKinds = map[IDKind]struct{}{
 	IDQueryPublication: {}, IDSession: {},
 	IDCatalogRevision: {}, IDOverlayRevision: {}, IDWorkBinding: {}, IDCreatorBinding: {}, IDMediaBinding: {}, IDBindingIssue: {},
 	IDCreatorMerge: {}, IDControlBackup: {}, IDControlRestore: {}, IDStructureDecision: {},
+	IDRulePackage: {}, IDRuleDraft: {}, IDRuleParameter: {}, IDRuleTestCase: {}, IDRuleExample: {}, IDRuleAudit: {},
 }
 
 // ID 是带类型前缀的 UUIDv7。零值不是合法领域 ID。
