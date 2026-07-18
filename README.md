@@ -54,6 +54,8 @@ Gallery（画廊，代码代号 `gallery`）是面向个人及可信局域网的
 11. 通过 `GET /creators` 与 `/creators/{creatorId}` 核对创作者证据，用 `POST /creators/merges` 合并、`DELETE /creators/merges/{mergeId}` 撤销，并按返回的 `projectionJobId` 观察查询投影更新；
 12. 通过 `GET /binding-issues` 与 `/binding-issues/{issueId}` 查看绑定歧义与候选证据，用 `/binding-issues/{issueId}/resolve|dismiss|reopen` 或 `/binding-actions/unbind-work|unbind-media|undo-unbind` 修复后重扫；通过 `GET /orphan-candidates` 查看到达保留窗口的孤立候选，用 `/orphan-candidates/{bindingId}/decide` 决定保留、延长、确认孤立或解绑；服务重启后复用未吊销 Session，并重新读取 Job、publication 和媒体 snapshot。
 
+阶段 3 的任务执行已完成 Correctness 修正：retry 在同一 Job ID 下增加 Attempt，队列满保持持久 `queued` 并由周期恢复重提；Hash completed 结果只在同一父 Scan 内复用；Watcher 默认采用五分钟低频 polling fallback 并动态管理 Source。维护空间预算由服务端给出，外部工具或 DerivedAsset resolver 未配置时会在创建 Job 前返回稳定不可用错误，因此当前不宣称已接入正式 ffmpeg 或完整变换集合。
+
 仓库内的完整生成客户端验收见 `internal/bootstrap` 与 `internal/transport/httpapi` 测试；合成输入位于 `tests/fixtures/walking-skeleton`。
 
 ## 开发环境

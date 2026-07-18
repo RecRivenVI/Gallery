@@ -90,7 +90,7 @@ startup: reconcile publications ↔ jobs
 | 活动 revision 完整，后处理失败 | Catalog 保持 completed；创建独立可重试 DerivedAsset Job |
 | 外部搜索投影落后 | 标记 `search_pending`；v1 同库 FTS 不应出现此状态 |
 
-重试创建新的 Job/attempt，保留 `retry_of`；幂等键防止同一 Source/目标重复并发执行，但不复用失败 Job 的身份。
+Job 是逻辑任务，Attempt 是该 Job 的一次实际执行。重试保持原 Job ID、增加 attempt number、保留全部历史 Attempt，并沿用请求、幂等身份和规则快照；`retry_of` 只保留为 v18 及更早子 Job 的兼容来源字段，新重试不再创建子 Job。只有 retryable 终态可重试，取消、完成和超过最大次数的 Job 不会自动重试。
 
 ## 取消、崩溃和离线
 
@@ -104,7 +104,7 @@ startup: reconcile publications ↔ jobs
 ## 增量与 Watcher
 
 - Watcher 事件只是“可能变化”的提示，不是事实源；事件丢失必须由周期校验扫描收敛。
-- 当前平台 adapter 提供只读 polling Watcher；它只更新 Source dirty/overflow 状态，不直接发布 Catalog。周期收敛负责在线/离线、失败重试、重复扫描抑制和当前 Job 关联，真实 OS watcher 与网络挂载行为另按平台门禁验证。
+- 当前平台 adapter 提供只读 polling Watcher fallback，正式 bootstrap 默认周期为五分钟而非高频全树遍历；Watcher Manager 动态发现新增、删除和根变更 Source，channel 关闭或错误时标记 dirty/unavailable 并退避重启。它只更新 Source dirty/overflow 状态，不直接发布 Catalog；周期收敛负责在线/离线、事件丢失、失败重试、重复扫描抑制和当前 Job 关联，真实 OS watcher 与网络挂载行为另按平台门禁验证。
 - 增量扫描可复用未变化 Source 分区或候选，但最终仍发布完整查询 revision。
 - 目录签名精度必须到规则可观察的容器层；规则、metadata 或内容身份变化必须使相关候选失效。
 - SourceRuleBinding 的 RuleVersion 或影响索引的参数变化必须经过 RuleImpact 决定重扫范围，不能靠 UI 猜测。
@@ -122,7 +122,7 @@ startup: reconcile publications ↔ jobs
 - 规则扫描必须额外冻结 `RuleVersion.semantic_hash`、规范化参数和 `parameter_hash`、`rule_ir_hash`、compiler version、CEL Profile version、extension registry version；重试和恢复只复用该快照，不重新读取当前 SourceRuleBinding；
 - 不含敏感绝对路径或 metadata 值的诊断摘要。
 
-扫描、完整哈希、Overlay、DerivedAsset、外部工具和维护必须使用不同有界池；优先级和并发上限属于运行配置，不进入规则表达式。完整 Hash Job 只有在前后身份复核成功后才返回 ContentBlob，Source 扫描在此之前不发布受影响候选。
+扫描、完整哈希、Overlay、DerivedAsset、外部工具和维护必须使用不同有界池；提交队列满时必须立即返回、清除内存 inflight 标记并让持久 Job 保持 queued，由低频 reconciliation 重提。中央恢复器周期回收过期 running Attempt，按持久 retry policy 和 `next_attempt_at` 在同一 Job 下建立新 Attempt，并覆盖所有任务类型。优先级、并发上限、租约和退避常量属于运行配置，不进入规则表达式。完整 Hash Job 只有在前后身份复核成功后才返回 ContentBlob，Source 扫描在此之前不发布受影响候选。
 
 ## revision 保留与 GC
 
@@ -130,7 +130,7 @@ startup: reconcile publications ↔ jobs
 - 有效游标签发短期租约，租约绑定 `query_publication_id` 并保留其完整 revision 元组；
 - 达到最大保留时间或空间门槛后，旧游标返回 `CURSOR_EXPIRED`，不得无限保留快照；
 - GC 先确认无 publication/租约引用，再删除候选和旧 Catalog/Overlay projection revision；
-- VACUUM 是显式维护任务，必须可取消或安排维护窗口，不能包含在发布路径；GC 具备 active Job candidate 保护、dry-run 和空间预检，维护任务与扫描/哈希使用独立资源池。
+- VACUUM 是显式维护任务，必须可取消或安排维护窗口，不能包含在发布路径；GC 具备 active Job candidate 保护、dry-run 和由服务端按操作生成的保守空间预检。VACUUM、checkpoint、GC 与 Catalog publication 使用显式进程内维护锁，不以 SQLite 最终锁冲突代替编排；control restore 只在下次启动、持有 AppDirs 单写者锁且打开数据库之前执行。
 
 ## 验收指标
 
