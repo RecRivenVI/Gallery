@@ -119,6 +119,108 @@ func TestScanJobPersistsRuleExecutionSnapshot(t *testing.T) {
 	}
 }
 
+func TestJobAttemptCancellationRetryAndMonotonicProgress(t *testing.T) {
+	dirs := appdirs.UnderRoot(filepath.Join(t.TempDir(), "app"))
+	if err := dirs.Ensure(filesystem.OS{}); err != nil {
+		t.Fatal(err)
+	}
+	store, err := storage.Open(context.Background(), dirs)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	now := clock.Fixed{Time: time.Date(2026, 7, 18, 1, 0, 0, 0, time.UTC)}
+	ids := identity.NewGenerator(now)
+	resources, err := application.NewResources(store.Control.SQL(), dirs, filesystem.OS{}, now, ids)
+	if err != nil {
+		t.Fatal(err)
+	}
+	library, err := resources.CreateLibrary(context.Background(), "job-attempt")
+	if err != nil {
+		t.Fatal(err)
+	}
+	source, err := createSourceForAttemptTest(t, resources, library.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	jobStore, err := jobs.NewStore(store.Control.SQL(), now, ids)
+	if err != nil {
+		t.Fatal(err)
+	}
+	job, err := jobStore.CreateScanWithOptions(context.Background(), source, "owner", "", nil, jobs.CreateOptions{MaxRetries: 2})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := jobStore.Start(context.Background(), job.ID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := jobStore.ProgressDetailed(context.Background(), job.ID, jobs.ProgressUpdate{Stage: "hashing", Current: 8, Total: 10, Bytes: 80, Unit: "bytes"}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := jobStore.ProgressDetailed(context.Background(), job.ID, jobs.ProgressUpdate{Stage: "hashing", Current: 7, Total: 10, Bytes: 70, Unit: "bytes"}); err == nil {
+		t.Fatal("进度回退未被拒绝")
+	} else {
+		var structured *fault.Error
+		if !errors.As(err, &structured) || structured.Code != fault.CodeJobProgressRegression {
+			t.Fatalf("进度回退错误码错误: %v", err)
+		}
+	}
+	cancelling, err := jobStore.RequestCancel(context.Background(), job.ID)
+	if err != nil || cancelling.Status != jobs.StatusCancelling {
+		t.Fatalf("运行中 Job 未进入 cancelling: %+v %v", cancelling, err)
+	}
+	cancelled, err := jobStore.FinalizeCancelled(context.Background(), job.ID)
+	if err != nil || cancelled.Status != jobs.StatusCancelled {
+		t.Fatalf("取消终态未收敛: %+v %v", cancelled, err)
+	}
+	attempts, err := jobStore.ListAttempts(context.Background(), job.ID)
+	if err != nil || len(attempts) != 1 || attempts[0].Status != "cancelled" {
+		t.Fatalf("取消 attempt 未落库: %+v %v", attempts, err)
+	}
+	retry, err := jobStore.Retry(context.Background(), job.ID, "owner")
+	if err != nil || retry.RetryOf != job.ID || retry.Attempt != 2 {
+		t.Fatalf("重试 attempt 错误: %+v %v", retry, err)
+	}
+}
+
+func TestMaintenanceJobHasOneActiveInstancePerType(t *testing.T) {
+	dirs := appdirs.UnderRoot(filepath.Join(t.TempDir(), "app"))
+	if err := dirs.Ensure(filesystem.OS{}); err != nil {
+		t.Fatal(err)
+	}
+	store, err := storage.Open(context.Background(), dirs)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	now := clock.Fixed{Time: time.Date(2026, 7, 18, 2, 0, 0, 0, time.UTC)}
+	jobStore, err := jobs.NewStore(store.Control.SQL(), now, identity.NewGenerator(now))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := jobStore.CreateMaintenance(context.Background(), "catalog_gc", "owner"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := jobStore.CreateMaintenance(context.Background(), "catalog_gc", "owner"); err == nil {
+		t.Fatal("同类维护 Job 未被单活跃约束拒绝")
+	} else {
+		var structured *fault.Error
+		if !errors.As(err, &structured) || structured.Code != fault.CodeJobStateConflict {
+			t.Fatalf("维护 Job 冲突错误码错误: %v", err)
+		}
+	}
+}
+
+func createSourceForAttemptTest(t *testing.T, resources *application.Resources, libraryID string) (string, error) {
+	t.Helper()
+	root := filepath.Join(t.TempDir(), "source")
+	if err := (filesystem.OS{}).MkdirAll(root, 0o700); err != nil {
+		return "", err
+	}
+	source, err := resources.CreateSource(context.Background(), libraryID, "source", root)
+	return source.ID, err
+}
+
 func createSource(t *testing.T, resources *application.Resources, libraryID string) string {
 	t.Helper()
 	root := filepath.Join(t.TempDir(), "source")
