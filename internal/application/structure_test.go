@@ -2,6 +2,8 @@ package application_test
 
 import (
 	"errors"
+	"os"
+	"path/filepath"
 	"testing"
 
 	"github.com/RecRivenVI/gallery/internal/application"
@@ -395,5 +397,98 @@ func TestStructureDecisionUndoConflictAfterRescan(t *testing.T) {
 	_, err = f.resources.UndoSourceStructureDecision(f.ctx, decision.DecisionID, "owner", decision.Version)
 	if err == nil || asStructured(t, err).Code != fault.CodeConflict {
 		t.Fatalf("已消费决策撤销应冲突: %v", err)
+	}
+}
+
+// secondSource 在同一 Library 下创建第二个只读 Source，用于多 Source 隔离测试。
+func (f *issueFixture) secondSource(t *testing.T) application.Source {
+	t.Helper()
+	root := filepath.Join(t.TempDir(), "source2")
+	if err := os.MkdirAll(root, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	src, err := f.resources.CreateSource(f.ctx, f.libraryID, "source2", root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return src
+}
+
+func (f *issueFixture) activeWorkIDIn(t *testing.T, sourceID, sourceKey string) string {
+	t.Helper()
+	var workID string
+	if err := f.control.QueryRowContext(f.ctx, `SELECT work_id FROM work_bindings
+WHERE source_id=? AND source_key=? AND status='active'`, sourceID, sourceKey).Scan(&workID); err != nil {
+		return ""
+	}
+	return workID
+}
+
+// TestSplitIsolatedAcrossSources 确认一个 Source 的拆分不影响另一个 Source 相同 source_key/blob 的 Binding。
+func TestSplitIsolatedAcrossSources(t *testing.T) {
+	f := newIssueFixture(t)
+	src2 := f.secondSource(t)
+	// 两个 Source 各有一个使用相同 source_key 与 digest 的作品。
+	seed := []application.DiscoveredWork{work("wkA", "作品甲", blob("wkA/m1", "d1", 0), blob("wkA/m2", "d2", 1), blob("wkA/m3", "d3", 2))}
+	if _, err := f.resources.EnsureCanonical(f.ctx, f.source.ID, seed); err != nil {
+		t.Fatalf("source1 scan1: %v", err)
+	}
+	if _, err := f.resources.EnsureCanonical(f.ctx, src2.ID, seed); err != nil {
+		t.Fatalf("source2 scan1: %v", err)
+	}
+	src2Work := f.activeWorkIDIn(t, src2.ID, "wkA")
+
+	// 仅在 source1 触发拆分并阻塞；source2 不应产生任何 issue。
+	split := []application.DiscoveredWork{
+		work("wkA1", "作品甲一", blob("wkA1/m1", "d1", 0), blob("wkA1/m2", "d2", 1)),
+		work("wkA2", "作品甲二", blob("wkA2/m3", "d3", 0)),
+	}
+	if _, err := f.resources.EnsureCanonical(f.ctx, f.source.ID, split); err == nil {
+		t.Fatal("source1 拆分应阻塞")
+	}
+	src2Issues, err := f.resources.ListBindingIssues(f.ctx, application.BindingIssueFilter{SourceID: src2.ID, Status: "open"}, "", 50)
+	if err != nil || len(src2Issues.Items) != 0 {
+		t.Fatalf("source2 不应受影响: %+v %v", src2Issues.Items, err)
+	}
+	// source2 的 wkA 绑定保持 active 且指向原 CanonicalWork。
+	if got := f.activeWorkIDIn(t, src2.ID, "wkA"); got != src2Work {
+		t.Fatalf("source2 Binding 被 source1 拆分影响: got=%s want=%s", got, src2Work)
+	}
+}
+
+// TestSplitThenMergeSequence 验证拆分后再对拆分出的两个 SourceWork 做合并的连续结构变化。
+func TestSplitThenMergeSequence(t *testing.T) {
+	f := newIssueFixture(t)
+	issue, origin, split := f.seedSplit(t)
+	if _, err := f.resources.ResolveSourceStructureIssue(f.ctx, issue.ID, "owner", "split_inherit", "wkA1", "", issue.Version); err != nil {
+		t.Fatalf("拆分决策: %v", err)
+	}
+	if _, err := f.resources.EnsureCanonical(f.ctx, f.source.ID, split); err != nil {
+		t.Fatalf("拆分重扫: %v", err)
+	}
+	y := f.activeWorkID(t, "wkA2")
+	if y == "" || y == origin {
+		t.Fatalf("拆分未生成新作品: y=%s origin=%s", y, origin)
+	}
+	// 再合并：wkA1、wkA2 消失，媒体汇聚到 wkM。
+	merge := []application.DiscoveredWork{
+		work("wkM", "再合并", blob("wkM/m1", "d1", 0), blob("wkM/m2", "d2", 1), blob("wkM/m3", "d3", 2)),
+	}
+	if _, err := f.resources.EnsureCanonical(f.ctx, f.source.ID, merge); err == nil {
+		t.Fatal("后续合并应阻塞")
+	}
+	open := f.openIssues(t)
+	if len(open) != 1 || open[0].Code != "SOURCE_WORK_MERGE_REVIEW_REQUIRED" {
+		t.Fatalf("未产生合并审查 issue: %+v", open)
+	}
+	// 绑定到拆分继承作品 X。
+	if _, err := f.resources.ResolveSourceStructureIssue(f.ctx, open[0].ID, "owner", "merge_bind_existing", "", origin, open[0].Version); err != nil {
+		t.Fatalf("合并决策: %v", err)
+	}
+	if _, err := f.resources.EnsureCanonical(f.ctx, f.source.ID, merge); err != nil {
+		t.Fatalf("合并重扫: %v", err)
+	}
+	if got := f.activeWorkID(t, "wkM"); got != origin {
+		t.Fatalf("合并后 wkM 未绑定 X: got=%s origin=%s", got, origin)
 	}
 }
