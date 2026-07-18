@@ -26,6 +26,7 @@ import (
 	"github.com/RecRivenVI/gallery/internal/platform/filesystem"
 	"github.com/RecRivenVI/gallery/internal/platform/identity"
 	galleryquery "github.com/RecRivenVI/gallery/internal/query"
+	recoveryservice "github.com/RecRivenVI/gallery/internal/recovery"
 	"github.com/RecRivenVI/gallery/internal/scanner"
 	"github.com/RecRivenVI/gallery/internal/storage"
 )
@@ -71,6 +72,21 @@ func TestRealProcessKillpointMatrix(t *testing.T) {
 				t.Fatal(err)
 			}
 			if err := runtime.overlay.Reconcile(context.Background()); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := runtime.store.Control.SQL().Exec(`UPDATE job_attempts
+SET heartbeat_at=?, lease_expires_at=? WHERE status='running'`,
+				recoveryClock.Now().Add(-10*time.Minute).Unix(), recoveryClock.Now().Add(-time.Minute).Unix()); err != nil {
+				t.Fatal(err)
+			}
+			reconciler, err := recoveryservice.New(runtime.jobs, runtimeSubmitter{runtime: runtime}, time.Hour, time.Minute)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := reconciler.ReconcileOnce(context.Background()); err != nil {
+				t.Fatal(err)
+			}
+			if err := runtime.scanner.Reconcile(context.Background()); err != nil {
 				t.Fatal(err)
 			}
 			runtime.scanner.Wait()
@@ -237,6 +253,20 @@ type runtimeServices struct {
 	overlay   *overlay.Service
 	derived   *derived.Service
 	source    application.Source
+}
+
+type runtimeSubmitter struct{ runtime *runtimeServices }
+
+func (s runtimeSubmitter) Submit(class, jobID string) bool {
+	switch class {
+	case jobs.ResourceScan:
+		_ = s.runtime.scanner.Execute(context.Background(), jobID)
+	case jobs.ResourceOverlay:
+		_ = s.runtime.overlay.Execute(context.Background(), jobID)
+	default:
+		return false
+	}
+	return true
 }
 
 func openRuntime(t *testing.T, root string) *runtimeServices {

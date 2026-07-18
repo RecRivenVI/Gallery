@@ -30,7 +30,7 @@ func openTestStore(t *testing.T) (*Store, appdirs.Dirs) {
 
 func TestIndependentWALMigrationsAndBackup(t *testing.T) {
 	store, dirs := openTestStore(t)
-	wantVersions := map[Role]int{RoleControl: 18, RoleCatalog: 7}
+	wantVersions := map[Role]int{RoleControl: 19, RoleCatalog: 7}
 	for _, database := range []*Database{store.Control, store.Catalog} {
 		var version int
 		if err := database.db.QueryRow("PRAGMA user_version").Scan(&version); err != nil {
@@ -261,7 +261,7 @@ VALUES ('decision_existing', 'issue_existing', 'src_existing', 'split', 'split_c
 	if err := upgraded.db.QueryRowContext(ctx, "PRAGMA user_version").Scan(&version); err != nil {
 		t.Fatal(err)
 	}
-	if version != 18 {
+	if version != 19 {
 		t.Fatalf("v15 数据升级后的 user_version = %d", version)
 	}
 	var issueFingerprint, decisionFingerprint string
@@ -283,6 +283,60 @@ WHERE freeze_phase='phase1'`).Scan(&freezeCount); err != nil {
 	}
 	if freezeCount != 17 {
 		t.Fatalf("v16 未登记完整阶段 1 冻结项: %d", freezeCount)
+	}
+}
+
+func TestStage3CorrectnessMigrationPreservesV18RetryChildren(t *testing.T) {
+	ctx := context.Background()
+	path := filepath.Join(t.TempDir(), "control.db")
+	db, err := sql.Open("sqlite", "file:"+filepath.ToSlash(path)+"?_pragma=foreign_keys(ON)")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.ExecContext(ctx, `CREATE TABLE gallery_schema_migrations (
+version INTEGER PRIMARY KEY NOT NULL, name TEXT NOT NULL, sha256 TEXT NOT NULL,
+applied_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))) STRICT`); err != nil {
+		t.Fatal(err)
+	}
+	sub, _ := fs.Sub(migrationFiles, "migrations/control")
+	migrations, _ := readMigrations(sub)
+	for _, item := range migrations[:18] {
+		if err := applyMigration(ctx, db, item); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, err := db.ExecContext(ctx, `INSERT INTO jobs
+(job_id, job_type, source_id, created_by, status, stage, issue_code, retry_of,
+ progress_sequence, attempt, resource_class, max_retries, failure_retryable, created_at, updated_at)
+VALUES
+('job_00000000-0000-7000-8000-000000000001', 'hash', NULL, 'owner', 'failed', 'failed', 'OLD_FAILURE', NULL,
+ 1, 1, 'hash', 2, 1, 1, 1),
+('job_00000000-0000-7000-8000-000000000002', 'hash', NULL, 'owner', 'completed', 'completed', NULL,
+ 'job_00000000-0000-7000-8000-000000000001', 2, 1, 'hash', 2, 0, 2, 2)`); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Close(); err != nil {
+		t.Fatal(err)
+	}
+	upgraded, err := openDatabase(ctx, RoleControl, path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer upgraded.Close()
+	var retryOf string
+	if err := upgraded.db.QueryRowContext(ctx, `SELECT retry_of FROM jobs
+WHERE job_id='job_00000000-0000-7000-8000-000000000002'`).Scan(&retryOf); err != nil {
+		t.Fatal(err)
+	}
+	if retryOf != "job_00000000-0000-7000-8000-000000000001" {
+		t.Fatalf("v18 retry 子 Job 来源丢失: %q", retryOf)
+	}
+	var attempts int
+	if err := upgraded.db.QueryRowContext(ctx, "SELECT count(*) FROM job_attempts").Scan(&attempts); err != nil {
+		t.Fatal(err)
+	}
+	if attempts != 2 {
+		t.Fatalf("v19 未为既有 Job 补齐可解释 Attempt: %d", attempts)
 	}
 }
 

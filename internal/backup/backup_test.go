@@ -104,7 +104,7 @@ func TestBackupProducesConsistentRestorableCopy(t *testing.T) {
 	if manifest.Role != string(storage.RoleControl) || manifest.ManifestVersion != backup.ManifestVersion {
 		t.Fatalf("manifest 基本字段错误: %+v", manifest)
 	}
-	if manifest.SchemaVersion != 18 {
+	if manifest.SchemaVersion != 19 {
 		t.Fatalf("manifest schemaVersion = %d，应等于 control 最高 migration", manifest.SchemaVersion)
 	}
 	if manifest.Database.ChecksumAlgorithm != "sha256" || manifest.Database.FileName != "control.db" {
@@ -223,15 +223,20 @@ func TestCancelledContextPublishesNoBackupAndKeepsControl(t *testing.T) {
 	}
 }
 
-func TestReconcileFailsInterruptedBackupAndGCsStaging(t *testing.T) {
+func TestReconcileLeavesUnexpiredBackupForCentralLeaseRecovery(t *testing.T) {
 	h := newHarness(t)
 	if _, err := h.store.Control.SQL().Exec(`INSERT INTO jobs
 (job_id, job_type, source_id, created_by, status, stage, progress_sequence, attempt, created_at, updated_at)
 VALUES ('job_00000000-0000-7000-8000-000000000001', 'control_backup', NULL, 'personal-owner', 'running', 'copying', 1, 1, 1, 1)`); err != nil {
 		t.Fatal(err)
 	}
-	staging := filepath.Join(h.dirs.State, "backups", ".staging-leftover")
-	if err := os.MkdirAll(staging, 0o700); err != nil {
+	activeStaging := filepath.Join(h.dirs.State, "backups",
+		".staging-job_00000000-0000-7000-8000-000000000001--bkp_00000000-0000-7000-8000-000000000001")
+	orphanStaging := filepath.Join(h.dirs.State, "backups", ".staging-leftover")
+	if err := os.MkdirAll(activeStaging, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(orphanStaging, 0o700); err != nil {
 		t.Fatal(err)
 	}
 	if err := h.svc.Reconcile(context.Background()); err != nil {
@@ -241,10 +246,13 @@ VALUES ('job_00000000-0000-7000-8000-000000000001', 'control_backup', NULL, 'per
 	if err != nil {
 		t.Fatal(err)
 	}
-	if job.Status != jobs.StatusFailed || job.IssueCode != string(fault.CodeProcessInterrupted) {
-		t.Fatalf("中断备份未标记失败: %+v", job)
+	if job.Status != jobs.StatusRunning {
+		t.Fatalf("尚未过期的备份 Attempt 被提前判死: %+v", job)
 	}
-	if _, err := os.Stat(staging); !errors.Is(err, os.ErrNotExist) {
+	if _, err := os.Stat(activeStaging); err != nil {
+		t.Fatalf("Reconcile 删除了活动备份 staging: %v", err)
+	}
+	if _, err := os.Stat(orphanStaging); !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("Reconcile 未清理遗留 staging 目录: %v", err)
 	}
 }

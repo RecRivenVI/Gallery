@@ -15,6 +15,8 @@ func AllCodes() []Code {
 		CodeNotFound, CodeConflict, CodeAppDirsOverlap, CodeSourceRootsOverlap, CodeDatabaseOpen,
 		CodeMigrationFailed, CodeBackupFailed, CodeCursorInvalid, CodeCursorExpired,
 		CodeRuleSchemaInvalid, CodeRuleEval, CodeCatalogPublicationAbsent,
+		CodeDerivedAssetInvalid, CodeDerivedAssetUnavailable, CodeDerivedAssetFailed,
+		CodeExternalToolUnavailable, CodeExternalToolFailed,
 		CodeContentChangedDuringHash, CodeMediaOffline, CodeHostRejected, CodeOriginRejected,
 		CodeCSRFInvalid, CodePairingInvalid, CodePairingExpired, CodeSourcePathInvalid,
 		CodeRuleParameterInvalid, CodeRuleDraftConflict, CodeRulePackageConflict,

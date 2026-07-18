@@ -184,6 +184,44 @@ func TestSchedulerShutdownCancelsAndRejects(t *testing.T) {
 	}
 }
 
+func TestSchedulerQueueFullReturnsImmediatelyAndClearsInflight(t *testing.T) {
+	scheduler := jobs.NewScheduler(context.Background())
+	defer scheduler.Shutdown()
+	started := make(chan struct{})
+	release := make(chan struct{})
+	defer close(release)
+	scheduler.Register("scan", 1, func(ctx context.Context, jobID string) error {
+		if jobID == "running" {
+			close(started)
+		}
+		<-release
+		return nil
+	})
+	if !scheduler.Submit("scan", "running") {
+		t.Fatal("首个 Job 未入队")
+	}
+	<-started
+	// limit=1 的队列容量为 64；worker 被 running 占用后填满队列。
+	for i := 0; i < 64; i++ {
+		if !scheduler.Submit("scan", "queued-"+jobName(i)) {
+			t.Fatalf("第 %d 个排队 Job 未入队", i)
+		}
+	}
+	returned := make(chan bool, 1)
+	go func() { returned <- scheduler.Submit("scan", "retry-later") }()
+	select {
+	case submitted := <-returned:
+		if submitted {
+			t.Fatal("队列已满仍报告提交成功")
+		}
+	case <-time.After(250 * time.Millisecond):
+		t.Fatal("队列满时 Submit 阻塞")
+	}
+	if scheduler.Running("retry-later") {
+		t.Fatal("队列满后 inflight 标记未清理")
+	}
+}
+
 func jobName(i int) string {
 	return "job-" + string(rune('a'+i))
 }

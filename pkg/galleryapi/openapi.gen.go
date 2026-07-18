@@ -358,8 +358,10 @@ const (
 	DATABASEOPENFAILED            ErrorCode = "DATABASE_OPEN_FAILED"
 	DERIVEDASSETFAILED            ErrorCode = "DERIVED_ASSET_FAILED"
 	DERIVEDASSETINVALID           ErrorCode = "DERIVED_ASSET_INVALID"
+	DERIVEDASSETUNAVAILABLE       ErrorCode = "DERIVED_ASSET_UNAVAILABLE"
 	DISKSPACEINSUFFICIENT         ErrorCode = "DISK_SPACE_INSUFFICIENT"
 	EXTERNALTOOLFAILED            ErrorCode = "EXTERNAL_TOOL_FAILED"
+	EXTERNALTOOLUNAVAILABLE       ErrorCode = "EXTERNAL_TOOL_UNAVAILABLE"
 	FORBIDDEN                     ErrorCode = "FORBIDDEN"
 	HOSTREJECTED                  ErrorCode = "HOST_REJECTED"
 	INTERNALERROR                 ErrorCode = "INTERNAL_ERROR"
@@ -451,9 +453,13 @@ func (e ErrorCode) Valid() bool {
 		return true
 	case DERIVEDASSETINVALID:
 		return true
+	case DERIVEDASSETUNAVAILABLE:
+		return true
 	case DISKSPACEINSUFFICIENT:
 		return true
 	case EXTERNALTOOLFAILED:
+		return true
+	case EXTERNALTOOLUNAVAILABLE:
 		return true
 	case FORBIDDEN:
 		return true
@@ -657,43 +663,43 @@ func (e JobStatus) Valid() bool {
 
 // Defines values for JobType.
 const (
-	CatalogCheckpoint JobType = "catalog_checkpoint"
-	CatalogGc         JobType = "catalog_gc"
-	CatalogVacuum     JobType = "catalog_vacuum"
-	ControlBackup     JobType = "control_backup"
-	ControlRestore    JobType = "control_restore"
-	Derived           JobType = "derived"
-	DerivedGc         JobType = "derived_gc"
-	ExternalTool      JobType = "external_tool"
-	Hash              JobType = "hash"
-	OverlayProjection JobType = "overlay_projection"
-	Scan              JobType = "scan"
+	JobTypeCatalogCheckpoint JobType = "catalog_checkpoint"
+	JobTypeCatalogGc         JobType = "catalog_gc"
+	JobTypeCatalogVacuum     JobType = "catalog_vacuum"
+	JobTypeControlBackup     JobType = "control_backup"
+	JobTypeControlRestore    JobType = "control_restore"
+	JobTypeDerived           JobType = "derived"
+	JobTypeDerivedGc         JobType = "derived_gc"
+	JobTypeExternalTool      JobType = "external_tool"
+	JobTypeHash              JobType = "hash"
+	JobTypeOverlayProjection JobType = "overlay_projection"
+	JobTypeScan              JobType = "scan"
 )
 
 // Valid indicates whether the value is a known member of the JobType enum.
 func (e JobType) Valid() bool {
 	switch e {
-	case CatalogCheckpoint:
+	case JobTypeCatalogCheckpoint:
 		return true
-	case CatalogGc:
+	case JobTypeCatalogGc:
 		return true
-	case CatalogVacuum:
+	case JobTypeCatalogVacuum:
 		return true
-	case ControlBackup:
+	case JobTypeControlBackup:
 		return true
-	case ControlRestore:
+	case JobTypeControlRestore:
 		return true
-	case Derived:
+	case JobTypeDerived:
 		return true
-	case DerivedGc:
+	case JobTypeDerivedGc:
 		return true
-	case ExternalTool:
+	case JobTypeExternalTool:
 		return true
-	case Hash:
+	case JobTypeHash:
 		return true
-	case OverlayProjection:
+	case JobTypeOverlayProjection:
 		return true
-	case Scan:
+	case JobTypeScan:
 		return true
 	default:
 		return false
@@ -1255,6 +1261,36 @@ func (e SourceStructureDecisionRequestAction) Valid() bool {
 	}
 }
 
+// Defines values for SpaceEstimateOperation.
+const (
+	SpaceEstimateOperationCatalogCheckpoint SpaceEstimateOperation = "catalog_checkpoint"
+	SpaceEstimateOperationCatalogGc         SpaceEstimateOperation = "catalog_gc"
+	SpaceEstimateOperationCatalogStaging    SpaceEstimateOperation = "catalog_staging"
+	SpaceEstimateOperationCatalogVacuum     SpaceEstimateOperation = "catalog_vacuum"
+	SpaceEstimateOperationControlBackup     SpaceEstimateOperation = "control_backup"
+	SpaceEstimateOperationDerivedGc         SpaceEstimateOperation = "derived_gc"
+)
+
+// Valid indicates whether the value is a known member of the SpaceEstimateOperation enum.
+func (e SpaceEstimateOperation) Valid() bool {
+	switch e {
+	case SpaceEstimateOperationCatalogCheckpoint:
+		return true
+	case SpaceEstimateOperationCatalogGc:
+		return true
+	case SpaceEstimateOperationCatalogStaging:
+		return true
+	case SpaceEstimateOperationCatalogVacuum:
+		return true
+	case SpaceEstimateOperationControlBackup:
+		return true
+	case SpaceEstimateOperationDerivedGc:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for WorkListResponseSortProtocolVersion.
 const (
 	WorkListResponseSortProtocolVersionN1 WorkListResponseSortProtocolVersion = 1
@@ -1745,6 +1781,7 @@ type Job struct {
 	FinishedAt               *time.Time `json:"finishedAt,omitempty"`
 	Id                       JobId      `json:"id"`
 	IssueCode                *string    `json:"issueCode,omitempty"`
+	NextAttemptAt            *time.Time `json:"nextAttemptAt,omitempty"`
 	Progress                 struct {
 		Bytes     *int64  `json:"bytes,omitempty"`
 		Current   int64   `json:"current"`
@@ -1758,17 +1795,19 @@ type Job struct {
 	} `json:"progress"`
 	QueryPublicationId *QueryPublicationId `json:"queryPublicationId,omitempty"`
 	ResourceClass      *string             `json:"resourceClass,omitempty"`
-	RetryOf            *JobId              `json:"retryOf,omitempty"`
-	RuleIrHash         *SHA256Digest       `json:"ruleIrHash,omitempty"`
-	RuleParametersHash *SHA256Digest       `json:"ruleParametersHash,omitempty"`
-	RuleSemanticHash   *SHA256Digest       `json:"ruleSemanticHash,omitempty"`
-	SourceId           *SourceId           `json:"sourceId,omitempty"`
-	Stage              string              `json:"stage"`
-	StartedAt          *time.Time          `json:"startedAt,omitempty"`
-	Status             JobStatus           `json:"status"`
-	TargetResource     *string             `json:"targetResource,omitempty"`
-	Type               JobType             `json:"type"`
-	UpdatedAt          time.Time           `json:"updatedAt"`
+
+	// RetryOf v18 及更早历史子 Job 的兼容来源；新 retry 不再写入
+	RetryOf            *JobId        `json:"retryOf,omitempty"`
+	RuleIrHash         *SHA256Digest `json:"ruleIrHash,omitempty"`
+	RuleParametersHash *SHA256Digest `json:"ruleParametersHash,omitempty"`
+	RuleSemanticHash   *SHA256Digest `json:"ruleSemanticHash,omitempty"`
+	SourceId           *SourceId     `json:"sourceId,omitempty"`
+	Stage              string        `json:"stage"`
+	StartedAt          *time.Time    `json:"startedAt,omitempty"`
+	Status             JobStatus     `json:"status"`
+	TargetResource     *string       `json:"targetResource,omitempty"`
+	Type               JobType       `json:"type"`
+	UpdatedAt          time.Time     `json:"updatedAt"`
 }
 
 // JobStatus defines model for Job.Status.
@@ -1828,8 +1867,13 @@ type LibraryId = string
 // MaintenanceGCRequest defines model for MaintenanceGCRequest.
 type MaintenanceGCRequest struct {
 	DryRun           *bool  `json:"dryRun,omitempty"`
-	RequiredBytes    *int64 `json:"requiredBytes,omitempty"`
 	RetentionSeconds *int64 `json:"retentionSeconds,omitempty"`
+}
+
+// MaintenanceJobResponse defines model for MaintenanceJobResponse.
+type MaintenanceJobResponse struct {
+	Job           Job           `json:"job"`
+	SpaceEstimate SpaceEstimate `json:"spaceEstimate"`
 }
 
 // MediaListResponse defines model for MediaListResponse.
@@ -2408,6 +2452,18 @@ type SourceStructureDecisionRequest struct {
 
 // SourceStructureDecisionRequestAction defines model for SourceStructureDecisionRequest.Action.
 type SourceStructureDecisionRequestAction string
+
+// SpaceEstimate defines model for SpaceEstimate.
+type SpaceEstimate struct {
+	AvailableBytes int64                  `json:"availableBytes"`
+	Conservative   bool                   `json:"conservative"`
+	Operation      SpaceEstimateOperation `json:"operation"`
+	RequiredBytes  int64                  `json:"requiredBytes"`
+	Sufficient     bool                   `json:"sufficient"`
+}
+
+// SpaceEstimateOperation defines model for SpaceEstimate.Operation.
+type SpaceEstimateOperation string
 
 // WorkListResponse defines model for WorkListResponse.
 type WorkListResponse struct {
@@ -10098,7 +10154,7 @@ func (r VerifyControlRestoreResponse) ContentType() string {
 type CreateCatalogCheckpointJobResponse struct {
 	Body         []byte
 	HTTPResponse *http.Response
-	JSON202      *Job
+	JSON202      *MaintenanceJobResponse
 	JSON401      *UnauthenticatedError
 	JSON403      *ForbiddenError
 	JSON409      *ConflictError
@@ -10131,7 +10187,7 @@ func (r CreateCatalogCheckpointJobResponse) ContentType() string {
 type CreateCatalogGCJobResponse struct {
 	Body         []byte
 	HTTPResponse *http.Response
-	JSON202      *Job
+	JSON202      *MaintenanceJobResponse
 	JSON401      *UnauthenticatedError
 	JSON403      *ForbiddenError
 	JSON409      *ConflictError
@@ -10164,7 +10220,7 @@ func (r CreateCatalogGCJobResponse) ContentType() string {
 type CreateCatalogVacuumJobResponse struct {
 	Body         []byte
 	HTTPResponse *http.Response
-	JSON202      *Job
+	JSON202      *MaintenanceJobResponse
 	JSON401      *UnauthenticatedError
 	JSON403      *ForbiddenError
 	JSON409      *ConflictError
@@ -14382,7 +14438,7 @@ func ParseCreateCatalogCheckpointJobResponse(rsp *http.Response) (*CreateCatalog
 
 	switch {
 	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 202:
-		var dest Job
+		var dest MaintenanceJobResponse
 		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
 			return nil, err
 		}
@@ -14429,7 +14485,7 @@ func ParseCreateCatalogGCJobResponse(rsp *http.Response) (*CreateCatalogGCJobRes
 
 	switch {
 	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 202:
-		var dest Job
+		var dest MaintenanceJobResponse
 		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
 			return nil, err
 		}
@@ -14476,7 +14532,7 @@ func ParseCreateCatalogVacuumJobResponse(rsp *http.Response) (*CreateCatalogVacu
 
 	switch {
 	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 202:
-		var dest Job
+		var dest MaintenanceJobResponse
 		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
 			return nil, err
 		}

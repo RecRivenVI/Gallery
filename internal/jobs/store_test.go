@@ -3,7 +3,9 @@ package jobs_test
 import (
 	"context"
 	"errors"
+	"fmt"
 	"path/filepath"
+	"sync"
 	"testing"
 	"time"
 
@@ -15,8 +17,45 @@ import (
 	"github.com/RecRivenVI/gallery/internal/platform/clock"
 	"github.com/RecRivenVI/gallery/internal/platform/filesystem"
 	"github.com/RecRivenVI/gallery/internal/platform/identity"
+	"github.com/RecRivenVI/gallery/internal/recovery"
 	"github.com/RecRivenVI/gallery/internal/storage"
 )
+
+type mutableClock struct {
+	mu  sync.Mutex
+	now time.Time
+}
+
+func (c *mutableClock) Now() time.Time {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.now
+}
+
+func (c *mutableClock) Advance(value time.Duration) {
+	c.mu.Lock()
+	c.now = c.now.Add(value)
+	c.mu.Unlock()
+}
+
+type recordingSubmitter struct {
+	mu      sync.Mutex
+	accept  bool
+	records []string
+}
+
+func (s *recordingSubmitter) Submit(class, jobID string) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.records = append(s.records, class+":"+jobID)
+	return s.accept
+}
+
+func (s *recordingSubmitter) count() int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return len(s.records)
+}
 
 func TestPersistentJobTransitionsAndActiveScanConflict(t *testing.T) {
 	dirs := appdirs.UnderRoot(filepath.Join(t.TempDir(), "app"))
@@ -165,21 +204,21 @@ func TestJobAttemptCancellationRetryAndMonotonicProgress(t *testing.T) {
 			t.Fatalf("进度回退错误码错误: %v", err)
 		}
 	}
-	cancelling, err := jobStore.RequestCancel(context.Background(), job.ID)
-	if err != nil || cancelling.Status != jobs.StatusCancelling {
-		t.Fatalf("运行中 Job 未进入 cancelling: %+v %v", cancelling, err)
-	}
-	cancelled, err := jobStore.FinalizeCancelled(context.Background(), job.ID)
-	if err != nil || cancelled.Status != jobs.StatusCancelled {
-		t.Fatalf("取消终态未收敛: %+v %v", cancelled, err)
+	failed, err := jobStore.FailWithRetryable(context.Background(), job.ID, "TRANSIENT_TEST", true)
+	if err != nil || failed.Status != jobs.StatusFailed || !failed.FailureRetryable {
+		t.Fatalf("可重试失败未收敛: %+v %v", failed, err)
 	}
 	attempts, err := jobStore.ListAttempts(context.Background(), job.ID)
-	if err != nil || len(attempts) != 1 || attempts[0].Status != "cancelled" {
-		t.Fatalf("取消 attempt 未落库: %+v %v", attempts, err)
+	if err != nil || len(attempts) != 1 || attempts[0].Status != "failed" {
+		t.Fatalf("失败 attempt 未落库: %+v %v", attempts, err)
 	}
 	retry, err := jobStore.Retry(context.Background(), job.ID, "owner")
-	if err != nil || retry.RetryOf != job.ID || retry.Attempt != 2 {
+	if err != nil || retry.ID != job.ID || retry.RetryOf != "" || retry.Attempt != 2 || retry.Status != jobs.StatusQueued {
 		t.Fatalf("重试 attempt 错误: %+v %v", retry, err)
+	}
+	attempts, err = jobStore.ListAttempts(context.Background(), job.ID)
+	if err != nil || len(attempts) != 2 || attempts[0].Status != "failed" || attempts[1].Status != "queued" {
+		t.Fatalf("同一 Job 的 Attempt 历史错误: %+v %v", attempts, err)
 	}
 }
 
@@ -208,6 +247,182 @@ func TestMaintenanceJobHasOneActiveInstancePerType(t *testing.T) {
 		if !errors.As(err, &structured) || structured.Code != fault.CodeJobStateConflict {
 			t.Fatalf("维护 Job 冲突错误码错误: %v", err)
 		}
+	}
+}
+
+func TestLeaseRecoveryWaitsForExpiryAndRetriesSameJob(t *testing.T) {
+	ctx := context.Background()
+	dirs := appdirs.UnderRoot(filepath.Join(t.TempDir(), "app"))
+	if err := dirs.Ensure(filesystem.OS{}); err != nil {
+		t.Fatal(err)
+	}
+	store, err := storage.Open(ctx, dirs)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	now := &mutableClock{now: time.Date(2026, 7, 18, 3, 0, 0, 0, time.UTC)}
+	ids := identity.NewGenerator(now)
+	jobStore, err := jobs.NewStore(store.Control.SQL(), now, ids)
+	if err != nil {
+		t.Fatal(err)
+	}
+	job, err := jobStore.CreateWithOptions(ctx, "hash", "", "owner", jobs.CreateOptions{
+		ResourceClass: jobs.ResourceHash, MaxRetries: 2,
+		RetryPolicyJSON: []byte(`{"kind":"fixed","baseMs":1000,"maxMs":1000}`),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := jobStore.StartStage(ctx, job.ID, "hashing"); err != nil {
+		t.Fatal(err)
+	}
+	submitter := &recordingSubmitter{accept: true}
+	reconciler, err := recovery.New(jobStore, submitter, time.Hour, 2*time.Minute)
+	if err != nil {
+		t.Fatal(err)
+	}
+	now.Advance(time.Minute)
+	if err := reconciler.ReconcileOnce(ctx); err != nil {
+		t.Fatal(err)
+	}
+	stillRunning, _ := jobStore.Get(ctx, job.ID)
+	if stillRunning.Status != jobs.StatusRunning || submitter.count() != 0 {
+		t.Fatalf("尚未到期的 Attempt 被回收: %+v submits=%d", stillRunning, submitter.count())
+	}
+	now.Advance(2 * time.Minute)
+	if err := reconciler.ReconcileOnce(ctx); err != nil {
+		t.Fatal(err)
+	}
+	recovered, _ := jobStore.Get(ctx, job.ID)
+	if recovered.Status != jobs.StatusFailed || recovered.NextAttemptAt == nil {
+		t.Fatalf("过期 Attempt 未进入带退避的 retryable 终态: %+v", recovered)
+	}
+	attempts, _ := jobStore.ListAttempts(ctx, job.ID)
+	if len(attempts) != 1 || attempts[0].Status != "recovered" {
+		t.Fatalf("过期 Attempt 历史错误: %+v", attempts)
+	}
+	now.Advance(2 * time.Second)
+	if err := reconciler.ReconcileOnce(ctx); err != nil {
+		t.Fatal(err)
+	}
+	retried, _ := jobStore.Get(ctx, job.ID)
+	if retried.ID != job.ID || retried.Attempt != 2 || retried.Status != jobs.StatusQueued || submitter.count() != 1 {
+		t.Fatalf("同一 Job 自动重试错误: %+v submits=%d", retried, submitter.count())
+	}
+	attempts, _ = jobStore.ListAttempts(ctx, job.ID)
+	if len(attempts) != 2 || attempts[1].Status != "queued" {
+		t.Fatalf("新 Attempt 未保留历史: %+v", attempts)
+	}
+}
+
+func TestReconcilerRetriesQueuedJobAfterSchedulerRejects(t *testing.T) {
+	ctx := context.Background()
+	dirs := appdirs.UnderRoot(filepath.Join(t.TempDir(), "app"))
+	if err := dirs.Ensure(filesystem.OS{}); err != nil {
+		t.Fatal(err)
+	}
+	store, err := storage.Open(ctx, dirs)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	now := clock.Fixed{Time: time.Date(2026, 7, 18, 4, 0, 0, 0, time.UTC)}
+	jobStore, _ := jobs.NewStore(store.Control.SQL(), now, identity.NewGenerator(now))
+	job, err := jobStore.CreateWithOptions(ctx, "external_tool", "", "owner",
+		jobs.CreateOptions{ResourceClass: jobs.ResourceExternalTool})
+	if err != nil {
+		t.Fatal(err)
+	}
+	submitter := &recordingSubmitter{accept: false}
+	reconciler, _ := recovery.New(jobStore, submitter, time.Hour, time.Minute)
+	if err := reconciler.ReconcileOnce(ctx); err != nil {
+		t.Fatal(err)
+	}
+	first, _ := jobStore.Get(ctx, job.ID)
+	if first.Status != jobs.StatusQueued || submitter.count() != 1 {
+		t.Fatalf("拒绝提交后持久 Job 状态错误: %+v submits=%d", first, submitter.count())
+	}
+	submitter.accept = true
+	if err := reconciler.ReconcileOnce(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if submitter.count() != 2 {
+		t.Fatalf("后续 reconciliation 未重提 queued Job: %d", submitter.count())
+	}
+}
+
+func TestRecoverySubmitsEveryResourceClassAndSkipsCancelledJob(t *testing.T) {
+	ctx := context.Background()
+	dirs := appdirs.UnderRoot(filepath.Join(t.TempDir(), "app"))
+	if err := dirs.Ensure(filesystem.OS{}); err != nil {
+		t.Fatal(err)
+	}
+	store, _ := storage.Open(ctx, dirs)
+	defer store.Close()
+	now := clock.Fixed{Time: time.Date(2026, 7, 18, 5, 0, 0, 0, time.UTC)}
+	jobStore, _ := jobs.NewStore(store.Control.SQL(), now, identity.NewGenerator(now))
+	resources := []struct{ jobType, class string }{
+		{"scan", jobs.ResourceScan}, {"hash", jobs.ResourceHash}, {"overlay_projection", jobs.ResourceOverlay},
+		{"derived_asset", jobs.ResourceDerived}, {"external_tool", jobs.ResourceExternalTool},
+		{"catalog_gc", jobs.ResourceMaintenance}, {"control_backup", jobs.ResourceMaintenance},
+	}
+	for index, resource := range resources {
+		if _, err := jobStore.CreateWithOptions(ctx, fmt.Sprintf("%s_%d", resource.jobType, index), "", "owner",
+			jobs.CreateOptions{ResourceClass: resource.class}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	cancelled, _ := jobStore.CreateWithOptions(ctx, "cancelled", "", "owner",
+		jobs.CreateOptions{ResourceClass: jobs.ResourceHash})
+	if _, err := jobStore.Cancel(ctx, cancelled.ID); err != nil {
+		t.Fatal(err)
+	}
+	submitter := &recordingSubmitter{accept: true}
+	reconciler, _ := recovery.New(jobStore, submitter, time.Hour, time.Minute)
+	if err := reconciler.ReconcileOnce(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if submitter.count() != len(resources) {
+		t.Fatalf("任务类型提交数量错误: want=%d got=%d", len(resources), submitter.count())
+	}
+}
+
+func TestAutomaticRetryStopsAtConfiguredMaximum(t *testing.T) {
+	ctx := context.Background()
+	dirs := appdirs.UnderRoot(filepath.Join(t.TempDir(), "app"))
+	if err := dirs.Ensure(filesystem.OS{}); err != nil {
+		t.Fatal(err)
+	}
+	store, _ := storage.Open(ctx, dirs)
+	defer store.Close()
+	now := &mutableClock{now: time.Date(2026, 7, 18, 6, 0, 0, 0, time.UTC)}
+	jobStore, _ := jobs.NewStore(store.Control.SQL(), now, identity.NewGenerator(now))
+	job, _ := jobStore.CreateWithOptions(ctx, "hash", "", "owner", jobs.CreateOptions{
+		ResourceClass: jobs.ResourceHash, MaxRetries: 1,
+		RetryPolicyJSON: []byte(`{"kind":"fixed","baseMs":1,"maxMs":1}`),
+	})
+	_, _ = jobStore.StartStage(ctx, job.ID, "hashing")
+	_, _ = jobStore.FailWithRetryable(ctx, job.ID, "TRANSIENT", true)
+	now.Advance(time.Millisecond)
+	if _, err := jobStore.RequeueDueFailures(ctx); err != nil {
+		t.Fatal(err)
+	}
+	second, _ := jobStore.StartStage(ctx, job.ID, "hashing")
+	if second.Attempt != 2 {
+		t.Fatalf("未创建第二个 Attempt: %+v", second)
+	}
+	failed, err := jobStore.FailWithRetryable(ctx, job.ID, "TRANSIENT", true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if failed.NextAttemptAt != nil {
+		t.Fatalf("达到最大重试次数后仍安排退避: %+v", failed)
+	}
+	now.Advance(time.Hour)
+	requeued, err := jobStore.RequeueDueFailures(ctx)
+	if err != nil || len(requeued) != 0 {
+		t.Fatalf("达到最大重试次数后仍自动重试: %+v %v", requeued, err)
 	}
 }
 

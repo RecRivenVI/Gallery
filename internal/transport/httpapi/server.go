@@ -60,7 +60,7 @@ type Server struct {
 }
 
 type JobController interface {
-	Submit(class, jobID string)
+	Submit(class, jobID string) bool
 	Cancel(jobID string) bool
 }
 
@@ -764,23 +764,20 @@ func (s *Server) createCatalogGCJob(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
-	retention, dryRun, required := int64(24*60*60), false, int64(0)
+	retention, dryRun := int64(24*60*60), false
 	if request.RetentionSeconds != nil {
 		retention = *request.RetentionSeconds
 	}
 	if request.DryRun != nil {
 		dryRun = *request.DryRun
 	}
-	if request.RequiredBytes != nil {
-		required = *request.RequiredBytes
-	}
-	job, err := s.maintenance.CreateGC(r.Context(), session.PrincipalID, maintenance.Request{RetentionSeconds: retention, DryRun: dryRun, RequiredBytes: required})
+	job, err := s.maintenance.CreateGC(r.Context(), session.PrincipalID, maintenance.Request{RetentionSeconds: retention, DryRun: dryRun})
 	if err != nil {
 		s.writeRequestError(w, err)
 		return
 	}
 	s.startJob(job)
-	writeJSON(w, http.StatusAccepted, jobDTO(job))
+	writeJSON(w, http.StatusAccepted, maintenanceJobDTO(job))
 }
 
 func (s *Server) createCatalogCheckpointJob(w http.ResponseWriter, r *http.Request) {
@@ -801,13 +798,17 @@ func (s *Server) createMaintenanceJob(w http.ResponseWriter, r *http.Request, jo
 		s.writeRequestError(w, err)
 		return
 	}
-	job, err := s.jobs.CreateMaintenance(r.Context(), jobType, session.PrincipalID)
+	if s.maintenance == nil {
+		s.writeRequestError(w, fault.New(fault.CodeInternal, false, nil))
+		return
+	}
+	job, err := s.maintenance.Create(r.Context(), jobType, session.PrincipalID)
 	if err != nil {
 		s.writeRequestError(w, err)
 		return
 	}
 	s.startJob(job)
-	writeJSON(w, http.StatusAccepted, jobDTO(job))
+	writeJSON(w, http.StatusAccepted, maintenanceJobDTO(job))
 }
 
 func (s *Server) startJob(job jobs.Job) {
@@ -1757,6 +1758,7 @@ func jobDTO(value jobs.Job) api.Job {
 		Stage: value.Stage, Attempt: value.Attempt, CreatedAt: value.CreatedAt, StartedAt: value.StartedAt,
 		FinishedAt: value.FinishedAt, UpdatedAt: value.UpdatedAt,
 	}
+	result.NextAttemptAt = value.NextAttemptAt
 	if value.SourceID != "" {
 		sourceID := api.SourceId(value.SourceID)
 		result.SourceId = &sourceID
@@ -1812,6 +1814,21 @@ func jobDTO(value jobs.Job) api.Job {
 	result.CancelRequested = boolPtr(value.CancelRequested)
 	result.FailureRetryable = boolPtr(value.FailureRetryable)
 	return result
+}
+
+func maintenanceJobDTO(value jobs.Job) api.MaintenanceJobResponse {
+	var request maintenance.Request
+	_ = json.Unmarshal(value.RequestJSON, &request)
+	return api.MaintenanceJobResponse{
+		Job: jobDTO(value),
+		SpaceEstimate: api.SpaceEstimate{
+			Operation:      api.SpaceEstimateOperation(request.Space.Operation),
+			RequiredBytes:  request.Space.RequiredBytes,
+			AvailableBytes: request.Space.FreeBytes,
+			Sufficient:     request.Space.Sufficient,
+			Conservative:   request.Space.Conservative,
+		},
+	}
 }
 
 func jobAttemptDTO(value jobs.Attempt) api.JobAttempt {
@@ -2072,6 +2089,8 @@ func statusForFault(err error) int {
 	case fault.CodeMediaOffline, fault.CodeSourceUnavailable, fault.CodeSourceReadFailed, fault.CodeContentDisappeared:
 		return http.StatusServiceUnavailable
 	case fault.CodeWatcherOverflow, fault.CodeSourceIdentityChanged, fault.CodeSourcePermissionDenied:
+		return http.StatusServiceUnavailable
+	case fault.CodeDerivedAssetUnavailable, fault.CodeExternalToolUnavailable:
 		return http.StatusServiceUnavailable
 	case fault.CodeDiskSpaceInsufficient:
 		return http.StatusInsufficientStorage
