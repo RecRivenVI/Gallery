@@ -356,6 +356,12 @@ WHERE singleton=1 RETURNING generation`).Scan(&generation); err != nil {
 		return nil, fault.New(fault.CodeInternal, true, err)
 	}
 	now := r.clock.Now().UTC().Unix()
+	// 逐项解析前先检测 SourceWork 拆分/合并结构变化。检测到未决结构变化时会记录审查 issue、
+	// 提交事务并返回 review-required，阻塞该 Source publication；已通过人工决策 pre-seed 的
+	// 新 source_key 已带 Binding，不会被识别为新 SourceWork，因此不再阻塞。
+	if blocked, err := r.detectSourceStructureChange(ctx, tx, sourceID, discovered, now); blocked || err != nil {
+		return nil, err
+	}
 	result := make(map[string]CanonicalWork, len(discovered))
 	seenSourceKeys := make(map[string]struct{}, len(discovered))
 	seenKeys := make(map[string]struct{}, len(discovered))

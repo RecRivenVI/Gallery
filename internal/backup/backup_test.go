@@ -96,7 +96,7 @@ func TestBackupProducesConsistentRestorableCopy(t *testing.T) {
 	if manifest.Role != string(storage.RoleControl) || manifest.ManifestVersion != backup.ManifestVersion {
 		t.Fatalf("manifest 基本字段错误: %+v", manifest)
 	}
-	if manifest.SchemaVersion != 14 {
+	if manifest.SchemaVersion != 15 {
 		t.Fatalf("manifest schemaVersion = %d，应等于 control 最高 migration", manifest.SchemaVersion)
 	}
 	if manifest.Database.ChecksumAlgorithm != "sha256" || manifest.Database.FileName != "control.db" {

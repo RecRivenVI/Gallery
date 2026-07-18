@@ -30,6 +30,7 @@ const (
 	IDCreatorMerge      IDKind = "cmrg"
 	IDControlBackup     IDKind = "bkp"
 	IDControlRestore    IDKind = "rst"
+	IDStructureDecision IDKind = "swd"
 )
 
 var validIDKinds = map[IDKind]struct{}{
@@ -37,7 +38,7 @@ var validIDKinds = map[IDKind]struct{}{
 	IDCanonicalMedia: {}, IDSourceRuleBinding: {}, IDRuleSet: {}, IDJob: {},
 	IDQueryPublication: {}, IDSession: {},
 	IDCatalogRevision: {}, IDOverlayRevision: {}, IDWorkBinding: {}, IDCreatorBinding: {}, IDMediaBinding: {}, IDBindingIssue: {},
-	IDCreatorMerge: {}, IDControlBackup: {}, IDControlRestore: {},
+	IDCreatorMerge: {}, IDControlBackup: {}, IDControlRestore: {}, IDStructureDecision: {},
 }
 
 // ID 是带类型前缀的 UUIDv7。零值不是合法领域 ID。
