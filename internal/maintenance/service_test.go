@@ -58,6 +58,18 @@ func TestPreflightRejectsInsufficientAppDirsSpace(t *testing.T) {
 	if report.FreeBytes != 10 || report.RequiredBytes != 11 {
 		t.Fatalf("空间报告不完整: %+v", report)
 	}
+	estimate, estimateErr := service.Estimate(context.Background(), "catalog_vacuum")
+	if estimateErr == nil || estimate.Operation != "catalog_vacuum" || !estimate.Conservative ||
+		estimate.RequiredBytes <= 11 || estimate.FreeBytes != 10 {
+		t.Fatalf("服务端保守估算错误: %+v %v", estimate, estimateErr)
+	}
+	if _, createErr := service.CreateGC(context.Background(), "owner", maintenance.Request{}); createErr == nil {
+		t.Fatal("空间不足仍创建了维护 Job")
+	}
+	var count int
+	if err := store.Control.SQL().QueryRow("SELECT COUNT(*) FROM jobs").Scan(&count); err != nil || count != 0 {
+		t.Fatalf("空间预检失败污染了 Job 表: count=%d err=%v", count, err)
+	}
 }
 
 var _ ports.SpaceChecker = spaceChecker{}
