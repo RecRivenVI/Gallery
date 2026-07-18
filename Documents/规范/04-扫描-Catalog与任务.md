@@ -117,6 +117,7 @@ startup: reconcile publications ↔ jobs
 - queued/running/publishing/completed/failed/cancelled/needs_repair 状态；
 - 单调进度序号、阶段、可取消性和结构化 issue；
 - 重试关系、开始/结束时间、关联 publication/revision；
+- 规则扫描必须额外冻结 `RuleVersion.semantic_hash`、规范化参数和 `parameter_hash`、`rule_ir_hash`、compiler version、CEL Profile version、extension registry version；重试和恢复只复用该快照，不重新读取当前 SourceRuleBinding；
 - 不含敏感绝对路径或 metadata 值的诊断摘要。
 
 扫描、完整哈希和 ffmpeg 必须使用不同有界池；优先级和并发上限属于运行配置，不进入规则表达式。

@@ -2,7 +2,7 @@
 
 Gallery（画廊，代码代号 `gallery`）是面向个人及可信局域网的本地优先、只读媒体目录产品。它是独立净室项目，不兼容或迁移任何旧 Gallery 实现。
 
-> 当前状态：**阶段 1「领域和数据所有权」已完成**（含 CanonicalCreator 合并、Binding 修复、inactive/orphan 生命周期、control 备份/恢复、SourceWork 拆分/合并与阶段 1 Schema Freeze Gate）。正式实现已证明规则、双 revision 查询、Overlay 重投影、Catalog 重建、媒体缓存生命周期和强杀恢复路径。当前仍没有可供普通用户安装的产品版本；核心身份约束已冻结，FileLocation 唯一约束、完整 API 与物理 Schema 因文件身份、百万级参考性能、完整排序/过滤语义及平台门禁仍未冻结。SourceWork 决策撤回仅限尚未被扫描消费的 pre-seed Binding，消费后返回 `CONFLICT`，不等于已生效结构变化的完整反向操作。下一阶段为规则闭环。
+> 当前状态：**阶段 2「规则闭环」已完成 Correctness 实现**（阶段 0、Walking Skeleton、Architecture Proof 正确性切片和阶段 1「领域和数据所有权」同样已完成）。规则包草稿/版本/参数/审计/编译缓存、严格 JSON/YAML/TOML 导入、Schema/UI metadata、未知扩展分类、Dry Run/Trace/Explain/Impact/diff/回滚、Binding 状态和扫描 Job 规则快照均已接入正式迁移、API 和测试。当前仍没有可供普通用户安装的产品版本；FileLocation 最终唯一约束、完整查询/排序 API、百万级参考性能、真实媒体规模、多平台和发行签名门禁仍未完成。SourceWork 决策撤回仅限尚未被扫描消费的 pre-seed Binding，消费后返回 `CONFLICT`，不等于已生效结构变化的完整反向操作。
 
 ## 当前可运行能力
 
@@ -19,6 +19,7 @@ Gallery（画廊，代码代号 `gallery`）是面向个人及可信局域网的
 - `galleryctl health` 只使用公开的 `pkg/galleryapi` 生成客户端，不访问数据库、应用服务或后端 `internal` 包；
 - OpenAPI、错误信封、WebSocket 信封、签名游标、规则包 JSON Schema 与 CEL Profile v1 均可执行校验。
 - 规则 API 提供 Schema 感知规范化、默认值物化、三类 hash、validate/compile/Dry Run/Trace/Impact、参数校验和编译缓存；扫描器只执行版本化 Rule IR，不含平台特例；
+- 规则闭环 API 提供 RulePackage/Draft/Version 生命周期、revision 并发保存、JSON/YAML/TOML 导入、参数集 revision/hash、Explain/Trace/diff/Impact、回滚/弃用/审计、持久编译缓存、三类内置示例列表和受限示例测试；每个扫描 Job 记录规则语义、参数和 Rule IR 快照；
 - Work 查询使用同一 publication 内的 FTS5、CJK bigram/拉丁与文件名 trigram、原文复核、自然排序 v1、稳定 tie-break、签名 keyset cursor 和持久租约；
 - 标题 Override、ManualTag、HiddenState、CustomCover 写入 control 后由持久 Overlay Job 发布新 projection；Favorite/Progress 作为实时状态不改变分页成员或顺序；
 - Catalog 删除重建会通过稳定来源引用恢复 Canonical Work/Creator/Media、Binding、Overlay、Favorite、Progress 和媒体 URL；冲突与手动解绑不会被静默覆盖；
