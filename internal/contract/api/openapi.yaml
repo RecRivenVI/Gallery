@@ -2,7 +2,7 @@ openapi: 3.0.3
 info:
   title: Gallery API
   version: 0.5.0-pre-alpha
-  description: Gallery pre-alpha 契约（阶段 1 领域和数据所有权）；资源面随阶段演进为兼容基线，物理 Schema 与完整 v1 语义尚未冻结。
+  description: Gallery pre-alpha 契约（阶段 3 扫描、任务和 Catalog 正确性切片）；资源面随阶段演进为兼容基线，物理 Schema 与完整 v1 语义尚未冻结。
 servers:
   - url: http://127.0.0.1:{port}
     variables:
@@ -1117,6 +1117,7 @@ paths:
           schema:
             $ref: "#/components/schemas/SourceId"
         - $ref: "#/components/parameters/CSRFHeader"
+        - $ref: "#/components/parameters/IdempotencyKey"
       responses:
         "202":
           description: 扫描 Job 已排队
@@ -1155,6 +1156,158 @@ paths:
           $ref: "#/components/responses/ForbiddenError"
         "404":
           $ref: "#/components/responses/NotFoundError"
+  /api/v1/jobs:
+    get:
+      operationId: listJobs
+      summary: 按持久状态读取 Job snapshot
+      parameters:
+        - name: status
+          in: query
+          required: false
+          schema:
+            type: string
+        - name: limit
+          in: query
+          required: false
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 200
+      responses:
+        "200":
+          description: Job 列表
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/JobListResponse"
+        "401": {$ref: "#/components/responses/UnauthenticatedError"}
+        "403": {$ref: "#/components/responses/ForbiddenError"}
+  /api/v1/jobs/{jobId}/cancel:
+    post:
+      operationId: cancelJob
+      summary: 请求取消 Job
+      parameters:
+        - name: jobId
+          in: path
+          required: true
+          schema: {$ref: "#/components/schemas/JobId"}
+        - $ref: "#/components/parameters/CSRFHeader"
+      responses:
+        "202":
+          description: 取消请求已持久化
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/Job"}
+        "401": {$ref: "#/components/responses/UnauthenticatedError"}
+        "403": {$ref: "#/components/responses/ForbiddenError"}
+        "404": {$ref: "#/components/responses/NotFoundError"}
+        "409": {$ref: "#/components/responses/ConflictError"}
+  /api/v1/jobs/{jobId}/retry:
+    post:
+      operationId: retryJob
+      summary: 为可重试终态创建新的 Job attempt
+      parameters:
+        - name: jobId
+          in: path
+          required: true
+          schema: {$ref: "#/components/schemas/JobId"}
+        - $ref: "#/components/parameters/CSRFHeader"
+      responses:
+        "202":
+          description: 重试 Job 已排队
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/Job"}
+        "401": {$ref: "#/components/responses/UnauthenticatedError"}
+        "403": {$ref: "#/components/responses/ForbiddenError"}
+        "404": {$ref: "#/components/responses/NotFoundError"}
+        "409": {$ref: "#/components/responses/ConflictError"}
+  /api/v1/jobs/{jobId}/attempts:
+    get:
+      operationId: listJobAttempts
+      summary: 读取 Job 的持久尝试记录
+      parameters:
+        - name: jobId
+          in: path
+          required: true
+          schema: {$ref: "#/components/schemas/JobId"}
+      responses:
+        "200":
+          description: Job attempts
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/JobAttemptsResponse"}
+        "401": {$ref: "#/components/responses/UnauthenticatedError"}
+        "403": {$ref: "#/components/responses/ForbiddenError"}
+        "404": {$ref: "#/components/responses/NotFoundError"}
+  /api/v1/sources/{sourceId}/scan-status:
+    get:
+      operationId: getSourceScanStatus
+      summary: 读取 Source 离线、dirty 和 Watcher 收敛状态
+      parameters:
+        - name: sourceId
+          in: path
+          required: true
+          schema: {$ref: "#/components/schemas/SourceId"}
+      responses:
+        "200":
+          description: Source scan state
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/SourceScanState"}
+        "401": {$ref: "#/components/responses/UnauthenticatedError"}
+        "403": {$ref: "#/components/responses/ForbiddenError"}
+        "404": {$ref: "#/components/responses/NotFoundError"}
+  /api/v1/admin/maintenance/gc:
+    post:
+      operationId: createCatalogGCJob
+      summary: 创建 Catalog、Derived 和临时文件 GC Job
+      parameters:
+        - $ref: "#/components/parameters/CSRFHeader"
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema: {$ref: "#/components/schemas/MaintenanceGCRequest"}
+      responses:
+        "202":
+          description: GC Job 已排队
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/Job"}
+        "401": {$ref: "#/components/responses/UnauthenticatedError"}
+        "403": {$ref: "#/components/responses/ForbiddenError"}
+        "409": {$ref: "#/components/responses/ConflictError"}
+  /api/v1/admin/maintenance/checkpoint:
+    post:
+      operationId: createCatalogCheckpointJob
+      summary: 创建 WAL checkpoint Job
+      parameters:
+        - $ref: "#/components/parameters/CSRFHeader"
+      responses:
+        "202":
+          description: checkpoint Job 已排队
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/Job"}
+        "401": {$ref: "#/components/responses/UnauthenticatedError"}
+        "403": {$ref: "#/components/responses/ForbiddenError"}
+        "409": {$ref: "#/components/responses/ConflictError"}
+  /api/v1/admin/maintenance/vacuum:
+    post:
+      operationId: createCatalogVacuumJob
+      summary: 创建 Catalog/Control VACUUM Job
+      parameters:
+        - $ref: "#/components/parameters/CSRFHeader"
+      responses:
+        "202":
+          description: vacuum Job 已排队
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/Job"}
+        "401": {$ref: "#/components/responses/UnauthenticatedError"}
+        "403": {$ref: "#/components/responses/ForbiddenError"}
+        "409": {$ref: "#/components/responses/ConflictError"}
   /api/v1/admin/control-backups:
     post:
       operationId: createControlBackup
@@ -2048,6 +2201,14 @@ components:
         type: string
         minLength: 32
         maxLength: 256
+    IdempotencyKey:
+      name: Idempotency-Key
+      in: header
+      required: false
+      schema:
+        type: string
+        minLength: 1
+        maxLength: 256
     IfMatch:
       name: If-Match
       in: header
@@ -2220,6 +2381,7 @@ components:
         - BINDING_REVIEW_REQUIRED
         - DERIVED_ASSET_INVALID
         - DERIVED_ASSET_FAILED
+        - EXTERNAL_TOOL_FAILED
         - RULE_SCHEMA_INVALID
         - RULE_COMPILE_ERROR
         - RULE_CEL_LIMIT
@@ -2245,7 +2407,16 @@ components:
         - RULE_IMPORT_INVALID
         - RULE_BINDING_CONFLICT
         - JOB_STATE_CONFLICT
+        - JOB_PROGRESS_REGRESSION
+        - JOB_RETRY_EXHAUSTED
+        - JOB_CANCELLATION_REQUESTED
         - SCAN_ALREADY_RUNNING
+        - CONTENT_HASH_PENDING
+        - DISK_SPACE_INSUFFICIENT
+        - MAINTENANCE_BLOCKED
+        - WATCHER_OVERFLOW
+        - SOURCE_IDENTITY_CHANGED
+        - SOURCE_PERMISSION_DENIED
         - SOURCE_UNAVAILABLE
         - SOURCE_READ_FAILED
         - CONTENT_DISAPPEARED
@@ -2268,12 +2439,12 @@ components:
           $ref: "#/components/schemas/JobId"
         type:
           type: string
-          enum: [scan, overlay_projection, control_backup, control_restore]
+          enum: [scan, hash, overlay_projection, derived, external_tool, control_backup, control_restore, catalog_gc, catalog_checkpoint, catalog_vacuum, derived_gc]
         sourceId:
           $ref: "#/components/schemas/SourceId"
         status:
           type: string
-          enum: [queued, running, publishing, completed, failed, cancelled, needs_repair]
+          enum: [queued, running, publishing, cancelling, completed, failed, cancelled, superseded, needs_repair]
         stage:
           type: string
         progress:
@@ -2293,6 +2464,22 @@ components:
               type: integer
               format: int64
               minimum: 1
+            phase:
+              type: string
+            unit:
+              type: string
+            message:
+              type: string
+            bytes:
+              type: integer
+              format: int64
+              minimum: 0
+            entities:
+              type: integer
+              format: int64
+              minimum: 0
+            estimated:
+              type: boolean
         issueCode:
           type: string
           nullable: true
@@ -2333,6 +2520,85 @@ components:
           type: string
         extensionRegistryVersion:
           type: string
+        resourceClass:
+          type: string
+        targetResource:
+          type: string
+        failureRetryable:
+          type: boolean
+        cancelRequested:
+          type: boolean
+
+    JobListResponse:
+      type: object
+      additionalProperties: false
+      required: [jobs]
+      properties:
+        jobs:
+          type: array
+          items: {$ref: "#/components/schemas/Job"}
+
+    JobAttempt:
+      type: object
+      additionalProperties: false
+      required: [attemptId, jobId, attempt, resourceClass, status, progressSequence, createdAt, updatedAt]
+      properties:
+        attemptId: {type: string}
+        jobId: {$ref: "#/components/schemas/JobId"}
+        attempt: {type: integer, minimum: 1}
+        resourceClass: {type: string}
+        status:
+          type: string
+          enum: [queued, running, completed, failed, cancelled, recovered]
+        startedAt: {type: string, format: date-time, nullable: true}
+        heartbeatAt: {type: string, format: date-time, nullable: true}
+        finishedAt: {type: string, format: date-time, nullable: true}
+        errorCode: {type: string, nullable: true}
+        errorRetryable: {type: boolean}
+        progressSequence: {type: integer, format: int64, minimum: 1}
+        createdAt: {type: string, format: date-time}
+        updatedAt: {type: string, format: date-time}
+
+    JobAttemptsResponse:
+      type: object
+      additionalProperties: false
+      required: [attempts]
+      properties:
+        attempts:
+          type: array
+          items: {$ref: "#/components/schemas/JobAttempt"}
+
+    SourceScanState:
+      type: object
+      additionalProperties: false
+      required: [sourceId, status, dirty, watcherAvailable, watcherOverflow, pendingHashCount, updatedAt]
+      properties:
+        sourceId: {$ref: "#/components/schemas/SourceId"}
+        status:
+          type: string
+          enum: [unknown, online, offline, degraded, permission_denied, identity_changed]
+        dirty: {type: boolean}
+        watcherAvailable: {type: boolean}
+        watcherOverflow: {type: boolean}
+        currentJobId:
+          allOf: [{$ref: "#/components/schemas/JobId"}]
+          nullable: true
+        pendingHashCount: {type: integer, format: int64, minimum: 0}
+        blockingIssueCode: {type: string, nullable: true}
+        currentPublicationId:
+          allOf: [{$ref: "#/components/schemas/QueryPublicationId"}]
+          nullable: true
+        lastEventAt: {type: string, format: date-time, nullable: true}
+        lastCheckedAt: {type: string, format: date-time, nullable: true}
+        updatedAt: {type: string, format: date-time}
+
+    MaintenanceGCRequest:
+      type: object
+      additionalProperties: false
+      properties:
+        retentionSeconds: {type: integer, format: int64, minimum: 0, default: 86400}
+        dryRun: {type: boolean, default: false}
+        requiredBytes: {type: integer, format: int64, minimum: 0, default: 0}
     ControlBackupManifest:
       type: object
       additionalProperties: false

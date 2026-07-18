@@ -26,6 +26,7 @@ import (
 	"github.com/RecRivenVI/gallery/internal/creators"
 	"github.com/RecRivenVI/gallery/internal/domain"
 	"github.com/RecRivenVI/gallery/internal/jobs"
+	"github.com/RecRivenVI/gallery/internal/maintenance"
 	"github.com/RecRivenVI/gallery/internal/media"
 	"github.com/RecRivenVI/gallery/internal/overlay"
 	"github.com/RecRivenVI/gallery/internal/ports"
@@ -33,28 +34,43 @@ import (
 	"github.com/RecRivenVI/gallery/internal/rules"
 	"github.com/RecRivenVI/gallery/internal/scanner"
 	"github.com/RecRivenVI/gallery/internal/storage"
+	watcherservice "github.com/RecRivenVI/gallery/internal/watcher"
 	api "github.com/RecRivenVI/gallery/pkg/galleryapi"
 )
 
 type Server struct {
-	mode     config.Mode
-	store    *storage.Store
-	clock    ports.Clock
-	logger   *slog.Logger
-	auth     *auth.Personal
-	data     *application.Resources
-	jobs     *jobs.Store
-	catalog  *catalog.Store
-	scanner  *scanner.Service
-	hub      *realtime.Hub
-	rules    *rules.Lifecycle
-	query    *queryservice.Service
-	overlay  *overlay.Service
-	creators *creators.Service
-	backup   *backup.Service
+	mode        config.Mode
+	store       *storage.Store
+	clock       ports.Clock
+	logger      *slog.Logger
+	auth        *auth.Personal
+	data        *application.Resources
+	jobs        *jobs.Store
+	catalog     *catalog.Store
+	scanner     *scanner.Service
+	hub         *realtime.Hub
+	rules       *rules.Lifecycle
+	query       *queryservice.Service
+	overlay     *overlay.Service
+	creators    *creators.Service
+	backup      *backup.Service
+	maintenance *maintenance.Service
+	watcher     *watcherservice.Service
+	scheduler   JobController
 }
 
-func New(mode config.Mode, store *storage.Store, clock ports.Clock, personal *auth.Personal, resources *application.Resources, jobStore *jobs.Store, catalogStore *catalog.Store, scannerService *scanner.Service, overlayService *overlay.Service, creatorsService *creators.Service, backupService *backup.Service, hub *realtime.Hub, logger *slog.Logger) http.Handler {
+type JobController interface {
+	Submit(class, jobID string)
+	Cancel(jobID string) bool
+}
+
+type Options struct {
+	Maintenance *maintenance.Service
+	Watcher     *watcherservice.Service
+	Scheduler   JobController
+}
+
+func New(mode config.Mode, store *storage.Store, clock ports.Clock, personal *auth.Personal, resources *application.Resources, jobStore *jobs.Store, catalogStore *catalog.Store, scannerService *scanner.Service, overlayService *overlay.Service, creatorsService *creators.Service, backupService *backup.Service, hub *realtime.Hub, logger *slog.Logger, options ...Options) http.Handler {
 	if hub == nil {
 		hub = realtime.NewHub(clock)
 	}
@@ -66,7 +82,11 @@ func New(mode config.Mode, store *storage.Store, clock ports.Clock, personal *au
 	if err != nil {
 		panic(fmt.Sprintf("初始化查询服务: %v", err))
 	}
-	server := &Server{mode: mode, store: store, clock: clock, auth: personal, data: resources, jobs: jobStore, catalog: catalogStore, scanner: scannerService, hub: hub, logger: logger, rules: ruleLifecycle, query: queryService, overlay: overlayService, creators: creatorsService, backup: backupService}
+	var option Options
+	if len(options) > 0 {
+		option = options[0]
+	}
+	server := &Server{mode: mode, store: store, clock: clock, auth: personal, data: resources, jobs: jobStore, catalog: catalogStore, scanner: scannerService, hub: hub, logger: logger, rules: ruleLifecycle, query: queryService, overlay: overlayService, creators: creatorsService, backup: backupService, maintenance: option.Maintenance, watcher: option.Watcher, scheduler: option.Scheduler}
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /api/v1/health", server.health)
 	mux.HandleFunc("GET /api/v1/bootstrap", server.bootstrap)
@@ -118,6 +138,14 @@ func New(mode config.Mode, store *storage.Store, clock ports.Clock, personal *au
 	mux.HandleFunc("GET /api/v1/sources/{sourceId}/effective-rule-binding", server.getEffectiveRuleBinding)
 	mux.HandleFunc("POST /api/v1/sources/{sourceId}/scan-jobs", server.createScanJob)
 	mux.HandleFunc("GET /api/v1/jobs/{jobId}", server.getJob)
+	mux.HandleFunc("GET /api/v1/jobs", server.listJobs)
+	mux.HandleFunc("POST /api/v1/jobs/{jobId}/cancel", server.cancelJob)
+	mux.HandleFunc("POST /api/v1/jobs/{jobId}/retry", server.retryJob)
+	mux.HandleFunc("GET /api/v1/jobs/{jobId}/attempts", server.listJobAttempts)
+	mux.HandleFunc("GET /api/v1/sources/{sourceId}/scan-status", server.getSourceScanStatus)
+	mux.HandleFunc("POST /api/v1/admin/maintenance/gc", server.createCatalogGCJob)
+	mux.HandleFunc("POST /api/v1/admin/maintenance/checkpoint", server.createCatalogCheckpointJob)
+	mux.HandleFunc("POST /api/v1/admin/maintenance/vacuum", server.createCatalogVacuumJob)
 	mux.HandleFunc("GET /api/v1/creators", server.listCreators)
 	mux.HandleFunc("GET /api/v1/creators/{creatorId}", server.getCreator)
 	mux.HandleFunc("GET /api/v1/creators/merges", server.listCreatorMerges)
@@ -576,7 +604,7 @@ func (s *Server) createScanJob(w http.ResponseWriter, r *http.Request) {
 		s.writeRequestError(w, err)
 		return
 	}
-	job, err := s.scanner.CreateScan(r.Context(), r.PathValue("sourceId"), session.PrincipalID)
+	job, err := s.scanner.CreateScanWithIdempotency(r.Context(), r.PathValue("sourceId"), session.PrincipalID, r.Header.Get("Idempotency-Key"))
 	if err != nil {
 		s.writeRequestError(w, err)
 		return
@@ -596,6 +624,204 @@ func (s *Server) getJob(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, jobDTO(job))
+}
+
+func (s *Server) listJobs(w http.ResponseWriter, r *http.Request) {
+	if _, err := s.requireCapability(r, "library.read"); err != nil {
+		s.writeRequestError(w, err)
+		return
+	}
+	statuses := []jobs.Status{jobs.StatusQueued, jobs.StatusRunning, jobs.StatusPublishing, jobs.StatusCancelling,
+		jobs.StatusCompleted, jobs.StatusFailed, jobs.StatusCancelled, jobs.StatusSuperseded, jobs.StatusNeedsRepair}
+	if raw := strings.TrimSpace(r.URL.Query().Get("status")); raw != "" {
+		statuses = []jobs.Status{jobs.Status(raw)}
+	}
+	items, err := s.jobs.ListByStatuses(r.Context(), statuses...)
+	if err != nil {
+		s.writeRequestError(w, err)
+		return
+	}
+	limit := 100
+	if raw := r.URL.Query().Get("limit"); raw != "" {
+		parsed, parseErr := strconv.Atoi(raw)
+		if parseErr != nil || parsed < 1 || parsed > 200 {
+			s.writeRequestError(w, fault.New(fault.CodeValidation, false, nil))
+			return
+		}
+		limit = parsed
+	}
+	if len(items) > limit {
+		items = items[:limit]
+	}
+	result := api.JobListResponse{Jobs: make([]api.Job, 0, len(items))}
+	for _, item := range items {
+		result.Jobs = append(result.Jobs, jobDTO(item))
+	}
+	writeJSON(w, http.StatusOK, result)
+}
+
+func (s *Server) cancelJob(w http.ResponseWriter, r *http.Request) {
+	session, err := s.requireCapability(r, "scan.run")
+	if err != nil {
+		s.writeRequestError(w, err)
+		return
+	}
+	if err := auth.ValidateMutation(r, session.CSRFToken); err != nil {
+		s.writeRequestError(w, err)
+		return
+	}
+	job, err := s.jobs.RequestCancel(r.Context(), r.PathValue("jobId"))
+	if err != nil {
+		s.writeRequestError(w, err)
+		return
+	}
+	if s.scheduler != nil {
+		s.scheduler.Cancel(job.ID)
+	}
+	writeJSON(w, http.StatusAccepted, jobDTO(job))
+}
+
+func (s *Server) retryJob(w http.ResponseWriter, r *http.Request) {
+	session, err := s.requireCapability(r, "scan.run")
+	if err != nil {
+		s.writeRequestError(w, err)
+		return
+	}
+	if err := auth.ValidateMutation(r, session.CSRFToken); err != nil {
+		s.writeRequestError(w, err)
+		return
+	}
+	job, err := s.jobs.Retry(r.Context(), r.PathValue("jobId"), session.PrincipalID)
+	if err != nil {
+		s.writeRequestError(w, err)
+		return
+	}
+	s.startJob(job)
+	writeJSON(w, http.StatusAccepted, jobDTO(job))
+}
+
+func (s *Server) listJobAttempts(w http.ResponseWriter, r *http.Request) {
+	if _, err := s.requireCapability(r, "library.read"); err != nil {
+		s.writeRequestError(w, err)
+		return
+	}
+	if _, err := s.jobs.Get(r.Context(), r.PathValue("jobId")); err != nil {
+		s.writeRequestError(w, err)
+		return
+	}
+	items, err := s.jobs.ListAttempts(r.Context(), r.PathValue("jobId"))
+	if err != nil {
+		s.writeRequestError(w, err)
+		return
+	}
+	result := api.JobAttemptsResponse{Attempts: make([]api.JobAttempt, 0, len(items))}
+	for _, item := range items {
+		result.Attempts = append(result.Attempts, jobAttemptDTO(item))
+	}
+	writeJSON(w, http.StatusOK, result)
+}
+
+func (s *Server) getSourceScanStatus(w http.ResponseWriter, r *http.Request) {
+	if _, err := s.requireCapability(r, "library.read"); err != nil {
+		s.writeRequestError(w, err)
+		return
+	}
+	if s.watcher == nil {
+		if _, err := s.data.GetSource(r.Context(), r.PathValue("sourceId")); err != nil {
+			s.writeRequestError(w, err)
+			return
+		}
+		now := s.clock.Now().UTC()
+		writeJSON(w, http.StatusOK, api.SourceScanState{SourceId: r.PathValue("sourceId"), Status: api.SourceScanStateStatus("unknown"), Dirty: true, UpdatedAt: now})
+		return
+	}
+	state, err := s.watcher.GetState(r.Context(), r.PathValue("sourceId"))
+	if err != nil {
+		s.writeRequestError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, sourceScanStateDTO(state))
+}
+
+func (s *Server) createCatalogGCJob(w http.ResponseWriter, r *http.Request) {
+	session, err := s.requireCapability(r, "admin.maintenance")
+	if err != nil {
+		s.writeRequestError(w, err)
+		return
+	}
+	if err := auth.ValidateMutation(r, session.CSRFToken); err != nil {
+		s.writeRequestError(w, err)
+		return
+	}
+	if s.maintenance == nil {
+		s.writeRequestError(w, fault.New(fault.CodeInternal, false, nil))
+		return
+	}
+	request := api.MaintenanceGCRequest{}
+	if r.ContentLength != 0 {
+		if err := decodeJSON(r, &request); err != nil {
+			s.writeRequestError(w, fault.WithField(fault.CodeValidation, "body", err))
+			return
+		}
+	}
+	retention, dryRun, required := int64(24*60*60), false, int64(0)
+	if request.RetentionSeconds != nil {
+		retention = *request.RetentionSeconds
+	}
+	if request.DryRun != nil {
+		dryRun = *request.DryRun
+	}
+	if request.RequiredBytes != nil {
+		required = *request.RequiredBytes
+	}
+	job, err := s.maintenance.CreateGC(r.Context(), session.PrincipalID, maintenance.Request{RetentionSeconds: retention, DryRun: dryRun, RequiredBytes: required})
+	if err != nil {
+		s.writeRequestError(w, err)
+		return
+	}
+	s.startJob(job)
+	writeJSON(w, http.StatusAccepted, jobDTO(job))
+}
+
+func (s *Server) createCatalogCheckpointJob(w http.ResponseWriter, r *http.Request) {
+	s.createMaintenanceJob(w, r, "catalog_checkpoint")
+}
+
+func (s *Server) createCatalogVacuumJob(w http.ResponseWriter, r *http.Request) {
+	s.createMaintenanceJob(w, r, "catalog_vacuum")
+}
+
+func (s *Server) createMaintenanceJob(w http.ResponseWriter, r *http.Request, jobType string) {
+	session, err := s.requireCapability(r, "admin.maintenance")
+	if err != nil {
+		s.writeRequestError(w, err)
+		return
+	}
+	if err := auth.ValidateMutation(r, session.CSRFToken); err != nil {
+		s.writeRequestError(w, err)
+		return
+	}
+	job, err := s.jobs.CreateMaintenance(r.Context(), jobType, session.PrincipalID)
+	if err != nil {
+		s.writeRequestError(w, err)
+		return
+	}
+	s.startJob(job)
+	writeJSON(w, http.StatusAccepted, jobDTO(job))
+}
+
+func (s *Server) startJob(job jobs.Job) {
+	if job.Type == "scan" && s.scanner != nil {
+		s.scanner.Start(job.ID)
+		return
+	}
+	if s.scheduler != nil {
+		class := job.ResourceClass
+		if class == "" {
+			class = jobs.ResourceMaintenance
+		}
+		s.scheduler.Submit(class, job.ID)
+	}
 }
 
 func (s *Server) listCreators(w http.ResponseWriter, r *http.Request) {
@@ -1536,6 +1762,18 @@ func jobDTO(value jobs.Job) api.Job {
 		result.SourceId = &sourceID
 	}
 	result.Progress.Current, result.Progress.Total, result.Progress.Sequence = value.ProgressCurrent, value.ProgressTotal, int64(value.ProgressSequence)
+	result.Progress.Bytes = int64Ptr(value.ProgressBytes)
+	result.Progress.Entities = int64Ptr(value.ProgressEntities)
+	result.Progress.Estimated = boolPtr(value.ProgressEstimated)
+	if value.ProgressPhase != "" {
+		result.Progress.Phase = stringPtr(value.ProgressPhase)
+	}
+	if value.ProgressUnit != "" {
+		result.Progress.Unit = stringPtr(value.ProgressUnit)
+	}
+	if value.ProgressMessage != "" {
+		result.Progress.Message = stringPtr(value.ProgressMessage)
+	}
 	if value.IssueCode != "" {
 		result.IssueCode = &value.IssueCode
 	}
@@ -1565,8 +1803,47 @@ func jobDTO(value jobs.Job) api.Job {
 	if value.ExtensionRegistryVersion != "" {
 		result.ExtensionRegistryVersion = &value.ExtensionRegistryVersion
 	}
+	if value.ResourceClass != "" {
+		result.ResourceClass = &value.ResourceClass
+	}
+	if value.TargetResource != "" {
+		result.TargetResource = &value.TargetResource
+	}
+	result.CancelRequested = boolPtr(value.CancelRequested)
+	result.FailureRetryable = boolPtr(value.FailureRetryable)
 	return result
 }
+
+func jobAttemptDTO(value jobs.Attempt) api.JobAttempt {
+	result := api.JobAttempt{AttemptId: value.ID, JobId: value.JobID, Attempt: value.Attempt,
+		ResourceClass: value.ResourceClass, Status: api.JobAttemptStatus(value.Status), ProgressSequence: int64(value.ProgressSequence),
+		CreatedAt: value.CreatedAt, UpdatedAt: value.UpdatedAt, StartedAt: value.StartedAt, HeartbeatAt: value.HeartbeatAt, FinishedAt: value.FinishedAt}
+	if value.ErrorCode != "" {
+		result.ErrorCode = stringPtr(value.ErrorCode)
+	}
+	result.ErrorRetryable = boolPtr(value.ErrorRetryable)
+	return result
+}
+
+func sourceScanStateDTO(value watcherservice.State) api.SourceScanState {
+	result := api.SourceScanState{SourceId: value.SourceID, Status: api.SourceScanStateStatus(value.Status), Dirty: value.Dirty,
+		WatcherAvailable: value.WatcherAvailable, WatcherOverflow: value.WatcherOverflow, PendingHashCount: value.PendingHashCount,
+		LastEventAt: value.LastEventAt, LastCheckedAt: value.LastCheckedAt, UpdatedAt: value.UpdatedAt}
+	if value.CurrentJobID != "" {
+		result.CurrentJobId = stringPtr(value.CurrentJobID)
+	}
+	if value.CurrentPublicationID != "" {
+		result.CurrentPublicationId = stringPtr(value.CurrentPublicationID)
+	}
+	if value.BlockingIssueCode != "" {
+		result.BlockingIssueCode = stringPtr(value.BlockingIssueCode)
+	}
+	return result
+}
+
+func stringPtr(value string) *string { return &value }
+func int64Ptr(value int64) *int64    { return &value }
+func boolPtr(value bool) *bool       { return &value }
 
 func overlayDTO(value overlay.State) api.WorkOverlayState {
 	result := api.WorkOverlayState{
@@ -1783,7 +2060,8 @@ func statusForFault(err error) int {
 		fault.CodeRuleParameterConflict, fault.CodeRulePublishBlocked, fault.CodeRuleRollbackBlocked,
 		fault.CodeRuleVersionInUse, fault.CodeRuleBindingConflict:
 		return http.StatusConflict
-	case fault.CodeJobStateConflict, fault.CodeScanAlreadyRunning, fault.CodeCatalogCandidateInvalid:
+	case fault.CodeJobStateConflict, fault.CodeJobProgressRegression, fault.CodeJobRetryExhausted, fault.CodeJobCancellationRequested,
+		fault.CodeScanAlreadyRunning, fault.CodeCatalogCandidateInvalid, fault.CodeMaintenanceBlocked:
 		return http.StatusConflict
 	case fault.CodeBindingReviewRequired:
 		return http.StatusConflict
@@ -1793,6 +2071,10 @@ func statusForFault(err error) int {
 		return http.StatusRequestedRangeNotSatisfiable
 	case fault.CodeMediaOffline, fault.CodeSourceUnavailable, fault.CodeSourceReadFailed, fault.CodeContentDisappeared:
 		return http.StatusServiceUnavailable
+	case fault.CodeWatcherOverflow, fault.CodeSourceIdentityChanged, fault.CodeSourcePermissionDenied:
+		return http.StatusServiceUnavailable
+	case fault.CodeDiskSpaceInsufficient:
+		return http.StatusInsufficientStorage
 	case fault.CodeAppDirsOverlap, fault.CodeSourceRootsOverlap:
 		return http.StatusConflict
 	default:
