@@ -31,6 +31,10 @@ type Resolver interface {
 	Resolve(ctx context.Context, toolID string, args []string, workingDir string) (ports.Command, error)
 }
 
+type SpaceGate interface {
+	CheckSpace(ctx context.Context, operation string, additionalBytes int64) error
+}
+
 type Result struct {
 	StdoutBytes  int64  `json:"stdoutBytes"`
 	StderrBytes  int64  `json:"stderrBytes"`
@@ -42,6 +46,8 @@ type Service struct {
 	jobs     *jobs.Store
 	process  ports.ProcessController
 	resolver Resolver
+	temp     *jobs.TempStore
+	space    SpaceGate
 }
 
 func New(jobStore *jobs.Store, controller ports.ProcessController, resolver Resolver) (*Service, error) {
@@ -61,6 +67,14 @@ func (s *Service) Create(ctx context.Context, request Request, createdBy string)
 	if request.MaxOutputBytes > 64<<20 {
 		return jobs.Job{}, fault.New(fault.CodeValidation, false, nil)
 	}
+	if s.resolver == nil {
+		return jobs.Job{}, fault.New(fault.CodeExternalToolUnavailable, false, nil)
+	}
+	if s.space != nil {
+		if err := s.space.CheckSpace(ctx, "external_tool", request.MaxOutputBytes*2); err != nil {
+			return jobs.Job{}, err
+		}
+	}
 	payload, err := json.Marshal(request)
 	if err != nil {
 		return jobs.Job{}, fault.New(fault.CodeInternal, true, err)
@@ -69,6 +83,12 @@ func (s *Service) Create(ctx context.Context, request Request, createdBy string)
 		ResourceClass: jobs.ResourceExternalTool, RequestJSON: payload, MaxRetries: 1,
 	})
 }
+
+func (s *Service) Available() bool { return s != nil && s.resolver != nil }
+
+func (s *Service) SetTempStore(store *jobs.TempStore) { s.temp = store }
+
+func (s *Service) SetSpaceGate(gate SpaceGate) { s.space = gate }
 
 func (s *Service) Execute(ctx context.Context, jobID string) error {
 	job, err := s.jobs.StartStage(ctx, jobID, "running_tool")
@@ -80,7 +100,14 @@ func (s *Service) Execute(ctx context.Context, jobID string) error {
 		return s.fail(ctx, jobID, fault.New(fault.CodeValidation, false, err))
 	}
 	if s.resolver == nil {
-		return s.fail(ctx, jobID, fault.New(fault.CodeExternalToolFailed, false, errors.New("ToolDiscovery 未配置")))
+		return s.fail(ctx, jobID, fault.New(fault.CodeExternalToolUnavailable, false, errors.New("ToolDiscovery 未配置")))
+	}
+	if s.temp != nil {
+		workingDirectory, tempErr := s.temp.Acquire(ctx, job, []string{"stdout", "stderr"})
+		if tempErr != nil {
+			return s.fail(ctx, jobID, tempErr)
+		}
+		request.WorkingDir = workingDirectory
 	}
 	command, err := s.resolver.Resolve(ctx, request.ToolID, request.Args, request.WorkingDir)
 	if err != nil || command.Path == "" {
