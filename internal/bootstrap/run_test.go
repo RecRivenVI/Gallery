@@ -37,12 +37,7 @@ func TestRunnableGallerydUsesAppDirsAndLeavesSyntheticSourceUnchanged(t *testing
 	dirs := appdirs.UnderRoot(filepath.Join(root, "app"))
 	cfg := config.Config{Mode: config.ModePersonal, Listen: "127.0.0.1:0", AppDirs: dirs, SourceRoots: []string{source}}
 	logger := slog.New(slog.NewJSONHandler(io.Discard, nil))
-	ctx, cancel := context.WithCancel(context.Background())
-	done := make(chan error, 1)
-	go func() { done <- bootstrap.Run(ctx, cfg, logger) }()
-
-	descriptorPath := filepath.Join(dirs.Runtime, "galleryd.json")
-	runtimeDescriptor := waitForDescriptor(t, descriptorPath)
+	cancel, done, runtimeDescriptor := startGalleryd(t, cfg, logger)
 	client, err := api.NewClientWithResponses("http://" + runtimeDescriptor.Address)
 	if err != nil {
 		cancel()
@@ -53,15 +48,7 @@ func TestRunnableGallerydUsesAppDirsAndLeavesSyntheticSourceUnchanged(t *testing
 		cancel()
 		t.Fatalf("运行中的 galleryd health 失败: %v", err)
 	}
-	cancel()
-	select {
-	case err := <-done:
-		if err != nil {
-			t.Fatal(err)
-		}
-	case <-time.After(10 * time.Second):
-		t.Fatal("galleryd 未在期限内优雅停止")
-	}
+	stopGalleryd(t, cancel, done)
 
 	afterContent, err := os.ReadFile(sentinel)
 	if err != nil {
@@ -76,7 +63,7 @@ func TestRunnableGallerydUsesAppDirsAndLeavesSyntheticSourceUnchanged(t *testing
 			t.Fatalf("AppDirs 数据库未创建: %v", err)
 		}
 	}
-	if _, err := os.Stat(descriptorPath); !os.IsNotExist(err) {
+	if _, err := os.Stat(filepath.Join(dirs.Runtime, "galleryd.json")); !os.IsNotExist(err) {
 		t.Fatal("停止后 runtime descriptor 未清理")
 	}
 }
@@ -201,8 +188,16 @@ func startGalleryd(t *testing.T, cfg config.Config, logger *slog.Logger) (contex
 	t.Helper()
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan error, 1)
-	go func() { done <- bootstrap.Run(ctx, cfg, logger) }()
-	value := waitForDescriptor(t, filepath.Join(cfg.AppDirs.Runtime, "galleryd.json"))
+	ready := make(chan descriptor.Descriptor, 1)
+	go func() { done <- bootstrap.RunWithReady(ctx, cfg, logger, ready) }()
+	var value descriptor.Descriptor
+	select {
+	case value = <-ready:
+	case err := <-done:
+		t.Fatalf("galleryd 在 ready 前退出: %v", err)
+	case <-time.After(10 * time.Second):
+		t.Fatal("未等待到 galleryd ready 信号")
+	}
 	return cancel, done, value
 }
 
