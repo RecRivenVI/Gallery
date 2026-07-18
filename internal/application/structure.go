@@ -633,10 +633,13 @@ func scanStructureDecision(row rowScanner) (SourceStructureDecision, error) {
 	return decision, nil
 }
 
-// UndoSourceStructureDecision 撤销一次尚未被扫描消费的拆分/合并决策：删除其 pre-seed Binding，将
-// 决策标为 undone，并把对应审查 issue 重新打开，使结构变化恢复为待审查状态。若决策已被后续成功
-// 扫描消费（新 source_key 已产生 active Binding，即已发生新 Binding 与可能的 Overlay/Favorite/
-// Progress 依赖），返回结构化 CONFLICT，不做不可靠的逆向重建。
+// UndoSourceStructureDecision 撤回一次尚未被扫描消费的拆分/合并决策。这是「撤回尚未应用的结构
+// 决策」，不是对已生效结构变化的完整反向操作：仅当决策的 pre-seed Binding 尚未被下一次扫描消费
+// （新 source_key 尚未产生 active Binding）时，删除 pre-seed Binding、把决策标为 undone、并重开对应
+// 审查 issue，使结构变化恢复为待审查状态。若决策已被后续成功扫描消费并产生实际 Binding（可能已有
+// Overlay/Favorite/Progress 依赖），返回稳定 CONFLICT 且不部分修改决策、issue 或 Binding，不做不可靠
+// 的逆向重建；此时若需反转已生效的结构变化，应通过新的人工决策或未来补偿流程处理。乐观 version 防
+// 止并发覆盖。
 func (r *Resources) UndoSourceStructureDecision(ctx context.Context, decisionID, undoneBy string, version int) (SourceStructureDecision, error) {
 	if strings.TrimSpace(undoneBy) == "" {
 		return SourceStructureDecision{}, fault.New(fault.CodeValidation, false, nil)
