@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"sort"
+	"strings"
 	"time"
 
 	"github.com/RecRivenVI/gallery/internal/contract/fault"
@@ -114,6 +115,15 @@ type GCResult struct {
 	Publications       int
 	OverlayRevisions   int
 	CatalogRevisions   int
+	StagingAborted     int
+	SkippedActive      int
+	DryRun             bool
+}
+
+type GCOptions struct {
+	Retention    time.Duration
+	ActiveJobIDs []string
+	DryRun       bool
 }
 
 type Store struct {
@@ -827,6 +837,82 @@ AND NOT EXISTS (
 		return GCResult{}, fault.New(fault.CodeInternal, true, err)
 	}
 	return result, nil
+}
+
+// GarbageCollectWithOptions 在已有 GC 保护之外收敛遗留 staging candidate。活动 Job 的
+// candidate 永不 abort；DryRun 只返回可处理数量，供维护 API 做空间和影响预览。
+func (s *Store) GarbageCollectWithOptions(ctx context.Context, options GCOptions) (GCResult, error) {
+	if options.Retention < 0 {
+		return GCResult{}, fault.New(fault.CodeValidation, false, nil)
+	}
+	cutoff := s.clock.Now().UTC().Add(-options.Retention).Unix()
+	args := []any{cutoff}
+	query := `SELECT count(*) FROM catalog_revisions WHERE status='staging' AND created_at<=?`
+	if len(options.ActiveJobIDs) > 0 {
+		placeholders := make([]string, len(options.ActiveJobIDs))
+		for index, id := range options.ActiveJobIDs {
+			placeholders[index] = "?"
+			args = append(args, id)
+		}
+		query += " AND job_id NOT IN (" + strings.Join(placeholders, ",") + ")"
+	}
+	var stale int
+	if err := s.db.QueryRowContext(ctx, query, args...).Scan(&stale); err != nil {
+		return GCResult{}, fault.New(fault.CodeInternal, true, err)
+	}
+	skipped := 0
+	if len(options.ActiveJobIDs) > 0 {
+		activeArgs := []any{cutoff}
+		placeholders := make([]string, len(options.ActiveJobIDs))
+		for index, id := range options.ActiveJobIDs {
+			placeholders[index] = "?"
+			activeArgs = append(activeArgs, id)
+		}
+		activeQuery := `SELECT count(*) FROM catalog_revisions WHERE status='staging' AND created_at<=? AND job_id IN (` + strings.Join(placeholders, ",") + `)`
+		if err := s.db.QueryRowContext(ctx, activeQuery, activeArgs...).Scan(&skipped); err != nil {
+			return GCResult{}, fault.New(fault.CodeInternal, true, err)
+		}
+	}
+	result := GCResult{DryRun: options.DryRun, StagingAborted: stale, SkippedActive: skipped}
+	if options.DryRun {
+		return result, nil
+	}
+	if stale > 0 {
+		args = []any{cutoff}
+		query = `UPDATE catalog_revisions SET status='aborted' WHERE status='staging' AND created_at<=?`
+		if len(options.ActiveJobIDs) > 0 {
+			placeholders := make([]string, len(options.ActiveJobIDs))
+			for index, id := range options.ActiveJobIDs {
+				placeholders[index] = "?"
+				args = append(args, id)
+			}
+			query += " AND job_id NOT IN (" + strings.Join(placeholders, ",") + ")"
+		}
+		if _, err := s.db.ExecContext(ctx, query, args...); err != nil {
+			return GCResult{}, fault.New(fault.CodeInternal, true, err)
+		}
+	}
+	cleaned, err := s.GarbageCollect(ctx, options.Retention)
+	if err != nil {
+		return GCResult{}, err
+	}
+	cleaned.StagingAborted = result.StagingAborted
+	cleaned.SkippedActive = result.SkippedActive
+	return cleaned, nil
+}
+
+func (s *Store) Checkpoint(ctx context.Context) error {
+	if _, err := s.db.ExecContext(ctx, "PRAGMA wal_checkpoint(TRUNCATE)"); err != nil {
+		return fault.New(fault.CodeInternal, true, err)
+	}
+	return nil
+}
+
+func (s *Store) Vacuum(ctx context.Context) error {
+	if _, err := s.db.ExecContext(ctx, "VACUUM"); err != nil {
+		return fault.New(fault.CodeInternal, true, err)
+	}
+	return nil
 }
 
 func deleteCount(ctx context.Context, tx *sql.Tx, query string, args ...any) (int, error) {
