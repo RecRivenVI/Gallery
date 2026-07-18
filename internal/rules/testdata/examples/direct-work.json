@@ -1,0 +1,18 @@
+{
+  "rule_set_id": "rset_018f47d2-5c16-7a44-a8a0-000000000102",
+  "version": "1.0.0",
+  "schema_version": 1,
+  "normalization_algorithm_version": "gallery-canonical-json-v1",
+  "compiler_requirement": "gallery-rule-compiler-v1",
+  "cel_profile_version": "gallery-cel-v1",
+  "parameter_schema": {"type": "object", "additionalProperties": false},
+  "provider_namespaces": [],
+  "primitives": [
+    {"id": "work", "kind": "path_match", "config": {"scope": "work_directory", "glob": "*", "title": "directory_name", "stable_key": "relative_path"}},
+    {"id": "title", "kind": "selector", "config": {"target": "title", "pointers": ["/title", "/name"], "required": true}},
+    {"id": "media", "kind": "media_classify", "config": {"glob": "*.webp", "kind": "image", "mime": "image/webp"}}
+  ],
+  "cel_expressions": [],
+  "tests": [{"id": "direct-work"}],
+  "extensions": {}
+}

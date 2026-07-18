@@ -1,0 +1,20 @@
+{
+  "rule_set_id": "rset_018f47d2-5c16-7a44-a8a0-000000000103",
+  "version": "1.0.0",
+  "schema_version": 1,
+  "normalization_algorithm_version": "gallery-canonical-json-v1",
+  "compiler_requirement": "gallery-rule-compiler-v1",
+  "cel_profile_version": "gallery-cel-v1",
+  "parameter_schema": {"type": "object", "additionalProperties": false, "properties": {"minimumSize": {"type": "integer", "minimum": 0}}},
+  "provider_namespaces": ["synthetic.messy"],
+  "primitives": [
+    {"id": "work", "kind": "path_match", "config": {"scope": "work_directory", "glob": "*", "title": "directory_name", "stable_key": "relative_path"}},
+    {"id": "title", "kind": "fallback", "config": {"target": "title", "pointers": ["/post/title", "/title"], "default": "untitled"}},
+    {"id": "files", "kind": "media_classify", "config": {"glob": "*.*", "kind": "asset", "mime": "application/octet-stream"}},
+    {"id": "order", "kind": "media_order", "config": {"by": "path", "direction": "asc"}},
+    {"id": "cover", "kind": "cover_candidate", "config": {"glob": "cover.*", "score": 100}}
+  ],
+  "cel_expressions": [],
+  "tests": [{"id": "messy-structure"}],
+  "extensions": {"vendor.notes": {"required": false, "semantic": false, "payload": {"note": "synthetic fixture"}}}
+}
