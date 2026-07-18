@@ -112,6 +112,24 @@ func (e BindingIssueStatus) Valid() bool {
 	}
 }
 
+// Defines values for BindingIssueStructureKind.
+const (
+	BindingIssueStructureKindMerge BindingIssueStructureKind = "merge"
+	BindingIssueStructureKindSplit BindingIssueStructureKind = "split"
+)
+
+// Valid indicates whether the value is a known member of the BindingIssueStructureKind enum.
+func (e BindingIssueStructureKind) Valid() bool {
+	switch e {
+	case BindingIssueStructureKindMerge:
+		return true
+	case BindingIssueStructureKindSplit:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for BindingIssueCandidateCandidateKind.
 const (
 	BindingIssueCandidateCandidateKindCreator BindingIssueCandidateCandidateKind = "creator"
@@ -279,16 +297,16 @@ func (e ControlBackupManifestRole) Valid() bool {
 
 // Defines values for CreatorMergeStatus.
 const (
-	Applied CreatorMergeStatus = "applied"
-	Undone  CreatorMergeStatus = "undone"
+	CreatorMergeStatusApplied CreatorMergeStatus = "applied"
+	CreatorMergeStatusUndone  CreatorMergeStatus = "undone"
 )
 
 // Valid indicates whether the value is a known member of the CreatorMergeStatus enum.
 func (e CreatorMergeStatus) Valid() bool {
 	switch e {
-	case Applied:
+	case CreatorMergeStatusApplied:
 		return true
-	case Undone:
+	case CreatorMergeStatusUndone:
 		return true
 	default:
 		return false
@@ -321,55 +339,57 @@ func (e CreatorSourceBindingStatus) Valid() bool {
 
 // Defines values for ErrorCode.
 const (
-	APPDIRSSOURCEOVERLAP      ErrorCode = "APPDIRS_SOURCE_OVERLAP"
-	BACKUPCORRUPT             ErrorCode = "BACKUP_CORRUPT"
-	BACKUPFAILED              ErrorCode = "BACKUP_FAILED"
-	BACKUPINCOMPATIBLE        ErrorCode = "BACKUP_INCOMPATIBLE"
-	BACKUPNOTFOUND            ErrorCode = "BACKUP_NOT_FOUND"
-	BINDINGREVIEWREQUIRED     ErrorCode = "BINDING_REVIEW_REQUIRED"
-	CATALOGCANDIDATEINVALID   ErrorCode = "CATALOG_CANDIDATE_INVALID"
-	CATALOGPUBLICATIONMISSING ErrorCode = "CATALOG_PUBLICATION_MISSING"
-	CONFIGINVALID             ErrorCode = "CONFIG_INVALID"
-	CONFLICT                  ErrorCode = "CONFLICT"
-	CONTENTCHANGEDDURINGHASH  ErrorCode = "CONTENT_CHANGED_DURING_HASH"
-	CONTENTDISAPPEARED        ErrorCode = "CONTENT_DISAPPEARED"
-	CSRFINVALID               ErrorCode = "CSRF_INVALID"
-	CURSOREXPIRED             ErrorCode = "CURSOR_EXPIRED"
-	CURSORINVALID             ErrorCode = "CURSOR_INVALID"
-	DATABASEOPENFAILED        ErrorCode = "DATABASE_OPEN_FAILED"
-	DERIVEDASSETFAILED        ErrorCode = "DERIVED_ASSET_FAILED"
-	DERIVEDASSETINVALID       ErrorCode = "DERIVED_ASSET_INVALID"
-	FORBIDDEN                 ErrorCode = "FORBIDDEN"
-	HOSTREJECTED              ErrorCode = "HOST_REJECTED"
-	INTERNALERROR             ErrorCode = "INTERNAL_ERROR"
-	JOBSTATECONFLICT          ErrorCode = "JOB_STATE_CONFLICT"
-	MEDIAOFFLINE              ErrorCode = "MEDIA_OFFLINE"
-	MIGRATIONFAILED           ErrorCode = "MIGRATION_FAILED"
-	NOTFOUND                  ErrorCode = "NOT_FOUND"
-	ORIGINREJECTED            ErrorCode = "ORIGIN_REJECTED"
-	OVERLAYFACTINVALID        ErrorCode = "OVERLAY_FACT_INVALID"
-	OVERLAYPROJECTIONFAILED   ErrorCode = "OVERLAY_PROJECTION_FAILED"
-	PAIRINGEXPIRED            ErrorCode = "PAIRING_EXPIRED"
-	PAIRINGINVALID            ErrorCode = "PAIRING_INVALID"
-	PATHESCAPE                ErrorCode = "PATH_ESCAPE"
-	PROCESSINTERRUPTED        ErrorCode = "PROCESS_INTERRUPTED"
-	QUERYTOOSHORT             ErrorCode = "QUERY_TOO_SHORT"
-	RANGEINVALID              ErrorCode = "RANGE_INVALID"
-	RESTOREFAILED             ErrorCode = "RESTORE_FAILED"
-	RULECELLIMIT              ErrorCode = "RULE_CEL_LIMIT"
-	RULECOMPILEERROR          ErrorCode = "RULE_COMPILE_ERROR"
-	RULEDRYRUNFAILED          ErrorCode = "RULE_DRY_RUN_FAILED"
-	RULEEVALERROR             ErrorCode = "RULE_EVAL_ERROR"
-	RULEIMPACTFAILED          ErrorCode = "RULE_IMPACT_FAILED"
-	RULEPARAMETERINVALID      ErrorCode = "RULE_PARAMETER_INVALID"
-	RULESCHEMAINVALID         ErrorCode = "RULE_SCHEMA_INVALID"
-	SCANALREADYRUNNING        ErrorCode = "SCAN_ALREADY_RUNNING"
-	SOURCEPATHINVALID         ErrorCode = "SOURCE_PATH_INVALID"
-	SOURCEREADFAILED          ErrorCode = "SOURCE_READ_FAILED"
-	SOURCEROOTSOVERLAP        ErrorCode = "SOURCE_ROOTS_OVERLAP"
-	SOURCEUNAVAILABLE         ErrorCode = "SOURCE_UNAVAILABLE"
-	UNAUTHENTICATED           ErrorCode = "UNAUTHENTICATED"
-	VALIDATIONERROR           ErrorCode = "VALIDATION_ERROR"
+	APPDIRSSOURCEOVERLAP          ErrorCode = "APPDIRS_SOURCE_OVERLAP"
+	BACKUPCORRUPT                 ErrorCode = "BACKUP_CORRUPT"
+	BACKUPFAILED                  ErrorCode = "BACKUP_FAILED"
+	BACKUPINCOMPATIBLE            ErrorCode = "BACKUP_INCOMPATIBLE"
+	BACKUPNOTFOUND                ErrorCode = "BACKUP_NOT_FOUND"
+	BINDINGREVIEWREQUIRED         ErrorCode = "BINDING_REVIEW_REQUIRED"
+	CATALOGCANDIDATEINVALID       ErrorCode = "CATALOG_CANDIDATE_INVALID"
+	CATALOGPUBLICATIONMISSING     ErrorCode = "CATALOG_PUBLICATION_MISSING"
+	CONFIGINVALID                 ErrorCode = "CONFIG_INVALID"
+	CONFLICT                      ErrorCode = "CONFLICT"
+	CONTENTCHANGEDDURINGHASH      ErrorCode = "CONTENT_CHANGED_DURING_HASH"
+	CONTENTDISAPPEARED            ErrorCode = "CONTENT_DISAPPEARED"
+	CSRFINVALID                   ErrorCode = "CSRF_INVALID"
+	CURSOREXPIRED                 ErrorCode = "CURSOR_EXPIRED"
+	CURSORINVALID                 ErrorCode = "CURSOR_INVALID"
+	DATABASEOPENFAILED            ErrorCode = "DATABASE_OPEN_FAILED"
+	DERIVEDASSETFAILED            ErrorCode = "DERIVED_ASSET_FAILED"
+	DERIVEDASSETINVALID           ErrorCode = "DERIVED_ASSET_INVALID"
+	FORBIDDEN                     ErrorCode = "FORBIDDEN"
+	HOSTREJECTED                  ErrorCode = "HOST_REJECTED"
+	INTERNALERROR                 ErrorCode = "INTERNAL_ERROR"
+	JOBSTATECONFLICT              ErrorCode = "JOB_STATE_CONFLICT"
+	MEDIAOFFLINE                  ErrorCode = "MEDIA_OFFLINE"
+	MIGRATIONFAILED               ErrorCode = "MIGRATION_FAILED"
+	NOTFOUND                      ErrorCode = "NOT_FOUND"
+	ORIGINREJECTED                ErrorCode = "ORIGIN_REJECTED"
+	OVERLAYFACTINVALID            ErrorCode = "OVERLAY_FACT_INVALID"
+	OVERLAYPROJECTIONFAILED       ErrorCode = "OVERLAY_PROJECTION_FAILED"
+	PAIRINGEXPIRED                ErrorCode = "PAIRING_EXPIRED"
+	PAIRINGINVALID                ErrorCode = "PAIRING_INVALID"
+	PATHESCAPE                    ErrorCode = "PATH_ESCAPE"
+	PROCESSINTERRUPTED            ErrorCode = "PROCESS_INTERRUPTED"
+	QUERYTOOSHORT                 ErrorCode = "QUERY_TOO_SHORT"
+	RANGEINVALID                  ErrorCode = "RANGE_INVALID"
+	RESTOREFAILED                 ErrorCode = "RESTORE_FAILED"
+	RULECELLIMIT                  ErrorCode = "RULE_CEL_LIMIT"
+	RULECOMPILEERROR              ErrorCode = "RULE_COMPILE_ERROR"
+	RULEDRYRUNFAILED              ErrorCode = "RULE_DRY_RUN_FAILED"
+	RULEEVALERROR                 ErrorCode = "RULE_EVAL_ERROR"
+	RULEIMPACTFAILED              ErrorCode = "RULE_IMPACT_FAILED"
+	RULEPARAMETERINVALID          ErrorCode = "RULE_PARAMETER_INVALID"
+	RULESCHEMAINVALID             ErrorCode = "RULE_SCHEMA_INVALID"
+	SCANALREADYRUNNING            ErrorCode = "SCAN_ALREADY_RUNNING"
+	SOURCEPATHINVALID             ErrorCode = "SOURCE_PATH_INVALID"
+	SOURCEREADFAILED              ErrorCode = "SOURCE_READ_FAILED"
+	SOURCEROOTSOVERLAP            ErrorCode = "SOURCE_ROOTS_OVERLAP"
+	SOURCEUNAVAILABLE             ErrorCode = "SOURCE_UNAVAILABLE"
+	SOURCEWORKMERGEREVIEWREQUIRED ErrorCode = "SOURCE_WORK_MERGE_REVIEW_REQUIRED"
+	SOURCEWORKSPLITREVIEWREQUIRED ErrorCode = "SOURCE_WORK_SPLIT_REVIEW_REQUIRED"
+	UNAUTHENTICATED               ErrorCode = "UNAUTHENTICATED"
+	VALIDATIONERROR               ErrorCode = "VALIDATION_ERROR"
 )
 
 // Valid indicates whether the value is a known member of the ErrorCode enum.
@@ -468,6 +488,10 @@ func (e ErrorCode) Valid() bool {
 	case SOURCEROOTSOVERLAP:
 		return true
 	case SOURCEUNAVAILABLE:
+		return true
+	case SOURCEWORKMERGEREVIEWREQUIRED:
+		return true
+	case SOURCEWORKSPLITREVIEWREQUIRED:
 		return true
 	case UNAUTHENTICATED:
 		return true
@@ -706,6 +730,96 @@ func (e OrphanDecisionResultNewStatus) Valid() bool {
 	}
 }
 
+// Defines values for SourceStructureDecisionAction.
+const (
+	SourceStructureDecisionActionMergeBindExisting SourceStructureDecisionAction = "merge_bind_existing"
+	SourceStructureDecisionActionMergeCreateNew    SourceStructureDecisionAction = "merge_create_new"
+	SourceStructureDecisionActionSplitCreateNew    SourceStructureDecisionAction = "split_create_new"
+	SourceStructureDecisionActionSplitInherit      SourceStructureDecisionAction = "split_inherit"
+	SourceStructureDecisionActionSplitKeepSame     SourceStructureDecisionAction = "split_keep_same"
+)
+
+// Valid indicates whether the value is a known member of the SourceStructureDecisionAction enum.
+func (e SourceStructureDecisionAction) Valid() bool {
+	switch e {
+	case SourceStructureDecisionActionMergeBindExisting:
+		return true
+	case SourceStructureDecisionActionMergeCreateNew:
+		return true
+	case SourceStructureDecisionActionSplitCreateNew:
+		return true
+	case SourceStructureDecisionActionSplitInherit:
+		return true
+	case SourceStructureDecisionActionSplitKeepSame:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for SourceStructureDecisionKind.
+const (
+	SourceStructureDecisionKindMerge SourceStructureDecisionKind = "merge"
+	SourceStructureDecisionKindSplit SourceStructureDecisionKind = "split"
+)
+
+// Valid indicates whether the value is a known member of the SourceStructureDecisionKind enum.
+func (e SourceStructureDecisionKind) Valid() bool {
+	switch e {
+	case SourceStructureDecisionKindMerge:
+		return true
+	case SourceStructureDecisionKindSplit:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for SourceStructureDecisionStatus.
+const (
+	SourceStructureDecisionStatusApplied SourceStructureDecisionStatus = "applied"
+	SourceStructureDecisionStatusUndone  SourceStructureDecisionStatus = "undone"
+)
+
+// Valid indicates whether the value is a known member of the SourceStructureDecisionStatus enum.
+func (e SourceStructureDecisionStatus) Valid() bool {
+	switch e {
+	case SourceStructureDecisionStatusApplied:
+		return true
+	case SourceStructureDecisionStatusUndone:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for SourceStructureDecisionRequestAction.
+const (
+	SourceStructureDecisionRequestActionMergeBindExisting SourceStructureDecisionRequestAction = "merge_bind_existing"
+	SourceStructureDecisionRequestActionMergeCreateNew    SourceStructureDecisionRequestAction = "merge_create_new"
+	SourceStructureDecisionRequestActionSplitCreateNew    SourceStructureDecisionRequestAction = "split_create_new"
+	SourceStructureDecisionRequestActionSplitInherit      SourceStructureDecisionRequestAction = "split_inherit"
+	SourceStructureDecisionRequestActionSplitKeepSame     SourceStructureDecisionRequestAction = "split_keep_same"
+)
+
+// Valid indicates whether the value is a known member of the SourceStructureDecisionRequestAction enum.
+func (e SourceStructureDecisionRequestAction) Valid() bool {
+	switch e {
+	case SourceStructureDecisionRequestActionMergeBindExisting:
+		return true
+	case SourceStructureDecisionRequestActionMergeCreateNew:
+		return true
+	case SourceStructureDecisionRequestActionSplitCreateNew:
+		return true
+	case SourceStructureDecisionRequestActionSplitInherit:
+		return true
+	case SourceStructureDecisionRequestActionSplitKeepSame:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for WorkListResponseSortProtocolVersion.
 const (
 	WorkListResponseSortProtocolVersionN1 WorkListResponseSortProtocolVersion = 1
@@ -811,6 +925,24 @@ func (e ListOrphanCandidatesParamsEntityType) Valid() bool {
 	}
 }
 
+// Defines values for ListSourceStructureDecisionsParamsStatus.
+const (
+	Applied ListSourceStructureDecisionsParamsStatus = "applied"
+	Undone  ListSourceStructureDecisionsParamsStatus = "undone"
+)
+
+// Valid indicates whether the value is a known member of the ListSourceStructureDecisionsParamsStatus enum.
+func (e ListSourceStructureDecisionsParamsStatus) Valid() bool {
+	switch e {
+	case Applied:
+		return true
+	case Undone:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for ListWorksParamsSortDirection.
 const (
 	Asc  ListWorksParamsSortDirection = "asc"
@@ -840,24 +972,25 @@ type BindingActionResultEntityKind string
 
 // BindingIssue defines model for BindingIssue.
 type BindingIssue struct {
-	CandidateCount   int                     `json:"candidateCount"`
-	Candidates       []BindingIssueCandidate `json:"candidates"`
-	Code             ErrorCode               `json:"code"`
-	CreatedAt        time.Time               `json:"createdAt"`
-	EntityType       BindingIssueEntityType  `json:"entityType"`
-	ExternalId       *string                 `json:"externalId,omitempty"`
-	Id               BindingIssueId          `json:"id"`
-	ProviderId       *string                 `json:"providerId,omitempty"`
-	Resolution       *BindingIssueResolution `json:"resolution,omitempty"`
-	ResolvedAt       *time.Time              `json:"resolvedAt,omitempty"`
-	ResolvedBy       *string                 `json:"resolvedBy,omitempty"`
-	ResolvedTargetId *string                 `json:"resolvedTargetId,omitempty"`
-	SourceId         SourceId                `json:"sourceId"`
-	SourceKey        string                  `json:"sourceKey"`
-	Status           BindingIssueStatus      `json:"status"`
-	UpdatedAt        time.Time               `json:"updatedAt"`
-	Version          int                     `json:"version"`
-	WorkSourceKey    *string                 `json:"workSourceKey,omitempty"`
+	CandidateCount   int                        `json:"candidateCount"`
+	Candidates       []BindingIssueCandidate    `json:"candidates"`
+	Code             ErrorCode                  `json:"code"`
+	CreatedAt        time.Time                  `json:"createdAt"`
+	EntityType       BindingIssueEntityType     `json:"entityType"`
+	ExternalId       *string                    `json:"externalId,omitempty"`
+	Id               BindingIssueId             `json:"id"`
+	ProviderId       *string                    `json:"providerId,omitempty"`
+	Resolution       *BindingIssueResolution    `json:"resolution,omitempty"`
+	ResolvedAt       *time.Time                 `json:"resolvedAt,omitempty"`
+	ResolvedBy       *string                    `json:"resolvedBy,omitempty"`
+	ResolvedTargetId *string                    `json:"resolvedTargetId,omitempty"`
+	SourceId         SourceId                   `json:"sourceId"`
+	SourceKey        string                     `json:"sourceKey"`
+	Status           BindingIssueStatus         `json:"status"`
+	StructureKind    *BindingIssueStructureKind `json:"structureKind,omitempty"`
+	UpdatedAt        time.Time                  `json:"updatedAt"`
+	Version          int                        `json:"version"`
+	WorkSourceKey    *string                    `json:"workSourceKey,omitempty"`
 }
 
 // BindingIssueEntityType defines model for BindingIssue.EntityType.
@@ -868,6 +1001,9 @@ type BindingIssueResolution string
 
 // BindingIssueStatus defines model for BindingIssue.Status.
 type BindingIssueStatus string
+
+// BindingIssueStructureKind defines model for BindingIssue.StructureKind.
+type BindingIssueStructureKind string
 
 // BindingIssueCandidate defines model for BindingIssueCandidate.
 type BindingIssueCandidate struct {
@@ -1426,6 +1562,46 @@ type SourceRuleBindingCreateRequest struct {
 // SourceRuleBindingId defines model for SourceRuleBindingId.
 type SourceRuleBindingId = string
 
+// SourceStructureDecision defines model for SourceStructureDecision.
+type SourceStructureDecision struct {
+	Action          SourceStructureDecisionAction `json:"action"`
+	CreatedAt       time.Time                     `json:"createdAt"`
+	DecisionId      string                        `json:"decisionId"`
+	IssueId         BindingIssueId                `json:"issueId"`
+	Kind            SourceStructureDecisionKind   `json:"kind"`
+	SourceId        SourceId                      `json:"sourceId"`
+	Status          SourceStructureDecisionStatus `json:"status"`
+	TargetSourceKey *string                       `json:"targetSourceKey,omitempty"`
+	TargetWorkId    *string                       `json:"targetWorkId,omitempty"`
+	UpdatedAt       time.Time                     `json:"updatedAt"`
+	Version         int                           `json:"version"`
+}
+
+// SourceStructureDecisionAction defines model for SourceStructureDecision.Action.
+type SourceStructureDecisionAction string
+
+// SourceStructureDecisionKind defines model for SourceStructureDecision.Kind.
+type SourceStructureDecisionKind string
+
+// SourceStructureDecisionStatus defines model for SourceStructureDecision.Status.
+type SourceStructureDecisionStatus string
+
+// SourceStructureDecisionListResponse defines model for SourceStructureDecisionListResponse.
+type SourceStructureDecisionListResponse struct {
+	Decisions []SourceStructureDecision `json:"decisions"`
+}
+
+// SourceStructureDecisionRequest defines model for SourceStructureDecisionRequest.
+type SourceStructureDecisionRequest struct {
+	Action          SourceStructureDecisionRequestAction `json:"action"`
+	TargetSourceKey *string                              `json:"targetSourceKey,omitempty"`
+	TargetWorkId    *string                              `json:"targetWorkId,omitempty"`
+	Version         int                                  `json:"version"`
+}
+
+// SourceStructureDecisionRequestAction defines model for SourceStructureDecisionRequest.Action.
+type SourceStructureDecisionRequestAction string
+
 // WorkListResponse defines model for WorkListResponse.
 type WorkListResponse struct {
 	CatalogRevision           string                              `json:"catalogRevision"`
@@ -1563,6 +1739,11 @@ type ResolveBindingIssueParams struct {
 	XGalleryCSRF CSRFHeader `json:"X-Gallery-CSRF"`
 }
 
+// ResolveSourceStructureIssueParams defines parameters for ResolveSourceStructureIssue.
+type ResolveSourceStructureIssueParams struct {
+	XGalleryCSRF CSRFHeader `json:"X-Gallery-CSRF"`
+}
+
 // MergeCreatorsParams defines parameters for MergeCreators.
 type MergeCreatorsParams struct {
 	XGalleryCSRF CSRFHeader `json:"X-Gallery-CSRF"`
@@ -1651,6 +1832,21 @@ type CreateSourceRuleBindingParams struct {
 	XGalleryCSRF CSRFHeader `json:"X-Gallery-CSRF"`
 }
 
+// ListSourceStructureDecisionsParams defines parameters for ListSourceStructureDecisions.
+type ListSourceStructureDecisionsParams struct {
+	SourceId *SourceId                                 `form:"sourceId,omitempty" json:"sourceId,omitempty"`
+	Status   *ListSourceStructureDecisionsParamsStatus `form:"status,omitempty" json:"status,omitempty"`
+	Limit    *int                                      `form:"limit,omitempty" json:"limit,omitempty"`
+}
+
+// ListSourceStructureDecisionsParamsStatus defines parameters for ListSourceStructureDecisions.
+type ListSourceStructureDecisionsParamsStatus string
+
+// UndoSourceStructureDecisionParams defines parameters for UndoSourceStructureDecision.
+type UndoSourceStructureDecisionParams struct {
+	XGalleryCSRF CSRFHeader `json:"X-Gallery-CSRF"`
+}
+
 // CreateSourceParams defines parameters for CreateSource.
 type CreateSourceParams struct {
 	XGalleryCSRF CSRFHeader `json:"X-Gallery-CSRF"`
@@ -1705,6 +1901,9 @@ type ReopenBindingIssueJSONRequestBody = BindingIssueVersionRequest
 // ResolveBindingIssueJSONRequestBody defines body for ResolveBindingIssue for application/json ContentType.
 type ResolveBindingIssueJSONRequestBody = BindingIssueResolveRequest
 
+// ResolveSourceStructureIssueJSONRequestBody defines body for ResolveSourceStructureIssue for application/json ContentType.
+type ResolveSourceStructureIssueJSONRequestBody = SourceStructureDecisionRequest
+
 // MergeCreatorsJSONRequestBody defines body for MergeCreators for application/json ContentType.
 type MergeCreatorsJSONRequestBody = CreatorMergeRequest
 
@@ -1734,6 +1933,9 @@ type ValidateRulePackageJSONRequestBody = RuleValidateRequest
 
 // CreateSourceRuleBindingJSONRequestBody defines body for CreateSourceRuleBinding for application/json ContentType.
 type CreateSourceRuleBindingJSONRequestBody = SourceRuleBindingCreateRequest
+
+// UndoSourceStructureDecisionJSONRequestBody defines body for UndoSourceStructureDecision for application/json ContentType.
+type UndoSourceStructureDecisionJSONRequestBody = BindingIssueVersionRequest
 
 // CreateSourceJSONRequestBody defines body for CreateSource for application/json ContentType.
 type CreateSourceJSONRequestBody = SourceCreateRequest
@@ -1869,6 +2071,11 @@ type ClientInterface interface {
 
 	ResolveBindingIssue(ctx context.Context, issueId BindingIssueId, params *ResolveBindingIssueParams, body ResolveBindingIssueJSONRequestBody, reqEditors ...RequestEditorFn) (*http.Response, error)
 
+	// ResolveSourceStructureIssueWithBody request with any body
+	ResolveSourceStructureIssueWithBody(ctx context.Context, issueId BindingIssueId, params *ResolveSourceStructureIssueParams, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*http.Response, error)
+
+	ResolveSourceStructureIssue(ctx context.Context, issueId BindingIssueId, params *ResolveSourceStructureIssueParams, body ResolveSourceStructureIssueJSONRequestBody, reqEditors ...RequestEditorFn) (*http.Response, error)
+
 	// GetBootstrap request
 	GetBootstrap(ctx context.Context, reqEditors ...RequestEditorFn) (*http.Response, error)
 
@@ -1972,6 +2179,17 @@ type ClientInterface interface {
 
 	// GetSourceRuleBinding request
 	GetSourceRuleBinding(ctx context.Context, bindingId SourceRuleBindingId, reqEditors ...RequestEditorFn) (*http.Response, error)
+
+	// ListSourceStructureDecisions request
+	ListSourceStructureDecisions(ctx context.Context, params *ListSourceStructureDecisionsParams, reqEditors ...RequestEditorFn) (*http.Response, error)
+
+	// GetSourceStructureDecision request
+	GetSourceStructureDecision(ctx context.Context, decisionId string, reqEditors ...RequestEditorFn) (*http.Response, error)
+
+	// UndoSourceStructureDecisionWithBody request with any body
+	UndoSourceStructureDecisionWithBody(ctx context.Context, decisionId string, params *UndoSourceStructureDecisionParams, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*http.Response, error)
+
+	UndoSourceStructureDecision(ctx context.Context, decisionId string, params *UndoSourceStructureDecisionParams, body UndoSourceStructureDecisionJSONRequestBody, reqEditors ...RequestEditorFn) (*http.Response, error)
 
 	// CreateSourceWithBody request with any body
 	CreateSourceWithBody(ctx context.Context, params *CreateSourceParams, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*http.Response, error)
@@ -2244,6 +2462,30 @@ func (c *Client) ResolveBindingIssueWithBody(ctx context.Context, issueId Bindin
 
 func (c *Client) ResolveBindingIssue(ctx context.Context, issueId BindingIssueId, params *ResolveBindingIssueParams, body ResolveBindingIssueJSONRequestBody, reqEditors ...RequestEditorFn) (*http.Response, error) {
 	req, err := NewResolveBindingIssueRequest(c.Server, issueId, params, body)
+	if err != nil {
+		return nil, err
+	}
+	req = req.WithContext(ctx)
+	if err := c.applyEditors(ctx, req, reqEditors); err != nil {
+		return nil, err
+	}
+	return c.Client.Do(req)
+}
+
+func (c *Client) ResolveSourceStructureIssueWithBody(ctx context.Context, issueId BindingIssueId, params *ResolveSourceStructureIssueParams, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewResolveSourceStructureIssueRequestWithBody(c.Server, issueId, params, contentType, body)
+	if err != nil {
+		return nil, err
+	}
+	req = req.WithContext(ctx)
+	if err := c.applyEditors(ctx, req, reqEditors); err != nil {
+		return nil, err
+	}
+	return c.Client.Do(req)
+}
+
+func (c *Client) ResolveSourceStructureIssue(ctx context.Context, issueId BindingIssueId, params *ResolveSourceStructureIssueParams, body ResolveSourceStructureIssueJSONRequestBody, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewResolveSourceStructureIssueRequest(c.Server, issueId, params, body)
 	if err != nil {
 		return nil, err
 	}
@@ -2700,6 +2942,54 @@ func (c *Client) CreateSourceRuleBinding(ctx context.Context, params *CreateSour
 
 func (c *Client) GetSourceRuleBinding(ctx context.Context, bindingId SourceRuleBindingId, reqEditors ...RequestEditorFn) (*http.Response, error) {
 	req, err := NewGetSourceRuleBindingRequest(c.Server, bindingId)
+	if err != nil {
+		return nil, err
+	}
+	req = req.WithContext(ctx)
+	if err := c.applyEditors(ctx, req, reqEditors); err != nil {
+		return nil, err
+	}
+	return c.Client.Do(req)
+}
+
+func (c *Client) ListSourceStructureDecisions(ctx context.Context, params *ListSourceStructureDecisionsParams, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewListSourceStructureDecisionsRequest(c.Server, params)
+	if err != nil {
+		return nil, err
+	}
+	req = req.WithContext(ctx)
+	if err := c.applyEditors(ctx, req, reqEditors); err != nil {
+		return nil, err
+	}
+	return c.Client.Do(req)
+}
+
+func (c *Client) GetSourceStructureDecision(ctx context.Context, decisionId string, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewGetSourceStructureDecisionRequest(c.Server, decisionId)
+	if err != nil {
+		return nil, err
+	}
+	req = req.WithContext(ctx)
+	if err := c.applyEditors(ctx, req, reqEditors); err != nil {
+		return nil, err
+	}
+	return c.Client.Do(req)
+}
+
+func (c *Client) UndoSourceStructureDecisionWithBody(ctx context.Context, decisionId string, params *UndoSourceStructureDecisionParams, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewUndoSourceStructureDecisionRequestWithBody(c.Server, decisionId, params, contentType, body)
+	if err != nil {
+		return nil, err
+	}
+	req = req.WithContext(ctx)
+	if err := c.applyEditors(ctx, req, reqEditors); err != nil {
+		return nil, err
+	}
+	return c.Client.Do(req)
+}
+
+func (c *Client) UndoSourceStructureDecision(ctx context.Context, decisionId string, params *UndoSourceStructureDecisionParams, body UndoSourceStructureDecisionJSONRequestBody, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewUndoSourceStructureDecisionRequest(c.Server, decisionId, params, body)
 	if err != nil {
 		return nil, err
 	}
@@ -3480,6 +3770,66 @@ func NewResolveBindingIssueRequestWithBody(server string, issueId BindingIssueId
 	}
 
 	operationPath := fmt.Sprintf("/api/v1/binding-issues/%s/resolve", pathParam0)
+	if operationPath[0] == '/' {
+		operationPath = "." + operationPath
+	}
+
+	queryURL, err := serverURL.Parse(operationPath)
+	if err != nil {
+		return nil, err
+	}
+
+	req, err := http.NewRequest(http.MethodPost, queryURL.String(), body)
+	if err != nil {
+		return nil, err
+	}
+
+	req.Header.Add("Content-Type", contentType)
+
+	if params != nil {
+
+		var headerParam0 string
+
+		headerParam0, err = runtime.StyleParamWithOptions("simple", false, "X-Gallery-CSRF", params.XGalleryCSRF, runtime.StyleParamOptions{ParamLocation: runtime.ParamLocationHeader, Type: "string", Format: ""})
+		if err != nil {
+			return nil, err
+		}
+
+		req.Header.Set("X-Gallery-CSRF", headerParam0)
+
+	}
+
+	return req, nil
+}
+
+// NewResolveSourceStructureIssueRequest calls the generic ResolveSourceStructureIssue builder with application/json body
+func NewResolveSourceStructureIssueRequest(server string, issueId BindingIssueId, params *ResolveSourceStructureIssueParams, body ResolveSourceStructureIssueJSONRequestBody) (*http.Request, error) {
+	var bodyReader io.Reader
+	buf, err := json.Marshal(body)
+	if err != nil {
+		return nil, err
+	}
+	bodyReader = bytes.NewReader(buf)
+	return NewResolveSourceStructureIssueRequestWithBody(server, issueId, params, "application/json", bodyReader)
+}
+
+// NewResolveSourceStructureIssueRequestWithBody generates requests for ResolveSourceStructureIssue with any type of body
+func NewResolveSourceStructureIssueRequestWithBody(server string, issueId BindingIssueId, params *ResolveSourceStructureIssueParams, contentType string, body io.Reader) (*http.Request, error) {
+	var err error
+
+	var pathParam0 string
+
+	pathParam0, err = runtime.StyleParamWithOptions("simple", false, "issueId", issueId, runtime.StyleParamOptions{ParamLocation: runtime.ParamLocationPath, Type: "string", Format: ""})
+	if err != nil {
+		return nil, err
+	}
+
+	serverURL, err := url.Parse(server)
+	if err != nil {
+		return nil, err
+	}
+
+	operationPath := fmt.Sprintf("/api/v1/binding-issues/%s/resolve-structure", pathParam0)
 	if operationPath[0] == '/' {
 		operationPath = "." + operationPath
 	}
@@ -4759,6 +5109,178 @@ func NewGetSourceRuleBindingRequest(server string, bindingId SourceRuleBindingId
 	return req, nil
 }
 
+// NewListSourceStructureDecisionsRequest generates requests for ListSourceStructureDecisions
+func NewListSourceStructureDecisionsRequest(server string, params *ListSourceStructureDecisionsParams) (*http.Request, error) {
+	var err error
+
+	serverURL, err := url.Parse(server)
+	if err != nil {
+		return nil, err
+	}
+
+	operationPath := fmt.Sprintf("/api/v1/source-structure-decisions")
+	if operationPath[0] == '/' {
+		operationPath = "." + operationPath
+	}
+
+	queryURL, err := serverURL.Parse(operationPath)
+	if err != nil {
+		return nil, err
+	}
+
+	if params != nil {
+		// queryValues collects non-styled parameters (passthrough, JSON)
+		// that are safe to round-trip through url.Values.Encode().
+		queryValues := queryURL.Query()
+		// rawQueryFragments collects pre-encoded query fragments from
+		// styled parameters, preserving literal commas as delimiters
+		// per the OpenAPI spec (e.g. "color=blue,black,brown").
+		var rawQueryFragments []string
+
+		if params.SourceId != nil {
+
+			if queryFrag, err := runtime.StyleParamWithOptions("form", true, "sourceId", *params.SourceId, runtime.StyleParamOptions{ParamLocation: runtime.ParamLocationQuery, Type: "string", Format: ""}); err != nil {
+				return nil, err
+			} else {
+				for _, qp := range strings.Split(queryFrag, "&") {
+					rawQueryFragments = append(rawQueryFragments, qp)
+				}
+			}
+
+		}
+
+		if params.Status != nil {
+
+			if queryFrag, err := runtime.StyleParamWithOptions("form", true, "status", *params.Status, runtime.StyleParamOptions{ParamLocation: runtime.ParamLocationQuery, Type: "string", Format: ""}); err != nil {
+				return nil, err
+			} else {
+				for _, qp := range strings.Split(queryFrag, "&") {
+					rawQueryFragments = append(rawQueryFragments, qp)
+				}
+			}
+
+		}
+
+		if params.Limit != nil {
+
+			if queryFrag, err := runtime.StyleParamWithOptions("form", true, "limit", *params.Limit, runtime.StyleParamOptions{ParamLocation: runtime.ParamLocationQuery, Type: "integer", Format: ""}); err != nil {
+				return nil, err
+			} else {
+				for _, qp := range strings.Split(queryFrag, "&") {
+					rawQueryFragments = append(rawQueryFragments, qp)
+				}
+			}
+
+		}
+
+		if encoded := queryValues.Encode(); encoded != "" {
+			rawQueryFragments = append(rawQueryFragments, encoded)
+		}
+		queryURL.RawQuery = strings.Join(rawQueryFragments, "&")
+	}
+
+	req, err := http.NewRequest(http.MethodGet, queryURL.String(), nil)
+	if err != nil {
+		return nil, err
+	}
+
+	return req, nil
+}
+
+// NewGetSourceStructureDecisionRequest generates requests for GetSourceStructureDecision
+func NewGetSourceStructureDecisionRequest(server string, decisionId string) (*http.Request, error) {
+	var err error
+
+	var pathParam0 string
+
+	pathParam0, err = runtime.StyleParamWithOptions("simple", false, "decisionId", decisionId, runtime.StyleParamOptions{ParamLocation: runtime.ParamLocationPath, Type: "string", Format: ""})
+	if err != nil {
+		return nil, err
+	}
+
+	serverURL, err := url.Parse(server)
+	if err != nil {
+		return nil, err
+	}
+
+	operationPath := fmt.Sprintf("/api/v1/source-structure-decisions/%s", pathParam0)
+	if operationPath[0] == '/' {
+		operationPath = "." + operationPath
+	}
+
+	queryURL, err := serverURL.Parse(operationPath)
+	if err != nil {
+		return nil, err
+	}
+
+	req, err := http.NewRequest(http.MethodGet, queryURL.String(), nil)
+	if err != nil {
+		return nil, err
+	}
+
+	return req, nil
+}
+
+// NewUndoSourceStructureDecisionRequest calls the generic UndoSourceStructureDecision builder with application/json body
+func NewUndoSourceStructureDecisionRequest(server string, decisionId string, params *UndoSourceStructureDecisionParams, body UndoSourceStructureDecisionJSONRequestBody) (*http.Request, error) {
+	var bodyReader io.Reader
+	buf, err := json.Marshal(body)
+	if err != nil {
+		return nil, err
+	}
+	bodyReader = bytes.NewReader(buf)
+	return NewUndoSourceStructureDecisionRequestWithBody(server, decisionId, params, "application/json", bodyReader)
+}
+
+// NewUndoSourceStructureDecisionRequestWithBody generates requests for UndoSourceStructureDecision with any type of body
+func NewUndoSourceStructureDecisionRequestWithBody(server string, decisionId string, params *UndoSourceStructureDecisionParams, contentType string, body io.Reader) (*http.Request, error) {
+	var err error
+
+	var pathParam0 string
+
+	pathParam0, err = runtime.StyleParamWithOptions("simple", false, "decisionId", decisionId, runtime.StyleParamOptions{ParamLocation: runtime.ParamLocationPath, Type: "string", Format: ""})
+	if err != nil {
+		return nil, err
+	}
+
+	serverURL, err := url.Parse(server)
+	if err != nil {
+		return nil, err
+	}
+
+	operationPath := fmt.Sprintf("/api/v1/source-structure-decisions/%s/undo", pathParam0)
+	if operationPath[0] == '/' {
+		operationPath = "." + operationPath
+	}
+
+	queryURL, err := serverURL.Parse(operationPath)
+	if err != nil {
+		return nil, err
+	}
+
+	req, err := http.NewRequest(http.MethodPost, queryURL.String(), body)
+	if err != nil {
+		return nil, err
+	}
+
+	req.Header.Add("Content-Type", contentType)
+
+	if params != nil {
+
+		var headerParam0 string
+
+		headerParam0, err = runtime.StyleParamWithOptions("simple", false, "X-Gallery-CSRF", params.XGalleryCSRF, runtime.StyleParamOptions{ParamLocation: runtime.ParamLocationHeader, Type: "string", Format: ""})
+		if err != nil {
+			return nil, err
+		}
+
+		req.Header.Set("X-Gallery-CSRF", headerParam0)
+
+	}
+
+	return req, nil
+}
+
 // NewCreateSourceRequest calls the generic CreateSource builder with application/json body
 func NewCreateSourceRequest(server string, params *CreateSourceParams, body CreateSourceJSONRequestBody) (*http.Request, error) {
 	var bodyReader io.Reader
@@ -5291,6 +5813,11 @@ type ClientWithResponsesInterface interface {
 
 	ResolveBindingIssueWithResponse(ctx context.Context, issueId BindingIssueId, params *ResolveBindingIssueParams, body ResolveBindingIssueJSONRequestBody, reqEditors ...RequestEditorFn) (*ResolveBindingIssueResponse, error)
 
+	// ResolveSourceStructureIssueWithBodyWithResponse request with any body
+	ResolveSourceStructureIssueWithBodyWithResponse(ctx context.Context, issueId BindingIssueId, params *ResolveSourceStructureIssueParams, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*ResolveSourceStructureIssueResponse, error)
+
+	ResolveSourceStructureIssueWithResponse(ctx context.Context, issueId BindingIssueId, params *ResolveSourceStructureIssueParams, body ResolveSourceStructureIssueJSONRequestBody, reqEditors ...RequestEditorFn) (*ResolveSourceStructureIssueResponse, error)
+
 	// GetBootstrapWithResponse request
 	GetBootstrapWithResponse(ctx context.Context, reqEditors ...RequestEditorFn) (*GetBootstrapResponse, error)
 
@@ -5394,6 +5921,17 @@ type ClientWithResponsesInterface interface {
 
 	// GetSourceRuleBindingWithResponse request
 	GetSourceRuleBindingWithResponse(ctx context.Context, bindingId SourceRuleBindingId, reqEditors ...RequestEditorFn) (*GetSourceRuleBindingResponse, error)
+
+	// ListSourceStructureDecisionsWithResponse request
+	ListSourceStructureDecisionsWithResponse(ctx context.Context, params *ListSourceStructureDecisionsParams, reqEditors ...RequestEditorFn) (*ListSourceStructureDecisionsResponse, error)
+
+	// GetSourceStructureDecisionWithResponse request
+	GetSourceStructureDecisionWithResponse(ctx context.Context, decisionId string, reqEditors ...RequestEditorFn) (*GetSourceStructureDecisionResponse, error)
+
+	// UndoSourceStructureDecisionWithBodyWithResponse request with any body
+	UndoSourceStructureDecisionWithBodyWithResponse(ctx context.Context, decisionId string, params *UndoSourceStructureDecisionParams, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*UndoSourceStructureDecisionResponse, error)
+
+	UndoSourceStructureDecisionWithResponse(ctx context.Context, decisionId string, params *UndoSourceStructureDecisionParams, body UndoSourceStructureDecisionJSONRequestBody, reqEditors ...RequestEditorFn) (*UndoSourceStructureDecisionResponse, error)
 
 	// CreateSourceWithBodyWithResponse request with any body
 	CreateSourceWithBodyWithResponse(ctx context.Context, params *CreateSourceParams, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*CreateSourceResponse, error)
@@ -5860,6 +6398,41 @@ func (r ResolveBindingIssueResponse) StatusCode() int {
 
 // ContentType is a convenience method to retrieve the Content-Type value from the HTTP response headers
 func (r ResolveBindingIssueResponse) ContentType() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Header.Get("Content-Type")
+	}
+	return ""
+}
+
+type ResolveSourceStructureIssueResponse struct {
+	Body         []byte
+	HTTPResponse *http.Response
+	JSON200      *SourceStructureDecision
+	JSON400      *ValidationError
+	JSON401      *UnauthenticatedError
+	JSON403      *ForbiddenError
+	JSON404      *NotFoundError
+	JSON409      *ConflictError
+}
+
+// Status returns HTTPResponse.Status
+func (r ResolveSourceStructureIssueResponse) Status() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Status
+	}
+	return http.StatusText(0)
+}
+
+// StatusCode returns HTTPResponse.StatusCode
+func (r ResolveSourceStructureIssueResponse) StatusCode() int {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.StatusCode
+	}
+	return 0
+}
+
+// ContentType is a convenience method to retrieve the Content-Type value from the HTTP response headers
+func (r ResolveSourceStructureIssueResponse) ContentType() string {
 	if r.HTTPResponse != nil {
 		return r.HTTPResponse.Header.Get("Content-Type")
 	}
@@ -6793,6 +7366,107 @@ func (r GetSourceRuleBindingResponse) ContentType() string {
 	return ""
 }
 
+type ListSourceStructureDecisionsResponse struct {
+	Body         []byte
+	HTTPResponse *http.Response
+	JSON200      *SourceStructureDecisionListResponse
+	JSON400      *ValidationError
+	JSON401      *UnauthenticatedError
+	JSON403      *ForbiddenError
+}
+
+// Status returns HTTPResponse.Status
+func (r ListSourceStructureDecisionsResponse) Status() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Status
+	}
+	return http.StatusText(0)
+}
+
+// StatusCode returns HTTPResponse.StatusCode
+func (r ListSourceStructureDecisionsResponse) StatusCode() int {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.StatusCode
+	}
+	return 0
+}
+
+// ContentType is a convenience method to retrieve the Content-Type value from the HTTP response headers
+func (r ListSourceStructureDecisionsResponse) ContentType() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Header.Get("Content-Type")
+	}
+	return ""
+}
+
+type GetSourceStructureDecisionResponse struct {
+	Body         []byte
+	HTTPResponse *http.Response
+	JSON200      *SourceStructureDecision
+	JSON401      *UnauthenticatedError
+	JSON403      *ForbiddenError
+	JSON404      *NotFoundError
+}
+
+// Status returns HTTPResponse.Status
+func (r GetSourceStructureDecisionResponse) Status() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Status
+	}
+	return http.StatusText(0)
+}
+
+// StatusCode returns HTTPResponse.StatusCode
+func (r GetSourceStructureDecisionResponse) StatusCode() int {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.StatusCode
+	}
+	return 0
+}
+
+// ContentType is a convenience method to retrieve the Content-Type value from the HTTP response headers
+func (r GetSourceStructureDecisionResponse) ContentType() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Header.Get("Content-Type")
+	}
+	return ""
+}
+
+type UndoSourceStructureDecisionResponse struct {
+	Body         []byte
+	HTTPResponse *http.Response
+	JSON200      *SourceStructureDecision
+	JSON400      *ValidationError
+	JSON401      *UnauthenticatedError
+	JSON403      *ForbiddenError
+	JSON404      *NotFoundError
+	JSON409      *ConflictError
+}
+
+// Status returns HTTPResponse.Status
+func (r UndoSourceStructureDecisionResponse) Status() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Status
+	}
+	return http.StatusText(0)
+}
+
+// StatusCode returns HTTPResponse.StatusCode
+func (r UndoSourceStructureDecisionResponse) StatusCode() int {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.StatusCode
+	}
+	return 0
+}
+
+// ContentType is a convenience method to retrieve the Content-Type value from the HTTP response headers
+func (r UndoSourceStructureDecisionResponse) ContentType() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Header.Get("Content-Type")
+	}
+	return ""
+}
+
 type CreateSourceResponse struct {
 	Body         []byte
 	HTTPResponse *http.Response
@@ -7243,6 +7917,23 @@ func (c *ClientWithResponses) ResolveBindingIssueWithResponse(ctx context.Contex
 	return ParseResolveBindingIssueResponse(rsp)
 }
 
+// ResolveSourceStructureIssueWithBodyWithResponse request with arbitrary body returning *ResolveSourceStructureIssueResponse
+func (c *ClientWithResponses) ResolveSourceStructureIssueWithBodyWithResponse(ctx context.Context, issueId BindingIssueId, params *ResolveSourceStructureIssueParams, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*ResolveSourceStructureIssueResponse, error) {
+	rsp, err := c.ResolveSourceStructureIssueWithBody(ctx, issueId, params, contentType, body, reqEditors...)
+	if err != nil {
+		return nil, err
+	}
+	return ParseResolveSourceStructureIssueResponse(rsp)
+}
+
+func (c *ClientWithResponses) ResolveSourceStructureIssueWithResponse(ctx context.Context, issueId BindingIssueId, params *ResolveSourceStructureIssueParams, body ResolveSourceStructureIssueJSONRequestBody, reqEditors ...RequestEditorFn) (*ResolveSourceStructureIssueResponse, error) {
+	rsp, err := c.ResolveSourceStructureIssue(ctx, issueId, params, body, reqEditors...)
+	if err != nil {
+		return nil, err
+	}
+	return ParseResolveSourceStructureIssueResponse(rsp)
+}
+
 // GetBootstrapWithResponse request returning *GetBootstrapResponse
 func (c *ClientWithResponses) GetBootstrapWithResponse(ctx context.Context, reqEditors ...RequestEditorFn) (*GetBootstrapResponse, error) {
 	rsp, err := c.GetBootstrap(ctx, reqEditors...)
@@ -7573,6 +8264,41 @@ func (c *ClientWithResponses) GetSourceRuleBindingWithResponse(ctx context.Conte
 		return nil, err
 	}
 	return ParseGetSourceRuleBindingResponse(rsp)
+}
+
+// ListSourceStructureDecisionsWithResponse request returning *ListSourceStructureDecisionsResponse
+func (c *ClientWithResponses) ListSourceStructureDecisionsWithResponse(ctx context.Context, params *ListSourceStructureDecisionsParams, reqEditors ...RequestEditorFn) (*ListSourceStructureDecisionsResponse, error) {
+	rsp, err := c.ListSourceStructureDecisions(ctx, params, reqEditors...)
+	if err != nil {
+		return nil, err
+	}
+	return ParseListSourceStructureDecisionsResponse(rsp)
+}
+
+// GetSourceStructureDecisionWithResponse request returning *GetSourceStructureDecisionResponse
+func (c *ClientWithResponses) GetSourceStructureDecisionWithResponse(ctx context.Context, decisionId string, reqEditors ...RequestEditorFn) (*GetSourceStructureDecisionResponse, error) {
+	rsp, err := c.GetSourceStructureDecision(ctx, decisionId, reqEditors...)
+	if err != nil {
+		return nil, err
+	}
+	return ParseGetSourceStructureDecisionResponse(rsp)
+}
+
+// UndoSourceStructureDecisionWithBodyWithResponse request with arbitrary body returning *UndoSourceStructureDecisionResponse
+func (c *ClientWithResponses) UndoSourceStructureDecisionWithBodyWithResponse(ctx context.Context, decisionId string, params *UndoSourceStructureDecisionParams, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*UndoSourceStructureDecisionResponse, error) {
+	rsp, err := c.UndoSourceStructureDecisionWithBody(ctx, decisionId, params, contentType, body, reqEditors...)
+	if err != nil {
+		return nil, err
+	}
+	return ParseUndoSourceStructureDecisionResponse(rsp)
+}
+
+func (c *ClientWithResponses) UndoSourceStructureDecisionWithResponse(ctx context.Context, decisionId string, params *UndoSourceStructureDecisionParams, body UndoSourceStructureDecisionJSONRequestBody, reqEditors ...RequestEditorFn) (*UndoSourceStructureDecisionResponse, error) {
+	rsp, err := c.UndoSourceStructureDecision(ctx, decisionId, params, body, reqEditors...)
+	if err != nil {
+		return nil, err
+	}
+	return ParseUndoSourceStructureDecisionResponse(rsp)
 }
 
 // CreateSourceWithBodyWithResponse request with arbitrary body returning *CreateSourceResponse
@@ -8320,6 +9046,67 @@ func ParseResolveBindingIssueResponse(rsp *http.Response) (*ResolveBindingIssueR
 	switch {
 	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 200:
 		var dest BindingIssue
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON200 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 400:
+		var dest ValidationError
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON400 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 401:
+		var dest UnauthenticatedError
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON401 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 403:
+		var dest ForbiddenError
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON403 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 404:
+		var dest NotFoundError
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON404 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 409:
+		var dest ConflictError
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON409 = &dest
+
+	}
+
+	return response, nil
+}
+
+// ParseResolveSourceStructureIssueResponse parses an HTTP response from a ResolveSourceStructureIssueWithResponse call
+func ParseResolveSourceStructureIssueResponse(rsp *http.Response) (*ResolveSourceStructureIssueResponse, error) {
+	bodyBytes, err := io.ReadAll(rsp.Body)
+	defer func() { _ = rsp.Body.Close() }()
+	if err != nil {
+		return nil, err
+	}
+
+	response := &ResolveSourceStructureIssueResponse{
+		Body:         bodyBytes,
+		HTTPResponse: rsp,
+	}
+
+	switch {
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 200:
+		var dest SourceStructureDecision
 		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
 			return nil, err
 		}
@@ -9684,6 +10471,161 @@ func ParseGetSourceRuleBindingResponse(rsp *http.Response) (*GetSourceRuleBindin
 			return nil, err
 		}
 		response.JSON404 = &dest
+
+	}
+
+	return response, nil
+}
+
+// ParseListSourceStructureDecisionsResponse parses an HTTP response from a ListSourceStructureDecisionsWithResponse call
+func ParseListSourceStructureDecisionsResponse(rsp *http.Response) (*ListSourceStructureDecisionsResponse, error) {
+	bodyBytes, err := io.ReadAll(rsp.Body)
+	defer func() { _ = rsp.Body.Close() }()
+	if err != nil {
+		return nil, err
+	}
+
+	response := &ListSourceStructureDecisionsResponse{
+		Body:         bodyBytes,
+		HTTPResponse: rsp,
+	}
+
+	switch {
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 200:
+		var dest SourceStructureDecisionListResponse
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON200 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 400:
+		var dest ValidationError
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON400 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 401:
+		var dest UnauthenticatedError
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON401 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 403:
+		var dest ForbiddenError
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON403 = &dest
+
+	}
+
+	return response, nil
+}
+
+// ParseGetSourceStructureDecisionResponse parses an HTTP response from a GetSourceStructureDecisionWithResponse call
+func ParseGetSourceStructureDecisionResponse(rsp *http.Response) (*GetSourceStructureDecisionResponse, error) {
+	bodyBytes, err := io.ReadAll(rsp.Body)
+	defer func() { _ = rsp.Body.Close() }()
+	if err != nil {
+		return nil, err
+	}
+
+	response := &GetSourceStructureDecisionResponse{
+		Body:         bodyBytes,
+		HTTPResponse: rsp,
+	}
+
+	switch {
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 200:
+		var dest SourceStructureDecision
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON200 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 401:
+		var dest UnauthenticatedError
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON401 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 403:
+		var dest ForbiddenError
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON403 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 404:
+		var dest NotFoundError
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON404 = &dest
+
+	}
+
+	return response, nil
+}
+
+// ParseUndoSourceStructureDecisionResponse parses an HTTP response from a UndoSourceStructureDecisionWithResponse call
+func ParseUndoSourceStructureDecisionResponse(rsp *http.Response) (*UndoSourceStructureDecisionResponse, error) {
+	bodyBytes, err := io.ReadAll(rsp.Body)
+	defer func() { _ = rsp.Body.Close() }()
+	if err != nil {
+		return nil, err
+	}
+
+	response := &UndoSourceStructureDecisionResponse{
+		Body:         bodyBytes,
+		HTTPResponse: rsp,
+	}
+
+	switch {
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 200:
+		var dest SourceStructureDecision
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON200 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 400:
+		var dest ValidationError
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON400 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 401:
+		var dest UnauthenticatedError
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON401 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 403:
+		var dest ForbiddenError
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON403 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 404:
+		var dest NotFoundError
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON404 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 409:
+		var dest ConflictError
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON409 = &dest
 
 	}
 
