@@ -104,6 +104,7 @@ startup: reconcile publications ↔ jobs
 ## 增量与 Watcher
 
 - Watcher 事件只是“可能变化”的提示，不是事实源；事件丢失必须由周期校验扫描收敛。
+- 当前平台 adapter 提供只读 polling Watcher；它只更新 Source dirty/overflow 状态，不直接发布 Catalog。周期收敛负责在线/离线、失败重试、重复扫描抑制和当前 Job 关联，真实 OS watcher 与网络挂载行为另按平台门禁验证。
 - 增量扫描可复用未变化 Source 分区或候选，但最终仍发布完整查询 revision。
 - 目录签名精度必须到规则可观察的容器层；规则、metadata 或内容身份变化必须使相关候选失效。
 - SourceRuleBinding 的 RuleVersion 或影响索引的参数变化必须经过 RuleImpact 决定重扫范围，不能靠 UI 猜测。
@@ -114,13 +115,14 @@ startup: reconcile publications ↔ jobs
 所有长操作统一为持久 Job：扫描、Catalog GC/VACUUM、Blob 完整哈希、缩略图、转码、备份/恢复校验和大规模 Overlay 重投影。Job 至少提供：
 
 - 稳定 job ID、attempt、类型、资源范围、创建者和 capability 上下文；
-- queued/running/publishing/completed/failed/cancelled/needs_repair 状态；
+- queued/running/publishing/completed/failed/cancelled/needs_repair 状态；对外还可观察 `cancelling`/`superseded` 语义，数据库历史状态保持向后兼容并由应用层映射；
 - 单调进度序号、阶段、可取消性和结构化 issue；
 - 重试关系、开始/结束时间、关联 publication/revision；
+- 字节/实体进度、幂等键、心跳租约、retryable 失败和 attempt 明细；
 - 规则扫描必须额外冻结 `RuleVersion.semantic_hash`、规范化参数和 `parameter_hash`、`rule_ir_hash`、compiler version、CEL Profile version、extension registry version；重试和恢复只复用该快照，不重新读取当前 SourceRuleBinding；
 - 不含敏感绝对路径或 metadata 值的诊断摘要。
 
-扫描、完整哈希和 ffmpeg 必须使用不同有界池；优先级和并发上限属于运行配置，不进入规则表达式。
+扫描、完整哈希、Overlay、DerivedAsset、外部工具和维护必须使用不同有界池；优先级和并发上限属于运行配置，不进入规则表达式。完整 Hash Job 只有在前后身份复核成功后才返回 ContentBlob，Source 扫描在此之前不发布受影响候选。
 
 ## revision 保留与 GC
 
@@ -128,7 +130,7 @@ startup: reconcile publications ↔ jobs
 - 有效游标签发短期租约，租约绑定 `query_publication_id` 并保留其完整 revision 元组；
 - 达到最大保留时间或空间门槛后，旧游标返回 `CURSOR_EXPIRED`，不得无限保留快照；
 - GC 先确认无 publication/租约引用，再删除候选和旧 Catalog/Overlay projection revision；
-- VACUUM 是显式维护任务，必须可取消或安排维护窗口，不能包含在发布路径。
+- VACUUM 是显式维护任务，必须可取消或安排维护窗口，不能包含在发布路径；GC 具备 active Job candidate 保护、dry-run 和空间预检，维护任务与扫描/哈希使用独立资源池。
 
 ## 验收指标
 

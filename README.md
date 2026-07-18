@@ -2,7 +2,7 @@
 
 Gallery（画廊，代码代号 `gallery`）是面向个人及可信局域网的本地优先、只读媒体目录产品。它是独立净室项目，不兼容或迁移任何旧 Gallery 实现。
 
-> 当前状态：**阶段 2「规则闭环」已完成 Correctness 实现**（阶段 0、Walking Skeleton、Architecture Proof 正确性切片和阶段 1「领域和数据所有权」同样已完成）。规则包草稿/版本/参数/审计/编译缓存、严格 JSON/YAML/TOML 导入、Schema/UI metadata、未知扩展分类、Dry Run/Trace/Explain/Impact/diff/回滚、Binding 状态和扫描 Job 规则快照均已接入正式迁移、API 和测试。当前仍没有可供普通用户安装的产品版本；FileLocation 最终唯一约束、完整查询/排序 API、百万级参考性能、真实媒体规模、多平台和发行签名门禁仍未完成。SourceWork 决策撤回仅限尚未被扫描消费的 pre-seed Binding，消费后返回 `CONFLICT`，不等于已生效结构变化的完整反向操作。
+> 当前状态：**阶段 3「扫描、任务和 Catalog」已完成代码与合成 Correctness 实现**（阶段 0、Walking Skeleton、Architecture Proof 正确性切片和阶段 1、阶段 2 同样已完成相应 Correctness 实现）。阶段 3 已接入持久 Job/attempt、六类独立资源池、可取消完整 SHA-256 Hash Job、Watcher 周期收敛、staging/publication、GC/VACUUM/空间预检、DerivedAsset 与外部工具执行边界，以及 REST/OpenAPI/生成客户端和迁移测试。当前仍没有可供普通用户安装的产品版本；真实 HDD、SMB/NAS、网络挂载和正式 Reference/Degradation Performance Gate 留待下一轮实测，FileLocation 最终唯一约束、完整查询/排序 API、多平台和发行签名门禁仍未完成。SourceWork 决策撤回仅限尚未被扫描消费的 pre-seed Binding，消费后返回 `CONFLICT`，不等于已生效结构变化的完整反向操作。
 
 ## 当前可运行能力
 
@@ -16,6 +16,9 @@ Gallery（画廊，代码代号 `gallery`）是面向个人及可信局域网的
 - 打开或迁移数据库前取得 AppDirs 进程独占锁（Windows/Unix 各自平台 adapter）；第二个实例在此以 `INSTANCE_ALREADY_RUNNING` 失败，不打开数据库、不迁移、不监听、不改写活动 descriptor，锁在进程退出或强杀后由操作系统释放；
 - 原子发布带 nonce/ownership 的运行 descriptor，并在正常停止时按 ownership 清理；
 - 扫描与 Overlay 投影 Job 经中央有界调度器领取：按资源类别独立并发上限、context 取消传播、重复领取防护和 graceful shutdown，未完成 Job 由启动 reconciliation 重新入队；
+- 阶段 3 的 Scan、Hash、Overlay、Derived、External Tool、Maintenance 使用独立有界资源池；Job 持久化 attempt、租约/心跳、单调字节与实体进度、取消、重试和幂等键，启动时收敛强杀与未完成任务；
+- Watcher 只写 dirty/overflow 提示，周期性 Source 收敛才创建扫描 Job；Source 离线、权限、文件身份变化和内容消失均保留旧 publication，不把暂时不可达误判成删除；
+- Catalog 维护 Job 支持 staging candidate 活跃保护、GC dry-run、WAL checkpoint、VACUUM 和 AppDirs 临时文件清理；哈希结果只有完整 SHA-256 且前后身份复核成功后才能进入 publication；
 - `galleryctl health` 只使用公开的 `pkg/galleryapi` 生成客户端，不访问数据库、应用服务或后端 `internal` 包；
 - OpenAPI、错误信封、WebSocket 信封、签名游标、规则包 JSON Schema 与 CEL Profile v1 均可执行校验。
 - 规则 API 提供 Schema 感知规范化、默认值物化、三类 hash、validate/compile/Dry Run/Trace/Impact、参数校验和编译缓存；扫描器只执行版本化 Rule IR，不含平台特例；
@@ -43,12 +46,13 @@ Gallery（画廊，代码代号 `gallery`）是面向个人及可信局域网的
 3. `POST /libraries`、`POST /sources`；
 4. `POST /rule-versions`、`POST /source-rule-bindings`；
 5. 可先调用 `/rules/validate`、`/rules/compile`、`/rules/dry-run` 和 `/rules/impact`，再连接 `/ws/v1` 并 `POST /sources/{sourceId}/scan-jobs`；
-6. 通过 `GET /jobs/{jobId}` 取得事实状态，通过 WS 接收提示事件；
-7. `GET /query-publications/current`，通过 `GET /works` 的服务端过滤、搜索、排序和 cursor 分页读取固定快照，再读取 `/works/{workId}/media`；
-8. 对 `/media/{mediaId}/content` 执行 HEAD、GET 或单区间 Range GET；
-9. 通过 `GET/PUT /works/{workId}/overlay` 写入并观察 pending/published/failed；
-10. 通过 `GET /creators` 与 `/creators/{creatorId}` 核对创作者证据，用 `POST /creators/merges` 合并、`DELETE /creators/merges/{mergeId}` 撤销，并按返回的 `projectionJobId` 观察查询投影更新；
-11. 通过 `GET /binding-issues` 与 `/binding-issues/{issueId}` 查看绑定歧义与候选证据，用 `/binding-issues/{issueId}/resolve|dismiss|reopen` 或 `/binding-actions/unbind-work|unbind-media|undo-unbind` 修复后重扫；通过 `GET /orphan-candidates` 查看到达保留窗口的孤立候选，用 `/orphan-candidates/{bindingId}/decide` 决定保留、延长、确认孤立或解绑；服务重启后复用未吊销 Session，并重新读取 Job、publication 和媒体 snapshot。
+6. 通过 `GET /jobs/{jobId}`、`GET /jobs/{jobId}/attempts` 和 `GET /sources/{sourceId}/scan-status` 取得事实状态，通过 `POST /jobs/{jobId}/cancel|retry` 控制可重试任务，并通过 WS 接收提示事件；
+7. 管理员可通过 `POST /admin/maintenance/gc|checkpoint|vacuum` 创建持久维护 Job，再用同一 Job API 观察进度、取消和失败原因；
+8. `GET /query-publications/current`，通过 `GET /works` 的服务端过滤、搜索、排序和 cursor 分页读取固定快照，再读取 `/works/{workId}/media`；
+9. 对 `/media/{mediaId}/content` 执行 HEAD、GET 或单区间 Range GET；
+10. 通过 `GET/PUT /works/{workId}/overlay` 写入并观察 pending/published/failed；
+11. 通过 `GET /creators` 与 `/creators/{creatorId}` 核对创作者证据，用 `POST /creators/merges` 合并、`DELETE /creators/merges/{mergeId}` 撤销，并按返回的 `projectionJobId` 观察查询投影更新；
+12. 通过 `GET /binding-issues` 与 `/binding-issues/{issueId}` 查看绑定歧义与候选证据，用 `/binding-issues/{issueId}/resolve|dismiss|reopen` 或 `/binding-actions/unbind-work|unbind-media|undo-unbind` 修复后重扫；通过 `GET /orphan-candidates` 查看到达保留窗口的孤立候选，用 `/orphan-candidates/{bindingId}/decide` 决定保留、延长、确认孤立或解绑；服务重启后复用未吊销 Session，并重新读取 Job、publication 和媒体 snapshot。
 
 仓库内的完整生成客户端验收见 `internal/bootstrap` 与 `internal/transport/httpapi` 测试；合成输入位于 `tests/fixtures/walking-skeleton`。
 
