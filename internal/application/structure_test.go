@@ -4,6 +4,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/RecRivenVI/gallery/internal/application"
@@ -573,5 +574,31 @@ func TestStructureInputOrderReusesIssue(t *testing.T) {
 	open := f.openIssues(t)
 	if len(open) != 1 || open[0].ID != first[0].ID {
 		t.Fatalf("不同输入顺序未复用同一 issue: first=%s open=%+v", first[0].ID, open)
+	}
+}
+
+// TestLegacyStructureFingerprintIsUpgradedInPlace 验证旧版 v1 issue 在再次观察到相同旧证据时
+// 原位升级为当前 v2 指纹，不重开或替换既有 issue。
+func TestLegacyStructureFingerprintIsUpgradedInPlace(t *testing.T) {
+	f := newIssueFixture(t)
+	issue, _, split := f.seedSplit(t)
+	legacy := "split|wkA|wkA1\x00wkA2"
+	if _, err := f.control.ExecContext(f.ctx, `UPDATE binding_issues SET candidate_fingerprint=? WHERE issue_id=?`, legacy, issue.ID); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := f.resources.EnsureCanonical(f.ctx, f.source.ID, split); err == nil {
+		t.Fatal("旧版指纹对应的结构变化仍应阻塞")
+	}
+	open := f.openIssues(t)
+	if len(open) != 1 || open[0].ID != issue.ID {
+		t.Fatalf("旧版 issue 未原位复用: %+v", open)
+	}
+	var upgraded string
+	if err := f.control.QueryRowContext(f.ctx, `SELECT candidate_fingerprint FROM binding_issues WHERE issue_id=?`, issue.ID).Scan(&upgraded); err != nil {
+		t.Fatal(err)
+	}
+	if upgraded == legacy || !strings.HasPrefix(upgraded, "sf2:") {
+		t.Fatalf("旧版 issue 未升级为 v2 指纹: %q", upgraded)
 	}
 }

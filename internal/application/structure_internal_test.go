@@ -41,11 +41,37 @@ func TestStructureFingerprintDeterministicAndEvidenceSensitive(t *testing.T) {
 		t.Fatal("Blob 归属变化未改变指纹")
 	}
 
+	// 算法版本变化也必须改变完整 Blob 证据身份。
+	algorithmChanged := base
+	algorithmChanged.originDigests = map[string][]string{"wkA": {"sha-512:d1", "sha-256:d2", "sha-256:d3"}}
+	if structureFingerprint(algorithmChanged) == baseFP {
+		t.Fatal("Blob 算法变化未改变指纹")
+	}
+
 	// source_key 与 Blob 集合相同但 new→origin 映射变化：指纹必须不同。
 	mappingChanged := base
 	mappingChanged.mapping = map[string][]string{"wkA1": {"wkA"}, "wkA2": {"wkA", "wkB"}}
 	if structureFingerprint(mappingChanged) == baseFP {
 		t.Fatal("映射变化未改变指纹")
+	}
+
+	// 规范化必须去重：重复的 source_key、digest 和映射边不应制造新的证据身份。
+	withDuplicates := base
+	withDuplicates.originSourceKeys = []string{"wkA", "wkA"}
+	withDuplicates.originWorkIDs = []string{"wrk_x", "wrk_x"}
+	withDuplicates.newSourceKeys = []string{"wkA2", "wkA1", "wkA1", "wkA2"}
+	withDuplicates.originDigests = map[string][]string{"wkA": {"sha-256:d3", "sha-256:d1", "sha-256:d1", "sha-256:d2"}}
+	withDuplicates.newDigests = map[string][]string{"wkA1": {"sha-256:d2", "sha-256:d1", "sha-256:d1"}, "wkA2": {"sha-256:d3", "sha-256:d3"}}
+	withDuplicates.mapping = map[string][]string{"wkA1": {"wkA", "wkA"}, "wkA2": {"wkA", "wkA"}}
+	if got := structureFingerprint(withDuplicates); got != baseFP {
+		t.Fatalf("重复证据未被规范化去重: base=%s got=%s", baseFP, got)
+	}
+
+	// 候选 CanonicalWork 身份变化必须改变人工判断依据。
+	workChanged := base
+	workChanged.originWorkIDs = []string{"wrk_y"}
+	if structureFingerprint(workChanged) == baseFP {
+		t.Fatal("候选 CanonicalWork 身份变化未改变指纹")
 	}
 
 	// 不同 Source 相同结构：指纹必须不同。
