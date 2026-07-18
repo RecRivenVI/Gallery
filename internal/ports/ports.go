@@ -47,6 +47,10 @@ type FileWatcher interface {
 	Watch(ctx context.Context, root string) (<-chan WatchEvent, error)
 }
 
+type SpaceChecker interface {
+	FreeBytes(path string) (int64, error)
+}
+
 type Command struct {
 	Path   string
 	Args   []string
