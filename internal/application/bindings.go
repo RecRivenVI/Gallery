@@ -20,6 +20,7 @@ type BindingIssue struct {
 	ID               string
 	SourceID         string
 	EntityType       string
+	StructureKind    string
 	SourceKey        string
 	WorkSourceKey    string
 	ProviderID       string
@@ -231,7 +232,7 @@ func (r *Resources) ListBindingIssues(ctx context.Context, filter BindingIssueFi
 		conditions = append(conditions, "(created_at > ? OR (created_at = ? AND issue_id > ?))")
 		args = append(args, createdAt, createdAt, issueID)
 	}
-	query := `SELECT issue_id, source_id, entity_type, source_key, work_source_key, provider_id, external_id,
+	query := `SELECT issue_id, source_id, entity_type, COALESCE(structure_kind, ''), source_key, work_source_key, provider_id, external_id,
 code, candidate_count, status, resolution, resolved_target_id, resolved_by, version, created_at, updated_at, resolved_at
 FROM binding_issues WHERE ` + strings.Join(conditions, " AND ") +
 		` ORDER BY created_at, issue_id LIMIT ?`
@@ -266,7 +267,7 @@ func (r *Resources) GetBindingIssue(ctx context.Context, issueID string) (Bindin
 	if _, err := domain.ParseID(domain.IDBindingIssue, issueID); err != nil {
 		return BindingIssue{}, fault.New(fault.CodeNotFound, false, nil)
 	}
-	row := r.control.QueryRowContext(ctx, `SELECT issue_id, source_id, entity_type, source_key, work_source_key,
+	row := r.control.QueryRowContext(ctx, `SELECT issue_id, source_id, entity_type, COALESCE(structure_kind, ''), source_key, work_source_key,
 provider_id, external_id, code, candidate_count, status, resolution, resolved_target_id, resolved_by,
 version, created_at, updated_at, resolved_at FROM binding_issues WHERE issue_id=?`, issueID)
 	issue, err := scanBindingIssueRow(row)
@@ -317,7 +318,7 @@ func scanBindingIssueRow(row rowScanner) (BindingIssue, error) {
 	var workSourceKey, providerID, externalID sql.NullString
 	var createdAt, updatedAt int64
 	var resolvedAt sql.NullInt64
-	if err := row.Scan(&issue.ID, &issue.SourceID, &issue.EntityType, &issue.SourceKey, &workSourceKey,
+	if err := row.Scan(&issue.ID, &issue.SourceID, &issue.EntityType, &issue.StructureKind, &issue.SourceKey, &workSourceKey,
 		&providerID, &externalID, &issue.Code, &issue.CandidateCount, &issue.Status, &resolution,
 		&resolvedTarget, &resolvedBy, &issue.Version, &createdAt, &updatedAt, &resolvedAt); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {

@@ -1067,3 +1067,116 @@ func TestControlBackupEndpoints(t *testing.T) {
 		t.Fatalf("缺 CSRF 恢复请求未 403: %v status=%d", err, noCSRF.StatusCode())
 	}
 }
+
+func TestSourceStructureDecisionAPI(t *testing.T) {
+	ctx := context.Background()
+	dirs := appdirs.UnderRoot(filepath.Join(t.TempDir(), "app"))
+	if err := dirs.Ensure(filesystem.OS{}); err != nil {
+		t.Fatal(err)
+	}
+	store, err := storage.Open(ctx, dirs)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	fixedClock := clock.Fixed{Time: time.Now().UTC()}
+	generator := identity.NewGenerator(fixedClock)
+	personal, err := auth.NewPersonal(store.Control.SQL(), fixedClock, generator, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resources, err := application.NewResources(store.Control.SQL(), dirs, filesystem.OS{}, fixedClock, generator)
+	if err != nil {
+		t.Fatal(err)
+	}
+	handler := httpapi.New(config.ModePersonal, store, fixedClock, personal, resources, nil, nil, nil, nil, nil, nil, nil, slog.New(slog.NewJSONHandler(io.Discard, nil)))
+	server := httptest.NewServer(handler)
+	defer server.Close()
+
+	newID := func(kind domain.IDKind) string {
+		id, err := generator.New(kind)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return id.String()
+	}
+	exec := func(query string, args ...any) {
+		if _, err := store.Control.SQL().ExecContext(ctx, query, args...); err != nil {
+			t.Fatal(err)
+		}
+	}
+	libraryID, sourceID := newID(domain.IDLibrary), newID(domain.IDSource)
+	originWork, issueID := newID(domain.IDCanonicalWork), newID(domain.IDBindingIssue)
+	exec(`INSERT INTO libraries (library_id, name, created_at) VALUES (?, 'lib', 1)`, libraryID)
+	exec(`INSERT INTO sources (source_id, library_id, display_name, root_path, root_key, created_at)
+VALUES (?, ?, 'src', '/seed/root', '/seed/root', 1)`, sourceID, libraryID)
+	exec(`INSERT INTO canonical_works (work_id, title, created_at) VALUES (?, '原作品', 1)`, originWork)
+	// 模拟检测产生的拆分审查 issue：原 SourceWork wkA 拆为 wkA1、wkA2。
+	exec(`INSERT INTO binding_issues
+(issue_id, source_id, entity_type, structure_kind, source_key, code, candidate_fingerprint, candidate_count, status, version, created_at, updated_at)
+VALUES (?, ?, 'work', 'split', 'wkA', 'SOURCE_WORK_SPLIT_REVIEW_REQUIRED', 'split|wkA|wkA1\x00wkA2', 3, 'open', 1, 10, 10)`,
+		issueID, sourceID, originWork)
+	exec(`INSERT INTO binding_issue_candidates (issue_id, ordinal, candidate_id, candidate_kind, match_signal, match_value, label)
+VALUES (?, 0, ?, 'work', 'origin_canonical', 'wkA', '原作品'),
+       (?, 1, 'wkA1', 'work', 'new_source_work', '', ''),
+       (?, 2, 'wkA2', 'work', 'new_source_work', '', '')`, issueID, originWork, issueID, issueID)
+
+	jar, err := cookiejar.New(nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	client, err := api.NewClientWithResponses(server.URL, api.WithHTTPClient(&http.Client{Jar: jar}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	csrf := pairSession(t, ctx, client, server.URL)
+	editor := sameOrigin(server.URL)
+
+	// issue 详情应携带 structureKind。
+	detail, err := client.GetBindingIssueWithResponse(ctx, issueID)
+	if err != nil || detail.JSON200 == nil || detail.JSON200.StructureKind == nil || string(*detail.JSON200.StructureKind) != "split" {
+		t.Fatalf("issue structureKind 缺失: %v status=%d body=%s", err, detail.StatusCode(), detail.Body)
+	}
+
+	// 缺 CSRF 决策被拒绝。
+	target := "wkA1"
+	if noCSRF, err := client.ResolveSourceStructureIssueWithResponse(ctx, issueID, &api.ResolveSourceStructureIssueParams{XGalleryCSRF: ""},
+		api.SourceStructureDecisionRequest{Action: "split_inherit", TargetSourceKey: &target, Version: 1}, editor); err != nil || noCSRF.JSON403 == nil {
+		t.Fatalf("缺 CSRF 决策未 403: %v status=%d", err, noCSRF.StatusCode())
+	}
+	// kind 不匹配的合并动作应校验失败。
+	if bad, err := client.ResolveSourceStructureIssueWithResponse(ctx, issueID, &api.ResolveSourceStructureIssueParams{XGalleryCSRF: csrf},
+		api.SourceStructureDecisionRequest{Action: "merge_create_new", Version: 1}, editor); err != nil || bad.JSON400 == nil {
+		t.Fatalf("kind 不匹配未 400: %v status=%d body=%s", err, bad.StatusCode(), bad.Body)
+	}
+	// split_inherit 决策成功。
+	resolved, err := client.ResolveSourceStructureIssueWithResponse(ctx, issueID, &api.ResolveSourceStructureIssueParams{XGalleryCSRF: csrf},
+		api.SourceStructureDecisionRequest{Action: "split_inherit", TargetSourceKey: &target, Version: 1}, editor)
+	if err != nil || resolved.JSON200 == nil || string(resolved.JSON200.Status) != "applied" ||
+		string(resolved.JSON200.Kind) != "split" || resolved.JSON200.TargetWorkId == nil || *resolved.JSON200.TargetWorkId != originWork {
+		t.Fatalf("split_inherit 接口失败: %v status=%d body=%s", err, resolved.StatusCode(), resolved.Body)
+	}
+	decisionID := resolved.JSON200.DecisionId
+
+	// 列表与详情。
+	appliedStatus := api.ListSourceStructureDecisionsParamsStatus("applied")
+	list, err := client.ListSourceStructureDecisionsWithResponse(ctx, &api.ListSourceStructureDecisionsParams{SourceId: &sourceID, Status: &appliedStatus})
+	if err != nil || list.JSON200 == nil || len(list.JSON200.Decisions) != 1 || list.JSON200.Decisions[0].DecisionId != decisionID {
+		t.Fatalf("决策列表错误: %v status=%d body=%s", err, list.StatusCode(), list.Body)
+	}
+	if bytes.Contains(list.Body, []byte("/seed/root")) {
+		t.Fatal("决策列表泄露绝对路径")
+	}
+
+	// 重扫前撤销成功（clean）。
+	undone, err := client.UndoSourceStructureDecisionWithResponse(ctx, decisionID, &api.UndoSourceStructureDecisionParams{XGalleryCSRF: csrf},
+		api.BindingIssueVersionRequest{Version: 1}, editor)
+	if err != nil || undone.JSON200 == nil || string(undone.JSON200.Status) != "undone" {
+		t.Fatalf("撤销接口失败: %v status=%d body=%s", err, undone.StatusCode(), undone.Body)
+	}
+	// issue 应重新打开。
+	reopened, err := client.GetBindingIssueWithResponse(ctx, issueID)
+	if err != nil || reopened.JSON200 == nil || string(reopened.JSON200.Status) != "open" {
+		t.Fatalf("撤销后 issue 未重开: %v body=%s", err, reopened.Body)
+	}
+}

@@ -1072,6 +1072,122 @@ paths:
           $ref: "#/components/responses/NotFoundError"
         "409":
           $ref: "#/components/responses/ConflictError"
+  /api/v1/binding-issues/{issueId}/resolve-structure:
+    post:
+      operationId: resolveSourceStructureIssue
+      summary: 对 SourceWork 拆分或合并审查 issue 应用人工决策，以 pre-seed Binding 表达，不改写 Canonical 用户事实
+      parameters:
+        - name: issueId
+          in: path
+          required: true
+          schema:
+            $ref: "#/components/schemas/BindingIssueId"
+        - $ref: "#/components/parameters/CSRFHeader"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/SourceStructureDecisionRequest"
+      responses:
+        "200":
+          description: 决策结果
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SourceStructureDecision"
+        "400":
+          $ref: "#/components/responses/ValidationError"
+        "401":
+          $ref: "#/components/responses/UnauthenticatedError"
+        "403":
+          $ref: "#/components/responses/ForbiddenError"
+        "404":
+          $ref: "#/components/responses/NotFoundError"
+        "409":
+          $ref: "#/components/responses/ConflictError"
+  /api/v1/source-structure-decisions:
+    get:
+      operationId: listSourceStructureDecisions
+      summary: 列出 SourceWork 拆分/合并人工决策记录
+      parameters:
+        - {name: sourceId, in: query, required: false, schema: {$ref: "#/components/schemas/SourceId"}}
+        - {name: status, in: query, required: false, schema: {type: string, enum: [applied, undone]}}
+        - {name: limit, in: query, required: false, schema: {type: integer, minimum: 1, maximum: 200, default: 50}}
+      responses:
+        "200":
+          description: 决策列表
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SourceStructureDecisionListResponse"
+        "400":
+          $ref: "#/components/responses/ValidationError"
+        "401":
+          $ref: "#/components/responses/UnauthenticatedError"
+        "403":
+          $ref: "#/components/responses/ForbiddenError"
+  /api/v1/source-structure-decisions/{decisionId}:
+    get:
+      operationId: getSourceStructureDecision
+      summary: 读取单条 SourceWork 拆分/合并决策
+      parameters:
+        - name: decisionId
+          in: path
+          required: true
+          schema:
+            type: string
+            minLength: 1
+            maxLength: 128
+      responses:
+        "200":
+          description: 决策
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SourceStructureDecision"
+        "401":
+          $ref: "#/components/responses/UnauthenticatedError"
+        "403":
+          $ref: "#/components/responses/ForbiddenError"
+        "404":
+          $ref: "#/components/responses/NotFoundError"
+  /api/v1/source-structure-decisions/{decisionId}/undo:
+    post:
+      operationId: undoSourceStructureDecision
+      summary: 撤销尚未被扫描消费的拆分/合并决策，已消费时返回 CONFLICT
+      parameters:
+        - name: decisionId
+          in: path
+          required: true
+          schema:
+            type: string
+            minLength: 1
+            maxLength: 128
+        - $ref: "#/components/parameters/CSRFHeader"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/BindingIssueVersionRequest"
+      responses:
+        "200":
+          description: 已撤销
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SourceStructureDecision"
+        "400":
+          $ref: "#/components/responses/ValidationError"
+        "401":
+          $ref: "#/components/responses/UnauthenticatedError"
+        "403":
+          $ref: "#/components/responses/ForbiddenError"
+        "404":
+          $ref: "#/components/responses/NotFoundError"
+        "409":
+          $ref: "#/components/responses/ConflictError"
   /api/v1/binding-actions/unbind-work:
     post:
       operationId: unbindWork
@@ -1425,6 +1541,8 @@ components:
         - BACKUP_NOT_FOUND
         - BACKUP_CORRUPT
         - BACKUP_INCOMPATIBLE
+        - SOURCE_WORK_SPLIT_REVIEW_REQUIRED
+        - SOURCE_WORK_MERGE_REVIEW_REQUIRED
     Job:
       type: object
       additionalProperties: false
@@ -1877,6 +1995,10 @@ components:
         entityType:
           type: string
           enum: [work, creator, media]
+        structureKind:
+          type: string
+          enum: [split, merge]
+          nullable: true
         sourceKey:
           type: string
         workSourceKey:
@@ -1952,6 +2074,65 @@ components:
         version:
           type: integer
           minimum: 1
+    SourceStructureDecisionRequest:
+      type: object
+      additionalProperties: false
+      required: [action, version]
+      properties:
+        action:
+          type: string
+          enum: [split_inherit, split_keep_same, split_create_new, merge_bind_existing, merge_create_new]
+        targetSourceKey:
+          type: string
+          maxLength: 4096
+        targetWorkId:
+          type: string
+          maxLength: 128
+        version:
+          type: integer
+          minimum: 1
+    SourceStructureDecision:
+      type: object
+      additionalProperties: false
+      required: [decisionId, issueId, sourceId, kind, action, status, version, createdAt, updatedAt]
+      properties:
+        decisionId:
+          type: string
+        issueId:
+          $ref: "#/components/schemas/BindingIssueId"
+        sourceId:
+          $ref: "#/components/schemas/SourceId"
+        kind:
+          type: string
+          enum: [split, merge]
+        action:
+          type: string
+          enum: [split_inherit, split_keep_same, split_create_new, merge_bind_existing, merge_create_new]
+        targetSourceKey:
+          type: string
+        targetWorkId:
+          type: string
+        status:
+          type: string
+          enum: [applied, undone]
+        version:
+          type: integer
+          minimum: 1
+        createdAt:
+          type: string
+          format: date-time
+        updatedAt:
+          type: string
+          format: date-time
+    SourceStructureDecisionListResponse:
+      type: object
+      additionalProperties: false
+      required: [decisions]
+      properties:
+        decisions:
+          type: array
+          items:
+            $ref: "#/components/schemas/SourceStructureDecision"
     BindingUnbindRequest:
       type: object
       additionalProperties: false
