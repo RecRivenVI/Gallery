@@ -30,7 +30,7 @@ func openTestStore(t *testing.T) (*Store, appdirs.Dirs) {
 
 func TestIndependentWALMigrationsAndBackup(t *testing.T) {
 	store, dirs := openTestStore(t)
-	wantVersions := map[Role]int{RoleControl: 15, RoleCatalog: 7}
+	wantVersions := map[Role]int{RoleControl: 16, RoleCatalog: 7}
 	for _, database := range []*Database{store.Control, store.Catalog} {
 		var version int
 		if err := database.db.QueryRow("PRAGMA user_version").Scan(&version); err != nil {
@@ -200,6 +200,92 @@ VALUES ('wrk_existing', 1, 'published', 2)`); err != nil {
 	}
 }
 
+func TestSchemaFreezeMigrationUpgradesPopulatedV15Control(t *testing.T) {
+	ctx := context.Background()
+	path := filepath.Join(t.TempDir(), "control.db")
+	db, err := sql.Open("sqlite", "file:"+filepath.ToSlash(path)+"?_pragma=foreign_keys(ON)")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.ExecContext(ctx, `CREATE TABLE gallery_schema_migrations (
+version INTEGER PRIMARY KEY NOT NULL, name TEXT NOT NULL, sha256 TEXT NOT NULL,
+applied_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))) STRICT`); err != nil {
+		t.Fatal(err)
+	}
+	sub, err := fs.Sub(migrationFiles, "migrations/control")
+	if err != nil {
+		t.Fatal(err)
+	}
+	migrations, err := readMigrations(sub)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, item := range migrations[:15] {
+		if err := applyMigration(ctx, db, item); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, err := db.ExecContext(ctx, `
+INSERT INTO libraries (library_id, name, created_at)
+VALUES ('lib_existing', '既有库', 1);
+INSERT INTO sources (source_id, library_id, display_name, root_path, root_key, created_at)
+VALUES ('src_existing', 'lib_existing', '既有 Source', 'synthetic-root', 'synthetic-root-key', 2);
+INSERT INTO canonical_works (work_id, title, created_at)
+VALUES ('wrk_existing', '既有作品', 3);
+INSERT INTO binding_issues
+(issue_id, source_id, entity_type, structure_kind, source_key, work_source_key,
+ provider_id, external_id, code, candidate_fingerprint, candidate_count, status,
+ version, created_at, updated_at)
+VALUES ('issue_existing', 'src_existing', 'work', 'split', 'wk-parent', '',
+ 'provider', 'external', 'source_work_split', 'sf1:existing', 2, 'open',
+ 1, 4, 5);
+INSERT INTO source_structure_decisions
+(decision_id, issue_id, source_id, kind, action, fingerprint,
+ origin_source_keys, origin_work_ids, new_source_keys, target_source_key, target_work_id,
+ decided_by, status, version, created_at, updated_at)
+VALUES ('decision_existing', 'issue_existing', 'src_existing', 'split', 'split_create_new', 'sf1:existing',
+ '["wk-parent"]', '["wrk_existing"]', '["wk-child"]', '', '',
+ 'owner', 'applied', 1, 6, 7);`); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	upgraded, err := openDatabase(ctx, RoleControl, path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer upgraded.Close()
+	var version int
+	if err := upgraded.db.QueryRowContext(ctx, "PRAGMA user_version").Scan(&version); err != nil {
+		t.Fatal(err)
+	}
+	if version != 16 {
+		t.Fatalf("v15 数据升级后的 user_version = %d", version)
+	}
+	var issueFingerprint, decisionFingerprint string
+	if err := upgraded.db.QueryRowContext(ctx, `SELECT candidate_fingerprint FROM binding_issues
+WHERE issue_id='issue_existing'`).Scan(&issueFingerprint); err != nil {
+		t.Fatal(err)
+	}
+	if err := upgraded.db.QueryRowContext(ctx, `SELECT fingerprint FROM source_structure_decisions
+WHERE decision_id='decision_existing'`).Scan(&decisionFingerprint); err != nil {
+		t.Fatal(err)
+	}
+	if issueFingerprint != "sf1:existing" || decisionFingerprint != "sf1:existing" {
+		t.Fatalf("既有结构证据在 v16 升级中被改写: issue=%q decision=%q", issueFingerprint, decisionFingerprint)
+	}
+	var freezeCount int
+	if err := upgraded.db.QueryRowContext(ctx, `SELECT count(*) FROM schema_freeze
+WHERE freeze_phase='phase1'`).Scan(&freezeCount); err != nil {
+		t.Fatal(err)
+	}
+	if freezeCount != 17 {
+		t.Fatalf("v16 未登记完整阶段 1 冻结项: %d", freezeCount)
+	}
+}
+
 func TestFailedMigrationRollsBackItsTransaction(t *testing.T) {
 	db, err := sql.Open("sqlite", "file:"+filepath.ToSlash(filepath.Join(t.TempDir(), "rollback.db")))
 	if err != nil {
@@ -228,5 +314,70 @@ func TestMigrationFileNamesAreStrict(t *testing.T) {
 	_, err := readMigrations(fs.FS(os.DirFS(t.TempDir())))
 	if err != nil {
 		t.Fatal(err)
+	}
+}
+
+// TestPhase1SchemaFreezeRecorded 断言阶段 1 Schema Freeze Gate 已把身份与唯一约束分类登记为可查询
+// 产品事实，且被冻结的核心 active Binding 唯一索引与结构决策 fingerprint 唯一索引真实存在。
+func TestPhase1SchemaFreezeRecorded(t *testing.T) {
+	store, _ := openTestStore(t)
+	ctx := context.Background()
+	control := store.Control.SQL()
+
+	want := map[string]string{
+		"binding.active_source_key_unique":              "FROZEN",
+		"binding.nonactive_history_multi":               "FROZEN",
+		"binding.manual_unbound_excludes_auto":          "FROZEN",
+		"binding.multi_source_isolation":                "FROZEN",
+		"binding.source_rebuild_recovery":               "FROZEN",
+		"binding.orphan_candidate_in_resolution":        "COMPATIBILITY_BASELINE",
+		"binding.provider_external_id_conflict":         "PRE_FREEZE",
+		"binding.rule_version_identity_namespace":       "DEFERRED",
+		"canonical_work.identity_by_persistent_id":      "FROZEN",
+		"canonical_work.origin_model":                   "PRE_FREEZE",
+		"canonical_media.work_ordinal_unique":           "FROZEN",
+		"canonical_media.same_blob_multi_occurrence":    "FROZEN",
+		"media_binding.blob_evidence_recandidate":       "COMPATIBILITY_BASELINE",
+		"binding_issue.fingerprint_dedup":               "FROZEN",
+		"binding_issue.active_uniqueness":               "COMPATIBILITY_BASELINE",
+		"structure_decision.fingerprint_unique_applied": "FROZEN",
+		"structure_decision.undo_conflict_on_consumed":  "FROZEN",
+	}
+	rows, err := control.QueryContext(ctx, `SELECT subject, classification FROM schema_freeze
+WHERE freeze_phase='phase1' ORDER BY subject`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer rows.Close()
+	got := make(map[string]string, len(want))
+	for rows.Next() {
+		var subject, classification string
+		if err := rows.Scan(&subject, &classification); err != nil {
+			t.Fatal(err)
+		}
+		got[subject] = classification
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != len(want) {
+		t.Fatalf("阶段 1 冻结项数量漂移: want=%d got=%d", len(want), len(got))
+	}
+	for subject, classification := range want {
+		if got[subject] != classification {
+			t.Fatalf("阶段 1 冻结分类漂移: subject=%s want=%s got=%s", subject, classification, got[subject])
+		}
+	}
+	// 被冻结的关键唯一索引必须存在于 schema。
+	for _, index := range []string{
+		"work_bindings_one_active_key", "media_bindings_one_active_key",
+		"creator_bindings_one_active_key", "source_structure_decisions_fingerprint_idx",
+	} {
+		var name string
+		err := control.QueryRowContext(ctx, `SELECT name FROM sqlite_master
+WHERE type='index' AND name=?`, index).Scan(&name)
+		if err != nil {
+			t.Fatalf("冻结索引缺失 %s: %v", index, err)
+		}
 	}
 }
