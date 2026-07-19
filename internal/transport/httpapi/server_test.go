@@ -331,6 +331,15 @@ func TestPersonalPairingIsSingleUseAndRevocationInvalidatesREST(t *testing.T) {
 	if err != nil || notModified.StatusCode() != http.StatusNotModified || len(notModified.Body) != 0 {
 		t.Fatalf("If-None-Match 错误: %v status=%d", err, notModified.StatusCode())
 	}
+	ifRangeMatch, err := client.GetMediaContentWithResponse(context.Background(), mediaID, &api.GetMediaContentParams{Range: &rangeHeader, IfRange: &etag})
+	if err != nil || ifRangeMatch.StatusCode() != http.StatusPartialContent || string(ifRangeMatch.Body) != "gallery" {
+		t.Fatalf("If-Range 匹配当前 ETag 应执行 Range: %v status=%d body=%q", err, ifRangeMatch.StatusCode(), ifRangeMatch.Body)
+	}
+	staleETag := `"gallery-sha256-v1-stale"`
+	ifRangeStale, err := client.GetMediaContentWithResponse(context.Background(), mediaID, &api.GetMediaContentParams{Range: &rangeHeader, IfRange: &staleETag})
+	if err != nil || ifRangeStale.StatusCode() != http.StatusOK || !bytes.Equal(ifRangeStale.Body, mediaContent) {
+		t.Fatalf("If-Range 不匹配应退回完整 200: %v status=%d body=%q", err, ifRangeStale.StatusCode(), ifRangeStale.Body)
+	}
 	invalidRange := "bytes=0-1,3-4"
 	invalid, err := client.GetMediaContentWithResponse(context.Background(), mediaID, &api.GetMediaContentParams{Range: &invalidRange})
 	if err != nil || invalid.JSON416 == nil || invalid.JSON416.Error.Code != api.RANGEINVALID {
