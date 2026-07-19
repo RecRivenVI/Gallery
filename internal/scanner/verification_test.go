@@ -7,11 +7,13 @@ import (
 	"testing"
 	"time"
 
+	"crypto/sha256"
 	"encoding/json"
 	"errors"
 	"github.com/RecRivenVI/gallery/internal/application"
 	"github.com/RecRivenVI/gallery/internal/catalog"
 	"github.com/RecRivenVI/gallery/internal/contract/fault"
+	"github.com/RecRivenVI/gallery/internal/domain"
 	"github.com/RecRivenVI/gallery/internal/hashjob"
 	"github.com/RecRivenVI/gallery/internal/jobs"
 	"github.com/RecRivenVI/gallery/internal/scanner"
@@ -449,4 +451,77 @@ func TestExplicitIndexRejectedWhenSourceAlreadyPublished(t *testing.T) {
 
 type scanProfileRequest struct {
 	ScanProfile string `json:"scanProfile,omitempty"`
+}
+
+// TestIncrementalDoesNotReuseDigestAfterFileChangesBetweenDiscoveryAndReuse 是 TOCTOU 回归
+// 测试：discovery 阶段的 Stat 与准备复用既往摘要之间存在窗口，文件在此窗口内被替换时不得
+// 错误复用旧 digest，必须降级为新的 Hash Job 并确认当前真实内容。
+func TestIncrementalDoesNotReuseDigestAfterFileChangesBetweenDiscoveryAndReuse(t *testing.T) {
+	fixture := []byte("toctou fixture before the reuse decision replaces this content")
+	_, _, catalogStore, service, source, store := setupWithHash(t, fixture)
+	defer store.Close()
+	ctx := context.Background()
+
+	first, err := service.CreateScanWithProfile(ctx, source.ID, "personal-owner", "", scanner.ScanProfileIncremental)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := service.Execute(ctx, first.ID); err != nil {
+		t.Fatal(err)
+	}
+	_, worksBefore, err := catalogStore.ListWorks(ctx)
+	if err != nil || len(worksBefore) != 1 {
+		t.Fatal(err)
+	}
+	_, mediaBefore, err := catalogStore.ListMediaForWork(ctx, worksBefore[0].ID)
+	if err != nil || len(mediaBefore) != 1 || mediaBefore[0].Digest == "" {
+		t.Fatalf("首次扫描未建立已确认 digest: %+v %v", mediaBefore, err)
+	}
+
+	mediaPath := filepath.Join(source.RootPath, "work-one", "media.bin")
+	replacement := []byte("replaced strictly between discovery and the reuse decision window!!")
+	if len(replacement) == len(fixture) {
+		t.Fatal("测试前置条件错误：替换内容大小需与原文件不同，以避免与已知同大小限制混淆")
+	}
+	service.SetPreReuseHook(func(relativePath string) {
+		if relativePath != "work-one/media.bin" {
+			return
+		}
+		if err := os.Chmod(mediaPath, 0o600); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(mediaPath, replacement, 0o400); err != nil {
+			t.Fatal(err)
+		}
+	})
+
+	second, err := service.CreateScanWithProfile(ctx, source.ID, "personal-owner", "", scanner.ScanProfileIncremental)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := service.Execute(ctx, second.ID); err != nil {
+		t.Fatal(err)
+	}
+	_, worksAfter, err := catalogStore.ListWorks(ctx)
+	if err != nil || len(worksAfter) != 1 {
+		t.Fatal(err)
+	}
+	_, mediaAfter, err := catalogStore.ListMediaForWork(ctx, worksAfter[0].ID)
+	if err != nil || len(mediaAfter) != 1 {
+		t.Fatal(err)
+	}
+	if mediaAfter[0].Digest == mediaBefore[0].Digest {
+		t.Fatalf("discovery 之后、复用之前文件已变化，不应复用旧 digest: before=%s after=%s", mediaBefore[0].Digest, mediaAfter[0].Digest)
+	}
+	expectedDigest := domain.NewSHA256BlobRef(sha256.Sum256(replacement)).Digest
+	if mediaAfter[0].Digest != expectedDigest {
+		t.Fatalf("重新确认的 digest 应反映复用决策窗口内的真实当前内容: got=%s want=%s", mediaAfter[0].Digest, expectedDigest)
+	}
+	var hashJobCount int
+	if err := store.Control.SQL().QueryRowContext(ctx, "SELECT count(*) FROM jobs WHERE job_type='hash'").Scan(&hashJobCount); err != nil {
+		t.Fatal(err)
+	}
+	if hashJobCount != 2 {
+		t.Fatalf("复用前证据变化应降级为新的 Hash Job，实际 hashJobCount=%d", hashJobCount)
+	}
 }
