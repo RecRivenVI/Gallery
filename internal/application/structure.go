@@ -432,6 +432,32 @@ func sortedCopy(values []string) []string {
 	return unique
 }
 
+// SourceHasDurableHistory 判断某 Source 是否已经存在不可由 Catalog 单独代表的持久领域历史：
+// work_bindings/media_bindings/creator_bindings 的任意历史状态（active、inactive、
+// orphan_candidate、orphaned、manual_unbound、conflict）、Binding issue（含 SourceWork
+// 拆分/合并审查）或 SourceWork 结构决策。Catalog 可以随时删除重建，但这些记录只存在于
+// control.db，一旦存在就说明该 Source 曾经完成过真正的 Canonical 解析；Catalog 重建后若
+// 仅凭"当前无 publication"判断为全新 Source 并默认选择 index，会让本次扫描不建立
+// ContentBlob digest，绕过阶段 1 依赖完整哈希证据的 SourceWork 拆分/合并结构审查。
+// Source 行本身、SourceRuleBinding 或从未成功解析过 Canonical 的空 Source 不计入此判定。
+func (r *Resources) SourceHasDurableHistory(ctx context.Context, sourceID string) (bool, error) {
+	if _, err := domain.ParseID(domain.IDSource, sourceID); err != nil {
+		return false, fault.New(fault.CodeValidation, false, nil)
+	}
+	var count int
+	err := r.control.QueryRowContext(ctx, `SELECT
+  (SELECT count(*) FROM work_bindings WHERE source_id=?) +
+  (SELECT count(*) FROM media_bindings WHERE source_id=?) +
+  (SELECT count(*) FROM creator_bindings WHERE source_id=?) +
+  (SELECT count(*) FROM binding_issues WHERE source_id=?) +
+  (SELECT count(*) FROM source_structure_decisions WHERE source_id=?)`,
+		sourceID, sourceID, sourceID, sourceID, sourceID).Scan(&count)
+	if err != nil {
+		return false, fault.New(fault.CodeInternal, true, err)
+	}
+	return count > 0, nil
+}
+
 // SourceStructureDecision 汇报一次拆分/合并人工决策的结果，供 API 返回与查询。
 type SourceStructureDecision struct {
 	DecisionID      string

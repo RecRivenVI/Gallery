@@ -61,8 +61,9 @@ type Service struct {
 	space       SpaceGate
 	clock       ports.Clock
 
-	// preReuseHook 仅供确定性测试使用：在准备复用既往已确认 digest、重新 Stat 当前文件前
-	// 触发一次，用于模拟 discovery 观察之后、复用决策之前的文件替换竞争。生产路径始终为 nil。
+	// preReuseHook 仅供确定性测试使用：在本次扫描对某个媒体做最终定位观察（重新 Stat 当前
+	// 文件）之前触发一次，覆盖 incremental 复用决策与 index 两条路径，用于模拟 discovery
+	// 观察之后、最终定位之前的文件属性变化。生产路径始终为 nil。
 	preReuseHook func(relativePath string)
 }
 
@@ -152,12 +153,19 @@ func (s *Service) CreateScanWithIdempotency(ctx context.Context, sourceID, creat
 	return s.CreateScanWithProfile(ctx, sourceID, createdBy, idempotencyKey, "")
 }
 
-// CreateScanWithProfile 是唯一实际创建扫描 Job 的入口。scanProfile 为空表示未显式指定：
-// Source 尚无已发布 Catalog 时自动选择 index，已有 publication 时自动选择 incremental；
-// 两种情况下持久化的都是最终实际决定的档案，绝不保存含糊的 "auto"。显式指定的
-// index/incremental/verify 必须被尊重；已有 publication 的 Source 显式请求 index 会绕过
-// 阶段 1 依赖 ContentBlob digest 的 SourceWork 拆分/合并结构审查，因此拒绝并保持
-// Binding/Catalog 不变，不创建 Job。
+// CreateScanWithProfile 是唯一实际创建扫描 Job 的入口。scanProfile 为空表示未显式指定，
+// 按下表选择最终档案，两种情况下持久化的都是最终实际决定的档案，绝不保存含糊的 "auto"：
+//
+//	无当前 publication，且 control.db 无持久领域历史 -> index
+//	有当前 publication                            -> incremental
+//	无当前 publication，但 control.db 有持久领域历史 -> incremental
+//
+// 持久领域历史见 Resources.SourceHasDurableHistory：Catalog 可随时删除重建，但 control.db
+// 中残留的 Binding/Binding issue/结构决策说明该 Source 曾经完成过真正的 Canonical 解析，
+// 仅凭"当前无 publication"判断为全新 Source 会让本次扫描不建立 ContentBlob digest，绕过
+// 阶段 1 依赖完整哈希证据的 SourceWork 拆分/合并结构审查。显式指定的 index/incremental/
+// verify 必须被尊重；已有 publication 或 Catalog 已丢失但仍有持久领域历史时显式请求 index
+// 都会绕过该审查，因此拒绝并保持 Binding/Catalog 不变，不创建 Job。
 func (s *Service) CreateScanWithProfile(ctx context.Context, sourceID, createdBy, idempotencyKey, scanProfile string) (jobs.Job, error) {
 	requested, err := validateScanProfile(scanProfile)
 	if err != nil {
@@ -170,16 +178,20 @@ func (s *Service) CreateScanWithProfile(ctx context.Context, sourceID, createdBy
 	if err != nil {
 		return jobs.Job{}, err
 	}
+	durableHistory, err := s.resources.SourceHasDurableHistory(ctx, sourceID)
+	if err != nil {
+		return jobs.Job{}, err
+	}
 	effective := requested
 	switch requested {
 	case "":
-		if published {
+		if published || durableHistory {
 			effective = ScanProfileIncremental
 		} else {
 			effective = ScanProfileIndex
 		}
 	case ScanProfileIndex:
-		if published {
+		if published || durableHistory {
 			return jobs.Job{}, fault.New(fault.CodeConflict, false, nil)
 		}
 	}
@@ -331,11 +343,19 @@ func (s *Service) Execute(ctx context.Context, jobID string) error {
 					}
 				} else if scanProfile == ScanProfileIndex {
 					// index 档案对新增或疑似变化媒体也不建立 Hash Job，只定位并标记未确认。
+					// 一条 FileObservation 的 size、mtime、location key 必须来自同一次最终定位
+					// 观察：discovery 阶段的 Stat 与这次 Locate 之间可能存在窗口，只更新 Size
+					// 而保留 discovery 时的旧 ExpectedModTimeNanos 会持久化"当前 size + 较早
+					// mtime"的混合记录，因此这里必须同步刷新 ExpectedModTimeNanos。
+					if s.preReuseHook != nil {
+						s.preReuseHook(item.RelativePath)
+					}
 					located, locateErr := media.LocateSourceFile(source.RootPath, item.RelativePath)
 					if locateErr != nil {
 						return s.fail(ctx, job.ID, locateErr)
 					}
 					item.Hash = media.HashResult{Size: located.Size, LocationKey: located.LocationKey, RelativePath: located.RelativePath}
+					item.ExpectedModTimeNanos = located.ModTimeNanos
 					verificationState[item.RelativePath] = catalog.ContentVerificationStateLocatedUnverified
 					skipHash = true
 				}
