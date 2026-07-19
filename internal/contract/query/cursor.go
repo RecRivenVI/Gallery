@@ -16,12 +16,19 @@ import (
 
 const SortProtocolVersion = 1
 
+// RankProtocolVersion 标识排序结果内使用的 ranking tier 算法版本。任何改变 tier 计算
+// 方式的变更都必须递增本常量，使旧 cursor 随之失效而不是静默产生不一致的续页顺序。
+// tier 权重数值本身在正式压力测试前保持 PRE_FREEZE，但协议版本字段是冻结兼容点。
+const RankProtocolVersion = 1
+
 type CursorClaims struct {
 	QueryFingerprint       string    `json:"queryFingerprint"`
 	SortProtocolVersion    int       `json:"sortProtocolVersion"`
+	RankProtocolVersion    int       `json:"rankProtocolVersion"`
 	QueryPublicationID     string    `json:"queryPublicationId"`
 	AuthorizationScopeHash string    `json:"authorizationScopeHash"`
 	LastSortKey            string    `json:"lastSortKey"`
+	LastRankTier           int       `json:"lastRankTier"`
 	LastCanonicalWorkID    string    `json:"lastCanonicalWorkId"`
 	IssuedAt               time.Time `json:"issuedAt"`
 	LeaseID                string    `json:"leaseId"`
@@ -92,6 +99,12 @@ func (s *CursorSigner) sign(payload []byte) []byte {
 func validateClaims(claims CursorClaims) error {
 	if claims.SortProtocolVersion != SortProtocolVersion {
 		return fmt.Errorf("sort protocol version 不匹配")
+	}
+	if claims.RankProtocolVersion != RankProtocolVersion {
+		return fmt.Errorf("rank protocol version 不匹配")
+	}
+	if claims.LastRankTier < 0 || claims.LastRankTier > 3 {
+		return fmt.Errorf("rank tier 超出范围")
 	}
 	if !isLowerHexSHA256(claims.QueryFingerprint) || !isLowerHexSHA256(claims.AuthorizationScopeHash) {
 		return fmt.Errorf("cursor fingerprint 必须是小写完整 SHA-256")

@@ -7,9 +7,11 @@
   "required": [
     "queryFingerprint",
     "sortProtocolVersion",
+    "rankProtocolVersion",
     "queryPublicationId",
     "authorizationScopeHash",
     "lastSortKey",
+    "lastRankTier",
     "lastCanonicalWorkId",
     "issuedAt",
     "leaseId",
@@ -18,9 +20,11 @@
   "properties": {
     "queryFingerprint": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
     "sortProtocolVersion": {"const": 1},
+    "rankProtocolVersion": {"const": 1},
     "queryPublicationId": {"type": "string", "pattern": "^qpub_[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"},
     "authorizationScopeHash": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
     "lastSortKey": {"type": "string", "minLength": 1, "maxLength": 8192},
+    "lastRankTier": {"type": "integer", "minimum": 0, "maximum": 3},
     "lastCanonicalWorkId": {"type": "string", "pattern": "^wrk_[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"},
     "issuedAt": {"type": "string", "format": "date-time"},
     "leaseId": {"type": "string", "minLength": 1, "maxLength": 128},
