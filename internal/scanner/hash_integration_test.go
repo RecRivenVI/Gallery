@@ -6,6 +6,7 @@ import (
 
 	"github.com/RecRivenVI/gallery/internal/hashjob"
 	"github.com/RecRivenVI/gallery/internal/jobs"
+	"github.com/RecRivenVI/gallery/internal/scanner"
 )
 
 func TestScanDelegatesFullHashToPersistentHashJob(t *testing.T) {
@@ -17,7 +18,9 @@ func TestScanDelegatesFullHashToPersistentHashJob(t *testing.T) {
 		t.Fatal(err)
 	}
 	service.SetHashService(hashService)
-	job, err := service.CreateScan(context.Background(), source.ID, "personal-owner")
+	// 首次扫描无既往 publication 时默认自动选 index（不建立 Hash Job）；本测试要验证
+	// Hash Job 委托链路，因此显式请求 incremental。
+	job, err := service.CreateScanWithProfile(context.Background(), source.ID, "personal-owner", "", scanner.ScanProfileIncremental)
 	if err != nil {
 		t.Fatal(err)
 	}
