@@ -616,6 +616,120 @@ func TestIncrementalReuseKeepsPriorConfirmationTimeVerifyAdvancesIt(t *testing.T
 	}
 }
 
+// TestIndexProfileObservationComesFromFinalLocateNotDiscovery 是 index observation 一致性
+// 回归测试：discovery 完成后、最终 Locate 之前改变合成文件的 size/mtime，index 扫描必须把
+// source_media.size_bytes、mtime_ns 与 projection size 全部持久化为最终定位状态，不得把
+// discovery 时的旧 mtime 与最终定位的新 size 拼接成混合 observation；随后一次默认
+// incremental 必须能基于这个一致 observation 正确建立完整 Hash Job。
+func TestIndexProfileObservationComesFromFinalLocateNotDiscovery(t *testing.T) {
+	fixture := []byte("index observation must come from the same final locate call")
+	_, _, catalogStore, service, source, store := setupWithHash(t, fixture)
+	defer store.Close()
+	ctx := context.Background()
+
+	mediaPath := filepath.Join(source.RootPath, "work-one", "media.bin")
+	replacement := append(append([]byte(nil), fixture...), []byte(" plus bytes changing size after discovery")...)
+	service.SetPreReuseHook(func(relativePath string) {
+		if relativePath != "work-one/media.bin" {
+			return
+		}
+		if err := os.Chmod(mediaPath, 0o600); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(mediaPath, replacement, 0o400); err != nil {
+			t.Fatal(err)
+		}
+		future := time.Now().Add(3 * time.Hour)
+		if err := os.Chtimes(mediaPath, future, future); err != nil {
+			t.Fatal(err)
+		}
+	})
+
+	job, err := service.CreateScanWithProfile(ctx, source.ID, "personal-owner", "", scanner.ScanProfileIndex)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := service.Execute(ctx, job.ID); err != nil {
+		t.Fatal(err)
+	}
+
+	finalInfo, err := os.Stat(mediaPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, works, err := catalogStore.ListWorks(ctx)
+	if err != nil || len(works) != 1 {
+		t.Fatal(err)
+	}
+	_, mediaItems, err := catalogStore.ListMediaForWork(ctx, works[0].ID)
+	if err != nil || len(mediaItems) != 1 {
+		t.Fatal(err)
+	}
+	if mediaItems[0].Size != finalInfo.Size() {
+		t.Fatalf("projection size 未反映最终定位状态: got=%d want=%d", mediaItems[0].Size, finalInfo.Size())
+	}
+	if mediaItems[0].ContentVerificationState != catalog.ContentVerificationStateLocatedUnverified {
+		t.Fatalf("index 档案应仍为 located_unverified: %+v", mediaItems[0])
+	}
+
+	var sizeBytes, mtimeNanos int64
+	if err := store.Catalog.SQL().QueryRowContext(ctx, `SELECT size_bytes, mtime_ns FROM source_media
+WHERE source_id=? AND source_key='work-one/media.bin'`, source.ID).Scan(&sizeBytes, &mtimeNanos); err != nil {
+		t.Fatal(err)
+	}
+	if sizeBytes != finalInfo.Size() {
+		t.Fatalf("source_media.size_bytes 未反映最终定位状态: got=%d want=%d", sizeBytes, finalInfo.Size())
+	}
+	if mtimeNanos != finalInfo.ModTime().UnixNano() {
+		t.Fatalf("source_media.mtime_ns 与最终定位状态不一致，疑似与 discovery 时的旧观察混合: got=%d want=%d", mtimeNanos, finalInfo.ModTime().UnixNano())
+	}
+
+	var blobCount, locationCount, hashJobCount int
+	_ = store.Catalog.SQL().QueryRowContext(ctx, "SELECT count(*) FROM content_blobs").Scan(&blobCount)
+	_ = store.Catalog.SQL().QueryRowContext(ctx, "SELECT count(*) FROM file_locations").Scan(&locationCount)
+	_ = store.Control.SQL().QueryRowContext(ctx, "SELECT count(*) FROM jobs WHERE job_type='hash'").Scan(&hashJobCount)
+	if blobCount != 0 || locationCount != 0 || hashJobCount != 0 {
+		t.Fatalf("index 档案不应写入 ContentBlob/FileLocation/Hash Job: blob=%d location=%d hash=%d", blobCount, locationCount, hashJobCount)
+	}
+
+	// 下一次默认 incremental 应基于这个一致 observation 正确建立完整 Hash Job：
+	// content_verification_state=located_unverified 使任何复用判定都不成立。
+	service.SetPreReuseHook(nil)
+	second, err := service.CreateScanWithProfile(ctx, source.ID, "personal-owner", "", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if profile := (func() string {
+		var request scanProfileRequest
+		_ = json.Unmarshal(second.RequestJSON, &request)
+		return request.ScanProfile
+	})(); profile != scanner.ScanProfileIncremental {
+		t.Fatalf("已发布 index 之后默认应选择 incremental，实际=%q", profile)
+	}
+	if err := service.Execute(ctx, second.ID); err != nil {
+		t.Fatal(err)
+	}
+	_, worksAfter, err := catalogStore.ListWorks(ctx)
+	if err != nil || len(worksAfter) != 1 {
+		t.Fatal(err)
+	}
+	_, mediaAfter, err := catalogStore.ListMediaForWork(ctx, worksAfter[0].ID)
+	if err != nil || len(mediaAfter) != 1 || mediaAfter[0].Digest == "" ||
+		mediaAfter[0].ContentVerificationState != catalog.ContentVerificationStateContentVerified {
+		t.Fatalf("index 之后默认 incremental 未正确建立完整确认: %+v %v", mediaAfter, err)
+	}
+	expectedDigest := domain.NewSHA256BlobRef(sha256.Sum256(replacement)).Digest
+	if mediaAfter[0].Digest != expectedDigest {
+		t.Fatalf("完整哈希应对应最终定位内容: got=%s want=%s", mediaAfter[0].Digest, expectedDigest)
+	}
+	if err := store.Control.SQL().QueryRowContext(ctx, "SELECT count(*) FROM jobs WHERE job_type='hash'").Scan(&hashJobCount); err != nil {
+		t.Fatal(err)
+	}
+	if hashJobCount != 1 {
+		t.Fatalf("index 之后首次 incremental 应恰好建立一个 Hash Job，实际=%d", hashJobCount)
+	}
+}
+
 type scanProfileRequest struct {
 	ScanProfile string `json:"scanProfile,omitempty"`
 }
