@@ -622,6 +622,27 @@ func (e HealthResponseStatus) Valid() bool {
 	}
 }
 
+// Defines values for JobScanProfile.
+const (
+	JobScanProfileIncremental JobScanProfile = "incremental"
+	JobScanProfileIndex       JobScanProfile = "index"
+	JobScanProfileVerify      JobScanProfile = "verify"
+)
+
+// Valid indicates whether the value is a known member of the JobScanProfile enum.
+func (e JobScanProfile) Valid() bool {
+	switch e {
+	case JobScanProfileIncremental:
+		return true
+	case JobScanProfileIndex:
+		return true
+	case JobScanProfileVerify:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for JobStatus.
 const (
 	JobStatusCancelled   JobStatus = "cancelled"
@@ -841,6 +862,24 @@ func (e OrphanDecisionResultNewStatus) Valid() bool {
 	case OrphanDecisionResultNewStatusManualUnbound:
 		return true
 	case OrphanDecisionResultNewStatusOrphaned:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for PublishedMediaContentVerificationState.
+const (
+	ContentVerified   PublishedMediaContentVerificationState = "content_verified"
+	LocatedUnverified PublishedMediaContentVerificationState = "located_unverified"
+)
+
+// Valid indicates whether the value is a known member of the PublishedMediaContentVerificationState enum.
+func (e PublishedMediaContentVerificationState) Valid() bool {
+	switch e {
+	case ContentVerified:
+		return true
+	case LocatedUnverified:
 		return true
 	default:
 		return false
@@ -1114,6 +1153,27 @@ func (e RuleVersionDiffCategory) Valid() bool {
 	case RESCANFULL:
 		return true
 	case RESCANPARTIAL:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for ScanJobCreateRequestScanProfile.
+const (
+	ScanJobCreateRequestScanProfileIncremental ScanJobCreateRequestScanProfile = "incremental"
+	ScanJobCreateRequestScanProfileIndex       ScanJobCreateRequestScanProfile = "index"
+	ScanJobCreateRequestScanProfileVerify      ScanJobCreateRequestScanProfile = "verify"
+)
+
+// Valid indicates whether the value is a known member of the ScanJobCreateRequestScanProfile enum.
+func (e ScanJobCreateRequestScanProfile) Valid() bool {
+	switch e {
+	case ScanJobCreateRequestScanProfileIncremental:
+		return true
+	case ScanJobCreateRequestScanProfileIndex:
+		return true
+	case ScanJobCreateRequestScanProfileVerify:
 		return true
 	default:
 		return false
@@ -1801,14 +1861,20 @@ type Job struct {
 	RuleIrHash         *SHA256Digest `json:"ruleIrHash,omitempty"`
 	RuleParametersHash *SHA256Digest `json:"ruleParametersHash,omitempty"`
 	RuleSemanticHash   *SHA256Digest `json:"ruleSemanticHash,omitempty"`
-	SourceId           *SourceId     `json:"sourceId,omitempty"`
-	Stage              string        `json:"stage"`
-	StartedAt          *time.Time    `json:"startedAt,omitempty"`
-	Status             JobStatus     `json:"status"`
-	TargetResource     *string       `json:"targetResource,omitempty"`
-	Type               JobType       `json:"type"`
-	UpdatedAt          time.Time     `json:"updatedAt"`
+
+	// ScanProfile 仅 scan 类型 Job 有效；index 不确认内容、incremental 按既往观察复用已确认摘要、verify 强制重新完整哈希
+	ScanProfile    *JobScanProfile `json:"scanProfile,omitempty"`
+	SourceId       *SourceId       `json:"sourceId,omitempty"`
+	Stage          string          `json:"stage"`
+	StartedAt      *time.Time      `json:"startedAt,omitempty"`
+	Status         JobStatus       `json:"status"`
+	TargetResource *string         `json:"targetResource,omitempty"`
+	Type           JobType         `json:"type"`
+	UpdatedAt      time.Time       `json:"updatedAt"`
 }
+
+// JobScanProfile 仅 scan 类型 Job 有效；index 不确认内容、incremental 按既往观察复用已确认摘要、verify 强制重新完整哈希
+type JobScanProfile string
 
 // JobStatus defines model for Job.Status.
 type JobStatus string
@@ -1945,16 +2011,23 @@ type PairingExchangeRequest struct {
 
 // PublishedMedia defines model for PublishedMedia.
 type PublishedMedia struct {
-	Available          bool               `json:"available"`
-	Blob               ContentBlobRef     `json:"blob"`
-	Id                 CanonicalMediaId   `json:"id"`
-	Kind               string             `json:"kind"`
-	MimeType           string             `json:"mimeType"`
-	Ordinal            int                `json:"ordinal"`
-	QueryPublicationId QueryPublicationId `json:"queryPublicationId"`
-	SizeBytes          int64              `json:"sizeBytes"`
-	WorkId             CanonicalWorkId    `json:"workId"`
+	Available bool `json:"available"`
+
+	// Blob content_verification_state 为 located_unverified 时为 null，尚无已确认 ContentBlob
+	Blob                     *ContentBlobRef                        `json:"blob"`
+	ContentVerificationState PublishedMediaContentVerificationState `json:"contentVerificationState"`
+	Id                       CanonicalMediaId                       `json:"id"`
+	Kind                     string                                 `json:"kind"`
+	MimeType                 string                                 `json:"mimeType"`
+	Ordinal                  int                                    `json:"ordinal"`
+	QueryPublicationId       QueryPublicationId                     `json:"queryPublicationId"`
+	SizeBytes                int64                                  `json:"sizeBytes"`
+	VerifiedAt               *time.Time                             `json:"verifiedAt,omitempty"`
+	WorkId                   CanonicalWorkId                        `json:"workId"`
 }
+
+// PublishedMediaContentVerificationState defines model for PublishedMedia.ContentVerificationState.
+type PublishedMediaContentVerificationState string
 
 // PublishedWork defines model for PublishedWork.
 type PublishedWork struct {
@@ -2318,6 +2391,15 @@ type RuleVersionDiffCategory string
 
 // SHA256Digest defines model for SHA256Digest.
 type SHA256Digest = string
+
+// ScanJobCreateRequest defines model for ScanJobCreateRequest.
+type ScanJobCreateRequest struct {
+	// ScanProfile index 快速发布未确认媒体不计算内容摘要；incremental（默认）按既往观察复用未变化媒体的已确认摘要，仅对新增或疑似变化媒体计算摘要；verify 忽略既往观察，对本次扫描到的媒体强制重新计算完整摘要
+	ScanProfile *ScanJobCreateRequestScanProfile `json:"scanProfile,omitempty"`
+}
+
+// ScanJobCreateRequestScanProfile index 快速发布未确认媒体不计算内容摘要；incremental（默认）按既往观察复用未变化媒体的已确认摘要，仅对新增或疑似变化媒体计算摘要；verify 忽略既往观察，对本次扫描到的媒体强制重新计算完整摘要
+type ScanJobCreateRequestScanProfile string
 
 // SessionEstablishedResponse defines model for SessionEstablishedResponse.
 type SessionEstablishedResponse struct {
@@ -3055,6 +3137,9 @@ type UndoSourceStructureDecisionJSONRequestBody = BindingIssueVersionRequest
 // CreateSourceJSONRequestBody defines body for CreateSource for application/json ContentType.
 type CreateSourceJSONRequestBody = SourceCreateRequest
 
+// CreateScanJobJSONRequestBody defines body for CreateScanJob for application/json ContentType.
+type CreateScanJobJSONRequestBody = ScanJobCreateRequest
+
 // PutWorkOverlayJSONRequestBody defines body for PutWorkOverlay for application/json ContentType.
 type PutWorkOverlayJSONRequestBody = WorkOverlayPutRequest
 
@@ -3461,8 +3546,10 @@ type ClientInterface interface {
 	// GetEffectiveRuleBinding request
 	GetEffectiveRuleBinding(ctx context.Context, sourceId SourceId, reqEditors ...RequestEditorFn) (*http.Response, error)
 
-	// CreateScanJob request
-	CreateScanJob(ctx context.Context, sourceId SourceId, params *CreateScanJobParams, reqEditors ...RequestEditorFn) (*http.Response, error)
+	// CreateScanJobWithBody request with any body
+	CreateScanJobWithBody(ctx context.Context, sourceId SourceId, params *CreateScanJobParams, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*http.Response, error)
+
+	CreateScanJob(ctx context.Context, sourceId SourceId, params *CreateScanJobParams, body CreateScanJobJSONRequestBody, reqEditors ...RequestEditorFn) (*http.Response, error)
 
 	// GetSourceScanStatus request
 	GetSourceScanStatus(ctx context.Context, sourceId SourceId, reqEditors ...RequestEditorFn) (*http.Response, error)
@@ -4961,8 +5048,20 @@ func (c *Client) GetEffectiveRuleBinding(ctx context.Context, sourceId SourceId,
 	return c.Client.Do(req)
 }
 
-func (c *Client) CreateScanJob(ctx context.Context, sourceId SourceId, params *CreateScanJobParams, reqEditors ...RequestEditorFn) (*http.Response, error) {
-	req, err := NewCreateScanJobRequest(c.Server, sourceId, params)
+func (c *Client) CreateScanJobWithBody(ctx context.Context, sourceId SourceId, params *CreateScanJobParams, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewCreateScanJobRequestWithBody(c.Server, sourceId, params, contentType, body)
+	if err != nil {
+		return nil, err
+	}
+	req = req.WithContext(ctx)
+	if err := c.applyEditors(ctx, req, reqEditors); err != nil {
+		return nil, err
+	}
+	return c.Client.Do(req)
+}
+
+func (c *Client) CreateScanJob(ctx context.Context, sourceId SourceId, params *CreateScanJobParams, body CreateScanJobJSONRequestBody, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewCreateScanJobRequest(c.Server, sourceId, params, body)
 	if err != nil {
 		return nil, err
 	}
@@ -9194,8 +9293,19 @@ func NewGetEffectiveRuleBindingRequest(server string, sourceId SourceId) (*http.
 	return req, nil
 }
 
-// NewCreateScanJobRequest generates requests for CreateScanJob
-func NewCreateScanJobRequest(server string, sourceId SourceId, params *CreateScanJobParams) (*http.Request, error) {
+// NewCreateScanJobRequest calls the generic CreateScanJob builder with application/json body
+func NewCreateScanJobRequest(server string, sourceId SourceId, params *CreateScanJobParams, body CreateScanJobJSONRequestBody) (*http.Request, error) {
+	var bodyReader io.Reader
+	buf, err := json.Marshal(body)
+	if err != nil {
+		return nil, err
+	}
+	bodyReader = bytes.NewReader(buf)
+	return NewCreateScanJobRequestWithBody(server, sourceId, params, "application/json", bodyReader)
+}
+
+// NewCreateScanJobRequestWithBody generates requests for CreateScanJob with any type of body
+func NewCreateScanJobRequestWithBody(server string, sourceId SourceId, params *CreateScanJobParams, contentType string, body io.Reader) (*http.Request, error) {
 	var err error
 
 	var pathParam0 string
@@ -9220,10 +9330,12 @@ func NewCreateScanJobRequest(server string, sourceId SourceId, params *CreateSca
 		return nil, err
 	}
 
-	req, err := http.NewRequest(http.MethodPost, queryURL.String(), nil)
+	req, err := http.NewRequest(http.MethodPost, queryURL.String(), body)
 	if err != nil {
 		return nil, err
 	}
+
+	req.Header.Add("Content-Type", contentType)
 
 	if params != nil {
 
@@ -9959,8 +10071,10 @@ type ClientWithResponsesInterface interface {
 	// GetEffectiveRuleBindingWithResponse request
 	GetEffectiveRuleBindingWithResponse(ctx context.Context, sourceId SourceId, reqEditors ...RequestEditorFn) (*GetEffectiveRuleBindingResponse, error)
 
-	// CreateScanJobWithResponse request
-	CreateScanJobWithResponse(ctx context.Context, sourceId SourceId, params *CreateScanJobParams, reqEditors ...RequestEditorFn) (*CreateScanJobResponse, error)
+	// CreateScanJobWithBodyWithResponse request with any body
+	CreateScanJobWithBodyWithResponse(ctx context.Context, sourceId SourceId, params *CreateScanJobParams, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*CreateScanJobResponse, error)
+
+	CreateScanJobWithResponse(ctx context.Context, sourceId SourceId, params *CreateScanJobParams, body CreateScanJobJSONRequestBody, reqEditors ...RequestEditorFn) (*CreateScanJobResponse, error)
 
 	// GetSourceScanStatusWithResponse request
 	GetSourceScanStatusWithResponse(ctx context.Context, sourceId SourceId, reqEditors ...RequestEditorFn) (*GetSourceScanStatusResponse, error)
@@ -14096,9 +14210,17 @@ func (c *ClientWithResponses) GetEffectiveRuleBindingWithResponse(ctx context.Co
 	return ParseGetEffectiveRuleBindingResponse(rsp)
 }
 
-// CreateScanJobWithResponse request returning *CreateScanJobResponse
-func (c *ClientWithResponses) CreateScanJobWithResponse(ctx context.Context, sourceId SourceId, params *CreateScanJobParams, reqEditors ...RequestEditorFn) (*CreateScanJobResponse, error) {
-	rsp, err := c.CreateScanJob(ctx, sourceId, params, reqEditors...)
+// CreateScanJobWithBodyWithResponse request with arbitrary body returning *CreateScanJobResponse
+func (c *ClientWithResponses) CreateScanJobWithBodyWithResponse(ctx context.Context, sourceId SourceId, params *CreateScanJobParams, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*CreateScanJobResponse, error) {
+	rsp, err := c.CreateScanJobWithBody(ctx, sourceId, params, contentType, body, reqEditors...)
+	if err != nil {
+		return nil, err
+	}
+	return ParseCreateScanJobResponse(rsp)
+}
+
+func (c *ClientWithResponses) CreateScanJobWithResponse(ctx context.Context, sourceId SourceId, params *CreateScanJobParams, body CreateScanJobJSONRequestBody, reqEditors ...RequestEditorFn) (*CreateScanJobResponse, error) {
+	rsp, err := c.CreateScanJob(ctx, sourceId, params, body, reqEditors...)
 	if err != nil {
 		return nil, err
 	}
