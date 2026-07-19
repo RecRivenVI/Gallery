@@ -366,7 +366,8 @@ func (s *Service) Execute(ctx context.Context, jobID string) error {
 				}
 				item.Hash = hashed
 				verificationState[item.RelativePath] = catalog.ContentVerificationStateContentVerified
-				lastConfirmedAt[item.RelativePath] = time.Now().UTC()
+				// 只有真正完成完整哈希才推进确认时间。
+				lastConfirmedAt[item.RelativePath] = s.clock.Now().UTC()
 			}
 			current++
 			job, err = s.jobs.Progress(ctx, job.ID, "hashing", current, total)

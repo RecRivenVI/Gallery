@@ -2,14 +2,15 @@ package scanner_test
 
 import (
 	"context"
-	"os"
-	"path/filepath"
-	"testing"
-	"time"
-
 	"crypto/sha256"
 	"encoding/json"
 	"errors"
+	"os"
+	"path/filepath"
+	"sync"
+	"testing"
+	"time"
+
 	"github.com/RecRivenVI/gallery/internal/application"
 	"github.com/RecRivenVI/gallery/internal/catalog"
 	"github.com/RecRivenVI/gallery/internal/contract/fault"
@@ -19,6 +20,27 @@ import (
 	"github.com/RecRivenVI/gallery/internal/scanner"
 	"github.com/RecRivenVI/gallery/internal/storage"
 )
+
+// stepClock 是仅供本文件确定性测试使用的可推进时钟，用于验证"复用摘要保留旧确认时间、
+// 只有真正重新完成哈希才推进确认时间"的语义，而不依赖真实墙钟在两次扫描之间恰好流逝。
+type stepClock struct {
+	mu  sync.Mutex
+	now time.Time
+}
+
+func newStepClock(start time.Time) *stepClock { return &stepClock{now: start} }
+
+func (c *stepClock) Now() time.Time {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.now
+}
+
+func (c *stepClock) Advance(d time.Duration) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.now = c.now.Add(d)
+}
 
 // setupWithHash 在 setup 基础上注入真实的持久 Hash Job Service，使 job_type='hash' 计数
 // 能够真实反映"是否重新读取并哈希了媒体正文"，而不是落入不产生 Hash Job 记录的同步
@@ -449,10 +471,6 @@ func TestExplicitIndexRejectedWhenSourceAlreadyPublished(t *testing.T) {
 	}
 }
 
-type scanProfileRequest struct {
-	ScanProfile string `json:"scanProfile,omitempty"`
-}
-
 // TestIncrementalDoesNotReuseDigestAfterFileChangesBetweenDiscoveryAndReuse 是 TOCTOU 回归
 // 测试：discovery 阶段的 Stat 与准备复用既往摘要之间存在窗口，文件在此窗口内被替换时不得
 // 错误复用旧 digest，必须降级为新的 Hash Job 并确认当前真实内容。
@@ -524,4 +542,80 @@ func TestIncrementalDoesNotReuseDigestAfterFileChangesBetweenDiscoveryAndReuse(t
 	if hashJobCount != 2 {
 		t.Fatalf("复用前证据变化应降级为新的 Hash Job，实际 hashJobCount=%d", hashJobCount)
 	}
+}
+
+// TestIncrementalReuseKeepsPriorConfirmationTimeVerifyAdvancesIt 覆盖「复用保持旧时间、
+// verify 更新确认时间」：无变化的 incremental 重扫不得把 verifiedAt/last_confirmed_at 推进
+// 到复用发生的时刻；显式 verify 重新完成完整哈希后必须把确认时间推进到本次确认的时刻。
+func TestIncrementalReuseKeepsPriorConfirmationTimeVerifyAdvancesIt(t *testing.T) {
+	fixture := []byte("confirmation time must be preserved across an unchanged incremental rescan")
+	_, _, catalogStore, service, source, store := setupWithHash(t, fixture)
+	defer store.Close()
+	ctx := context.Background()
+
+	testClock := newStepClock(time.Date(2026, 7, 19, 0, 0, 0, 0, time.UTC))
+	service.SetClock(testClock)
+
+	first, err := service.CreateScanWithProfile(ctx, source.ID, "personal-owner", "", scanner.ScanProfileIncremental)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := service.Execute(ctx, first.ID); err != nil {
+		t.Fatal(err)
+	}
+	_, worksBefore, err := catalogStore.ListWorks(ctx)
+	if err != nil || len(worksBefore) != 1 {
+		t.Fatal(err)
+	}
+	_, mediaBefore, err := catalogStore.ListMediaForWork(ctx, worksBefore[0].ID)
+	if err != nil || len(mediaBefore) != 1 || mediaBefore[0].VerifiedAt.IsZero() {
+		t.Fatalf("首次确认未记录 verifiedAt: %+v %v", mediaBefore, err)
+	}
+	firstConfirmedAt := mediaBefore[0].VerifiedAt
+
+	// 时钟前进，模拟真实世界流逝的时间；无变化的复用扫描不应把确认时间推进到这个新时刻。
+	testClock.Advance(24 * time.Hour)
+
+	second, err := service.CreateScanWithProfile(ctx, source.ID, "personal-owner", "", scanner.ScanProfileIncremental)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := service.Execute(ctx, second.ID); err != nil {
+		t.Fatal(err)
+	}
+	_, worksAfter, err := catalogStore.ListWorks(ctx)
+	if err != nil || len(worksAfter) != 1 {
+		t.Fatal(err)
+	}
+	_, mediaAfter, err := catalogStore.ListMediaForWork(ctx, worksAfter[0].ID)
+	if err != nil || len(mediaAfter) != 1 {
+		t.Fatal(err)
+	}
+	if !mediaAfter[0].VerifiedAt.Equal(firstConfirmedAt) {
+		t.Fatalf("无变化 incremental 复用不应更新确认时间: before=%v after=%v", firstConfirmedAt, mediaAfter[0].VerifiedAt)
+	}
+
+	third, err := service.CreateScanWithProfile(ctx, source.ID, "personal-owner", "", scanner.ScanProfileVerify)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := service.Execute(ctx, third.ID); err != nil {
+		t.Fatal(err)
+	}
+	_, worksThird, err := catalogStore.ListWorks(ctx)
+	if err != nil || len(worksThird) != 1 {
+		t.Fatal(err)
+	}
+	_, mediaThird, err := catalogStore.ListMediaForWork(ctx, worksThird[0].ID)
+	if err != nil || len(mediaThird) != 1 {
+		t.Fatal(err)
+	}
+	if !mediaThird[0].VerifiedAt.Equal(testClock.Now()) || mediaThird[0].VerifiedAt.Equal(firstConfirmedAt) {
+		t.Fatalf("verify 档案应把确认时间推进到重新完成哈希的时刻: got=%v firstConfirmedAt=%v want=%v",
+			mediaThird[0].VerifiedAt, firstConfirmedAt, testClock.Now())
+	}
+}
+
+type scanProfileRequest struct {
+	ScanProfile string `json:"scanProfile,omitempty"`
 }
