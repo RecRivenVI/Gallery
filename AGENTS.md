@@ -157,6 +157,136 @@ Walking Skeleton 功能可以少，但基础模型不能是临时替代品：
 - 发行前完成 OpenAPI/WS/规则/数据版本、许可证、SBOM、依赖安全、签名和升级/降级说明。
 - Windows、Linux、macOS、Docker 和网络盘能力分别验收，不从 Go 可交叉编译目标自动生成支持矩阵。
 
+## 固定工具链与多环境调用
+
+本节是后续 Agent 在 Windows 原生、Git Bash/MSYS、WSL2 Debian 和 GitHub Actions 四种环境下解析和调用 Go 工具链的唯一权威规则，优先于任何“PATH 中找不到 `go` 就判定工具链缺失并自动安装”的默认行为。
+
+### 版本基线
+
+当前项目固定使用 `Go 1.26.5`：
+
+- 本地环境统一设置 `GOTOOLCHAIN=local`，不允许 Go 自动下载其他 toolchain，也不得静默改用系统中其他版本；
+- 执行测试前必须打印并记录实际 `go version`；
+- 若实际版本不是 Go 1.26.5，应停止对应门禁并报告，不能继续生成混合版本结果。
+
+### Windows 原生环境
+
+仓库路径为 `D:\GitHubRecRivenVI\Gallery`。Windows 正式 Go 可执行文件固定为：
+
+```text
+C:\Users\RavenYin\AppData\Local\CodexToolchains\go1.26.5\go\bin\go.exe
+```
+
+PowerShell 中必须显式设置：
+
+```powershell
+$env:GALLERY_GO = "C:\Users\RavenYin\AppData\Local\CodexToolchains\go1.26.5\go\bin\go.exe"
+$env:GOTOOLCHAIN = "local"
+```
+
+验证方式：
+
+```powershell
+if (-not (Test-Path -LiteralPath $env:GALLERY_GO -PathType Leaf)) {
+    throw "固定 Windows Go 工具链不存在：$env:GALLERY_GO"
+}
+& $env:GALLERY_GO version
+```
+
+Windows 下运行仓库门禁时优先使用 `.\Check.ps1`；直接调用 Go 时必须使用 `& $env:GALLERY_GO test ./...`、`& $env:GALLERY_GO vet ./...`、`& $env:GALLERY_GO build ./cmd/...`、`& $env:GALLERY_GO run golang.org/x/vuln/cmd/govulncheck@v1.6.0 ./...`，不得仅执行裸 `go test ./...` 后因为 `go` 不在 PATH 就判断工具链缺失。
+
+### Windows Git Bash / MSYS 环境
+
+Git Bash 中 Windows Go 的固定可执行文件为：
+
+```text
+/c/Users/RavenYin/AppData/Local/CodexToolchains/go1.26.5/go/bin/go.exe
+```
+
+需要在 Bash 中直接调用 Windows Go 时：
+
+```bash
+export GOTOOLCHAIN=local
+GALLERY_GO="/c/Users/RavenYin/AppData/Local/CodexToolchains/go1.26.5/go/bin/go.exe"
+test -x "$GALLERY_GO" || { echo "固定 Windows Go 工具链不存在：$GALLERY_GO" >&2; exit 1; }
+"$GALLERY_GO" version
+```
+
+PowerShell 脚本门禁仍应通过 `pwsh` 调用，并向其传递 Windows 格式的 `GALLERY_GO`：
+
+```bash
+export GALLERY_GO='C:\Users\RavenYin\AppData\Local\CodexToolchains\go1.26.5\go\bin\go.exe'
+export GOTOOLCHAIN=local
+pwsh -NoProfile -File ./Check.ps1
+```
+
+不得把 Windows Go 路径误认为 WSL Linux Go。
+
+### WSL2 Debian 环境
+
+WSL 发行版固定为 `Debian`，仓库路径为 `/mnt/d/GitHubRecRivenVI/Gallery`。WSL 用户级 Go 工具链固定为 `$HOME/go-sdk/bin/go`（工具链根目录 `$HOME/go-sdk`）。每次运行 WSL Go 命令前必须显式执行：
+
+```bash
+export PATH="$HOME/go-sdk/bin:$PATH"
+export GOTOOLCHAIN=local
+```
+
+验证方式：
+
+```bash
+test -x "$HOME/go-sdk/bin/go" || { echo "固定 WSL Go 工具链不存在：$HOME/go-sdk/bin/go" >&2; exit 1; }
+"$HOME/go-sdk/bin/go" version
+```
+
+WSL race 所需 GCC 固定为 `/usr/bin/gcc`，验证方式：
+
+```bash
+test -x /usr/bin/gcc || { echo "WSL GCC 不存在：/usr/bin/gcc" >&2; exit 1; }
+/usr/bin/gcc --version | head -1
+```
+
+正式 WSL race 调用模板：
+
+```powershell
+wsl.exe -d Debian -- bash -lc '
+  set -euo pipefail
+  export PATH="$HOME/go-sdk/bin:$PATH"
+  export GOTOOLCHAIN=local
+  test -x "$HOME/go-sdk/bin/go"
+  test -x /usr/bin/gcc
+  go version
+  gcc --version | head -1
+  cd /mnt/d/GitHubRecRivenVI/Gallery
+  CGO_ENABLED=1 go test -race ./...
+'
+```
+
+定向 race 只需替换最后一行的包路径，例如 `CGO_ENABLED=1 go test -race ./internal/rules/... ./internal/scanner/...`。不得仅运行 `which go` 或 `command -v go` 并因普通 PATH 中找不到 Go 就判定工具链不存在；必须先检查 `test -x "$HOME/go-sdk/bin/go"`。
+
+### Windows race 限制
+
+原生 Windows Go race runtime 在当前环境中存在已记录的运行时兼容问题（`0xc0000139`、`WaitOnAddress` 导出缺失）。因此：
+
+- Windows 原生只负责普通 test、vet、build 和 `CGO_ENABLED=0` 门禁；
+- 正式 `go test -race` 必须在 WSL2 Debian 中执行；
+- 不得在 Windows race 失败后尝试重新安装 Go；
+- 不得把 Windows race 工具链问题误判为项目代码竞态；
+- WSL race 结果不等于 Linux 原生 ext4 平台支持，因为仓库实际位于 `/mnt/d` 的 DrvFS/v9fs。
+
+### GitHub Actions 环境
+
+GitHub Actions 不使用本地硬编码用户路径，使用 `actions/setup-go` 安装 Go 1.26.5 并设置 `GOTOOLCHAIN=local`；Ubuntu runner 使用 runner 已有的 GCC 执行 race。本地固定路径规则不得写进 CI workflow；CI 不得依赖 `C:\Users\RavenYin` 或 `$HOME/go-sdk`；本地和 CI 必须输出实际 Go 版本；workflow 中的版本必须与 `go.mod` 和本节保持一致。
+
+### 工具链解析顺序
+
+**Windows**：检查固定路径 `C:\Users\RavenYin\AppData\Local\CodexToolchains\go1.26.5\go\bin\go.exe` → 设置 `GALLERY_GO` → 执行该可执行文件的 `version` → 使用 `Check.ps1` 或 `& $env:GALLERY_GO ...` → 固定路径不存在时停止并报告。不得先依赖 PATH 中的 `go`。
+
+**WSL**：检查 `$HOME/go-sdk/bin/go` → 将 `$HOME/go-sdk/bin` 放到 PATH 最前 → 检查 `/usr/bin/gcc` → 打印版本 → 进入 `/mnt/d/GitHubRecRivenVI/Gallery` → 执行 race → 固定路径不存在时停止并报告。不得扫描整个根文件系统寻找 Go，不得自动安装系统级 Go，不得因 `command -v go` 在设置 PATH 前失败就安装 Go，不得将 Windows `.exe` 用作 WSL race 工具链，不得自动从网络下载新版本。
+
+### 缺失工具链时的处理
+
+若任一固定路径确实不存在：保存准确命令和错误输出；列出预期路径的父目录（Windows 示例 `Get-Item -LiteralPath "C:\Users\RavenYin\AppData\Local\CodexToolchains\go1.26.5\go\bin" -ErrorAction SilentlyContinue`，WSL 示例 `ls -la "$HOME/go-sdk/bin" 2>/dev/null || true`）；检查是否只是环境变量或 PATH 未设置；不修改系统环境；不执行安装；继续完成所有不依赖该工具链的安全工作；最终将其报告为环境阻塞。禁止使用无界 `find /` 或递归扫描整个磁盘寻找工具链，禁止未经用户明确授权执行 `sudo apt install`、`sudo rm -rf /usr/local/go`、`curl ... | sudo tar ...`、`winget install`、`choco install` 等系统级工具链安装或升级操作。
+
 ## 文档维护
 
 - `Documents/README.md` 是唯一导航入口；不要恢复多轮调研报告或另建历史归档目录。
