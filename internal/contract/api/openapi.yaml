@@ -1118,6 +1118,11 @@ paths:
             $ref: "#/components/schemas/SourceId"
         - $ref: "#/components/parameters/CSRFHeader"
         - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema: {$ref: "#/components/schemas/ScanJobCreateRequest"}
       responses:
         "202":
           description: 扫描 Job 已排队
@@ -2535,6 +2540,10 @@ components:
           type: string
           format: date-time
           nullable: true
+        scanProfile:
+          type: string
+          enum: [index, incremental, verify]
+          description: 仅 scan 类型 Job 有效；index 不确认内容、incremental 按既往观察复用已确认摘要、verify 强制重新完整哈希
 
     JobListResponse:
       type: object
@@ -2605,6 +2614,15 @@ components:
       properties:
         retentionSeconds: {type: integer, format: int64, minimum: 0, default: 86400}
         dryRun: {type: boolean, default: false}
+    ScanJobCreateRequest:
+      type: object
+      additionalProperties: false
+      properties:
+        scanProfile:
+          type: string
+          enum: [index, incremental, verify]
+          default: incremental
+          description: index 快速发布未确认媒体不计算内容摘要；incremental（默认）按既往观察复用未变化媒体的已确认摘要，仅对新增或疑似变化媒体计算摘要；verify 忽略既往观察，对本次扫描到的媒体强制重新计算完整摘要
     SpaceEstimate:
       type: object
       additionalProperties: false
@@ -2842,7 +2860,7 @@ components:
     PublishedMedia:
       type: object
       additionalProperties: false
-      required: [id, workId, kind, mimeType, sizeBytes, blob, available, ordinal, queryPublicationId]
+      required: [id, workId, kind, mimeType, sizeBytes, blob, available, ordinal, queryPublicationId, contentVerificationState]
       properties:
         id:
           $ref: "#/components/schemas/CanonicalMediaId"
@@ -2857,7 +2875,10 @@ components:
           format: int64
           minimum: 0
         blob:
-          $ref: "#/components/schemas/ContentBlobRef"
+          allOf:
+            - $ref: "#/components/schemas/ContentBlobRef"
+          nullable: true
+          description: content_verification_state 为 located_unverified 时为 null，尚无已确认 ContentBlob
         available:
           type: boolean
         ordinal:
@@ -2865,6 +2886,13 @@ components:
           minimum: 0
         queryPublicationId:
           $ref: "#/components/schemas/QueryPublicationId"
+        contentVerificationState:
+          type: string
+          enum: [located_unverified, content_verified]
+        verifiedAt:
+          type: string
+          format: date-time
+          nullable: true
     MediaListResponse:
       type: object
       additionalProperties: false

@@ -604,7 +604,18 @@ func (s *Server) createScanJob(w http.ResponseWriter, r *http.Request) {
 		s.writeRequestError(w, err)
 		return
 	}
-	job, err := s.scanner.CreateScanWithIdempotency(r.Context(), r.PathValue("sourceId"), session.PrincipalID, r.Header.Get("Idempotency-Key"))
+	request := api.ScanJobCreateRequest{}
+	if r.ContentLength != 0 {
+		if err := decodeJSON(r, &request); err != nil {
+			s.writeRequestError(w, fault.WithField(fault.CodeValidation, "body", err))
+			return
+		}
+	}
+	scanProfile := scanner.ScanProfileIncremental
+	if request.ScanProfile != nil {
+		scanProfile = string(*request.ScanProfile)
+	}
+	job, err := s.scanner.CreateScanWithProfile(r.Context(), r.PathValue("sourceId"), session.PrincipalID, r.Header.Get("Idempotency-Key"), scanProfile)
 	if err != nil {
 		s.writeRequestError(w, err)
 		return
@@ -1973,7 +1984,18 @@ func workDTO(publication catalog.Publication, value catalog.Work) api.PublishedW
 }
 
 func mediaDTO(publication catalog.Publication, value catalog.Media) api.PublishedMedia {
-	return api.PublishedMedia{Id: value.ID, WorkId: value.WorkID, Kind: value.Kind, MimeType: value.MIME, SizeBytes: value.Size, Blob: api.ContentBlobRef{Algorithm: api.ContentBlobRefAlgorithm(value.Algorithm), Digest: value.Digest}, Available: value.LocationStatus == "present", Ordinal: value.Ordinal, QueryPublicationId: publication.ID}
+	verificationState := api.PublishedMediaContentVerificationState(catalog.ContentVerificationStateContentVerified)
+	var blob *api.ContentBlobRef
+	if value.LocationStatus == catalog.ContentVerificationStateLocatedUnverified {
+		verificationState = api.PublishedMediaContentVerificationState(catalog.ContentVerificationStateLocatedUnverified)
+	} else {
+		blob = &api.ContentBlobRef{Algorithm: api.ContentBlobRefAlgorithm(value.Algorithm), Digest: value.Digest}
+	}
+	return api.PublishedMedia{
+		Id: value.ID, WorkId: value.WorkID, Kind: value.Kind, MimeType: value.MIME, SizeBytes: value.Size, Blob: blob,
+		Available: value.LocationStatus == "present", Ordinal: value.Ordinal, QueryPublicationId: publication.ID,
+		ContentVerificationState: verificationState,
+	}
 }
 
 func (s *Server) authenticate(r *http.Request) (auth.Session, error) {
