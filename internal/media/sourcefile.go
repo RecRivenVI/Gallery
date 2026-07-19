@@ -162,6 +162,33 @@ func readFault(err error) error {
 	return fault.New(fault.CodeSourceUnavailable, true, err)
 }
 
+// LocateResult 只包含只读定位与身份线索，不读取文件正文；用于 index/incremental
+// 扫描档案在不确认内容的情况下发布 located_unverified 媒体或与既往观察比较。
+type LocateResult struct {
+	RelativePath string
+	LocationKey  string
+	Size         int64
+	ModTimeNanos int64
+}
+
+// LocateSourceFile 复用 OpenSourceFile 的安全路径解析与只读句柄，只读取文件元数据
+// （大小、mtime），不读取任何字节，不计算内容哈希。
+func LocateSourceFile(root, relative string) (LocateResult, error) {
+	file, _, normalized, err := OpenSourceFile(root, relative)
+	if err != nil {
+		return LocateResult{}, err
+	}
+	defer file.Close()
+	info, err := file.Stat()
+	if err != nil {
+		return LocateResult{}, readFault(err)
+	}
+	return LocateResult{
+		RelativePath: normalized, LocationKey: locationKey(normalized),
+		Size: info.Size(), ModTimeNanos: info.ModTime().UnixNano(),
+	}, nil
+}
+
 func locationKey(relative string) string {
 	sum := sha256.Sum256([]byte("gallery-file-location\x00v1\x00" + relative))
 	return hex.EncodeToString(sum[:])

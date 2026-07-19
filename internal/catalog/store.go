@@ -76,7 +76,23 @@ type MediaFact struct {
 	MediaID       string
 	WorkID        string
 	Ordinal       int
+
+	// ContentVerificationState 是 "located_unverified" 或 "content_verified"；未确认媒体
+	// 的 Algorithm/Digest/LocationKey 为空，不写入 content_blobs/file_locations。
+	ContentVerificationState string
+	MTimeNanos               int64
+	PlatformIdentityKind     string
+	PlatformIdentityValue    string
+	ContainerSignature       string
+	LastConfirmedAlgorithm   string
+	LastConfirmedDigest      string
+	LastConfirmedAt          time.Time
 }
+
+const (
+	ContentVerificationStateLocatedUnverified = "located_unverified"
+	ContentVerificationStateContentVerified   = "content_verified"
+)
 
 type Publication struct {
 	ID                string
@@ -998,25 +1014,46 @@ func (s *Store) stageMedia(ctx context.Context, candidate Candidate, items []Med
 	}
 	defer tx.Rollback()
 	for _, item := range items {
+		state := item.ContentVerificationState
+		if state == "" {
+			state = ContentVerificationStateContentVerified
+		}
+		verified := state == ContentVerificationStateContentVerified
+		var lastConfirmedAt any
+		if !item.LastConfirmedAt.IsZero() {
+			lastConfirmedAt = item.LastConfirmedAt.UTC().Unix()
+		}
 		if _, err := tx.ExecContext(ctx, `INSERT INTO source_media
-(catalog_revision_id, source_id, source_key, work_source_key, relative_path, media_kind, mime_type, size_bytes, rule_key)
-VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`, candidate.CatalogRevisionID, item.SourceID, item.SourceKey,
-			item.WorkSourceKey, item.RelativePath, item.Kind, item.MIME, item.Size, item.RuleKey); err != nil {
+(catalog_revision_id, source_id, source_key, work_source_key, relative_path, media_kind, mime_type, size_bytes, rule_key,
+ mtime_ns, platform_identity_kind, platform_identity_value, container_signature, content_verification_state,
+ last_confirmed_algorithm, last_confirmed_digest, last_confirmed_at)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`, candidate.CatalogRevisionID, item.SourceID, item.SourceKey,
+			item.WorkSourceKey, item.RelativePath, item.Kind, item.MIME, item.Size, item.RuleKey,
+			item.MTimeNanos, item.PlatformIdentityKind, item.PlatformIdentityValue, item.ContainerSignature, state,
+			item.LastConfirmedAlgorithm, item.LastConfirmedDigest, lastConfirmedAt); err != nil {
 			return fault.New(fault.CodeInternal, true, err)
 		}
-		if _, err := tx.ExecContext(ctx, `INSERT OR IGNORE INTO content_blobs
+		// 未确认媒体没有已确认字节，不写入 content_blobs/file_locations；这两张表继续只
+		// 承载真正完成完整 SHA-256 确认的内容事实，不引入伪造或占位 digest。
+		if verified {
+			if _, err := tx.ExecContext(ctx, `INSERT OR IGNORE INTO content_blobs
 (catalog_revision_id, algorithm, digest, size_bytes) VALUES (?, ?, ?, ?)`, candidate.CatalogRevisionID, item.Algorithm, item.Digest, item.Size); err != nil {
-			return fault.New(fault.CodeInternal, true, err)
-		}
-		if _, err := tx.ExecContext(ctx, `INSERT INTO file_locations
+				return fault.New(fault.CodeInternal, true, err)
+			}
+			if _, err := tx.ExecContext(ctx, `INSERT INTO file_locations
 (catalog_revision_id, source_id, source_key, location_key, relative_path, algorithm, digest, status)
 VALUES (?, ?, ?, ?, ?, ?, ?, 'present')`, candidate.CatalogRevisionID, item.SourceID, item.SourceKey, item.LocationKey, item.RelativePath, item.Algorithm, item.Digest); err != nil {
-			return fault.New(fault.CodeInternal, true, err)
+				return fault.New(fault.CodeInternal, true, err)
+			}
+		}
+		locationStatus := "present"
+		if !verified {
+			locationStatus = ContentVerificationStateLocatedUnverified
 		}
 		if _, err := tx.ExecContext(ctx, `INSERT INTO media_projections
 (catalog_revision_id, overlay_revision_id, media_id, work_id, source_id, source_key, relative_path,
  media_kind, mime_type, size_bytes, algorithm, digest, location_status, ordinal, base_ordinal)
-VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'present', ?, ?)`, candidate.CatalogRevisionID, candidate.OverlayRevisionID, item.MediaID, item.WorkID, item.SourceID, item.SourceKey, item.RelativePath, item.Kind, item.MIME, item.Size, item.Algorithm, item.Digest, item.Ordinal, item.Ordinal); err != nil {
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`, candidate.CatalogRevisionID, candidate.OverlayRevisionID, item.MediaID, item.WorkID, item.SourceID, item.SourceKey, item.RelativePath, item.Kind, item.MIME, item.Size, item.Algorithm, item.Digest, locationStatus, item.Ordinal, item.Ordinal); err != nil {
 			return fault.New(fault.CodeInternal, true, err)
 		}
 	}
@@ -1024,6 +1061,40 @@ VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'present', ?, ?)`, candidate.Catalog
 		return fault.New(fault.CodeInternal, true, err)
 	}
 	return nil
+}
+
+// PriorObservation 是 incremental 扫描档案复用判断所需的既往观察证据；Found=false 表示
+// 当前活动 publication 中不存在该 Source 下这个相对路径的既往记录（新文件）。
+type PriorObservation struct {
+	Found                    bool
+	Size                     int64
+	MTimeNanos               int64
+	ContentVerificationState string
+	Algorithm                string
+	Digest                   string
+}
+
+// LookupPriorObservation 在当前活动 query publication 内按 (source_id, relative_path) 查找
+// 既往观察，供 incremental 扫描档案组合 size/mtime 证据判断是否可复用已确认 digest，
+// 不产生任何文件 I/O。真实规模下依赖 source_media_identity_idx 索引，不做全表扫描。
+func (s *Store) LookupPriorObservation(ctx context.Context, sourceID, relativePath string) (PriorObservation, error) {
+	var size, mtimeNs sql.NullInt64
+	var state, algorithm, digest sql.NullString
+	err := s.db.QueryRowContext(ctx, `SELECT m.size_bytes, m.mtime_ns, m.content_verification_state, m.last_confirmed_algorithm, m.last_confirmed_digest
+FROM source_media m
+JOIN active_query_publication a ON a.singleton=1 JOIN query_publications q ON q.query_publication_id=a.query_publication_id
+WHERE m.catalog_revision_id=q.catalog_revision_id AND m.source_id=? AND m.relative_path=?`, sourceID, relativePath).
+		Scan(&size, &mtimeNs, &state, &algorithm, &digest)
+	if errors.Is(err, sql.ErrNoRows) {
+		return PriorObservation{}, nil
+	}
+	if err != nil {
+		return PriorObservation{}, fault.New(fault.CodeInternal, true, err)
+	}
+	return PriorObservation{
+		Found: true, Size: size.Int64, MTimeNanos: mtimeNs.Int64,
+		ContentVerificationState: state.String, Algorithm: algorithm.String, Digest: digest.String,
+	}, nil
 }
 
 func cloneUnchangedSources(ctx context.Context, tx *sql.Tx, candidate Candidate) error {
@@ -1034,7 +1105,9 @@ func cloneUnchangedSources(ctx context.Context, tx *sql.Tx, candidate Candidate)
 		{`INSERT INTO source_works SELECT ?, w.source_id, w.source_key, w.title, w.creator, w.tags_json, w.filenames_text, w.provider_id, w.external_id FROM source_works w
 JOIN active_query_publication a ON a.singleton=1 JOIN query_publications q ON q.query_publication_id=a.query_publication_id
 WHERE w.catalog_revision_id=q.catalog_revision_id AND w.source_id<>?`, []any{candidate.CatalogRevisionID, candidate.SourceID}},
-		{`INSERT INTO source_media SELECT ?, m.source_id, m.source_key, m.work_source_key, m.relative_path, m.media_kind, m.mime_type, m.size_bytes, m.rule_key FROM source_media m
+		{`INSERT INTO source_media SELECT ?, m.source_id, m.source_key, m.work_source_key, m.relative_path, m.media_kind, m.mime_type, m.size_bytes, m.rule_key,
+m.mtime_ns, m.platform_identity_kind, m.platform_identity_value, m.container_signature, m.content_verification_state,
+m.last_confirmed_algorithm, m.last_confirmed_digest, m.last_confirmed_at FROM source_media m
 JOIN active_query_publication a ON a.singleton=1 JOIN query_publications q ON q.query_publication_id=a.query_publication_id
 WHERE m.catalog_revision_id=q.catalog_revision_id AND m.source_id<>?`, []any{candidate.CatalogRevisionID, candidate.SourceID}},
 		{`INSERT INTO source_creators SELECT ?, c.source_id, c.source_key, c.provider_id, c.external_id, c.name FROM source_creators c
