@@ -23,7 +23,7 @@ func AllCodes() []Code {
 		CodeRuleParameterConflict, CodeRulePublishBlocked, CodeRuleRollbackBlocked,
 		CodeRuleVersionInUse, CodeRuleImportInvalid, CodeRuleBindingConflict, CodeJobStateConflict, CodeScanAlreadyRunning,
 		CodeSourceUnavailable, CodeSourceReadFailed, CodeContentDisappeared, CodePathEscape,
-		CodeCatalogCandidateInvalid, CodeProcessInterrupted, CodeRangeInvalid,
+		CodeCatalogCandidateInvalid, CodeCatalogCandidatePublished, CodeProcessInterrupted, CodeRangeInvalid,
 		CodeRestoreFailed, CodeBackupNotFound, CodeBackupCorrupt, CodeBackupIncompatible,
 	}
 }
