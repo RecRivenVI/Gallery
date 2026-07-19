@@ -26,6 +26,66 @@ const (
 	IssueSuperseded       = "OVERLAY_SUPERSEDED"
 )
 
+// DependencyClass 区分某个 Overlay 字段一旦写入是否必须先经过写后屏障（持久投影 Job →
+// publication）才能出现在下一次查询结果的过滤/排序/搜索/集合成员判断中（Snapshot），
+// 还是可以在写入后立即以 control.db 当前值展示而不影响当前页成员与顺序（Live）。
+// 这是当前实现，不是字段永久分类：某字段一旦参与过滤、排序、搜索或集合判断，必须
+// 改为 Snapshot 并进入对应查询的 dependency set 与 revision。见
+// Documents/规范/06-查询-搜索与排序.md「Overlay 查询依赖」。
+type DependencyClass string
+
+const (
+	DependencySnapshot DependencyClass = "snapshot"
+	DependencyLive     DependencyClass = "live"
+)
+
+// OverlayDependencySet 是当前 Overlay 字段的服务端权威依赖分类表。TitleOverride、
+// ManualTags、Hidden、CustomCoverMediaID 参与查询过滤/排序/搜索或集合成员判断
+// （标题排序键、标签过滤、hidden 可见性、封面引用），因此是 Snapshot：写入只有在对应
+// 持久投影 Job 完成并进入新 query publication 后才反映到查询结果。Favorite、Progress
+// 目前不参与任何过滤/排序/搜索判据，是 Live：写入后立即可通过 GET .../overlay 或未来
+// 的实时展示接口读取最新值，不需要等待新 publication，也不会让客户端插入/删除/重排
+// 当前页成员。
+var OverlayDependencySet = map[string]DependencyClass{
+	"titleOverride":      DependencySnapshot,
+	"manualTags":         DependencySnapshot,
+	"hidden":             DependencySnapshot,
+	"customCoverMediaId": DependencySnapshot,
+	"favorite":           DependencyLive,
+	"progress":           DependencyLive,
+}
+
+// QueryAffectingFieldsChanged 依据 OverlayDependencySet 判断 previous→normalized 之间
+// 的写入是否触碰了任何 Snapshot 字段，从而需要排队新的 overlay 投影 Job 并推进
+// query_watermark。只读遍历 Snapshot 分类，不在此处编码具体字段比较逻辑，使分类表
+// 与实际排队判据保持单一事实来源。
+func queryAffectingFieldsChanged(previous State, normalized Input) bool {
+	for field, class := range OverlayDependencySet {
+		if class != DependencySnapshot {
+			continue
+		}
+		switch field {
+		case "titleOverride":
+			if previous.TitleOverride != normalized.TitleOverride {
+				return true
+			}
+		case "manualTags":
+			if !equalStrings(previous.ManualTags, normalized.ManualTags) {
+				return true
+			}
+		case "hidden":
+			if previous.Hidden != normalized.Hidden {
+				return true
+			}
+		case "customCoverMediaId":
+			if previous.CustomCoverMediaID != normalized.CustomCoverMediaID {
+				return true
+			}
+		}
+	}
+	return false
+}
+
 type Input struct {
 	TitleOverride      string
 	ManualTags         []string
@@ -135,9 +195,10 @@ func (s *Service) Put(ctx context.Context, workID, createdBy string, input Input
 	if err != nil {
 		return PutResult{}, err
 	}
-	queryChanged := previous.TitleOverride != normalized.TitleOverride ||
-		!equalStrings(previous.ManualTags, normalized.ManualTags) || previous.Hidden != normalized.Hidden ||
-		previous.CustomCoverMediaID != normalized.CustomCoverMediaID || previous.ProjectionStatus == "failed" ||
+	// queryChanged 组合两类独立触发条件：本次写入是否碰到了 OverlayDependencySet 中的
+	// Snapshot 字段，以及既有投影是否需要修复（上次失败，或处于 pending 但从未成功
+	// 排队 Job）。后者不属于字段依赖分类，是写后屏障自身的重试语义。
+	queryChanged := queryAffectingFieldsChanged(previous, normalized) || previous.ProjectionStatus == "failed" ||
 		(previous.ProjectionStatus == "pending" && previous.ProjectionJobID == "")
 	var watermark int64
 	if err := tx.QueryRowContext(ctx, `UPDATE gallery_control_sequence SET watermark=watermark+1
