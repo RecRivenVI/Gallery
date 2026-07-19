@@ -1625,6 +1625,13 @@ paths:
         required: false
         schema:
           type: string
+      - name: If-Range
+        in: header
+        required: false
+        description: >-
+          与当前 ETag 不一致时忽略 Range，退回完整 200 响应，避免拼接不同内容版本的字节。
+        schema:
+          type: string
     head:
       operationId: headMediaContent
       summary: 读取稳定 Media ID 内容的 HTTP metadata
