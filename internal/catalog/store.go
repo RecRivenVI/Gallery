@@ -1094,29 +1094,60 @@ type PriorObservation struct {
 	ContentVerificationState string
 	Algorithm                string
 	Digest                   string
+	// LastConfirmedAt 是既往完成完整 SHA-256 确认的时间；复用摘要时必须原样保留这个时间，
+	// 不得因为本次扫描只是复用旧摘要就把它当作新一轮确认时间。
+	LastConfirmedAt time.Time
 }
 
 // LookupPriorObservation 在当前活动 query publication 内按 (source_id, relative_path) 查找
 // 既往观察，供 incremental 扫描档案组合 size/mtime 证据判断是否可复用已确认 digest，
 // 不产生任何文件 I/O。真实规模下依赖 source_media_identity_idx 索引，不做全表扫描。
 func (s *Store) LookupPriorObservation(ctx context.Context, sourceID, relativePath string) (PriorObservation, error) {
-	var size, mtimeNs sql.NullInt64
+	var size, mtimeNs, lastConfirmedAt sql.NullInt64
 	var state, algorithm, digest sql.NullString
-	err := s.db.QueryRowContext(ctx, `SELECT m.size_bytes, m.mtime_ns, m.content_verification_state, m.last_confirmed_algorithm, m.last_confirmed_digest
+	err := s.db.QueryRowContext(ctx, `SELECT m.size_bytes, m.mtime_ns, m.content_verification_state, m.last_confirmed_algorithm, m.last_confirmed_digest, m.last_confirmed_at
 FROM source_media m
 JOIN active_query_publication a ON a.singleton=1 JOIN query_publications q ON q.query_publication_id=a.query_publication_id
 WHERE m.catalog_revision_id=q.catalog_revision_id AND m.source_id=? AND m.relative_path=?`, sourceID, relativePath).
-		Scan(&size, &mtimeNs, &state, &algorithm, &digest)
+		Scan(&size, &mtimeNs, &state, &algorithm, &digest, &lastConfirmedAt)
 	if errors.Is(err, sql.ErrNoRows) {
 		return PriorObservation{}, nil
 	}
 	if err != nil {
 		return PriorObservation{}, fault.New(fault.CodeInternal, true, err)
 	}
-	return PriorObservation{
+	observation := PriorObservation{
 		Found: true, Size: size.Int64, MTimeNanos: mtimeNs.Int64,
 		ContentVerificationState: state.String, Algorithm: algorithm.String, Digest: digest.String,
-	}, nil
+	}
+	if lastConfirmedAt.Valid {
+		observation.LastConfirmedAt = time.Unix(lastConfirmedAt.Int64, 0).UTC()
+	}
+	return observation, nil
+}
+
+// SourcePublished 报告该 Source 是否已在当前活动 query publication 中拥有至少一条
+// Source-derived 数据，即是否已经完成过至少一次成功扫描发布。尚无任何活动 publication
+// （产品首次启动、从未有任何 Source 发布成功）视为未发布，不是错误。
+func (s *Store) SourcePublished(ctx context.Context, sourceID string) (bool, error) {
+	publication, err := s.Current(ctx)
+	if err != nil {
+		if isNotFoundErr(err) {
+			return false, nil
+		}
+		return false, err
+	}
+	var count int
+	if err := s.db.QueryRowContext(ctx, `SELECT count(*) FROM source_works w
+WHERE w.catalog_revision_id=? AND w.source_id=?`, publication.CatalogRevisionID, sourceID).Scan(&count); err != nil {
+		return false, fault.New(fault.CodeInternal, true, err)
+	}
+	return count > 0, nil
+}
+
+func isNotFoundErr(err error) bool {
+	var structured *fault.Error
+	return errors.As(err, &structured) && structured.Code == fault.CodeNotFound
 }
 
 func cloneUnchangedSources(ctx context.Context, tx *sql.Tx, candidate Candidate) error {
