@@ -905,6 +905,11 @@ WHERE job_id=? AND status IN ('failed','needs_repair') AND failure_retryable=1
 	}
 	result, err := tx.ExecContext(ctx, query, args...)
 	if err != nil {
+		if strings.Contains(strings.ToLower(err.Error()), "unique") {
+			// jobs_one_active_scan_per_source：另一个 Job 已经是该 Source 的活跃扫描，
+			// 按状态冲突处理以便 RequeueDueFailures 等调用方跳过重试而不是让恢复流程整体失败。
+			return Job{}, fault.New(fault.CodeJobStateConflict, true, nil)
+		}
 		return Job{}, fault.New(fault.CodeInternal, true, err)
 	}
 	if err := requireOne(result); err != nil {

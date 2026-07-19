@@ -426,6 +426,74 @@ func TestAutomaticRetryStopsAtConfiguredMaximum(t *testing.T) {
 	}
 }
 
+func TestRequeueDueFailuresSkipsSourceWithAnotherActiveScan(t *testing.T) {
+	ctx := context.Background()
+	dirs := appdirs.UnderRoot(filepath.Join(t.TempDir(), "app"))
+	if err := dirs.Ensure(filesystem.OS{}); err != nil {
+		t.Fatal(err)
+	}
+	store, err := storage.Open(ctx, dirs)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	now := &mutableClock{now: time.Date(2026, 7, 18, 6, 0, 0, 0, time.UTC)}
+	generator := identity.NewGenerator(now)
+	resources, err := application.NewResources(store.Control.SQL(), dirs, filesystem.OS{}, now, generator)
+	if err != nil {
+		t.Fatal(err)
+	}
+	library, err := resources.CreateLibrary(ctx, "jobs")
+	if err != nil {
+		t.Fatal(err)
+	}
+	sourceID := createSource(t, resources, library.ID)
+	jobStore, err := jobs.NewStore(store.Control.SQL(), now, generator)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// job 先失败并进入退避等待，随后另一个 Job 成为同一 Source 的活跃扫描。
+	first, err := jobStore.CreateScan(ctx, sourceID, "personal-owner", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := jobStore.Start(ctx, first.ID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := jobStore.FailWithRetryable(ctx, first.ID, "TRANSIENT_TEST", true); err != nil {
+		t.Fatal(err)
+	}
+	now.Advance(time.Hour)
+	second, err := jobStore.CreateScan(ctx, sourceID, "personal-owner", "")
+	if err != nil {
+		t.Fatalf("同一 Source 的第二次扫描在首次失败后应当允许: %v", err)
+	}
+	// 启动 reconciliation/周期恢复调用 RequeueDueFailures 时，试图把已失败的 first 重新置为
+	// queued 会与仍然活跃的 second 冲突；此前该冲突以 CodeInternal 传播，导致恢复流程（进而
+	// galleryd 启动本身）整体失败，而不是被优雅跳过。
+	requeued, err := jobStore.RequeueDueFailures(ctx)
+	if err != nil {
+		t.Fatalf("RequeueDueFailures 因活跃 Source 冲突整体失败: %v", err)
+	}
+	if len(requeued) != 0 {
+		t.Fatalf("冲突的 Job 不应被重新排队: %+v", requeued)
+	}
+	reloadedFirst, err := jobStore.Get(ctx, first.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if reloadedFirst.Status != jobs.StatusFailed || reloadedFirst.Attempt != 1 {
+		t.Fatalf("跳过的 Job 状态被意外修改: %+v", reloadedFirst)
+	}
+	reloadedSecond, err := jobStore.Get(ctx, second.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if reloadedSecond.Status != jobs.StatusQueued {
+		t.Fatalf("活跃 Job 被意外修改: %+v", reloadedSecond)
+	}
+}
+
 func createSourceForAttemptTest(t *testing.T, resources *application.Resources, libraryID string) (string, error) {
 	t.Helper()
 	root := filepath.Join(t.TempDir(), "source")
