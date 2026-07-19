@@ -51,8 +51,14 @@ func TestIndexProfilePublishesLocatedUnverifiedWithoutHashing(t *testing.T) {
 	if err != nil || len(mediaItems) != 1 {
 		t.Fatalf("index 档案未发布 Media: %+v %v", mediaItems, err)
 	}
-	if mediaItems[0].LocationStatus != catalog.ContentVerificationStateLocatedUnverified {
+	if mediaItems[0].LocationStatus != "present" {
+		t.Fatalf("index 档案媒体的位置应仍为 present: %+v", mediaItems[0])
+	}
+	if mediaItems[0].ContentVerificationState != catalog.ContentVerificationStateLocatedUnverified {
 		t.Fatalf("index 档案媒体应为 located_unverified: %+v", mediaItems[0])
+	}
+	if !mediaItems[0].VerifiedAt.IsZero() {
+		t.Fatalf("index 档案媒体不应有 verifiedAt: %+v", mediaItems[0])
 	}
 	if mediaItems[0].Digest != "" || mediaItems[0].Algorithm != "" {
 		t.Fatalf("index 档案不得建立伪造 digest: %+v", mediaItems[0])
