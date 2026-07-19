@@ -33,7 +33,9 @@ func TestWalkingSkeletonScanPublishesAndFailurePreservesOldPublication(t *testin
 	defer store.Close()
 	before := sha256.Sum256(mustRead(t, filepath.Join(source.RootPath, "work-one", "media.bin")))
 
-	job, err := service.CreateScan(context.Background(), source.ID, "personal-owner")
+	// Walking Skeleton 要证明完整 SHA-256 确认与 publication 链路，显式请求 incremental：
+	// 未显式指定档案时，尚无 publication 的 Source 会自动选择 index（不建立 ContentBlob）。
+	job, err := service.CreateScanWithProfile(context.Background(), source.ID, "personal-owner", "", scanner.ScanProfileIncremental)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -423,7 +425,9 @@ func TestBlobLocationOccurrencesAndContentReplacement(t *testing.T) {
 	if err := os.WriteFile(duplicatePath, fixture, 0o400); err != nil {
 		t.Fatal(err)
 	}
-	job, err := service.CreateScan(ctx, source.ID, "personal-owner")
+	// 首次扫描无既往 publication 时默认自动选 index，此处需要立即建立已确认 digest 以
+	// 验证同 Blob 多 occurrence 与内容替换语义，因此显式请求 incremental。
+	job, err := service.CreateScanWithProfile(ctx, source.ID, "personal-owner", "", scanner.ScanProfileIncremental)
 	if err != nil {
 		t.Fatal(err)
 	}

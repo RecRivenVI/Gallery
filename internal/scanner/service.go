@@ -21,6 +21,8 @@ import (
 	"github.com/RecRivenVI/gallery/internal/jobs"
 	"github.com/RecRivenVI/gallery/internal/maintenance"
 	"github.com/RecRivenVI/gallery/internal/media"
+	"github.com/RecRivenVI/gallery/internal/platform/clock"
+	"github.com/RecRivenVI/gallery/internal/ports"
 	"github.com/RecRivenVI/gallery/internal/rules"
 )
 
@@ -57,6 +59,23 @@ type Service struct {
 	hash        *hashjob.Service
 	maintenance *maintenance.Coordinator
 	space       SpaceGate
+	clock       ports.Clock
+
+	// preReuseHook 仅供确定性测试使用：在准备复用既往已确认 digest、重新 Stat 当前文件前
+	// 触发一次，用于模拟 discovery 观察之后、复用决策之前的文件替换竞争。生产路径始终为 nil。
+	preReuseHook func(relativePath string)
+}
+
+// SetPreReuseHook 仅供确定性测试注入；生产 bootstrap 不得调用。
+func (s *Service) SetPreReuseHook(hook func(relativePath string)) { s.preReuseHook = hook }
+
+// SetClock 注入内容确认时间来源；未注入时使用系统时钟。测试可注入可推进的时钟以确定性地
+// 验证"复用摘要保留旧确认时间、真正完成哈希才推进确认时间"的语义。
+func (s *Service) SetClock(value ports.Clock) {
+	if value == nil {
+		value = clock.System{}
+	}
+	s.clock = value
 }
 
 // SetDispatcher 注入中央调度器；注入后 Start 通过调度器领取执行并接受其 context 取消。
@@ -79,7 +98,7 @@ func New(ctx context.Context, resources *application.Resources, jobStore *jobs.S
 	if notifier == nil {
 		notifier = nopNotifier{}
 	}
-	return &Service{context: ctx, resources: resources, jobs: jobStore, catalog: catalogStore, notifier: notifier}, nil
+	return &Service{context: ctx, resources: resources, jobs: jobStore, catalog: catalogStore, notifier: notifier, clock: clock.System{}}, nil
 }
 
 // 扫描档案（scanProfile）决定媒体内容如何被确认，三者互不冒充：
@@ -99,12 +118,15 @@ type scanRequest struct {
 	ScanProfile string `json:"scanProfile,omitempty"`
 }
 
-func normalizeScanProfile(value string) string {
+// validateScanProfile 只接受空字符串（表示未显式指定，交由调用方按 Source 是否已发布决定
+// 实际档案）与三个正式档案值；任何拼写错误或未知值都必须返回结构化 VALIDATION_ERROR，
+// 不得静默归一化为 incremental。
+func validateScanProfile(value string) (string, error) {
 	switch value {
-	case ScanProfileIndex, ScanProfileVerify:
-		return value
+	case "", ScanProfileIndex, ScanProfileIncremental, ScanProfileVerify:
+		return value, nil
 	default:
-		return ScanProfileIncremental
+		return "", fault.WithField(fault.CodeValidation, "scanProfile", nil)
 	}
 }
 
@@ -116,7 +138,10 @@ func scanProfileFromJob(job jobs.Job) string {
 	if err := json.Unmarshal(job.RequestJSON, &request); err != nil {
 		return ScanProfileIncremental
 	}
-	return normalizeScanProfile(request.ScanProfile)
+	if request.ScanProfile == ScanProfileIndex || request.ScanProfile == ScanProfileVerify {
+		return request.ScanProfile
+	}
+	return ScanProfileIncremental
 }
 
 func (s *Service) CreateScan(ctx context.Context, sourceID, createdBy string) (jobs.Job, error) {
@@ -124,15 +149,39 @@ func (s *Service) CreateScan(ctx context.Context, sourceID, createdBy string) (j
 }
 
 func (s *Service) CreateScanWithIdempotency(ctx context.Context, sourceID, createdBy, idempotencyKey string) (jobs.Job, error) {
-	return s.CreateScanWithProfile(ctx, sourceID, createdBy, idempotencyKey, ScanProfileIncremental)
+	return s.CreateScanWithProfile(ctx, sourceID, createdBy, idempotencyKey, "")
 }
 
-// CreateScanWithProfile 是唯一实际创建扫描 Job 的入口；CreateScan/CreateScanWithIdempotency
-// 固定使用 incremental 档案以保持既有调用方（Watcher 周期收敛、启动 reconciliation、既有
-// 测试）行为不变。
+// CreateScanWithProfile 是唯一实际创建扫描 Job 的入口。scanProfile 为空表示未显式指定：
+// Source 尚无已发布 Catalog 时自动选择 index，已有 publication 时自动选择 incremental；
+// 两种情况下持久化的都是最终实际决定的档案，绝不保存含糊的 "auto"。显式指定的
+// index/incremental/verify 必须被尊重；已有 publication 的 Source 显式请求 index 会绕过
+// 阶段 1 依赖 ContentBlob digest 的 SourceWork 拆分/合并结构审查，因此拒绝并保持
+// Binding/Catalog 不变，不创建 Job。
 func (s *Service) CreateScanWithProfile(ctx context.Context, sourceID, createdBy, idempotencyKey, scanProfile string) (jobs.Job, error) {
+	requested, err := validateScanProfile(scanProfile)
+	if err != nil {
+		return jobs.Job{}, err
+	}
 	if _, err := s.resources.GetSource(ctx, sourceID); err != nil {
 		return jobs.Job{}, err
+	}
+	published, err := s.catalog.SourcePublished(ctx, sourceID)
+	if err != nil {
+		return jobs.Job{}, err
+	}
+	effective := requested
+	switch requested {
+	case "":
+		if published {
+			effective = ScanProfileIncremental
+		} else {
+			effective = ScanProfileIndex
+		}
+	case ScanProfileIndex:
+		if published {
+			return jobs.Job{}, fault.New(fault.CodeConflict, false, nil)
+		}
 	}
 	binding, err := s.resources.BindingForSource(ctx, sourceID)
 	if err != nil {
@@ -148,7 +197,7 @@ func (s *Service) CreateScanWithProfile(ctx context.Context, sourceID, createdBy
 		CompilerVersion: rules.CompilerVersion, CELProfileVersion: rules.CELProfileVersion,
 		ExtensionRegistryVersion: version.IR.ExtensionRegistryVersion,
 	}
-	requestJSON, err := json.Marshal(scanRequest{ScanProfile: normalizeScanProfile(scanProfile)})
+	requestJSON, err := json.Marshal(scanRequest{ScanProfile: effective})
 	if err != nil {
 		return jobs.Job{}, fault.New(fault.CodeInternal, true, err)
 	}
@@ -249,21 +298,37 @@ func (s *Service) Execute(ctx context.Context, jobID string) error {
 				if prior.Found && prior.ContentVerificationState == catalog.ContentVerificationStateContentVerified &&
 					prior.Size == item.ExpectedSize && prior.MTimeNanos == item.ExpectedModTimeNanos {
 					// 组合身份证据（同 Source、规范化路径、大小、mtime）未变化，且既往已完成完整
-					// 确认：直接复用既往摘要，不重新读取文件正文。
+					// 确认：候选复用既往摘要。但 discovery 阶段的 Stat 与此刻之间存在窗口，
+					// 复用前必须重新打开并 Stat 当前文件；只有这次重新句柄得到的 size/mtime
+					// 也同时与 discovery 观察一致才允许复用，任一证据在此窗口内变化都必须放弃
+					// 复用、降级为下方完整 Hash Job，不得把旧 digest 与新文件属性混合发布。
+					if s.preReuseHook != nil {
+						s.preReuseHook(item.RelativePath)
+					}
 					located, locateErr := media.LocateSourceFile(source.RootPath, item.RelativePath)
 					if locateErr != nil {
 						return s.fail(ctx, job.ID, locateErr)
 					}
-					blob, blobErr := domain.ParseContentBlobRef(prior.Algorithm, prior.Digest)
-					if blobErr != nil {
-						return s.fail(ctx, job.ID, blobErr)
+					if located.Size == item.ExpectedSize && located.ModTimeNanos == item.ExpectedModTimeNanos {
+						blob, blobErr := domain.ParseContentBlobRef(prior.Algorithm, prior.Digest)
+						if blobErr != nil {
+							return s.fail(ctx, job.ID, blobErr)
+						}
+						item.Hash = media.HashResult{
+							Blob: blob, Size: located.Size, LocationKey: located.LocationKey, RelativePath: located.RelativePath,
+						}
+						verificationState[item.RelativePath] = catalog.ContentVerificationStateContentVerified
+						// 复用摘要不改变确认时间：保留既往真正完成完整哈希时的时间，不得因为
+						// 本次只是复用旧摘要就把 last_confirmed_at 推进到现在。
+						lastConfirmedAt[item.RelativePath] = prior.LastConfirmedAt
+						skipHash = true
+					} else {
+						// 复用前证据已变化：放弃复用，改走下方完整 Hash Job；以刚获得的当前
+						// 状态作为本次哈希的期望身份，避免与已经过期的 discovery 观察比较、
+						// 对本来只是稍后处理的合法文件产生误报的 CONTENT_CHANGED_DURING_HASH。
+						item.ExpectedSize = located.Size
+						item.ExpectedModTimeNanos = located.ModTimeNanos
 					}
-					item.Hash = media.HashResult{
-						Blob: blob, Size: located.Size, LocationKey: located.LocationKey, RelativePath: located.RelativePath,
-					}
-					verificationState[item.RelativePath] = catalog.ContentVerificationStateContentVerified
-					lastConfirmedAt[item.RelativePath] = time.Now().UTC()
-					skipHash = true
 				} else if scanProfile == ScanProfileIndex {
 					// index 档案对新增或疑似变化媒体也不建立 Hash Job，只定位并标记未确认。
 					located, locateErr := media.LocateSourceFile(source.RootPath, item.RelativePath)
@@ -301,7 +366,8 @@ func (s *Service) Execute(ctx context.Context, jobID string) error {
 				}
 				item.Hash = hashed
 				verificationState[item.RelativePath] = catalog.ContentVerificationStateContentVerified
-				lastConfirmedAt[item.RelativePath] = time.Now().UTC()
+				// 只有真正完成完整哈希才推进确认时间。
+				lastConfirmedAt[item.RelativePath] = s.clock.Now().UTC()
 			}
 			current++
 			job, err = s.jobs.Progress(ctx, job.ID, "hashing", current, total)
