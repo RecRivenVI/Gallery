@@ -24,6 +24,9 @@ import (
 	contractquery "github.com/RecRivenVI/gallery/internal/contract/query"
 	"github.com/RecRivenVI/gallery/internal/contract/realtime"
 	"github.com/RecRivenVI/gallery/internal/creators"
+	"github.com/RecRivenVI/gallery/internal/derived"
+	"github.com/RecRivenVI/gallery/internal/derived/thumbnail"
+	"github.com/RecRivenVI/gallery/internal/derivedjob"
 	"github.com/RecRivenVI/gallery/internal/domain"
 	"github.com/RecRivenVI/gallery/internal/jobs"
 	"github.com/RecRivenVI/gallery/internal/maintenance"
@@ -57,6 +60,8 @@ type Server struct {
 	maintenance *maintenance.Service
 	watcher     *watcherservice.Service
 	scheduler   JobController
+	derived     *derived.Service
+	derivedJob  *derivedjob.Service
 }
 
 type JobController interface {
@@ -68,6 +73,8 @@ type Options struct {
 	Maintenance *maintenance.Service
 	Watcher     *watcherservice.Service
 	Scheduler   JobController
+	Derived     *derived.Service
+	DerivedJob  *derivedjob.Service
 }
 
 func New(mode config.Mode, store *storage.Store, clock ports.Clock, personal *auth.Personal, resources *application.Resources, jobStore *jobs.Store, catalogStore *catalog.Store, scannerService *scanner.Service, overlayService *overlay.Service, creatorsService *creators.Service, backupService *backup.Service, hub *realtime.Hub, logger *slog.Logger, options ...Options) http.Handler {
@@ -86,7 +93,7 @@ func New(mode config.Mode, store *storage.Store, clock ports.Clock, personal *au
 	if len(options) > 0 {
 		option = options[0]
 	}
-	server := &Server{mode: mode, store: store, clock: clock, auth: personal, data: resources, jobs: jobStore, catalog: catalogStore, scanner: scannerService, hub: hub, logger: logger, rules: ruleLifecycle, query: queryService, overlay: overlayService, creators: creatorsService, backup: backupService, maintenance: option.Maintenance, watcher: option.Watcher, scheduler: option.Scheduler}
+	server := &Server{mode: mode, store: store, clock: clock, auth: personal, data: resources, jobs: jobStore, catalog: catalogStore, scanner: scannerService, hub: hub, logger: logger, rules: ruleLifecycle, query: queryService, overlay: overlayService, creators: creatorsService, backup: backupService, maintenance: option.Maintenance, watcher: option.Watcher, scheduler: option.Scheduler, derived: option.Derived, derivedJob: option.DerivedJob}
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /api/v1/health", server.health)
 	mux.HandleFunc("GET /api/v1/bootstrap", server.bootstrap)
@@ -180,6 +187,8 @@ func New(mode config.Mode, store *storage.Store, clock ports.Clock, personal *au
 	mux.HandleFunc("GET /api/v1/media/{mediaId}/content", server.mediaContent)
 	mux.HandleFunc("HEAD /api/v1/media/{mediaId}/content", server.mediaContent)
 	mux.HandleFunc("POST /api/v1/media/{mediaId}/verification-jobs", server.createMediaVerificationJob)
+	mux.HandleFunc("POST /api/v1/media/{mediaId}/derived-assets", server.createDerivedAsset)
+	mux.HandleFunc("GET /api/v1/derived-assets/{assetKey}/content", server.derivedAssetContent)
 	mux.Handle("/ws/v1", hub.Handler(func(r *http.Request) (realtime.Principal, error) {
 		if err := auth.ValidateOrigin(r); err != nil {
 			return realtime.Principal{}, err
@@ -1710,6 +1719,94 @@ func (s *Server) createMediaVerificationJob(w http.ResponseWriter, r *http.Reque
 	s.scanner.Start(job.ID)
 }
 
+// createDerivedAsset 请求生成或复用一个 DerivedAsset。总是返回持久 Job（缓存命中时
+// Job 立即以 completed 态返回，不需要客户端区分"新生成"与"命中缓存"两种响应形状），
+// 媒体尚未 content_verified 时拒绝，外部 Resolver 未配置时返回稳定 unavailable。
+func (s *Server) createDerivedAsset(w http.ResponseWriter, r *http.Request) {
+	session, err := s.requireCapability(r, "media.read")
+	if err != nil {
+		s.writeRequestError(w, err)
+		return
+	}
+	if err := auth.ValidateMutation(r, session.CSRFToken); err != nil {
+		s.writeRequestError(w, err)
+		return
+	}
+	if s.derivedJob == nil || !s.derivedJob.Available() {
+		s.writeRequestError(w, fault.New(fault.CodeDerivedAssetUnavailable, false, nil))
+		return
+	}
+	var request api.DerivedAssetCreateRequest
+	if err := decodeJSON(r, &request); err != nil {
+		s.writeRequestError(w, fault.WithField(fault.CodeDerivedAssetInvalid, "body", err))
+		return
+	}
+	// 已知 transform 的白名单在创建时同步拒绝，避免为一个注定失败的请求消耗 Job 槽位；
+	// 具体生成仍完全异步，白名单只是快速失败，不代替 Resolver 在真正生成时的最终校验。
+	if request.TransformId != thumbnail.TransformID || request.TransformVersion != thumbnail.TransformVersion {
+		s.writeRequestError(w, fault.WithField(fault.CodeDerivedAssetInvalid, "transformId", nil))
+		return
+	}
+	_, item, err := s.catalog.GetMedia(r.Context(), r.PathValue("mediaId"))
+	if err != nil {
+		s.writeRequestError(w, err)
+		return
+	}
+	if item.ContentVerificationState != catalog.ContentVerificationStateContentVerified {
+		s.writeRequestError(w, fault.New(fault.CodeContentNotVerified, true, nil))
+		return
+	}
+	parameters := []byte("{}")
+	if request.Parameters != nil {
+		encoded, marshalErr := json.Marshal(*request.Parameters)
+		if marshalErr != nil {
+			s.writeRequestError(w, fault.WithField(fault.CodeDerivedAssetInvalid, "parameters", marshalErr))
+			return
+		}
+		parameters = encoded
+	}
+	job, err := s.derivedJob.Create(r.Context(), derivedjob.Request{
+		BlobAlgorithm: item.Algorithm, BlobDigest: item.Digest,
+		TransformID: request.TransformId, TransformVersion: request.TransformVersion, Parameters: parameters,
+	}, session.PrincipalID)
+	if err != nil {
+		s.writeRequestError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusAccepted, jobDTO(job))
+	s.startJob(job)
+}
+
+// derivedAssetContent 通过内容寻址 assetKey（不是 Catalog 内部 row ID）流式读取一个
+// 已就绪 DerivedAsset 的正文，读取期间持有 derived.Service 的租约以防止与 GC 竞争。
+func (s *Server) derivedAssetContent(w http.ResponseWriter, r *http.Request) {
+	if _, err := s.requireCapability(r, "media.read"); err != nil {
+		s.writeRequestError(w, err)
+		return
+	}
+	if s.derived == nil {
+		s.writeRequestError(w, fault.New(fault.CodeNotFound, false, nil))
+		return
+	}
+	lease, err := s.derived.Open(r.Context(), r.PathValue("assetKey"))
+	if err != nil {
+		s.writeRequestError(w, err)
+		return
+	}
+	defer lease.Close()
+	etag := `"gallery-derived-` + lease.Asset.OutputDigest + `"`
+	w.Header().Set("ETag", etag)
+	w.Header().Set("Content-Type", lease.Asset.OutputMIME)
+	w.Header().Set("X-Content-Type-Options", "nosniff")
+	if etagMatches(r.Header.Get("If-None-Match"), etag) {
+		w.WriteHeader(http.StatusNotModified)
+		return
+	}
+	w.Header().Set("Content-Length", strconv.FormatInt(lease.Asset.OutputSize, 10))
+	w.WriteHeader(http.StatusOK)
+	_, _ = io.Copy(w, lease.File)
+}
+
 func etagMatches(header, current string) bool {
 	for _, candidate := range strings.Split(header, ",") {
 		candidate = strings.TrimSpace(candidate)
@@ -1906,6 +2003,16 @@ func jobDTO(value jobs.Job) api.Job {
 		if err := json.Unmarshal(value.RequestJSON, &request); err == nil && request.ScanProfile != "" {
 			profile := api.JobScanProfile(request.ScanProfile)
 			result.ScanProfile = &profile
+		}
+	}
+	if value.Type == "derived" && value.Status == jobs.StatusCompleted {
+		// derivedAssetKey 只从持久结果（result_json）读取，不缓存于进程内状态；Get/List
+		// 在服务重启后仍返回一致值，且不会暴露 Catalog 内部 row ID 或绝对路径。
+		var derivedResult struct {
+			Key string `json:"Key"`
+		}
+		if err := json.Unmarshal(value.ResultJSON, &derivedResult); err == nil && derivedResult.Key != "" {
+			result.DerivedAssetKey = &derivedResult.Key
 		}
 	}
 	return result
@@ -2170,7 +2277,7 @@ func statusForFault(err error) int {
 	case fault.CodeValidation:
 		return http.StatusBadRequest
 	case fault.CodeSourcePathInvalid, fault.CodeCursorInvalid, fault.CodeCursorExpired, fault.CodeQueryTooShort,
-		fault.CodeOverlayFactInvalid,
+		fault.CodeOverlayFactInvalid, fault.CodeDerivedAssetInvalid,
 		fault.CodeRuleSchemaInvalid, fault.CodeRuleParameterInvalid, fault.CodeRuleCompile,
 		fault.CodeRuleCELLimit, fault.CodeRuleDryRun, fault.CodeRuleImpact, fault.CodeRuleEval:
 		return http.StatusBadRequest

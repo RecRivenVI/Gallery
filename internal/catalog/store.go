@@ -1177,6 +1177,27 @@ WHERE m.catalog_revision_id=q.catalog_revision_id AND m.source_id=? AND m.relati
 	return observation, nil
 }
 
+// LocateBlobFile 在当前活动 query publication 中为一个 ContentBlob 找到至少一个仍然
+// present 的 FileLocation，返回其 Source、相对路径与媒体大小，供 DerivedAsset 生成器
+// 在不持有 Catalog 内部 row ID 的前提下定位可读取的源文件。多个 occurrence 时任取其一
+// （内容相同，读取哪个位置对派生结果无影响）。
+func (s *Store) LocateBlobFile(ctx context.Context, algorithm, digest string) (sourceID, relativePath string, size int64, err error) {
+	err = s.db.QueryRowContext(ctx, `SELECT m.source_id, m.relative_path, m.size_bytes
+FROM media_projections m
+JOIN active_query_publication a ON a.singleton=1 JOIN query_publications q ON q.query_publication_id=a.query_publication_id
+JOIN file_locations f ON f.catalog_revision_id=q.catalog_revision_id AND f.source_id=m.source_id AND f.source_key=m.source_key AND f.status='present'
+WHERE m.catalog_revision_id=q.catalog_revision_id AND m.overlay_revision_id=q.overlay_revision_id
+  AND m.algorithm=? AND m.digest=? AND m.content_verification_state='content_verified'
+LIMIT 1`, algorithm, digest).Scan(&sourceID, &relativePath, &size)
+	if errors.Is(err, sql.ErrNoRows) {
+		return "", "", 0, fault.New(fault.CodeNotFound, false, nil)
+	}
+	if err != nil {
+		return "", "", 0, fault.New(fault.CodeInternal, true, err)
+	}
+	return sourceID, relativePath, size, nil
+}
+
 // SourcePublished 报告该 Source 是否已在当前活动 query publication 中拥有至少一条
 // Source-derived 数据，即是否已经完成过至少一次成功扫描发布。尚无任何活动 publication
 // （产品首次启动、从未有任何 Source 发布成功）视为未发布，不是错误。

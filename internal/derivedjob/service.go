@@ -22,8 +22,11 @@ type Request struct {
 	OverlayInputHash string `json:"overlayInputHash"`
 }
 
+// Resolver 把一次派生请求解析为具体的字节生成器。blob 是请求携带的 ContentBlob
+// 引用——Resolver 实现负责在真正生成时（而不是解析时）通过服务端权威的
+// catalog.Store.LocateBlobFile 定位可读源文件，不由调用方直接传入路径。
 type Resolver interface {
-	Resolve(ctx context.Context, transformID, transformVersion string) (derived.Generator, error)
+	Resolve(ctx context.Context, transformID, transformVersion string, blob domain.ContentBlobRef) (derived.Generator, error)
 }
 
 type SpaceGate interface {
@@ -82,7 +85,11 @@ func (s *Service) Execute(ctx context.Context, jobID string) error {
 	if s.resolver == nil {
 		return s.fail(ctx, jobID, fault.New(fault.CodeDerivedAssetUnavailable, false, errors.New("Derived transform resolver 未配置")))
 	}
-	generator, err := s.resolver.Resolve(ctx, request.TransformID, request.TransformVersion)
+	blobRef, err := domain.ParseContentBlobRef(request.BlobAlgorithm, request.BlobDigest)
+	if err != nil {
+		return s.fail(ctx, jobID, fault.New(fault.CodeDerivedAssetInvalid, false, err))
+	}
+	generator, err := s.resolver.Resolve(ctx, request.TransformID, request.TransformVersion, blobRef)
 	if err != nil {
 		return s.fail(ctx, jobID, fault.New(fault.CodeDerivedAssetFailed, true, err))
 	}
