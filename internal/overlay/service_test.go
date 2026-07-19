@@ -314,3 +314,42 @@ VALUES (?, ?, ?, ?, 'src_test', 'media-2', 'work/02.jpg', 'image', 'image/jpeg',
 	}
 	return ctx, store, service, catalogStore, queryService
 }
+
+// TestOverlayDependencySetMatchesQueryAffectingBehavior 锁定 OverlayDependencySet
+// 这份服务端权威分类表与实际排队判据一致：Snapshot 字段单独变化必须触发
+// queryAffectingFieldsChanged，Live 字段单独变化绝不触发。字段名新增/移除时本测试
+// 会因未覆盖分支而失败，提醒同步更新分类表与本测试。
+func TestOverlayDependencySetMatchesQueryAffectingBehavior(t *testing.T) {
+	if len(OverlayDependencySet) != 6 {
+		t.Fatalf("OverlayDependencySet 字段数 = %d，注册表变化后请同步更新本测试", len(OverlayDependencySet))
+	}
+	base := State{TitleOverride: "t", ManualTags: []string{"a"}, Hidden: false, CustomCoverMediaID: "med_x", Favorite: false, Progress: 0}
+	sameInput := Input{TitleOverride: base.TitleOverride, ManualTags: base.ManualTags, Hidden: base.Hidden, CustomCoverMediaID: base.CustomCoverMediaID, Favorite: base.Favorite, Progress: base.Progress}
+	if queryAffectingFieldsChanged(base, sameInput) {
+		t.Fatal("无变化不应触发 query-affecting")
+	}
+	for field, class := range OverlayDependencySet {
+		mutated := sameInput
+		switch field {
+		case "titleOverride":
+			mutated.TitleOverride = "changed"
+		case "manualTags":
+			mutated.ManualTags = []string{"b"}
+		case "hidden":
+			mutated.Hidden = true
+		case "customCoverMediaId":
+			mutated.CustomCoverMediaID = "med_y"
+		case "favorite":
+			mutated.Favorite = true
+		case "progress":
+			mutated.Progress = 0.5
+		default:
+			t.Fatalf("测试未覆盖新字段 %q，请补充分支", field)
+		}
+		got := queryAffectingFieldsChanged(base, mutated)
+		want := class == DependencySnapshot
+		if got != want {
+			t.Fatalf("字段 %s（%s）单独变化 queryAffecting=%v，want %v", field, class, got, want)
+		}
+	}
+}

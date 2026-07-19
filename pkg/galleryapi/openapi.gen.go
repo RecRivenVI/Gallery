@@ -2831,12 +2831,18 @@ type CreateLibraryParams struct {
 type GetMediaContentParams struct {
 	Range       *string `json:"Range,omitempty"`
 	IfNoneMatch *string `json:"If-None-Match,omitempty"`
+
+	// IfRange 与当前 ETag 不一致时忽略 Range，退回完整 200 响应，避免拼接不同内容版本的字节。
+	IfRange *string `json:"If-Range,omitempty"`
 }
 
 // HeadMediaContentParams defines parameters for HeadMediaContent.
 type HeadMediaContentParams struct {
 	Range       *string `json:"Range,omitempty"`
 	IfNoneMatch *string `json:"If-None-Match,omitempty"`
+
+	// IfRange 与当前 ETag 不一致时忽略 Range，退回完整 200 响应，避免拼接不同内容版本的字节。
+	IfRange *string `json:"If-Range,omitempty"`
 }
 
 // ListOrphanCandidatesParams defines parameters for ListOrphanCandidates.
@@ -6767,6 +6773,17 @@ func NewGetMediaContentRequest(server string, mediaId CanonicalMediaId, params *
 			req.Header.Set("If-None-Match", headerParam1)
 		}
 
+		if params.IfRange != nil {
+			var headerParam2 string
+
+			headerParam2, err = runtime.StyleParamWithOptions("simple", false, "If-Range", *params.IfRange, runtime.StyleParamOptions{ParamLocation: runtime.ParamLocationHeader, Type: "string", Format: ""})
+			if err != nil {
+				return nil, err
+			}
+
+			req.Header.Set("If-Range", headerParam2)
+		}
+
 	}
 
 	return req, nil
@@ -6825,6 +6842,17 @@ func NewHeadMediaContentRequest(server string, mediaId CanonicalMediaId, params 
 			}
 
 			req.Header.Set("If-None-Match", headerParam1)
+		}
+
+		if params.IfRange != nil {
+			var headerParam2 string
+
+			headerParam2, err = runtime.StyleParamWithOptions("simple", false, "If-Range", *params.IfRange, runtime.StyleParamOptions{ParamLocation: runtime.ParamLocationHeader, Type: "string", Format: ""})
+			if err != nil {
+				return nil, err
+			}
+
+			req.Header.Set("If-Range", headerParam2)
 		}
 
 	}

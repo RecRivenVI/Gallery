@@ -1640,7 +1640,13 @@ func (s *Server) mediaContent(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusNotModified)
 		return
 	}
-	selected, partial, err := media.ParseSingleRange(r.Header.Get("Range"), snapshot.Size)
+	rangeHeader := r.Header.Get("Range")
+	// If-Range：校验值与当前 ETag 不一致时说明内容在两次请求间已变化，必须退回完整
+	// 200 响应而不是对旧偏移执行 Range，避免返回来自不同内容版本的字节拼接结果。
+	if ifRange := r.Header.Get("If-Range"); rangeHeader != "" && ifRange != "" && !etagMatches(ifRange, etag) {
+		rangeHeader = ""
+	}
+	selected, partial, err := media.ParseSingleRange(rangeHeader, snapshot.Size)
 	if err != nil {
 		w.Header().Set("Content-Range", fmt.Sprintf("bytes */%d", snapshot.Size))
 		s.writeRequestError(w, err)
