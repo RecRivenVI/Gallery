@@ -2,7 +2,7 @@
 
 本目录是 Gallery（中文名“画廊”、代码代号 `gallery`）未来正式实现的唯一工程文档入口。这里保存当前规范、实施指南、验证证据和架构决策，不保存调研过程、阶段汇报或已完成任务清单。
 
-当前实现状态：阶段 0、Walking Skeleton、Architecture Proof 正确性切片、阶段 1「领域和数据所有权」、阶段 2「规则闭环」和阶段 3「扫描、任务和 Catalog」已完成代码与合成 Correctness 实现，并完成阶段 3 Correctness 修正。阶段 3 覆盖同一 Job 多 Attempt、周期租约恢复与退避、非阻塞独立资源池、限定同一父 Scan 复用的完整 SHA-256 Hash Job、动态 Watcher 与低频周期收敛、所有权 Temp GC、服务端维护空间估算、staging/publication 互斥、DerivedAsset/外部工具不可用边界及对应 REST/OpenAPI 契约；真实 HDD、SMB/NAS、网络挂载和正式 Reference/Degradation Performance Gate 留待下一轮实测，不代表完整产品、平台或发行门禁已经完成。
+当前实现状态：阶段 0、Walking Skeleton、Architecture Proof 正确性切片、阶段 1「领域和数据所有权」、阶段 2「规则闭环」、阶段 3「扫描、任务和 Catalog」与阶段 4「查询和媒体」已完成代码与合成 Correctness 实现，并完成阶段 3 Correctness 修正。阶段 3 覆盖同一 Job 多 Attempt、周期租约恢复与退避、非阻塞独立资源池、限定同一父 Scan 复用的完整 SHA-256 Hash Job、动态 Watcher 与低频周期收敛、所有权 Temp GC、服务端维护空间估算、staging/publication 互斥、DerivedAsset/外部工具不可用边界及对应 REST/OpenAPI 契约。阶段 4 覆盖结构化查询字段注册表（AND/OR/NOT）、Creator 合并查询等价组解析、版本化 Ranking/高亮/Total 协议、签名 keyset 游标 rank 扩展、Overlay 查询依赖服务端权威分类表、媒体 If-Range、未确认媒体按需内容确认闭环与 DerivedAsset 受限 JPEG 缩略图端到端公共契约。真实 HDD、SMB/NAS、网络挂载、正式 Reference/Degradation Performance Gate 与 ranking/total/cursor 租约等 PRE_FREEZE 数值冻结留待下一轮实测，不代表完整产品、平台或发行门禁已经完成。
 
 ## 如何使用
 
