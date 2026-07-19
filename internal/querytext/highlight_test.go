@@ -13,9 +13,9 @@ import (
 // 字符、连字和 emoji 变体选择符样本用显式 rune 码位拼接而非源文件字面量构造，保证实际
 // code point 序列不受编辑/存储链路的规范化影响。
 func TestHighlightSpansGoldenCorpus(t *testing.T) {
-	combiningAcute := "caf" + "e" + string(rune(0x0301))            // c a f + e + U+0301 COMBINING ACUTE ACCENT（分解形式）
-	precomposedCafe := "caf" + string(rune(0x00E9))                 // c a f + U+00E9 é（预组合形式）
-	ligatureFile := string(rune(0xFB01)) + "le"                     // U+FB01 LATIN SMALL LIGATURE FI + l e
+	combiningAcute := "caf" + "e" + string(rune(0x0301))           // c a f + e + U+0301 COMBINING ACUTE ACCENT（分解形式）
+	precomposedCafe := "caf" + string(rune(0x00E9))                // c a f + U+00E9 é（预组合形式）
+	ligatureFile := string(rune(0xFB01)) + "le"                    // U+FB01 LATIN SMALL LIGATURE FI + l e
 	heavyBlackHeart := string(rune(0x2764)) + string(rune(0xFE0F)) // U+2764 HEAVY BLACK HEART + U+FE0F VARIATION SELECTOR-16
 
 	cases := []struct {
