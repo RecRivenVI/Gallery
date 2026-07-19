@@ -21,7 +21,7 @@ import (
 
 type resolver struct{}
 
-func (resolver) Resolve(context.Context, string, string) (derived.Generator, error) {
+func (resolver) Resolve(context.Context, string, string, domain.ContentBlobRef) (derived.Generator, error) {
 	return func(_ context.Context, output io.Writer) (string, error) {
 		_, err := io.WriteString(output, "derived-output")
 		return "image/png", err
