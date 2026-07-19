@@ -10,6 +10,8 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+
+	"github.com/RecRivenVI/gallery/internal/querytext"
 )
 
 type Lifecycle struct {
@@ -602,11 +604,14 @@ func orderMedia(ir RuleIR, media []DryRunMedia) {
 			direction = stringConfig(rawConfig(primitive.Config), "direction")
 		}
 	}
+	// 按路径排序统一使用与查询/排序协议相同的自然排序键（querytext.NaturalSortKey），
+	// 使 "2.jpg" 排在 "10.jpg" 之前；纯字节比较会把多分页作品的媒体顺序按字典序打乱。
 	sort.SliceStable(media, func(i, j int) bool {
+		left, right := querytext.NaturalSortKey(media[i].Path), querytext.NaturalSortKey(media[j].Path)
 		if direction == "desc" {
-			return media[i].Path > media[j].Path
+			return left > right
 		}
-		return media[i].Path < media[j].Path
+		return left < right
 	})
 }
 
