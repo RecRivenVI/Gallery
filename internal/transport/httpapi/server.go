@@ -179,6 +179,7 @@ func New(mode config.Mode, store *storage.Store, clock ports.Clock, personal *au
 	mux.HandleFunc("GET /api/v1/media/{mediaId}", server.getMedia)
 	mux.HandleFunc("GET /api/v1/media/{mediaId}/content", server.mediaContent)
 	mux.HandleFunc("HEAD /api/v1/media/{mediaId}/content", server.mediaContent)
+	mux.HandleFunc("POST /api/v1/media/{mediaId}/verification-jobs", server.createMediaVerificationJob)
 	mux.Handle("/ws/v1", hub.Handler(func(r *http.Request) (realtime.Principal, error) {
 		if err := auth.ValidateOrigin(r); err != nil {
 			return realtime.Principal{}, err
@@ -1667,6 +1668,46 @@ func (s *Server) mediaContent(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	_, _ = io.CopyN(w, snapshot.File, length)
+}
+
+// createMediaVerificationJob 为 located_unverified 媒体建立按需内容确认闭环：不在 HTTP
+// 请求内同步阻塞计算完整 SHA-256，而是复用既有 verify scanProfile 与持久 Scan Job 管线
+// （scanner+hashjob+catalog publication），返回可轮询/可通过 WebSocket 观察的 Job。verify
+// 档案的作用范围是该媒体所属整个 Source（当前扫描模型没有单文件级 scanProfile），因此
+// 幂等键按该媒体当前观察（Source、相对路径、size、mtime）派生，文件未变化前的重复请求
+// 复用同一 Job；文件已变化或已完成的旧 Job 不会被这把 key 命中，从而不复用过期 observation。
+func (s *Server) createMediaVerificationJob(w http.ResponseWriter, r *http.Request) {
+	session, err := s.requireCapability(r, "scan.run")
+	if err != nil {
+		s.writeRequestError(w, err)
+		return
+	}
+	if err := auth.ValidateMutation(r, session.CSRFToken); err != nil {
+		s.writeRequestError(w, err)
+		return
+	}
+	_, item, err := s.catalog.GetMedia(r.Context(), r.PathValue("mediaId"))
+	if err != nil {
+		s.writeRequestError(w, err)
+		return
+	}
+	if item.ContentVerificationState == catalog.ContentVerificationStateContentVerified {
+		s.writeRequestError(w, fault.New(fault.CodeConflict, false, nil))
+		return
+	}
+	observation, err := s.catalog.LookupPriorObservation(r.Context(), item.SourceID, item.RelativePath)
+	if err != nil {
+		s.writeRequestError(w, err)
+		return
+	}
+	idempotencyKey := fmt.Sprintf("verify-media:%s:%s:%d:%d", item.SourceID, item.RelativePath, observation.Size, observation.MTimeNanos)
+	job, err := s.scanner.CreateScanWithProfile(r.Context(), item.SourceID, session.PrincipalID, idempotencyKey, scanner.ScanProfileVerify)
+	if err != nil {
+		s.writeRequestError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusAccepted, jobDTO(job))
+	s.scanner.Start(job.ID)
 }
 
 func etagMatches(header, current string) bool {

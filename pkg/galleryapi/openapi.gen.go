@@ -2845,6 +2845,11 @@ type HeadMediaContentParams struct {
 	IfRange *string `json:"If-Range,omitempty"`
 }
 
+// CreateMediaVerificationJobParams defines parameters for CreateMediaVerificationJob.
+type CreateMediaVerificationJobParams struct {
+	XGalleryCSRF CSRFHeader `json:"X-Gallery-CSRF"`
+}
+
 // ListOrphanCandidatesParams defines parameters for ListOrphanCandidates.
 type ListOrphanCandidatesParams struct {
 	SourceId   *SourceId                             `form:"sourceId,omitempty" json:"sourceId,omitempty"`
@@ -3437,6 +3442,9 @@ type ClientInterface interface {
 
 	// HeadMediaContent request
 	HeadMediaContent(ctx context.Context, mediaId CanonicalMediaId, params *HeadMediaContentParams, reqEditors ...RequestEditorFn) (*http.Response, error)
+
+	// CreateMediaVerificationJob request
+	CreateMediaVerificationJob(ctx context.Context, mediaId CanonicalMediaId, params *CreateMediaVerificationJobParams, reqEditors ...RequestEditorFn) (*http.Response, error)
 
 	// ListOrphanCandidates request
 	ListOrphanCandidates(ctx context.Context, params *ListOrphanCandidatesParams, reqEditors ...RequestEditorFn) (*http.Response, error)
@@ -4210,6 +4218,18 @@ func (c *Client) GetMediaContent(ctx context.Context, mediaId CanonicalMediaId, 
 
 func (c *Client) HeadMediaContent(ctx context.Context, mediaId CanonicalMediaId, params *HeadMediaContentParams, reqEditors ...RequestEditorFn) (*http.Response, error) {
 	req, err := NewHeadMediaContentRequest(c.Server, mediaId, params)
+	if err != nil {
+		return nil, err
+	}
+	req = req.WithContext(ctx)
+	if err := c.applyEditors(ctx, req, reqEditors); err != nil {
+		return nil, err
+	}
+	return c.Client.Do(req)
+}
+
+func (c *Client) CreateMediaVerificationJob(ctx context.Context, mediaId CanonicalMediaId, params *CreateMediaVerificationJobParams, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewCreateMediaVerificationJobRequest(c.Server, mediaId, params)
 	if err != nil {
 		return nil, err
 	}
@@ -6854,6 +6874,53 @@ func NewHeadMediaContentRequest(server string, mediaId CanonicalMediaId, params 
 
 			req.Header.Set("If-Range", headerParam2)
 		}
+
+	}
+
+	return req, nil
+}
+
+// NewCreateMediaVerificationJobRequest generates requests for CreateMediaVerificationJob
+func NewCreateMediaVerificationJobRequest(server string, mediaId CanonicalMediaId, params *CreateMediaVerificationJobParams) (*http.Request, error) {
+	var err error
+
+	var pathParam0 string
+
+	pathParam0, err = runtime.StyleParamWithOptions("simple", false, "mediaId", mediaId, runtime.StyleParamOptions{ParamLocation: runtime.ParamLocationPath, Type: "string", Format: ""})
+	if err != nil {
+		return nil, err
+	}
+
+	serverURL, err := url.Parse(server)
+	if err != nil {
+		return nil, err
+	}
+
+	operationPath := fmt.Sprintf("/api/v1/media/%s/verification-jobs", pathParam0)
+	if operationPath[0] == '/' {
+		operationPath = "." + operationPath
+	}
+
+	queryURL, err := serverURL.Parse(operationPath)
+	if err != nil {
+		return nil, err
+	}
+
+	req, err := http.NewRequest(http.MethodPost, queryURL.String(), nil)
+	if err != nil {
+		return nil, err
+	}
+
+	if params != nil {
+
+		var headerParam0 string
+
+		headerParam0, err = runtime.StyleParamWithOptions("simple", false, "X-Gallery-CSRF", params.XGalleryCSRF, runtime.StyleParamOptions{ParamLocation: runtime.ParamLocationHeader, Type: "string", Format: ""})
+		if err != nil {
+			return nil, err
+		}
+
+		req.Header.Set("X-Gallery-CSRF", headerParam0)
 
 	}
 
@@ -10009,6 +10076,9 @@ type ClientWithResponsesInterface interface {
 	// HeadMediaContentWithResponse request
 	HeadMediaContentWithResponse(ctx context.Context, mediaId CanonicalMediaId, params *HeadMediaContentParams, reqEditors ...RequestEditorFn) (*HeadMediaContentResponse, error)
 
+	// CreateMediaVerificationJobWithResponse request
+	CreateMediaVerificationJobWithResponse(ctx context.Context, mediaId CanonicalMediaId, params *CreateMediaVerificationJobParams, reqEditors ...RequestEditorFn) (*CreateMediaVerificationJobResponse, error)
+
 	// ListOrphanCandidatesWithResponse request
 	ListOrphanCandidatesWithResponse(ctx context.Context, params *ListOrphanCandidatesParams, reqEditors ...RequestEditorFn) (*ListOrphanCandidatesResponse, error)
 
@@ -11372,6 +11442,40 @@ func (r HeadMediaContentResponse) StatusCode() int {
 
 // ContentType is a convenience method to retrieve the Content-Type value from the HTTP response headers
 func (r HeadMediaContentResponse) ContentType() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Header.Get("Content-Type")
+	}
+	return ""
+}
+
+type CreateMediaVerificationJobResponse struct {
+	Body         []byte
+	HTTPResponse *http.Response
+	JSON202      *Job
+	JSON401      *UnauthenticatedError
+	JSON403      *ForbiddenError
+	JSON404      *NotFoundError
+	JSON409      *ConflictError
+}
+
+// Status returns HTTPResponse.Status
+func (r CreateMediaVerificationJobResponse) Status() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Status
+	}
+	return http.StatusText(0)
+}
+
+// StatusCode returns HTTPResponse.StatusCode
+func (r CreateMediaVerificationJobResponse) StatusCode() int {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.StatusCode
+	}
+	return 0
+}
+
+// ContentType is a convenience method to retrieve the Content-Type value from the HTTP response headers
+func (r CreateMediaVerificationJobResponse) ContentType() string {
 	if r.HTTPResponse != nil {
 		return r.HTTPResponse.Header.Get("Content-Type")
 	}
@@ -13685,6 +13789,15 @@ func (c *ClientWithResponses) HeadMediaContentWithResponse(ctx context.Context, 
 		return nil, err
 	}
 	return ParseHeadMediaContentResponse(rsp)
+}
+
+// CreateMediaVerificationJobWithResponse request returning *CreateMediaVerificationJobResponse
+func (c *ClientWithResponses) CreateMediaVerificationJobWithResponse(ctx context.Context, mediaId CanonicalMediaId, params *CreateMediaVerificationJobParams, reqEditors ...RequestEditorFn) (*CreateMediaVerificationJobResponse, error) {
+	rsp, err := c.CreateMediaVerificationJob(ctx, mediaId, params, reqEditors...)
+	if err != nil {
+		return nil, err
+	}
+	return ParseCreateMediaVerificationJobResponse(rsp)
 }
 
 // ListOrphanCandidatesWithResponse request returning *ListOrphanCandidatesResponse
@@ -16143,6 +16256,60 @@ func ParseHeadMediaContentResponse(rsp *http.Response) (*HeadMediaContentRespons
 			return nil, err
 		}
 		response.JSON503 = &dest
+
+	}
+
+	return response, nil
+}
+
+// ParseCreateMediaVerificationJobResponse parses an HTTP response from a CreateMediaVerificationJobWithResponse call
+func ParseCreateMediaVerificationJobResponse(rsp *http.Response) (*CreateMediaVerificationJobResponse, error) {
+	bodyBytes, err := io.ReadAll(rsp.Body)
+	defer func() { _ = rsp.Body.Close() }()
+	if err != nil {
+		return nil, err
+	}
+
+	response := &CreateMediaVerificationJobResponse{
+		Body:         bodyBytes,
+		HTTPResponse: rsp,
+	}
+
+	switch {
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 202:
+		var dest Job
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON202 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 401:
+		var dest UnauthenticatedError
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON401 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 403:
+		var dest ForbiddenError
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON403 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 404:
+		var dest NotFoundError
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON404 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 409:
+		var dest ConflictError
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON409 = &dest
 
 	}
 

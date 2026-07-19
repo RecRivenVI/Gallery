@@ -561,6 +561,44 @@ func TestScanProfileDefaultSelectionValidationConflictAndContentVerificationAPI(
 		t.Fatalf("未确认媒体内容端点未返回 CONTENT_NOT_VERIFIED: %v status=%d body=%s", err, contentResponse.StatusCode(), contentResponse.Body)
 	}
 
+	// 按需内容确认：对 located_unverified 媒体建立持久 Job，同一 observation 的重复
+	// 请求复用同一 Job；完成后媒体转为 content_verified 且内容端点可正常读取；对已确认
+	// 媒体重复请求返回结构化 CONFLICT，不建立无意义 Hash Job。
+	verifyFirst, err := client.CreateMediaVerificationJobWithResponse(context.Background(), firstMedia.Id, &api.CreateMediaVerificationJobParams{
+		XGalleryCSRF: exchange.JSON201.CsrfToken,
+	}, mutation)
+	if err != nil || verifyFirst.JSON202 == nil {
+		t.Fatalf("创建按需内容确认 Job 失败: %v status=%d body=%s", err, verifyFirst.StatusCode(), verifyFirst.Body)
+	}
+	verifyAgain, err := client.CreateMediaVerificationJobWithResponse(context.Background(), firstMedia.Id, &api.CreateMediaVerificationJobParams{
+		XGalleryCSRF: exchange.JSON201.CsrfToken,
+	}, mutation)
+	if err != nil || verifyAgain.JSON202 == nil || verifyAgain.JSON202.Id != verifyFirst.JSON202.Id {
+		t.Fatalf("同一 observation 的重复确认请求未复用 Job: first=%v again=%v err=%v", verifyFirst.JSON202, verifyAgain.JSON202, err)
+	}
+	verifyCompleted := waitForJob(t, client, verifyFirst.JSON202.Id)
+	if string(verifyCompleted.Status) != "completed" {
+		t.Fatalf("按需内容确认 Job 未完成: %+v", verifyCompleted)
+	}
+	verifiedMediaResponse, err := client.ListWorkMediaWithResponse(context.Background(), worksResponse.JSON200.Works[0].Id)
+	if err != nil || verifiedMediaResponse.JSON200 == nil || len(verifiedMediaResponse.JSON200.Media) != 1 {
+		t.Fatalf("按需确认后 Media 查询失败: %v", err)
+	}
+	verifiedMedia := verifiedMediaResponse.JSON200.Media[0]
+	if verifiedMedia.Blob == nil || verifiedMedia.ContentVerificationState != api.ContentVerified || verifiedMedia.VerifiedAt == nil {
+		t.Fatalf("按需内容确认后媒体应完成确认: %+v", verifiedMedia)
+	}
+	verifiedContent, err := client.GetMediaContentWithResponse(context.Background(), firstMedia.Id, &api.GetMediaContentParams{})
+	if err != nil || verifiedContent.StatusCode() != http.StatusOK || !bytes.Equal(verifiedContent.Body, mediaContent) {
+		t.Fatalf("按需确认后的内容端点应返回真实媒体正文: %v status=%d", err, verifiedContent.StatusCode())
+	}
+	verifyOnAlreadyVerified, err := client.CreateMediaVerificationJobWithResponse(context.Background(), firstMedia.Id, &api.CreateMediaVerificationJobParams{
+		XGalleryCSRF: exchange.JSON201.CsrfToken,
+	}, mutation)
+	if err != nil || verifyOnAlreadyVerified.JSON409 == nil || verifyOnAlreadyVerified.JSON409.Error.Code != api.CONFLICT {
+		t.Fatalf("已确认媒体重复确认请求未返回 CONFLICT: %v status=%d body=%s", err, verifyOnAlreadyVerified.StatusCode(), verifyOnAlreadyVerified.Body)
+	}
+
 	// 已发布 Source 显式请求 index 必须被拒绝为结构化冲突，不创建 Job。
 	indexProfile := api.ScanJobCreateRequestScanProfileIndex
 	rejected, err := client.CreateScanJobWithResponse(context.Background(), sourceResponse.JSON201.Id, &api.CreateScanJobParams{
