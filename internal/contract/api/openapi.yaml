@@ -1455,10 +1455,19 @@ paths:
         - {name: tag, in: query, required: false, schema: {type: string, maxLength: 512}}
         - {name: libraryId, in: query, required: false, schema: {$ref: "#/components/schemas/LibraryId"}}
         - {name: sourceId, in: query, required: false, schema: {$ref: "#/components/schemas/SourceId"}}
+        - name: filter
+          in: query
+          required: false
+          description: >-
+            服务端权威结构化过滤 AST 的 JSON 编码：{"all"|"any"|"not"|"field"/"op"/"value"}。
+            未知字段、未知操作符或类型错误一律返回 VALIDATION_ERROR。已注册字段与语义见
+            Documents/规范/06-查询-搜索与排序.md。
+          schema: {type: string, maxLength: 8192}
         - {name: sortDirection, in: query, required: false, schema: {type: string, enum: [asc, desc], default: asc}}
         - {name: limit, in: query, required: false, schema: {type: integer, minimum: 1, maximum: 200, default: 50}}
         - {name: cursor, in: query, required: false, schema: {type: string, maxLength: 16384}}
         - {name: queryPublicationId, in: query, required: false, schema: {$ref: "#/components/schemas/QueryPublicationId"}}
+        - {name: omitTotal, in: query, required: false, schema: {type: boolean, default: false}}
       responses:
         "200":
           description: 当前快照中的作品
@@ -2822,6 +2831,33 @@ components:
         publishedQueryPublicationId:
           $ref: "#/components/schemas/QueryPublicationId"
         issueCode: {type: string}
+    HighlightSpan:
+      type: object
+      additionalProperties: false
+      required: [start, end]
+      description: >-
+        原文 code point（rune）偏移，左闭右开；不是 UTF-16 code unit，也不是字节偏移。
+      properties:
+        start: {type: integer, minimum: 0}
+        end: {type: integer, minimum: 0}
+    Total:
+      type: object
+      additionalProperties: false
+      required: [mode, protocolVersion]
+      description: >-
+        exact 精确计数；lower_bound 命中数超过服务端预算时的下限估算（value 为预算值）；
+        omitted 客户端通过 omitTotal 显式跳过统计。预算数值本身 PRE_FREEZE。
+      properties:
+        mode:
+          type: string
+          enum: [exact, lower_bound, omitted]
+        value:
+          type: integer
+          format: int64
+          minimum: 0
+        protocolVersion:
+          type: integer
+          enum: [1]
     PublishedWork:
       type: object
       additionalProperties: false
@@ -2839,22 +2875,32 @@ components:
         mediaCount:
           type: integer
           minimum: 0
+        titleHighlights:
+          type: array
+          description: 仅在请求携带非空 q 时可能出现；无搜索词时不返回伪相关性高亮
+          items:
+            $ref: "#/components/schemas/HighlightSpan"
         queryPublicationId:
           $ref: "#/components/schemas/QueryPublicationId"
     WorkListResponse:
       type: object
       additionalProperties: false
-      required: [queryPublicationId, catalogRevision, overlayProjectionRevision, sortProtocolVersion, works]
+      required: [queryPublicationId, catalogRevision, overlayProjectionRevision, sortProtocolVersion, rankProtocolVersion, total, works]
       properties:
         queryPublicationId:
           $ref: "#/components/schemas/QueryPublicationId"
         sortProtocolVersion:
           type: integer
           enum: [1]
+        rankProtocolVersion:
+          type: integer
+          enum: [1]
         catalogRevision:
           type: string
         overlayProjectionRevision:
           type: string
+        total:
+          $ref: "#/components/schemas/Total"
         nextCursor:
           type: string
         works:

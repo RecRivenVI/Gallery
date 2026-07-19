@@ -1443,11 +1443,20 @@ func (s *Server) listWorks(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
+	omitTotal := false
+	if raw := r.URL.Query().Get("omitTotal"); raw != "" {
+		omitTotal, err = strconv.ParseBool(raw)
+		if err != nil {
+			s.writeRequestError(w, fault.WithField(fault.CodeValidation, "omitTotal", err))
+			return
+		}
+	}
 	result, err := s.query.Search(r.Context(), queryservice.Request{
 		Search: r.URL.Query().Get("q"), Tag: r.URL.Query().Get("tag"),
 		LibraryID: r.URL.Query().Get("libraryId"), SourceID: r.URL.Query().Get("sourceId"),
+		Filter:        r.URL.Query().Get("filter"),
 		SortDirection: r.URL.Query().Get("sortDirection"), Limit: limit, Cursor: r.URL.Query().Get("cursor"),
-		QueryPublicationID: r.URL.Query().Get("queryPublicationId"),
+		QueryPublicationID: r.URL.Query().Get("queryPublicationId"), OmitTotal: omitTotal,
 		AuthorizationScope: queryservice.AuthorizationScope(session.PrincipalID, session.Capabilities),
 	})
 	if err != nil {
@@ -1456,15 +1465,26 @@ func (s *Server) listWorks(w http.ResponseWriter, r *http.Request) {
 	}
 	items := make([]api.PublishedWork, 0, len(result.Items))
 	for _, work := range result.Items {
-		items = append(items, api.PublishedWork{
+		dto := api.PublishedWork{
 			Id: work.ID, Title: work.Title, Creator: work.Creator, Tags: work.Tags,
 			MediaCount: work.MediaCount, QueryPublicationId: result.QueryPublicationID,
-		})
+		}
+		if len(work.TitleHighlights) > 0 {
+			highlights := make([]api.HighlightSpan, 0, len(work.TitleHighlights))
+			for _, span := range work.TitleHighlights {
+				highlights = append(highlights, api.HighlightSpan{Start: span.Start, End: span.End})
+			}
+			dto.TitleHighlights = &highlights
+		}
+		items = append(items, dto)
 	}
 	response := api.WorkListResponse{
 		QueryPublicationId: result.QueryPublicationID, CatalogRevision: result.CatalogRevision,
 		OverlayProjectionRevision: result.OverlayProjectionRevision,
-		SortProtocolVersion:       api.WorkListResponseSortProtocolVersion(result.SortProtocolVersion), Works: items,
+		SortProtocolVersion:       api.WorkListResponseSortProtocolVersion(result.SortProtocolVersion),
+		RankProtocolVersion:       api.WorkListResponseRankProtocolVersion(result.RankProtocolVersion),
+		Total:                     api.Total{Mode: api.TotalMode(result.Total.Mode), Value: result.Total.Value, ProtocolVersion: api.TotalProtocolVersion(result.Total.ProtocolVersion)},
+		Works:                     items,
 	}
 	if result.NextCursor != "" {
 		response.NextCursor = &result.NextCursor

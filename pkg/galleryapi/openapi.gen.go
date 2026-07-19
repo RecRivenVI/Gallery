@@ -1357,6 +1357,57 @@ func (e SpaceEstimateOperation) Valid() bool {
 	}
 }
 
+// Defines values for TotalMode.
+const (
+	Exact      TotalMode = "exact"
+	LowerBound TotalMode = "lower_bound"
+	Omitted    TotalMode = "omitted"
+)
+
+// Valid indicates whether the value is a known member of the TotalMode enum.
+func (e TotalMode) Valid() bool {
+	switch e {
+	case Exact:
+		return true
+	case LowerBound:
+		return true
+	case Omitted:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for TotalProtocolVersion.
+const (
+	TotalProtocolVersionN1 TotalProtocolVersion = 1
+)
+
+// Valid indicates whether the value is a known member of the TotalProtocolVersion enum.
+func (e TotalProtocolVersion) Valid() bool {
+	switch e {
+	case TotalProtocolVersionN1:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for WorkListResponseRankProtocolVersion.
+const (
+	WorkListResponseRankProtocolVersionN1 WorkListResponseRankProtocolVersion = 1
+)
+
+// Valid indicates whether the value is a known member of the WorkListResponseRankProtocolVersion enum.
+func (e WorkListResponseRankProtocolVersion) Valid() bool {
+	switch e {
+	case WorkListResponseRankProtocolVersionN1:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for WorkListResponseSortProtocolVersion.
 const (
 	WorkListResponseSortProtocolVersionN1 WorkListResponseSortProtocolVersion = 1
@@ -1835,6 +1886,12 @@ type HealthResponseDatabasesControl string
 // HealthResponseStatus defines model for HealthResponse.Status.
 type HealthResponseStatus string
 
+// HighlightSpan 原文 code point（rune）偏移，左闭右开；不是 UTF-16 code unit，也不是字节偏移。
+type HighlightSpan struct {
+	End   int `json:"end"`
+	Start int `json:"start"`
+}
+
 // Job defines model for Job.
 type Job struct {
 	Attempt                  int        `json:"attempt"`
@@ -2043,6 +2100,9 @@ type PublishedWork struct {
 	QueryPublicationId QueryPublicationId `json:"queryPublicationId"`
 	Tags               []string           `json:"tags"`
 	Title              string             `json:"title"`
+
+	// TitleHighlights 仅在请求携带非空 q 时可能出现；无搜索词时不返回伪相关性高亮
+	TitleHighlights *[]HighlightSpan `json:"titleHighlights,omitempty"`
 }
 
 // QueryPublication defines model for QueryPublication.
@@ -2553,15 +2613,35 @@ type SpaceEstimate struct {
 // SpaceEstimateOperation defines model for SpaceEstimate.Operation.
 type SpaceEstimateOperation string
 
+// Total exact 精确计数；lower_bound 命中数超过服务端预算时的下限估算（value 为预算值）； omitted 客户端通过 omitTotal 显式跳过统计。预算数值本身 PRE_FREEZE。
+type Total struct {
+	Mode            TotalMode            `json:"mode"`
+	ProtocolVersion TotalProtocolVersion `json:"protocolVersion"`
+	Value           *int64               `json:"value,omitempty"`
+}
+
+// TotalMode defines model for Total.Mode.
+type TotalMode string
+
+// TotalProtocolVersion defines model for Total.ProtocolVersion.
+type TotalProtocolVersion int
+
 // WorkListResponse defines model for WorkListResponse.
 type WorkListResponse struct {
 	CatalogRevision           string                              `json:"catalogRevision"`
 	NextCursor                *string                             `json:"nextCursor,omitempty"`
 	OverlayProjectionRevision string                              `json:"overlayProjectionRevision"`
 	QueryPublicationId        QueryPublicationId                  `json:"queryPublicationId"`
+	RankProtocolVersion       WorkListResponseRankProtocolVersion `json:"rankProtocolVersion"`
 	SortProtocolVersion       WorkListResponseSortProtocolVersion `json:"sortProtocolVersion"`
-	Works                     []PublishedWork                     `json:"works"`
+
+	// Total exact 精确计数；lower_bound 命中数超过服务端预算时的下限估算（value 为预算值）； omitted 客户端通过 omitTotal 显式跳过统计。预算数值本身 PRE_FREEZE。
+	Total Total           `json:"total"`
+	Works []PublishedWork `json:"works"`
 }
+
+// WorkListResponseRankProtocolVersion defines model for WorkListResponse.RankProtocolVersion.
+type WorkListResponseRankProtocolVersion int
 
 // WorkListResponseSortProtocolVersion defines model for WorkListResponse.SortProtocolVersion.
 type WorkListResponseSortProtocolVersion int
@@ -3008,14 +3088,18 @@ type CreateScanJobParams struct {
 
 // ListWorksParams defines parameters for ListWorks.
 type ListWorksParams struct {
-	Q                  *string                       `form:"q,omitempty" json:"q,omitempty"`
-	Tag                *string                       `form:"tag,omitempty" json:"tag,omitempty"`
-	LibraryId          *LibraryId                    `form:"libraryId,omitempty" json:"libraryId,omitempty"`
-	SourceId           *SourceId                     `form:"sourceId,omitempty" json:"sourceId,omitempty"`
+	Q         *string    `form:"q,omitempty" json:"q,omitempty"`
+	Tag       *string    `form:"tag,omitempty" json:"tag,omitempty"`
+	LibraryId *LibraryId `form:"libraryId,omitempty" json:"libraryId,omitempty"`
+	SourceId  *SourceId  `form:"sourceId,omitempty" json:"sourceId,omitempty"`
+
+	// Filter 服务端权威结构化过滤 AST 的 JSON 编码：{"all"|"any"|"not"|"field"/"op"/"value"}。 未知字段、未知操作符或类型错误一律返回 VALIDATION_ERROR。已注册字段与语义见 Documents/规范/06-查询-搜索与排序.md。
+	Filter             *string                       `form:"filter,omitempty" json:"filter,omitempty"`
 	SortDirection      *ListWorksParamsSortDirection `form:"sortDirection,omitempty" json:"sortDirection,omitempty"`
 	Limit              *int                          `form:"limit,omitempty" json:"limit,omitempty"`
 	Cursor             *string                       `form:"cursor,omitempty" json:"cursor,omitempty"`
 	QueryPublicationId *QueryPublicationId           `form:"queryPublicationId,omitempty" json:"queryPublicationId,omitempty"`
+	OmitTotal          *bool                         `form:"omitTotal,omitempty" json:"omitTotal,omitempty"`
 }
 
 // ListWorksParamsSortDirection defines parameters for ListWorks.
@@ -9480,6 +9564,18 @@ func NewListWorksRequest(server string, params *ListWorksParams) (*http.Request,
 
 		}
 
+		if params.Filter != nil {
+
+			if queryFrag, err := runtime.StyleParamWithOptions("form", true, "filter", *params.Filter, runtime.StyleParamOptions{ParamLocation: runtime.ParamLocationQuery, Type: "string", Format: ""}); err != nil {
+				return nil, err
+			} else {
+				for _, qp := range strings.Split(queryFrag, "&") {
+					rawQueryFragments = append(rawQueryFragments, qp)
+				}
+			}
+
+		}
+
 		if params.SortDirection != nil {
 
 			if queryFrag, err := runtime.StyleParamWithOptions("form", true, "sortDirection", *params.SortDirection, runtime.StyleParamOptions{ParamLocation: runtime.ParamLocationQuery, Type: "string", Format: ""}); err != nil {
@@ -9519,6 +9615,18 @@ func NewListWorksRequest(server string, params *ListWorksParams) (*http.Request,
 		if params.QueryPublicationId != nil {
 
 			if queryFrag, err := runtime.StyleParamWithOptions("form", true, "queryPublicationId", *params.QueryPublicationId, runtime.StyleParamOptions{ParamLocation: runtime.ParamLocationQuery, Type: "string", Format: ""}); err != nil {
+				return nil, err
+			} else {
+				for _, qp := range strings.Split(queryFrag, "&") {
+					rawQueryFragments = append(rawQueryFragments, qp)
+				}
+			}
+
+		}
+
+		if params.OmitTotal != nil {
+
+			if queryFrag, err := runtime.StyleParamWithOptions("form", true, "omitTotal", *params.OmitTotal, runtime.StyleParamOptions{ParamLocation: runtime.ParamLocationQuery, Type: "boolean", Format: ""}); err != nil {
 				return nil, err
 			} else {
 				for _, qp := range strings.Split(queryFrag, "&") {
