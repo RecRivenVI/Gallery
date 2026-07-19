@@ -2,7 +2,7 @@
 
 Gallery（画廊，代码代号 `gallery`）是面向个人及可信局域网的本地优先、只读媒体目录产品。它是独立净室项目，不兼容或迁移任何旧 Gallery 实现。
 
-> 当前状态：**阶段 3「扫描、任务和 Catalog」已完成代码与合成 Correctness 实现**（阶段 0、Walking Skeleton、Architecture Proof 正确性切片和阶段 1、阶段 2 同样已完成相应 Correctness 实现）。阶段 3 已接入持久 Job/attempt、六类独立资源池、可取消完整 SHA-256 Hash Job、Watcher 周期收敛、staging/publication、GC/VACUUM/空间预检、DerivedAsset 与外部工具执行边界，以及 REST/OpenAPI/生成客户端和迁移测试。当前仍没有可供普通用户安装的产品版本；真实 HDD、SMB/NAS、网络挂载和正式 Reference/Degradation Performance Gate 留待下一轮实测，FileLocation 最终唯一约束、完整查询/排序 API、多平台和发行签名门禁仍未完成。SourceWork 决策撤回仅限尚未被扫描消费的 pre-seed Binding，消费后返回 `CONFLICT`，不等于已生效结构变化的完整反向操作。
+> 当前状态：**阶段 3「扫描、任务和 Catalog」已完成代码与合成 Correctness 实现，并完成真实 SSD/HDD 大数据集验收引发的扫描档案重构**（阶段 0、Walking Skeleton、Architecture Proof 正确性切片和阶段 1、阶段 2 同样已完成相应 Correctness 实现）。阶段 3 已接入持久 Job/attempt、六类独立资源池、可取消完整 SHA-256 Hash Job、Watcher 周期收敛、staging/publication、GC/VACUUM/空间预检、DerivedAsset 与外部工具执行边界，以及 REST/OpenAPI/生成客户端和迁移测试。真实 SSD（约 36.6 万文件）与 HDD（约 63.2 万文件）验收发现默认全量完整哈希扫描在真实规模下不适合作为日常路径，扫描改为 `index`（快速发布未确认媒体）/`incremental`（默认，仅对新增或变化媒体建立 Hash Job）/`verify`（显式强制完整性校验）三种档案，详见 [验证记录 EV-25](Documents/证据/验证记录.md#ev-25ssdhdd-真实大数据集验收与轻量扫描档案重构e3--e1)。当前仍没有可供普通用户安装的产品版本；真实全量规模 HDD 性能特征、SMB/NAS、网络挂载、真实平台文件身份和正式 Reference/Degradation Performance Gate 留待下一轮实测，FileLocation 最终唯一约束、完整查询/排序 API、多平台和发行签名门禁仍未完成。SourceWork 决策撤回仅限尚未被扫描消费的 pre-seed Binding，消费后返回 `CONFLICT`，不等于已生效结构变化的完整反向操作。
 
 ## 当前可运行能力
 
@@ -54,7 +54,7 @@ Gallery（画廊，代码代号 `gallery`）是面向个人及可信局域网的
 11. 通过 `GET /creators` 与 `/creators/{creatorId}` 核对创作者证据，用 `POST /creators/merges` 合并、`DELETE /creators/merges/{mergeId}` 撤销，并按返回的 `projectionJobId` 观察查询投影更新；
 12. 通过 `GET /binding-issues` 与 `/binding-issues/{issueId}` 查看绑定歧义与候选证据，用 `/binding-issues/{issueId}/resolve|dismiss|reopen` 或 `/binding-actions/unbind-work|unbind-media|undo-unbind` 修复后重扫；通过 `GET /orphan-candidates` 查看到达保留窗口的孤立候选，用 `/orphan-candidates/{bindingId}/decide` 决定保留、延长、确认孤立或解绑；服务重启后复用未吊销 Session，并重新读取 Job、publication 和媒体 snapshot。
 
-阶段 3 的任务执行已完成 Correctness 修正：retry 在同一 Job ID 下增加 Attempt，队列满保持持久 `queued` 并由周期恢复重提；Hash completed 结果只在同一父 Scan 内复用；Watcher 默认采用五分钟低频 polling fallback 并动态管理 Source。维护空间预算由服务端给出，外部工具或 DerivedAsset resolver 未配置时会在创建 Job 前返回稳定不可用错误，因此当前不宣称已接入正式 ffmpeg 或完整变换集合。
+阶段 3 的任务执行已完成 Correctness 修正：retry 在同一 Job ID 下增加 Attempt，队列满保持持久 `queued` 并由周期恢复重提；Watcher 默认采用五分钟低频 polling fallback 并动态管理 Source。真实 SSD/HDD 大数据集验收（见 [验证记录 EV-25](Documents/证据/验证记录.md)）后，扫描新增 `scanProfile`：默认 `incremental` 按 Source/相对路径/大小/mtime 组合证据与既往已发布 `content_verified` 观察比较，跨扫描复用未变化媒体的已确认摘要，仅对新增或变化媒体建立 Hash Job；`index` 只发现定位、不建立 Hash Job，媒体以 `located_unverified` 发布；`verify` 忽略既往观察强制重新完整哈希。维护空间预算由服务端给出，外部工具或 DerivedAsset resolver 未配置时会在创建 Job 前返回稳定不可用错误，因此当前不宣称已接入正式 ffmpeg 或完整变换集合。
 
 仓库内的完整生成客户端验收见 `internal/bootstrap` 与 `internal/transport/httpapi` 测试；合成输入位于 `tests/fixtures/walking-skeleton`。
 
