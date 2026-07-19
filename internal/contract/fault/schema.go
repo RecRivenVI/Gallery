@@ -17,7 +17,7 @@ func AllCodes() []Code {
 		CodeRuleSchemaInvalid, CodeRuleEval, CodeCatalogPublicationAbsent,
 		CodeDerivedAssetInvalid, CodeDerivedAssetUnavailable, CodeDerivedAssetFailed,
 		CodeExternalToolUnavailable, CodeExternalToolFailed,
-		CodeContentChangedDuringHash, CodeMediaOffline, CodeHostRejected, CodeOriginRejected,
+		CodeContentChangedDuringHash, CodeMediaOffline, CodeContentNotVerified, CodeHostRejected, CodeOriginRejected,
 		CodeCSRFInvalid, CodePairingInvalid, CodePairingExpired, CodeSourcePathInvalid,
 		CodeRuleParameterInvalid, CodeRuleDraftConflict, CodeRulePackageConflict,
 		CodeRuleParameterConflict, CodeRulePublishBlocked, CodeRuleRollbackBlocked,

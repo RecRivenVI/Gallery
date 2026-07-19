@@ -136,7 +136,11 @@ func TestWalkingSkeletonPersistsAcrossRealGallerydRestart(t *testing.T) {
 	if err != nil || binding.JSON201 == nil {
 		t.Fatalf("binding: %v status=%d body=%s", err, binding.StatusCode(), binding.Body)
 	}
-	scan, err := client.CreateScanJobWithResponse(context.Background(), sourceResponse.JSON201.Id, &api.CreateScanJobParams{XGalleryCSRF: csrf}, api.ScanJobCreateRequest{}, editor)
+	// 尚无 publication 的 Source 未显式指定档案时默认自动选择 index（不建立 ContentBlob）；
+	// 本测试要验证跨真实进程重启后媒体正文仍可读取，因此显式请求 incremental 以立即完成
+	// 内容确认。
+	incrementalProfile := api.ScanJobCreateRequestScanProfileIncremental
+	scan, err := client.CreateScanJobWithResponse(context.Background(), sourceResponse.JSON201.Id, &api.CreateScanJobParams{XGalleryCSRF: csrf}, api.ScanJobCreateRequest{ScanProfile: &incrementalProfile}, editor)
 	if err != nil || scan.JSON202 == nil {
 		t.Fatalf("scan: %v status=%d", err, scan.StatusCode())
 	}

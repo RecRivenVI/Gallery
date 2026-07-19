@@ -38,6 +38,7 @@ const (
 	CodeCatalogPublicationAbsent Code = "CATALOG_PUBLICATION_MISSING"
 	CodeContentChangedDuringHash Code = "CONTENT_CHANGED_DURING_HASH"
 	CodeMediaOffline             Code = "MEDIA_OFFLINE"
+	CodeContentNotVerified       Code = "CONTENT_NOT_VERIFIED"
 	CodeHostRejected             Code = "HOST_REJECTED"
 	CodeOriginRejected           Code = "ORIGIN_REJECTED"
 	CodeCSRFInvalid              Code = "CSRF_INVALID"
