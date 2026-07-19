@@ -11,10 +11,12 @@ import (
 	"path/filepath"
 	"sort"
 	"sync"
+	"time"
 
 	"github.com/RecRivenVI/gallery/internal/application"
 	"github.com/RecRivenVI/gallery/internal/catalog"
 	"github.com/RecRivenVI/gallery/internal/contract/fault"
+	"github.com/RecRivenVI/gallery/internal/domain"
 	"github.com/RecRivenVI/gallery/internal/hashjob"
 	"github.com/RecRivenVI/gallery/internal/jobs"
 	"github.com/RecRivenVI/gallery/internal/maintenance"
@@ -80,11 +82,55 @@ func New(ctx context.Context, resources *application.Resources, jobStore *jobs.S
 	return &Service{context: ctx, resources: resources, jobs: jobStore, catalog: catalogStore, notifier: notifier}, nil
 }
 
+// 扫描档案（scanProfile）决定媒体内容如何被确认，三者互不冒充：
+//   - ScanProfileIndex：从不计算完整内容摘要，媒体以 located_unverified 发布，用于首次
+//     快速建立可浏览 Catalog；
+//   - ScanProfileIncremental：默认档案，按既往观察（同 Source、路径、大小、mtime）组合
+//     判断是否可复用既往已确认摘要，只对新增或疑似变化媒体建立 Hash Job；
+//   - ScanProfileVerify：忽略既往观察，对本次扫描到的媒体强制重新完整哈希，用于显式、
+//     低频的完整性校验。
+const (
+	ScanProfileIndex       = "index"
+	ScanProfileIncremental = "incremental"
+	ScanProfileVerify      = "verify"
+)
+
+type scanRequest struct {
+	ScanProfile string `json:"scanProfile,omitempty"`
+}
+
+func normalizeScanProfile(value string) string {
+	switch value {
+	case ScanProfileIndex, ScanProfileVerify:
+		return value
+	default:
+		return ScanProfileIncremental
+	}
+}
+
+func scanProfileFromJob(job jobs.Job) string {
+	if len(job.RequestJSON) == 0 {
+		return ScanProfileIncremental
+	}
+	var request scanRequest
+	if err := json.Unmarshal(job.RequestJSON, &request); err != nil {
+		return ScanProfileIncremental
+	}
+	return normalizeScanProfile(request.ScanProfile)
+}
+
 func (s *Service) CreateScan(ctx context.Context, sourceID, createdBy string) (jobs.Job, error) {
 	return s.CreateScanWithIdempotency(ctx, sourceID, createdBy, "")
 }
 
 func (s *Service) CreateScanWithIdempotency(ctx context.Context, sourceID, createdBy, idempotencyKey string) (jobs.Job, error) {
+	return s.CreateScanWithProfile(ctx, sourceID, createdBy, idempotencyKey, ScanProfileIncremental)
+}
+
+// CreateScanWithProfile 是唯一实际创建扫描 Job 的入口；CreateScan/CreateScanWithIdempotency
+// 固定使用 incremental 档案以保持既有调用方（Watcher 周期收敛、启动 reconciliation、既有
+// 测试）行为不变。
+func (s *Service) CreateScanWithProfile(ctx context.Context, sourceID, createdBy, idempotencyKey, scanProfile string) (jobs.Job, error) {
 	if _, err := s.resources.GetSource(ctx, sourceID); err != nil {
 		return jobs.Job{}, err
 	}
@@ -102,7 +148,13 @@ func (s *Service) CreateScanWithIdempotency(ctx context.Context, sourceID, creat
 		CompilerVersion: rules.CompilerVersion, CELProfileVersion: rules.CELProfileVersion,
 		ExtensionRegistryVersion: version.IR.ExtensionRegistryVersion,
 	}
-	job, err := s.jobs.CreateScanWithOptions(ctx, sourceID, createdBy, "", snapshot, jobs.CreateOptions{ResourceClass: jobs.ResourceScan, IdempotencyKey: idempotencyKey})
+	requestJSON, err := json.Marshal(scanRequest{ScanProfile: normalizeScanProfile(scanProfile)})
+	if err != nil {
+		return jobs.Job{}, fault.New(fault.CodeInternal, true, err)
+	}
+	job, err := s.jobs.CreateScanWithOptions(ctx, sourceID, createdBy, "", snapshot, jobs.CreateOptions{
+		ResourceClass: jobs.ResourceScan, IdempotencyKey: idempotencyKey, RequestJSON: requestJSON,
+	})
 	if err == nil {
 		s.notifier.JobChanged(job)
 	}
@@ -176,7 +228,10 @@ func (s *Service) Execute(ctx context.Context, jobID string) error {
 	if total == 0 {
 		return s.fail(ctx, job.ID, fault.New(fault.CodeRuleEval, false, nil))
 	}
+	scanProfile := scanProfileFromJob(job)
 	current := int64(0)
+	verificationState := make(map[string]string, total)  // relative path -> state
+	lastConfirmedAt := make(map[string]time.Time, total) // relative path -> confirmation time
 	for workIndex := range discovered {
 		for mediaIndex := range discovered[workIndex].Media {
 			select {
@@ -185,30 +240,69 @@ func (s *Service) Execute(ctx context.Context, jobID string) error {
 			default:
 			}
 			item := &discovered[workIndex].Media[mediaIndex]
-			var hashed media.HashResult
-			var hashErr error
-			if s.hash != nil {
-				hashJob, createErr := s.hash.Create(ctx, hashjob.Request{SourceID: source.ID, RelativePath: item.RelativePath,
-					ExpectedSize: item.ExpectedSize, ExpectedModTimeNanos: item.ExpectedModTimeNanos,
-					HasExpectedIdentity: item.HasExpectedIdentity, ParentJobID: job.ID}, job.CreatedBy)
-				if createErr == nil && (hashJob.Status == jobs.StatusFailed || hashJob.Status == jobs.StatusCancelled || hashJob.Status == jobs.StatusNeedsRepair) {
-					hashJob, createErr = s.jobs.Retry(ctx, hashJob.ID, job.CreatedBy)
+			skipHash := false
+			if scanProfile != ScanProfileVerify {
+				prior, lookupErr := s.catalog.LookupPriorObservation(ctx, source.ID, item.RelativePath)
+				if lookupErr != nil {
+					return s.fail(ctx, job.ID, lookupErr)
 				}
-				if createErr == nil && hashJob.Status != jobs.StatusCompleted {
-					s.hash.Start(hashJob.ID)
+				if prior.Found && prior.ContentVerificationState == catalog.ContentVerificationStateContentVerified &&
+					prior.Size == item.ExpectedSize && prior.MTimeNanos == item.ExpectedModTimeNanos {
+					// 组合身份证据（同 Source、规范化路径、大小、mtime）未变化，且既往已完成完整
+					// 确认：直接复用既往摘要，不重新读取文件正文。
+					located, locateErr := media.LocateSourceFile(source.RootPath, item.RelativePath)
+					if locateErr != nil {
+						return s.fail(ctx, job.ID, locateErr)
+					}
+					blob, blobErr := domain.ParseContentBlobRef(prior.Algorithm, prior.Digest)
+					if blobErr != nil {
+						return s.fail(ctx, job.ID, blobErr)
+					}
+					item.Hash = media.HashResult{
+						Blob: blob, Size: located.Size, LocationKey: located.LocationKey, RelativePath: located.RelativePath,
+					}
+					verificationState[item.RelativePath] = catalog.ContentVerificationStateContentVerified
+					lastConfirmedAt[item.RelativePath] = time.Now().UTC()
+					skipHash = true
+				} else if scanProfile == ScanProfileIndex {
+					// index 档案对新增或疑似变化媒体也不建立 Hash Job，只定位并标记未确认。
+					located, locateErr := media.LocateSourceFile(source.RootPath, item.RelativePath)
+					if locateErr != nil {
+						return s.fail(ctx, job.ID, locateErr)
+					}
+					item.Hash = media.HashResult{Size: located.Size, LocationKey: located.LocationKey, RelativePath: located.RelativePath}
+					verificationState[item.RelativePath] = catalog.ContentVerificationStateLocatedUnverified
+					skipHash = true
 				}
-				if createErr == nil {
-					hashed, hashErr = s.hash.WaitResult(ctx, hashJob.ID)
+			}
+			if !skipHash {
+				var hashed media.HashResult
+				var hashErr error
+				if s.hash != nil {
+					hashJob, createErr := s.hash.Create(ctx, hashjob.Request{SourceID: source.ID, RelativePath: item.RelativePath,
+						ExpectedSize: item.ExpectedSize, ExpectedModTimeNanos: item.ExpectedModTimeNanos,
+						HasExpectedIdentity: item.HasExpectedIdentity, ParentJobID: job.ID}, job.CreatedBy)
+					if createErr == nil && (hashJob.Status == jobs.StatusFailed || hashJob.Status == jobs.StatusCancelled || hashJob.Status == jobs.StatusNeedsRepair) {
+						hashJob, createErr = s.jobs.Retry(ctx, hashJob.ID, job.CreatedBy)
+					}
+					if createErr == nil && hashJob.Status != jobs.StatusCompleted {
+						s.hash.Start(hashJob.ID)
+					}
+					if createErr == nil {
+						hashed, hashErr = s.hash.WaitResult(ctx, hashJob.ID)
+					} else {
+						hashErr = createErr
+					}
 				} else {
-					hashErr = createErr
+					hashed, hashErr = media.HashSourceFile(source.RootPath, item.RelativePath, nil)
 				}
-			} else {
-				hashed, hashErr = media.HashSourceFile(source.RootPath, item.RelativePath, nil)
+				if hashErr != nil {
+					return s.fail(ctx, job.ID, hashErr)
+				}
+				item.Hash = hashed
+				verificationState[item.RelativePath] = catalog.ContentVerificationStateContentVerified
+				lastConfirmedAt[item.RelativePath] = time.Now().UTC()
 			}
-			if hashErr != nil {
-				return s.fail(ctx, job.ID, hashErr)
-			}
-			item.Hash = hashed
 			current++
 			job, err = s.jobs.Progress(ctx, job.ID, "hashing", current, total)
 			if err != nil {
@@ -266,12 +360,27 @@ func (s *Service) Execute(ctx context.Context, jobID string) error {
 		works = append(works, workFact)
 		for _, item := range work.Media {
 			canonicalMedia := canonicalWork.Media[item.SourceKey]
-			mediaFacts = append(mediaFacts, catalog.MediaFact{
+			state := verificationState[item.RelativePath]
+			if state == "" {
+				state = catalog.ContentVerificationStateContentVerified
+			}
+			fact := catalog.MediaFact{
 				SourceID: source.ID, SourceKey: item.SourceKey, WorkSourceKey: work.SourceKey, RuleKey: item.RuleKey,
 				RelativePath: item.Hash.RelativePath, Kind: item.Kind, MIME: item.MIME, Size: item.Hash.Size,
 				Algorithm: item.Hash.Blob.Algorithm, Digest: item.Hash.Blob.Digest, LocationKey: item.Hash.LocationKey,
 				MediaID: canonicalMedia.ID, WorkID: canonicalWork.ID, Ordinal: canonicalMedia.Ordinal,
-			})
+				ContentVerificationState: state, MTimeNanos: item.ExpectedModTimeNanos,
+			}
+			if state == catalog.ContentVerificationStateContentVerified {
+				fact.LastConfirmedAlgorithm = item.Hash.Blob.Algorithm
+				fact.LastConfirmedDigest = item.Hash.Blob.Digest
+				if confirmedAt, ok := lastConfirmedAt[item.RelativePath]; ok {
+					fact.LastConfirmedAt = confirmedAt
+				} else {
+					fact.LastConfirmedAt = time.Now().UTC()
+				}
+			}
+			mediaFacts = append(mediaFacts, fact)
 		}
 	}
 	if err := s.catalog.Stage(ctx, candidate, works, mediaFacts); err != nil {
