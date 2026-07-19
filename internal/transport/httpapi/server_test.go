@@ -254,7 +254,7 @@ func TestPersonalPairingIsSingleUseAndRevocationInvalidatesREST(t *testing.T) {
 	}
 	scanResponse, err := client.CreateScanJobWithResponse(context.Background(), sourceResponse.JSON201.Id, &api.CreateScanJobParams{
 		XGalleryCSRF: exchange.JSON201.CsrfToken,
-	}, mutation)
+	}, api.ScanJobCreateRequest{}, mutation)
 	if err != nil || scanResponse.JSON202 == nil {
 		t.Fatalf("创建 Scan Job 失败: %v status=%d body=%s", err, scanResponse.StatusCode(), scanResponse.Body)
 	}
@@ -297,7 +297,7 @@ func TestPersonalPairingIsSingleUseAndRevocationInvalidatesREST(t *testing.T) {
 	}
 	rescan, err := client.CreateScanJobWithResponse(context.Background(), sourceResponse.JSON201.Id, &api.CreateScanJobParams{
 		XGalleryCSRF: exchange.JSON201.CsrfToken,
-	}, mutation)
+	}, api.ScanJobCreateRequest{}, mutation)
 	if err != nil || rescan.JSON202 == nil {
 		t.Fatalf("Overlay 后重扫创建失败: %v status=%d", err, rescan.StatusCode())
 	}

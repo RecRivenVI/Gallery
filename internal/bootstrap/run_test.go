@@ -136,7 +136,7 @@ func TestWalkingSkeletonPersistsAcrossRealGallerydRestart(t *testing.T) {
 	if err != nil || binding.JSON201 == nil {
 		t.Fatalf("binding: %v status=%d body=%s", err, binding.StatusCode(), binding.Body)
 	}
-	scan, err := client.CreateScanJobWithResponse(context.Background(), sourceResponse.JSON201.Id, &api.CreateScanJobParams{XGalleryCSRF: csrf}, editor)
+	scan, err := client.CreateScanJobWithResponse(context.Background(), sourceResponse.JSON201.Id, &api.CreateScanJobParams{XGalleryCSRF: csrf}, api.ScanJobCreateRequest{}, editor)
 	if err != nil || scan.JSON202 == nil {
 		t.Fatalf("scan: %v status=%d", err, scan.StatusCode())
 	}
