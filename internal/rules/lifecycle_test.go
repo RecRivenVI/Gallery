@@ -102,6 +102,34 @@ func TestLifecycleDryRunTraceCELAndImpact(t *testing.T) {
 	}
 }
 
+func TestMediaOrderUsesNaturalSortForNumericFilenames(t *testing.T) {
+	lifecycle, err := rules.NewLifecycle()
+	if err != nil {
+		t.Fatal(err)
+	}
+	packageJSON := readRulePackage(t)
+	result, err := lifecycle.DryRun(context.Background(), packageJSON, []byte(`{}`), rules.DryRunInput{
+		Path:     "work-multi-page",
+		Metadata: map[string]any{"creator": map[string]any{"name": "作者"}},
+		Files: []rules.DryRunFile{
+			{Path: "1.bin", Size: 1}, {Path: "10.bin", Size: 1}, {Path: "11.bin", Size: 1},
+			{Path: "2.bin", Size: 1}, {Path: "9.bin", Size: 1},
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []string{"1.bin", "2.bin", "9.bin", "10.bin", "11.bin"}
+	if len(result.Work.Media) != len(want) {
+		t.Fatalf("媒体数量不符: %+v", result.Work.Media)
+	}
+	for index, media := range result.Work.Media {
+		if media.Path != want[index] || media.Ordinal != index {
+			t.Fatalf("多分页作品未按自然序排序: got=%+v want=%v", result.Work.Media, want)
+		}
+	}
+}
+
 func TestCELProfileRejectsUnknownHostFunction(t *testing.T) {
 	invalid := bytes.Replace(complexRulePackage(), []byte(`file.size >= params.minimumSize`), []byte(`read_file(file.path)`), 1)
 	_, err := rules.CompilePackage(invalid)

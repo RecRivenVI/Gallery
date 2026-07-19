@@ -21,7 +21,7 @@ func TestRuleIRDiscoversDifferentDirectoryAndMetadataShapes(t *testing.T) {
 			selectors: `
     {"id":"title","kind":"selector","config":{"target":"title","pointers":["/post/title"],"required":true}},
     {"id":"identity","kind":"stable_key","config":{"target":"work","pointer":"/post/id","prefix":"origin:"}},`,
-			wantWorkKey: "origin:alpha-1", wantTitle: "Alpha 标题", wantMedia: "origin:alpha-1/02.jpg",
+			wantWorkKey: "origin:alpha-1", wantTitle: "Alpha 标题", wantMedia: "origin:alpha-1/cover.jpg",
 		},
 		{
 			name: "two-level-array-condition", relativeRoot: "layout-b", workGlob: "*/*", metadataFile: "post.json", mediaGlob: "*.png",
