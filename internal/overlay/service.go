@@ -415,11 +415,9 @@ func (s *Service) Reconcile(ctx context.Context) error {
 		if !isCode(publicationErr, fault.CodeNotFound) {
 			return publicationErr
 		}
-		if job.Status == jobs.StatusQueued {
-			s.Start(job.ID)
-		}
-		// 无 publication 的 queued Job 由中央循环提交；running/publishing Job 必须等租约
-		// 过期后再形成同一 Job 的新 Attempt。
+		// 无 publication 的 queued Job 只由中央 Recovery Service 的 ListRunnable/Submit 领取，
+		// 与 scanner.Reconcile 对齐；这里不再自行 Start，避免与中央循环对同一 Job 形成竞争
+		// 领取窗口。running/publishing Job 必须等租约过期后再形成同一 Job 的新 Attempt。
 	}
 	completed, err := s.jobs.ListByStatuses(ctx, jobs.StatusCompleted)
 	if err != nil {
