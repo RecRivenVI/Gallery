@@ -1688,6 +1688,36 @@ paths:
         "409": {$ref: "#/components/responses/ConflictError"}
         "416": {$ref: "#/components/responses/RangeError"}
         "503": {$ref: "#/components/responses/MediaOfflineError"}
+  /api/v1/media/{mediaId}/verification-jobs:
+    post:
+      operationId: createMediaVerificationJob
+      summary: 为 located_unverified 媒体按需建立内容确认 Job
+      description: >-
+        返回持久 Job 而不是同步阻塞计算完整 SHA-256。当前 verify scanProfile 的作用范围是
+        该媒体所属整个 Source；幂等键按媒体当前观察（Source、相对路径、size、mtime）派生，
+        文件未变化前的重复请求复用同一 Job。媒体已是 content_verified 时返回 409。
+      parameters:
+        - name: mediaId
+          in: path
+          required: true
+          schema:
+            $ref: "#/components/schemas/CanonicalMediaId"
+        - $ref: "#/components/parameters/CSRFHeader"
+      responses:
+        "202":
+          description: 内容确认 Job 已排队或复用既有同 observation Job
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Job"
+        "401":
+          $ref: "#/components/responses/UnauthenticatedError"
+        "403":
+          $ref: "#/components/responses/ForbiddenError"
+        "404":
+          $ref: "#/components/responses/NotFoundError"
+        "409":
+          $ref: "#/components/responses/ConflictError"
   /api/v1/creators:
     get:
       operationId: listCreators
