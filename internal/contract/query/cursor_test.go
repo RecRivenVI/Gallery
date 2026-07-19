@@ -14,8 +14,9 @@ import (
 func validClaims(now time.Time) query.CursorClaims {
 	return query.CursorClaims{
 		QueryFingerprint: strings.Repeat("a", 64), SortProtocolVersion: query.SortProtocolVersion,
+		RankProtocolVersion:    query.RankProtocolVersion,
 		QueryPublicationID:     "qpub_018f47d2-5c16-7a44-a8a0-000000000001",
-		AuthorizationScopeHash: strings.Repeat("b", 64), LastSortKey: "opaque-sort-key",
+		AuthorizationScopeHash: strings.Repeat("b", 64), LastSortKey: "opaque-sort-key", LastRankTier: 0,
 		LastCanonicalWorkID: "wrk_018f47d2-5c16-7a44-a8a0-000000000002",
 		IssuedAt:            now, LeaseID: "lease-1", ExpiresAt: now.Add(time.Minute),
 	}
@@ -53,7 +54,7 @@ func TestCursorJSONSchemaMatchesClaims(t *testing.T) {
 		t.Fatal(err)
 	}
 	now := time.Date(2026, 7, 16, 0, 0, 0, 0, time.UTC)
-	data := []byte(`{"queryFingerprint":"` + strings.Repeat("a", 64) + `","sortProtocolVersion":1,"queryPublicationId":"qpub_018f47d2-5c16-7a44-a8a0-000000000001","authorizationScopeHash":"` + strings.Repeat("b", 64) + `","lastSortKey":"key","lastCanonicalWorkId":"wrk_018f47d2-5c16-7a44-a8a0-000000000002","issuedAt":"` + now.Format(time.RFC3339) + `","leaseId":"lease","expiresAt":"` + now.Add(time.Minute).Format(time.RFC3339) + `"}`)
+	data := []byte(`{"queryFingerprint":"` + strings.Repeat("a", 64) + `","sortProtocolVersion":1,"rankProtocolVersion":1,"queryPublicationId":"qpub_018f47d2-5c16-7a44-a8a0-000000000001","authorizationScopeHash":"` + strings.Repeat("b", 64) + `","lastSortKey":"key","lastRankTier":0,"lastCanonicalWorkId":"wrk_018f47d2-5c16-7a44-a8a0-000000000002","issuedAt":"` + now.Format(time.RFC3339) + `","leaseId":"lease","expiresAt":"` + now.Add(time.Minute).Format(time.RFC3339) + `"}`)
 	if err := validator.ValidateJSON(data); err != nil {
 		t.Fatal(err)
 	}
