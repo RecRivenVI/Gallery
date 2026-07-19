@@ -1718,6 +1718,78 @@ paths:
           $ref: "#/components/responses/NotFoundError"
         "409":
           $ref: "#/components/responses/ConflictError"
+  /api/v1/media/{mediaId}/derived-assets:
+    post:
+      operationId: createDerivedAsset
+      summary: 请求生成或复用一个 DerivedAsset（当前仅受限 JPEG 缩略图 transform）
+      description: >-
+        总是返回持久 Job；缓存命中时 Job 立即以 completed 态返回。媒体尚未
+        content_verified 时返回 409；未知或不支持的 transformId/transformVersion 返回
+        400；外部 Resolver 未配置（Available()=false）时返回 503。
+      parameters:
+        - name: mediaId
+          in: path
+          required: true
+          schema:
+            $ref: "#/components/schemas/CanonicalMediaId"
+        - $ref: "#/components/parameters/CSRFHeader"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/DerivedAssetCreateRequest"
+      responses:
+        "202":
+          description: DerivedAsset Job 已排队或命中缓存
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Job"
+        "400":
+          $ref: "#/components/responses/ValidationError"
+        "401":
+          $ref: "#/components/responses/UnauthenticatedError"
+        "403":
+          $ref: "#/components/responses/ForbiddenError"
+        "404":
+          $ref: "#/components/responses/NotFoundError"
+        "409":
+          $ref: "#/components/responses/ConflictError"
+  /api/v1/derived-assets/{assetKey}/content:
+    get:
+      operationId: getDerivedAssetContent
+      summary: 读取已就绪 DerivedAsset 正文
+      description: assetKey 是内容寻址 key（完整 SHA-256），不是 Catalog 内部 row ID。
+      parameters:
+        - name: assetKey
+          in: path
+          required: true
+          schema:
+            type: string
+            pattern: "^[0-9a-f]{64}$"
+        - name: If-None-Match
+          in: header
+          required: false
+          schema:
+            type: string
+      responses:
+        "200":
+          description: DerivedAsset 正文
+          headers:
+            ETag: {schema: {type: string}}
+            Content-Length: {schema: {type: integer, format: int64}}
+          content:
+            application/octet-stream:
+              schema: {type: string, format: binary}
+        "304":
+          description: ETag 未变化
+        "401":
+          $ref: "#/components/responses/UnauthenticatedError"
+        "403":
+          $ref: "#/components/responses/ForbiddenError"
+        "404":
+          $ref: "#/components/responses/NotFoundError"
   /api/v1/creators:
     get:
       operationId: listCreators
@@ -2594,6 +2666,10 @@ components:
           type: string
           enum: [index, incremental, verify]
           description: 仅 scan 类型 Job 有效；index 不确认内容、incremental 按既往观察复用已确认摘要、verify 强制重新完整哈希
+        derivedAssetKey:
+          type: string
+          pattern: "^[0-9a-f]{64}$"
+          description: 仅 derived 类型且已 completed 的 Job 有效；配合 GET /derived-assets/{assetKey}/content 读取正文
 
     JobListResponse:
       type: object
@@ -2868,6 +2944,22 @@ components:
         publishedQueryPublicationId:
           $ref: "#/components/schemas/QueryPublicationId"
         issueCode: {type: string}
+    DerivedAssetCreateRequest:
+      type: object
+      additionalProperties: false
+      required: [transformId, transformVersion]
+      properties:
+        transformId:
+          type: string
+          minLength: 1
+          maxLength: 128
+        transformVersion:
+          type: string
+          minLength: 1
+          maxLength: 64
+        parameters:
+          type: object
+          additionalProperties: true
     HighlightSpan:
       type: object
       additionalProperties: false

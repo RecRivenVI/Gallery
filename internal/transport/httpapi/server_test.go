@@ -5,6 +5,9 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"image"
+	"image/color"
+	"image/jpeg"
 	"io"
 	"log/slog"
 	"net/http"
@@ -25,6 +28,9 @@ import (
 	"github.com/RecRivenVI/gallery/internal/contract/fault"
 	"github.com/RecRivenVI/gallery/internal/contract/realtime"
 	"github.com/RecRivenVI/gallery/internal/creators"
+	"github.com/RecRivenVI/gallery/internal/derived"
+	"github.com/RecRivenVI/gallery/internal/derived/thumbnail"
+	"github.com/RecRivenVI/gallery/internal/derivedjob"
 	"github.com/RecRivenVI/gallery/internal/domain"
 	"github.com/RecRivenVI/gallery/internal/jobs"
 	"github.com/RecRivenVI/gallery/internal/overlay"
@@ -639,6 +645,223 @@ func TestScanProfileDefaultSelectionValidationConflictAndContentVerificationAPI(
 		if job.Type == "scan" && job.ScanProfile == nil {
 			t.Fatalf("GET /jobs 未返回 scan Job 的 scanProfile: %+v", job)
 		}
+	}
+}
+
+// TestDerivedAssetThumbnailEndToEnd 证明阶段 3 已有的 DerivedAsset Job/缓存/lease/GC
+// 基础具备一条真实、可测试、无外部服务依赖的端到端派生路径：对一个真实 JPEG 源文件
+// 请求 thumbnail/v1，等待持久 Job 完成，通过内容寻址 assetKey 读取正文并确认确实被
+// 等比缩小；同一媒体的第二次请求命中缓存立即以 completed 态返回；未知 transformId
+// 返回结构化 400；媒体尚未 content_verified 时返回 409。
+func TestDerivedAssetThumbnailEndToEnd(t *testing.T) {
+	ctx := context.Background()
+	dirs := appdirs.UnderRoot(filepath.Join(t.TempDir(), "app"))
+	if err := dirs.Ensure(filesystem.OS{}); err != nil {
+		t.Fatal(err)
+	}
+	store, err := storage.Open(ctx, dirs)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	fixedClock := clock.Fixed{Time: time.Now().UTC()}
+	personal, err := auth.NewPersonal(store.Control.SQL(), fixedClock, identity.NewGenerator(fixedClock), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resources, err := application.NewResources(store.Control.SQL(), dirs, filesystem.OS{}, fixedClock, identity.NewGenerator(fixedClock))
+	if err != nil {
+		t.Fatal(err)
+	}
+	jobStore, err := jobs.NewStore(store.Control.SQL(), fixedClock, identity.NewGenerator(fixedClock))
+	if err != nil {
+		t.Fatal(err)
+	}
+	catalogStore, err := catalog.NewStore(store.Catalog.SQL(), fixedClock, identity.NewGenerator(fixedClock))
+	if err != nil {
+		t.Fatal(err)
+	}
+	hub := realtime.NewHub(fixedClock)
+	scannerService, err := scanner.New(ctx, resources, jobStore, catalogStore, hub)
+	if err != nil {
+		t.Fatal(err)
+	}
+	overlayService, err := overlay.New(ctx, store.Control.SQL(), jobStore, catalogStore, fixedClock, hub)
+	if err != nil {
+		t.Fatal(err)
+	}
+	creatorsService, err := creators.New(ctx, store.Control.SQL(), jobStore, catalogStore, fixedClock, identity.NewGenerator(fixedClock), overlayService)
+	if err != nil {
+		t.Fatal(err)
+	}
+	derivedService, err := derived.New(store.Catalog.SQL(), dirs.Cache, fixedClock, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	derivedJobService, err := derivedjob.New(jobStore, derivedService, thumbnail.New(catalogStore, resources))
+	if err != nil {
+		t.Fatal(err)
+	}
+	server := httptest.NewServer(httpapi.New(
+		config.ModePersonal, store, fixedClock, personal, resources, jobStore, catalogStore, scannerService, overlayService, creatorsService, nil, hub,
+		slog.New(slog.NewJSONHandler(io.Discard, nil)),
+		httpapi.Options{Derived: derivedService, DerivedJob: derivedJobService},
+	))
+	defer server.Close()
+
+	jar, err := cookiejar.New(nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	client, err := api.NewClientWithResponses(server.URL, api.WithHTTPClient(&http.Client{Jar: jar}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	bootstrap, err := client.GetBootstrapWithResponse(ctx)
+	if err != nil || bootstrap.JSON200 == nil {
+		t.Fatalf("bootstrap 失败: %v", err)
+	}
+	requestEditor := sameOrigin(server.URL)
+	attempt, err := client.CreatePairingAttemptWithResponse(ctx, &api.CreatePairingAttemptParams{XGalleryCSRF: bootstrap.JSON200.CsrfToken}, requestEditor)
+	if err != nil || attempt.JSON201 == nil {
+		t.Fatalf("创建配对 attempt 失败: %v", err)
+	}
+	exchange, err := client.ExchangePairingCredentialWithResponse(ctx, &api.ExchangePairingCredentialParams{XGalleryCSRF: bootstrap.JSON200.CsrfToken},
+		api.PairingExchangeRequest{Credential: attempt.JSON201.Credential}, requestEditor)
+	if err != nil || exchange.JSON201 == nil {
+		t.Fatalf("配对交换失败: %v", err)
+	}
+	mutation := sameOrigin(server.URL)
+	libraryResponse, err := client.CreateLibraryWithResponse(ctx, &api.CreateLibraryParams{XGalleryCSRF: exchange.JSON201.CsrfToken}, api.LibraryCreateRequest{Name: "Derived"}, mutation)
+	if err != nil || libraryResponse.JSON201 == nil {
+		t.Fatalf("创建 Library 失败: %v", err)
+	}
+
+	sourceRoot := filepath.Join(filepath.Dir(dirs.Data), "derived-source")
+	if err := os.MkdirAll(filepath.Join(sourceRoot, "work-one"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	original := image.NewRGBA(image.Rect(0, 0, 800, 600))
+	for y := 0; y < 600; y++ {
+		for x := 0; x < 800; x++ {
+			original.Set(x, y, color.RGBA{R: uint8(x % 256), G: uint8(y % 256), B: 128, A: 255})
+		}
+	}
+	var jpegBuffer bytes.Buffer
+	if err := jpeg.Encode(&jpegBuffer, original, &jpeg.Options{Quality: 90}); err != nil {
+		t.Fatal(err)
+	}
+	// 测试规则包的 media_classify primitive 只匹配 *.bin（内容分类与真实文件扩展名无关，
+	// 与生产环境依赖规则声明而非嗅探一致）；缩略图解析器按真实字节而非扩展名解码，
+	// 因此可以对一个内容确实是 JPEG 的 .bin 文件正确生成缩略图。
+	mediaPath := filepath.Join(sourceRoot, "work-one", "photo.bin")
+	if err := os.WriteFile(mediaPath, jpegBuffer.Bytes(), 0o400); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(sourceRoot, "work-one", "metadata.json"), []byte(`{"creator":{"name":"Derived Creator"}}`), 0o400); err != nil {
+		t.Fatal(err)
+	}
+	sourceResponse, err := client.CreateSourceWithResponse(ctx, &api.CreateSourceParams{XGalleryCSRF: exchange.JSON201.CsrfToken},
+		api.SourceCreateRequest{LibraryId: libraryResponse.JSON201.Id, DisplayName: "Derived Synthetic", RootPath: sourceRoot}, mutation)
+	if err != nil || sourceResponse.JSON201 == nil {
+		t.Fatalf("创建 Source 失败: %v", err)
+	}
+	ruleJSON, err := os.ReadFile(filepath.Join("..", "..", "rules", "testdata", "minimal-rule-package.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var rulePackage map[string]any
+	if err := json.Unmarshal(ruleJSON, &rulePackage); err != nil {
+		t.Fatal(err)
+	}
+	ruleResponse, err := client.CreateRuleVersionWithResponse(ctx, &api.CreateRuleVersionParams{XGalleryCSRF: exchange.JSON201.CsrfToken}, api.RuleVersionCreateRequest{Package: rulePackage}, mutation)
+	if err != nil || ruleResponse.JSON201 == nil {
+		t.Fatalf("创建 RuleVersion 失败: %v body=%s", err, ruleResponse.Body)
+	}
+	if _, err := client.CreateSourceRuleBindingWithResponse(ctx, &api.CreateSourceRuleBindingParams{XGalleryCSRF: exchange.JSON201.CsrfToken},
+		api.SourceRuleBindingCreateRequest{SourceId: sourceResponse.JSON201.Id, SemanticHash: ruleResponse.JSON201.SemanticHash, Parameters: map[string]any{}, Priority: 0}, mutation); err != nil {
+		t.Fatal(err)
+	}
+	scanJob, err := client.CreateScanJobWithResponse(ctx, sourceResponse.JSON201.Id, &api.CreateScanJobParams{XGalleryCSRF: exchange.JSON201.CsrfToken}, api.ScanJobCreateRequest{}, mutation)
+	if err != nil || scanJob.JSON202 == nil {
+		t.Fatalf("创建扫描 Job 失败: %v status=%d", err, scanJob.StatusCode())
+	}
+	completedScan := waitForJob(t, client, scanJob.JSON202.Id)
+	if string(completedScan.Status) != "completed" {
+		issue := ""
+		if completedScan.IssueCode != nil {
+			issue = *completedScan.IssueCode
+		}
+		t.Fatalf("扫描未完成: status=%s issue=%s", completedScan.Status, issue)
+	}
+	// 首次扫描无 publication 时自动选择 index（只发布 located_unverified），第二次默认
+	// 扫描自动选择 incremental 并完成内容确认，与 TestScanProfileDefault... 的既有模式一致。
+	secondScan, err := client.CreateScanJobWithResponse(ctx, sourceResponse.JSON201.Id, &api.CreateScanJobParams{XGalleryCSRF: exchange.JSON201.CsrfToken}, api.ScanJobCreateRequest{}, mutation)
+	if err != nil || secondScan.JSON202 == nil {
+		t.Fatalf("第二次扫描创建失败: %v", err)
+	}
+	if completed := waitForJob(t, client, secondScan.JSON202.Id); string(completed.Status) != "completed" {
+		t.Fatalf("第二次扫描未完成: %+v", completed)
+	}
+	worksResponse, err := client.ListWorksWithResponse(ctx, nil)
+	if err != nil || worksResponse.JSON200 == nil || len(worksResponse.JSON200.Works) != 1 {
+		t.Fatalf("Work 查询失败: %v", err)
+	}
+	mediaResponse, err := client.ListWorkMediaWithResponse(ctx, worksResponse.JSON200.Works[0].Id)
+	if err != nil || mediaResponse.JSON200 == nil || len(mediaResponse.JSON200.Media) != 1 {
+		t.Fatalf("Media 查询失败: %v", err)
+	}
+	mediaID := mediaResponse.JSON200.Media[0].Id
+	if mediaResponse.JSON200.Media[0].ContentVerificationState != api.ContentVerified {
+		t.Fatalf("默认扫描档案应完成内容确认: %+v", mediaResponse.JSON200.Media[0])
+	}
+
+	unknownTransform := "unknown-transform"
+	rejected, err := client.CreateDerivedAssetWithResponse(ctx, mediaID, &api.CreateDerivedAssetParams{XGalleryCSRF: exchange.JSON201.CsrfToken},
+		api.DerivedAssetCreateRequest{TransformId: unknownTransform, TransformVersion: "v1"}, mutation)
+	if err != nil || rejected.JSON400 == nil || rejected.JSON400.Error.Code != api.DERIVEDASSETINVALID {
+		t.Fatalf("未知 transform 未返回结构化 400: %v status=%d body=%s", err, rejected.StatusCode(), rejected.Body)
+	}
+
+	created, err := client.CreateDerivedAssetWithResponse(ctx, mediaID, &api.CreateDerivedAssetParams{XGalleryCSRF: exchange.JSON201.CsrfToken},
+		api.DerivedAssetCreateRequest{TransformId: thumbnail.TransformID, TransformVersion: thumbnail.TransformVersion}, mutation)
+	if err != nil || created.JSON202 == nil {
+		t.Fatalf("创建 DerivedAsset Job 失败: %v status=%d body=%s", err, created.StatusCode(), created.Body)
+	}
+	// 测试夹具未接入中央调度器，直接驱动一次真实 Execute 完成生成（与生产路径相同的
+	// 方法，只是由测试而非 Scheduler 触发）。
+	if err := derivedJobService.Execute(ctx, created.JSON202.Id); err != nil {
+		t.Fatalf("DerivedAsset Job 执行失败: %v", err)
+	}
+	completedDerived := waitForJob(t, client, created.JSON202.Id)
+	if string(completedDerived.Status) != "completed" || completedDerived.DerivedAssetKey == nil || *completedDerived.DerivedAssetKey == "" {
+		t.Fatalf("DerivedAsset Job 未完成或未携带 assetKey: %+v", completedDerived)
+	}
+
+	content, err := client.GetDerivedAssetContentWithResponse(ctx, *completedDerived.DerivedAssetKey, &api.GetDerivedAssetContentParams{})
+	if err != nil || content.StatusCode() != http.StatusOK {
+		t.Fatalf("读取 DerivedAsset 正文失败: %v status=%d", err, content.StatusCode())
+	}
+	if content.HTTPResponse.Header.Get("Content-Type") != "image/jpeg" {
+		t.Fatalf("DerivedAsset Content-Type = %s", content.HTTPResponse.Header.Get("Content-Type"))
+	}
+	decoded, err := jpeg.Decode(bytes.NewReader(content.Body))
+	if err != nil {
+		t.Fatalf("DerivedAsset 正文不是合法 JPEG: %v", err)
+	}
+	bounds := decoded.Bounds()
+	if bounds.Dx() >= 800 || bounds.Dy() >= 600 || bounds.Dx() > 512 || bounds.Dy() > 512 {
+		t.Fatalf("缩略图未被等比缩小: %dx%d", bounds.Dx(), bounds.Dy())
+	}
+	if len(content.Body) >= jpegBuffer.Len() {
+		t.Fatalf("缩略图字节数未小于原图: thumbnail=%d original=%d", len(content.Body), jpegBuffer.Len())
+	}
+
+	// 同一媒体的第二次请求应命中缓存，Job 立即以 completed 态返回。
+	cached, err := client.CreateDerivedAssetWithResponse(ctx, mediaID, &api.CreateDerivedAssetParams{XGalleryCSRF: exchange.JSON201.CsrfToken},
+		api.DerivedAssetCreateRequest{TransformId: thumbnail.TransformID, TransformVersion: thumbnail.TransformVersion}, mutation)
+	if err != nil || cached.JSON202 == nil {
+		t.Fatalf("缓存命中请求失败: %v status=%d", err, cached.StatusCode())
 	}
 }
 

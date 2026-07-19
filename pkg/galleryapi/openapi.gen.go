@@ -1841,6 +1841,13 @@ type CreatorSourceBinding struct {
 // CreatorSourceBindingStatus defines model for CreatorSourceBinding.Status.
 type CreatorSourceBindingStatus string
 
+// DerivedAssetCreateRequest defines model for DerivedAssetCreateRequest.
+type DerivedAssetCreateRequest struct {
+	Parameters       *map[string]interface{} `json:"parameters,omitempty"`
+	TransformId      string                  `json:"transformId"`
+	TransformVersion string                  `json:"transformVersion"`
+}
+
 // ErrorCode defines model for ErrorCode.
 type ErrorCode string
 
@@ -1894,11 +1901,14 @@ type HighlightSpan struct {
 
 // Job defines model for Job.
 type Job struct {
-	Attempt                  int        `json:"attempt"`
-	CancelRequested          *bool      `json:"cancelRequested,omitempty"`
-	CelProfileVersion        *string    `json:"celProfileVersion,omitempty"`
-	CompilerVersion          *string    `json:"compilerVersion,omitempty"`
-	CreatedAt                time.Time  `json:"createdAt"`
+	Attempt           int       `json:"attempt"`
+	CancelRequested   *bool     `json:"cancelRequested,omitempty"`
+	CelProfileVersion *string   `json:"celProfileVersion,omitempty"`
+	CompilerVersion   *string   `json:"compilerVersion,omitempty"`
+	CreatedAt         time.Time `json:"createdAt"`
+
+	// DerivedAssetKey 仅 derived 类型且已 completed 的 Job 有效；配合 GET /derived-assets/{assetKey}/content 读取正文
+	DerivedAssetKey          *string    `json:"derivedAssetKey,omitempty"`
 	ExtensionRegistryVersion *string    `json:"extensionRegistryVersion,omitempty"`
 	FailureRetryable         *bool      `json:"failureRetryable,omitempty"`
 	FinishedAt               *time.Time `json:"finishedAt,omitempty"`
@@ -2806,6 +2816,11 @@ type UndoCreatorMergeParams struct {
 	XGalleryCSRF CSRFHeader `json:"X-Gallery-CSRF"`
 }
 
+// GetDerivedAssetContentParams defines parameters for GetDerivedAssetContent.
+type GetDerivedAssetContentParams struct {
+	IfNoneMatch *string `json:"If-None-Match,omitempty"`
+}
+
 // ListJobsParams defines parameters for ListJobs.
 type ListJobsParams struct {
 	Status *string `form:"status,omitempty" json:"status,omitempty"`
@@ -2843,6 +2858,11 @@ type HeadMediaContentParams struct {
 
 	// IfRange 与当前 ETag 不一致时忽略 Range，退回完整 200 响应，避免拼接不同内容版本的字节。
 	IfRange *string `json:"If-Range,omitempty"`
+}
+
+// CreateDerivedAssetParams defines parameters for CreateDerivedAsset.
+type CreateDerivedAssetParams struct {
+	XGalleryCSRF CSRFHeader `json:"X-Gallery-CSRF"`
 }
 
 // CreateMediaVerificationJobParams defines parameters for CreateMediaVerificationJob.
@@ -3157,6 +3177,9 @@ type MergeCreatorsJSONRequestBody = CreatorMergeRequest
 // CreateLibraryJSONRequestBody defines body for CreateLibrary for application/json ContentType.
 type CreateLibraryJSONRequestBody = LibraryCreateRequest
 
+// CreateDerivedAssetJSONRequestBody defines body for CreateDerivedAsset for application/json ContentType.
+type CreateDerivedAssetJSONRequestBody = DerivedAssetCreateRequest
+
 // DecideOrphanCandidateJSONRequestBody defines body for DecideOrphanCandidate for application/json ContentType.
 type DecideOrphanCandidateJSONRequestBody = OrphanDecisionRequest
 
@@ -3408,6 +3431,9 @@ type ClientInterface interface {
 	// GetCreator request
 	GetCreator(ctx context.Context, creatorId CanonicalCreatorId, reqEditors ...RequestEditorFn) (*http.Response, error)
 
+	// GetDerivedAssetContent request
+	GetDerivedAssetContent(ctx context.Context, assetKey string, params *GetDerivedAssetContentParams, reqEditors ...RequestEditorFn) (*http.Response, error)
+
 	// GetHealth request
 	GetHealth(ctx context.Context, reqEditors ...RequestEditorFn) (*http.Response, error)
 
@@ -3442,6 +3468,11 @@ type ClientInterface interface {
 
 	// HeadMediaContent request
 	HeadMediaContent(ctx context.Context, mediaId CanonicalMediaId, params *HeadMediaContentParams, reqEditors ...RequestEditorFn) (*http.Response, error)
+
+	// CreateDerivedAssetWithBody request with any body
+	CreateDerivedAssetWithBody(ctx context.Context, mediaId CanonicalMediaId, params *CreateDerivedAssetParams, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*http.Response, error)
+
+	CreateDerivedAsset(ctx context.Context, mediaId CanonicalMediaId, params *CreateDerivedAssetParams, body CreateDerivedAssetJSONRequestBody, reqEditors ...RequestEditorFn) (*http.Response, error)
 
 	// CreateMediaVerificationJob request
 	CreateMediaVerificationJob(ctx context.Context, mediaId CanonicalMediaId, params *CreateMediaVerificationJobParams, reqEditors ...RequestEditorFn) (*http.Response, error)
@@ -4084,6 +4115,18 @@ func (c *Client) GetCreator(ctx context.Context, creatorId CanonicalCreatorId, r
 	return c.Client.Do(req)
 }
 
+func (c *Client) GetDerivedAssetContent(ctx context.Context, assetKey string, params *GetDerivedAssetContentParams, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewGetDerivedAssetContentRequest(c.Server, assetKey, params)
+	if err != nil {
+		return nil, err
+	}
+	req = req.WithContext(ctx)
+	if err := c.applyEditors(ctx, req, reqEditors); err != nil {
+		return nil, err
+	}
+	return c.Client.Do(req)
+}
+
 func (c *Client) GetHealth(ctx context.Context, reqEditors ...RequestEditorFn) (*http.Response, error) {
 	req, err := NewGetHealthRequest(c.Server)
 	if err != nil {
@@ -4218,6 +4261,30 @@ func (c *Client) GetMediaContent(ctx context.Context, mediaId CanonicalMediaId, 
 
 func (c *Client) HeadMediaContent(ctx context.Context, mediaId CanonicalMediaId, params *HeadMediaContentParams, reqEditors ...RequestEditorFn) (*http.Response, error) {
 	req, err := NewHeadMediaContentRequest(c.Server, mediaId, params)
+	if err != nil {
+		return nil, err
+	}
+	req = req.WithContext(ctx)
+	if err := c.applyEditors(ctx, req, reqEditors); err != nil {
+		return nil, err
+	}
+	return c.Client.Do(req)
+}
+
+func (c *Client) CreateDerivedAssetWithBody(ctx context.Context, mediaId CanonicalMediaId, params *CreateDerivedAssetParams, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewCreateDerivedAssetRequestWithBody(c.Server, mediaId, params, contentType, body)
+	if err != nil {
+		return nil, err
+	}
+	req = req.WithContext(ctx)
+	if err := c.applyEditors(ctx, req, reqEditors); err != nil {
+		return nil, err
+	}
+	return c.Client.Do(req)
+}
+
+func (c *Client) CreateDerivedAsset(ctx context.Context, mediaId CanonicalMediaId, params *CreateDerivedAssetParams, body CreateDerivedAssetJSONRequestBody, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewCreateDerivedAssetRequest(c.Server, mediaId, params, body)
 	if err != nil {
 		return nil, err
 	}
@@ -6362,6 +6429,55 @@ func NewGetCreatorRequest(server string, creatorId CanonicalCreatorId) (*http.Re
 	return req, nil
 }
 
+// NewGetDerivedAssetContentRequest generates requests for GetDerivedAssetContent
+func NewGetDerivedAssetContentRequest(server string, assetKey string, params *GetDerivedAssetContentParams) (*http.Request, error) {
+	var err error
+
+	var pathParam0 string
+
+	pathParam0, err = runtime.StyleParamWithOptions("simple", false, "assetKey", assetKey, runtime.StyleParamOptions{ParamLocation: runtime.ParamLocationPath, Type: "string", Format: ""})
+	if err != nil {
+		return nil, err
+	}
+
+	serverURL, err := url.Parse(server)
+	if err != nil {
+		return nil, err
+	}
+
+	operationPath := fmt.Sprintf("/api/v1/derived-assets/%s/content", pathParam0)
+	if operationPath[0] == '/' {
+		operationPath = "." + operationPath
+	}
+
+	queryURL, err := serverURL.Parse(operationPath)
+	if err != nil {
+		return nil, err
+	}
+
+	req, err := http.NewRequest(http.MethodGet, queryURL.String(), nil)
+	if err != nil {
+		return nil, err
+	}
+
+	if params != nil {
+
+		if params.IfNoneMatch != nil {
+			var headerParam0 string
+
+			headerParam0, err = runtime.StyleParamWithOptions("simple", false, "If-None-Match", *params.IfNoneMatch, runtime.StyleParamOptions{ParamLocation: runtime.ParamLocationHeader, Type: "string", Format: ""})
+			if err != nil {
+				return nil, err
+			}
+
+			req.Header.Set("If-None-Match", headerParam0)
+		}
+
+	}
+
+	return req, nil
+}
+
 // NewGetHealthRequest generates requests for GetHealth
 func NewGetHealthRequest(server string) (*http.Request, error) {
 	var err error
@@ -6874,6 +6990,66 @@ func NewHeadMediaContentRequest(server string, mediaId CanonicalMediaId, params 
 
 			req.Header.Set("If-Range", headerParam2)
 		}
+
+	}
+
+	return req, nil
+}
+
+// NewCreateDerivedAssetRequest calls the generic CreateDerivedAsset builder with application/json body
+func NewCreateDerivedAssetRequest(server string, mediaId CanonicalMediaId, params *CreateDerivedAssetParams, body CreateDerivedAssetJSONRequestBody) (*http.Request, error) {
+	var bodyReader io.Reader
+	buf, err := json.Marshal(body)
+	if err != nil {
+		return nil, err
+	}
+	bodyReader = bytes.NewReader(buf)
+	return NewCreateDerivedAssetRequestWithBody(server, mediaId, params, "application/json", bodyReader)
+}
+
+// NewCreateDerivedAssetRequestWithBody generates requests for CreateDerivedAsset with any type of body
+func NewCreateDerivedAssetRequestWithBody(server string, mediaId CanonicalMediaId, params *CreateDerivedAssetParams, contentType string, body io.Reader) (*http.Request, error) {
+	var err error
+
+	var pathParam0 string
+
+	pathParam0, err = runtime.StyleParamWithOptions("simple", false, "mediaId", mediaId, runtime.StyleParamOptions{ParamLocation: runtime.ParamLocationPath, Type: "string", Format: ""})
+	if err != nil {
+		return nil, err
+	}
+
+	serverURL, err := url.Parse(server)
+	if err != nil {
+		return nil, err
+	}
+
+	operationPath := fmt.Sprintf("/api/v1/media/%s/derived-assets", pathParam0)
+	if operationPath[0] == '/' {
+		operationPath = "." + operationPath
+	}
+
+	queryURL, err := serverURL.Parse(operationPath)
+	if err != nil {
+		return nil, err
+	}
+
+	req, err := http.NewRequest(http.MethodPost, queryURL.String(), body)
+	if err != nil {
+		return nil, err
+	}
+
+	req.Header.Add("Content-Type", contentType)
+
+	if params != nil {
+
+		var headerParam0 string
+
+		headerParam0, err = runtime.StyleParamWithOptions("simple", false, "X-Gallery-CSRF", params.XGalleryCSRF, runtime.StyleParamOptions{ParamLocation: runtime.ParamLocationHeader, Type: "string", Format: ""})
+		if err != nil {
+			return nil, err
+		}
+
+		req.Header.Set("X-Gallery-CSRF", headerParam0)
 
 	}
 
@@ -10041,6 +10217,9 @@ type ClientWithResponsesInterface interface {
 	// GetCreatorWithResponse request
 	GetCreatorWithResponse(ctx context.Context, creatorId CanonicalCreatorId, reqEditors ...RequestEditorFn) (*GetCreatorResponse, error)
 
+	// GetDerivedAssetContentWithResponse request
+	GetDerivedAssetContentWithResponse(ctx context.Context, assetKey string, params *GetDerivedAssetContentParams, reqEditors ...RequestEditorFn) (*GetDerivedAssetContentResponse, error)
+
 	// GetHealthWithResponse request
 	GetHealthWithResponse(ctx context.Context, reqEditors ...RequestEditorFn) (*GetHealthResponse, error)
 
@@ -10075,6 +10254,11 @@ type ClientWithResponsesInterface interface {
 
 	// HeadMediaContentWithResponse request
 	HeadMediaContentWithResponse(ctx context.Context, mediaId CanonicalMediaId, params *HeadMediaContentParams, reqEditors ...RequestEditorFn) (*HeadMediaContentResponse, error)
+
+	// CreateDerivedAssetWithBodyWithResponse request with any body
+	CreateDerivedAssetWithBodyWithResponse(ctx context.Context, mediaId CanonicalMediaId, params *CreateDerivedAssetParams, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*CreateDerivedAssetResponse, error)
+
+	CreateDerivedAssetWithResponse(ctx context.Context, mediaId CanonicalMediaId, params *CreateDerivedAssetParams, body CreateDerivedAssetJSONRequestBody, reqEditors ...RequestEditorFn) (*CreateDerivedAssetResponse, error)
 
 	// CreateMediaVerificationJobWithResponse request
 	CreateMediaVerificationJobWithResponse(ctx context.Context, mediaId CanonicalMediaId, params *CreateMediaVerificationJobParams, reqEditors ...RequestEditorFn) (*CreateMediaVerificationJobResponse, error)
@@ -11082,6 +11266,38 @@ func (r GetCreatorResponse) ContentType() string {
 	return ""
 }
 
+type GetDerivedAssetContentResponse struct {
+	Body         []byte
+	HTTPResponse *http.Response
+	JSON401      *UnauthenticatedError
+	JSON403      *ForbiddenError
+	JSON404      *NotFoundError
+}
+
+// Status returns HTTPResponse.Status
+func (r GetDerivedAssetContentResponse) Status() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Status
+	}
+	return http.StatusText(0)
+}
+
+// StatusCode returns HTTPResponse.StatusCode
+func (r GetDerivedAssetContentResponse) StatusCode() int {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.StatusCode
+	}
+	return 0
+}
+
+// ContentType is a convenience method to retrieve the Content-Type value from the HTTP response headers
+func (r GetDerivedAssetContentResponse) ContentType() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Header.Get("Content-Type")
+	}
+	return ""
+}
+
 type GetHealthResponse struct {
 	Body         []byte
 	HTTPResponse *http.Response
@@ -11442,6 +11658,41 @@ func (r HeadMediaContentResponse) StatusCode() int {
 
 // ContentType is a convenience method to retrieve the Content-Type value from the HTTP response headers
 func (r HeadMediaContentResponse) ContentType() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Header.Get("Content-Type")
+	}
+	return ""
+}
+
+type CreateDerivedAssetResponse struct {
+	Body         []byte
+	HTTPResponse *http.Response
+	JSON202      *Job
+	JSON400      *ValidationError
+	JSON401      *UnauthenticatedError
+	JSON403      *ForbiddenError
+	JSON404      *NotFoundError
+	JSON409      *ConflictError
+}
+
+// Status returns HTTPResponse.Status
+func (r CreateDerivedAssetResponse) Status() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Status
+	}
+	return http.StatusText(0)
+}
+
+// StatusCode returns HTTPResponse.StatusCode
+func (r CreateDerivedAssetResponse) StatusCode() int {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.StatusCode
+	}
+	return 0
+}
+
+// ContentType is a convenience method to retrieve the Content-Type value from the HTTP response headers
+func (r CreateDerivedAssetResponse) ContentType() string {
 	if r.HTTPResponse != nil {
 		return r.HTTPResponse.Header.Get("Content-Type")
 	}
@@ -13684,6 +13935,15 @@ func (c *ClientWithResponses) GetCreatorWithResponse(ctx context.Context, creato
 	return ParseGetCreatorResponse(rsp)
 }
 
+// GetDerivedAssetContentWithResponse request returning *GetDerivedAssetContentResponse
+func (c *ClientWithResponses) GetDerivedAssetContentWithResponse(ctx context.Context, assetKey string, params *GetDerivedAssetContentParams, reqEditors ...RequestEditorFn) (*GetDerivedAssetContentResponse, error) {
+	rsp, err := c.GetDerivedAssetContent(ctx, assetKey, params, reqEditors...)
+	if err != nil {
+		return nil, err
+	}
+	return ParseGetDerivedAssetContentResponse(rsp)
+}
+
 // GetHealthWithResponse request returning *GetHealthResponse
 func (c *ClientWithResponses) GetHealthWithResponse(ctx context.Context, reqEditors ...RequestEditorFn) (*GetHealthResponse, error) {
 	rsp, err := c.GetHealth(ctx, reqEditors...)
@@ -13789,6 +14049,23 @@ func (c *ClientWithResponses) HeadMediaContentWithResponse(ctx context.Context, 
 		return nil, err
 	}
 	return ParseHeadMediaContentResponse(rsp)
+}
+
+// CreateDerivedAssetWithBodyWithResponse request with arbitrary body returning *CreateDerivedAssetResponse
+func (c *ClientWithResponses) CreateDerivedAssetWithBodyWithResponse(ctx context.Context, mediaId CanonicalMediaId, params *CreateDerivedAssetParams, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*CreateDerivedAssetResponse, error) {
+	rsp, err := c.CreateDerivedAssetWithBody(ctx, mediaId, params, contentType, body, reqEditors...)
+	if err != nil {
+		return nil, err
+	}
+	return ParseCreateDerivedAssetResponse(rsp)
+}
+
+func (c *ClientWithResponses) CreateDerivedAssetWithResponse(ctx context.Context, mediaId CanonicalMediaId, params *CreateDerivedAssetParams, body CreateDerivedAssetJSONRequestBody, reqEditors ...RequestEditorFn) (*CreateDerivedAssetResponse, error) {
+	rsp, err := c.CreateDerivedAsset(ctx, mediaId, params, body, reqEditors...)
+	if err != nil {
+		return nil, err
+	}
+	return ParseCreateDerivedAssetResponse(rsp)
 }
 
 // CreateMediaVerificationJobWithResponse request returning *CreateMediaVerificationJobResponse
@@ -15724,6 +16001,46 @@ func ParseGetCreatorResponse(rsp *http.Response) (*GetCreatorResponse, error) {
 	return response, nil
 }
 
+// ParseGetDerivedAssetContentResponse parses an HTTP response from a GetDerivedAssetContentWithResponse call
+func ParseGetDerivedAssetContentResponse(rsp *http.Response) (*GetDerivedAssetContentResponse, error) {
+	bodyBytes, err := io.ReadAll(rsp.Body)
+	defer func() { _ = rsp.Body.Close() }()
+	if err != nil {
+		return nil, err
+	}
+
+	response := &GetDerivedAssetContentResponse{
+		Body:         bodyBytes,
+		HTTPResponse: rsp,
+	}
+
+	switch {
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 401:
+		var dest UnauthenticatedError
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON401 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 403:
+		var dest ForbiddenError
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON403 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 404:
+		var dest NotFoundError
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON404 = &dest
+
+	}
+
+	return response, nil
+}
+
 // ParseGetHealthResponse parses an HTTP response from a GetHealthWithResponse call
 func ParseGetHealthResponse(rsp *http.Response) (*GetHealthResponse, error) {
 	bodyBytes, err := io.ReadAll(rsp.Body)
@@ -16256,6 +16573,67 @@ func ParseHeadMediaContentResponse(rsp *http.Response) (*HeadMediaContentRespons
 			return nil, err
 		}
 		response.JSON503 = &dest
+
+	}
+
+	return response, nil
+}
+
+// ParseCreateDerivedAssetResponse parses an HTTP response from a CreateDerivedAssetWithResponse call
+func ParseCreateDerivedAssetResponse(rsp *http.Response) (*CreateDerivedAssetResponse, error) {
+	bodyBytes, err := io.ReadAll(rsp.Body)
+	defer func() { _ = rsp.Body.Close() }()
+	if err != nil {
+		return nil, err
+	}
+
+	response := &CreateDerivedAssetResponse{
+		Body:         bodyBytes,
+		HTTPResponse: rsp,
+	}
+
+	switch {
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 202:
+		var dest Job
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON202 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 400:
+		var dest ValidationError
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON400 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 401:
+		var dest UnauthenticatedError
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON401 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 403:
+		var dest ForbiddenError
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON403 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 404:
+		var dest NotFoundError
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON404 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 409:
+		var dest ConflictError
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON409 = &dest
 
 	}
 
