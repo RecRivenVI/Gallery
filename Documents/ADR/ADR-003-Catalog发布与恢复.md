@@ -16,13 +16,15 @@
 
 跨库使用可恢复 Saga：control 创建 Job，Catalog 候选记录 job ID，Catalog publication 是扫描成功事实源，随后 control 投影 completed。启动 reconciliation 修复已发布但 Job 未完成的状态；Job completed 而无 publication 时标记 needs_repair。
 
+**Candidate 归逻辑 Job 所有**（2026-07-20 由 EV-28 明确）：同一 `job_id` 任一时刻至多一个未发布候选，同一 Job 的多个 Attempt 共同推进或从头重建该候选，而不是各自持有独立候选。`BeginCandidate` 是幂等恢复入口：既有候选为 `staging`/`aborted` 时先删除（外键级联清理从属事实，显式清理不受级联管理的 FTS5 `work_search`）再重建；已 `published` 时拒绝重建，交由调用方按已有 publication 对账为 completed。`catalog_revisions.job_id`、`query_publications.job_id` 两处扁平 `UNIQUE` 约束均保持不变，未引入 schema 迁移；曾评估的"Candidate 归 Attempt 所有"（`(job_id, attempt_number)` 唯一）因需要重建被十余张表级联/限制引用的核心表且相对既有"同一 Job 最终最多一个 publication"语义没有额外收益，未被采用。
+
 ## 理由
 
 - 百万作品合成证据下，generation-delta 的发布事务随变化量增长，50% 变化达到 20.774 秒；staging 的单次 publication 观测为 3–8 毫秒；
 - staging 构建期间读者持续读取旧 revision 元组，发布停顿可预测；
 - Catalog 查询投影和 FTS 同 revision 元组，避免作品可见而搜索不可见；
 - 两库无法原子提交，显式 Saga 比假定跨库事务更可恢复；
-- 实测数字和局限见 [EV-04](../证据/验证记录.md#ev-04-catalog-提交e2) 与 [EV-08](../证据/验证记录.md#ev-08-跨库游标和-personal-契约e1)。
+- 实测数字和局限见 [EV-04](../证据/验证记录.md#ev-04-catalog-提交e2) 与 [EV-08](../证据/验证记录.md#ev-08-跨库游标和-personal-契约e1)；Candidate 所有权模型的裁决过程见 [EV-28](../证据/验证记录.md)。
 
 ## 替代方案
 
