@@ -611,7 +611,7 @@ func (s *Server) createScanJob(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
-	scanProfile := scanner.ScanProfileIncremental
+	scanProfile := ""
 	if request.ScanProfile != nil {
 		scanProfile = string(*request.ScanProfile)
 	}
@@ -1583,6 +1583,12 @@ func (s *Server) mediaContent(w http.ResponseWriter, r *http.Request) {
 		s.writeRequestError(w, fault.New(fault.CodeMediaOffline, true, nil))
 		return
 	}
+	if item.ContentVerificationState == catalog.ContentVerificationStateLocatedUnverified {
+		// 位置在线但内容尚未完整确认：这不是 Source 离线，不能伪装成 MEDIA_OFFLINE；
+		// 未确认媒体也不得进入依赖 ContentBlob/ETag 的已验证读取路径。
+		s.writeRequestError(w, fault.New(fault.CodeContentNotVerified, true, nil))
+		return
+	}
 	source, err := s.data.GetSource(r.Context(), item.SourceID)
 	if err != nil {
 		s.writeRequestError(w, fault.New(fault.CodeMediaOffline, true, nil))
@@ -1824,6 +1830,17 @@ func jobDTO(value jobs.Job) api.Job {
 	}
 	result.CancelRequested = boolPtr(value.CancelRequested)
 	result.FailureRetryable = boolPtr(value.FailureRetryable)
+	if value.Type == "scan" {
+		// scanProfile 只从持久请求（request_json）读取最终实际执行的档案，不依赖进程内
+		// 临时状态；Get/List 在服务重启后仍返回一致值。
+		var request struct {
+			ScanProfile string `json:"scanProfile,omitempty"`
+		}
+		if err := json.Unmarshal(value.RequestJSON, &request); err == nil && request.ScanProfile != "" {
+			profile := api.JobScanProfile(request.ScanProfile)
+			result.ScanProfile = &profile
+		}
+	}
 	return result
 }
 
@@ -1983,19 +2000,24 @@ func workDTO(publication catalog.Publication, value catalog.Work) api.PublishedW
 	}
 }
 
+// mediaDTO 把位置可用性（Available/LocationStatus）与内容确认状态
+// （ContentVerificationState/Blob/VerifiedAt）作为两个正交维度分别表达：位置在线但内容
+// 未确认时 Available 仍为 true、Blob 与 VerifiedAt 为 nil，不得把两者混为一谈。
 func mediaDTO(publication catalog.Publication, value catalog.Media) api.PublishedMedia {
-	verificationState := api.PublishedMediaContentVerificationState(catalog.ContentVerificationStateContentVerified)
 	var blob *api.ContentBlobRef
-	if value.LocationStatus == catalog.ContentVerificationStateLocatedUnverified {
-		verificationState = api.PublishedMediaContentVerificationState(catalog.ContentVerificationStateLocatedUnverified)
-	} else {
+	if value.ContentVerificationState == catalog.ContentVerificationStateContentVerified {
 		blob = &api.ContentBlobRef{Algorithm: api.ContentBlobRefAlgorithm(value.Algorithm), Digest: value.Digest}
 	}
-	return api.PublishedMedia{
+	result := api.PublishedMedia{
 		Id: value.ID, WorkId: value.WorkID, Kind: value.Kind, MimeType: value.MIME, SizeBytes: value.Size, Blob: blob,
 		Available: value.LocationStatus == "present", Ordinal: value.Ordinal, QueryPublicationId: publication.ID,
-		ContentVerificationState: verificationState,
+		ContentVerificationState: api.PublishedMediaContentVerificationState(value.ContentVerificationState),
 	}
+	if !value.VerifiedAt.IsZero() {
+		verifiedAt := value.VerifiedAt
+		result.VerifiedAt = &verifiedAt
+	}
+	return result
 }
 
 func (s *Server) authenticate(r *http.Request) (auth.Session, error) {
@@ -2105,6 +2127,8 @@ func statusForFault(err error) int {
 	case fault.CodeBindingReviewRequired:
 		return http.StatusConflict
 	case fault.CodeContentChangedDuringHash:
+		return http.StatusConflict
+	case fault.CodeContentNotVerified:
 		return http.StatusConflict
 	case fault.CodeRangeInvalid:
 		return http.StatusRequestedRangeNotSatisfiable

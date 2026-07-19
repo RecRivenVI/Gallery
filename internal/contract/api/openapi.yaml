@@ -1130,6 +1130,8 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/Job"
+        "400":
+          $ref: "#/components/responses/ValidationError"
         "401":
           $ref: "#/components/responses/UnauthenticatedError"
         "403":
@@ -2398,6 +2400,7 @@ components:
         - CATALOG_PUBLICATION_MISSING
         - CONTENT_CHANGED_DURING_HASH
         - MEDIA_OFFLINE
+        - CONTENT_NOT_VERIFIED
         - HOST_REJECTED
         - ORIGIN_REJECTED
         - CSRF_INVALID

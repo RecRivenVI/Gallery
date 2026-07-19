@@ -46,6 +46,7 @@
             "CATALOG_PUBLICATION_MISSING",
             "CONTENT_CHANGED_DURING_HASH",
             "MEDIA_OFFLINE",
+            "CONTENT_NOT_VERIFIED",
             "HOST_REJECTED",
             "ORIGIN_REJECTED",
             "CSRF_INVALID",

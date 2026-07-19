@@ -252,9 +252,12 @@ func TestPersonalPairingIsSingleUseAndRevocationInvalidatesREST(t *testing.T) {
 	if err := wsjson.Read(context.Background(), websocketConnection, &ready); err != nil || ready.EventType != realtime.EventConnectionReady {
 		t.Fatalf("WebSocket ready 错误: %+v %v", ready, err)
 	}
+	// 尚无 publication 的 Source 未显式指定档案时默认自动选择 index（不建立 ContentBlob）；
+	// 本测试要验证媒体正文读取全链路，因此显式请求 incremental 以立即完成内容确认。
+	incrementalProfile := api.ScanJobCreateRequestScanProfileIncremental
 	scanResponse, err := client.CreateScanJobWithResponse(context.Background(), sourceResponse.JSON201.Id, &api.CreateScanJobParams{
 		XGalleryCSRF: exchange.JSON201.CsrfToken,
-	}, api.ScanJobCreateRequest{}, mutation)
+	}, api.ScanJobCreateRequest{ScanProfile: &incrementalProfile}, mutation)
 	if err != nil || scanResponse.JSON202 == nil {
 		t.Fatalf("创建 Scan Job 失败: %v status=%d body=%s", err, scanResponse.StatusCode(), scanResponse.Body)
 	}
@@ -379,6 +382,216 @@ func TestPersonalPairingIsSingleUseAndRevocationInvalidatesREST(t *testing.T) {
 	afterRevokeMedia, err := client.GetMediaContentWithResponse(context.Background(), mediaID, &api.GetMediaContentParams{})
 	if err != nil || afterRevokeMedia.JSON401 == nil {
 		t.Fatalf("已吊销 Session 仍可读取媒体: %v status=%d", err, afterRevokeMedia.StatusCode())
+	}
+}
+
+// TestScanProfileDefaultSelectionValidationConflictAndContentVerificationAPI 是 scanProfile
+// 相关行为的端到端 API 契约测试：非法档案值的 VALIDATION_ERROR、尚无 publication 的
+// Source 默认自动选择 index、已发布 Source 显式请求 index 的结构化冲突、index → 默认
+// incremental 完成内容确认、Job DTO 的 scanProfile 字段，以及未确认媒体内容端点的
+// CONTENT_NOT_VERIFIED（区别于 Source 离线的 MEDIA_OFFLINE）。
+func TestScanProfileDefaultSelectionValidationConflictAndContentVerificationAPI(t *testing.T) {
+	dirs := appdirs.UnderRoot(filepath.Join(t.TempDir(), "app"))
+	if err := dirs.Ensure(filesystem.OS{}); err != nil {
+		t.Fatal(err)
+	}
+	store, err := storage.Open(context.Background(), dirs)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	fixedClock := clock.Fixed{Time: time.Now().UTC()}
+	personal, err := auth.NewPersonal(store.Control.SQL(), fixedClock, identity.NewGenerator(fixedClock), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resources, err := application.NewResources(store.Control.SQL(), dirs, filesystem.OS{}, fixedClock, identity.NewGenerator(fixedClock))
+	if err != nil {
+		t.Fatal(err)
+	}
+	jobStore, err := jobs.NewStore(store.Control.SQL(), fixedClock, identity.NewGenerator(fixedClock))
+	if err != nil {
+		t.Fatal(err)
+	}
+	catalogStore, err := catalog.NewStore(store.Catalog.SQL(), fixedClock, identity.NewGenerator(fixedClock))
+	if err != nil {
+		t.Fatal(err)
+	}
+	hub := realtime.NewHub(fixedClock)
+	scannerService, err := scanner.New(context.Background(), resources, jobStore, catalogStore, hub)
+	if err != nil {
+		t.Fatal(err)
+	}
+	overlayService, err := overlay.New(context.Background(), store.Control.SQL(), jobStore, catalogStore, fixedClock, hub)
+	if err != nil {
+		t.Fatal(err)
+	}
+	creatorsService, err := creators.New(context.Background(), store.Control.SQL(), jobStore, catalogStore, fixedClock, identity.NewGenerator(fixedClock), overlayService)
+	if err != nil {
+		t.Fatal(err)
+	}
+	server := httptest.NewServer(httpapi.New(
+		config.ModePersonal, store, fixedClock, personal, resources, jobStore, catalogStore, scannerService, overlayService, creatorsService, nil, hub,
+		slog.New(slog.NewJSONHandler(io.Discard, nil)),
+	))
+	defer server.Close()
+
+	jar, err := cookiejar.New(nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	client, err := api.NewClientWithResponses(server.URL, api.WithHTTPClient(&http.Client{Jar: jar}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	bootstrap, err := client.GetBootstrapWithResponse(context.Background())
+	if err != nil || bootstrap.JSON200 == nil {
+		t.Fatalf("bootstrap 失败: %v", err)
+	}
+	requestEditor := sameOrigin(server.URL)
+	attempt, err := client.CreatePairingAttemptWithResponse(context.Background(), &api.CreatePairingAttemptParams{
+		XGalleryCSRF: bootstrap.JSON200.CsrfToken,
+	}, requestEditor)
+	if err != nil || attempt.JSON201 == nil {
+		t.Fatalf("创建配对 attempt 失败: %v", err)
+	}
+	exchange, err := client.ExchangePairingCredentialWithResponse(context.Background(), &api.ExchangePairingCredentialParams{
+		XGalleryCSRF: bootstrap.JSON200.CsrfToken,
+	}, api.PairingExchangeRequest{Credential: attempt.JSON201.Credential}, requestEditor)
+	if err != nil || exchange.JSON201 == nil {
+		t.Fatalf("配对交换失败: %v", err)
+	}
+	mutation := sameOrigin(server.URL)
+	libraryResponse, err := client.CreateLibraryWithResponse(context.Background(), &api.CreateLibraryParams{
+		XGalleryCSRF: exchange.JSON201.CsrfToken,
+	}, api.LibraryCreateRequest{Name: "ScanProfile API"}, mutation)
+	if err != nil || libraryResponse.JSON201 == nil {
+		t.Fatalf("创建 Library 失败: %v", err)
+	}
+	sourceRoot := filepath.Join(filepath.Dir(dirs.Data), "scanprofile-source")
+	if err := os.MkdirAll(filepath.Join(sourceRoot, "work-one"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	mediaContent := []byte("scan profile api media content\n")
+	if err := os.WriteFile(filepath.Join(sourceRoot, "work-one", "media.bin"), mediaContent, 0o400); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(sourceRoot, "work-one", "metadata.json"),
+		[]byte(`{"creator":{"name":"ScanProfile Creator"}}`), 0o400); err != nil {
+		t.Fatal(err)
+	}
+	sourceResponse, err := client.CreateSourceWithResponse(context.Background(), &api.CreateSourceParams{
+		XGalleryCSRF: exchange.JSON201.CsrfToken,
+	}, api.SourceCreateRequest{
+		LibraryId: libraryResponse.JSON201.Id, DisplayName: "ScanProfile Synthetic", RootPath: sourceRoot,
+	}, mutation)
+	if err != nil || sourceResponse.JSON201 == nil {
+		t.Fatalf("创建 Source 失败: %v", err)
+	}
+	ruleJSON, err := os.ReadFile(filepath.Join("..", "..", "rules", "testdata", "minimal-rule-package.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var rulePackage map[string]any
+	if err := json.Unmarshal(ruleJSON, &rulePackage); err != nil {
+		t.Fatal(err)
+	}
+	ruleResponse, err := client.CreateRuleVersionWithResponse(context.Background(), &api.CreateRuleVersionParams{
+		XGalleryCSRF: exchange.JSON201.CsrfToken,
+	}, api.RuleVersionCreateRequest{Package: rulePackage}, mutation)
+	if err != nil || ruleResponse.JSON201 == nil {
+		t.Fatalf("创建 RuleVersion 失败: %v body=%s", err, ruleResponse.Body)
+	}
+	if _, err := client.CreateSourceRuleBindingWithResponse(context.Background(), &api.CreateSourceRuleBindingParams{
+		XGalleryCSRF: exchange.JSON201.CsrfToken,
+	}, api.SourceRuleBindingCreateRequest{
+		SourceId: sourceResponse.JSON201.Id, SemanticHash: ruleResponse.JSON201.SemanticHash,
+		Parameters: map[string]any{}, Priority: 0,
+	}, mutation); err != nil {
+		t.Fatal(err)
+	}
+
+	// 非法 scanProfile 必须返回结构化 VALIDATION_ERROR，不创建任何 Job。
+	invalidProfile := api.ScanJobCreateRequestScanProfile("incrementall")
+	invalid, err := client.CreateScanJobWithResponse(context.Background(), sourceResponse.JSON201.Id, &api.CreateScanJobParams{
+		XGalleryCSRF: exchange.JSON201.CsrfToken,
+	}, api.ScanJobCreateRequest{ScanProfile: &invalidProfile}, mutation)
+	if err != nil || invalid.JSON400 == nil || invalid.JSON400.Error.Code != api.VALIDATIONERROR {
+		t.Fatalf("非法 scanProfile 未返回 VALIDATION_ERROR: %v status=%d body=%s", err, invalid.StatusCode(), invalid.Body)
+	}
+	listAfterInvalid, err := client.ListJobsWithResponse(context.Background(), nil)
+	if err != nil || listAfterInvalid.JSON200 == nil || len(listAfterInvalid.JSON200.Jobs) != 0 {
+		t.Fatalf("非法 scanProfile 请求不应创建 Job: %v jobs=%+v", err, listAfterInvalid.JSON200)
+	}
+
+	// 未显式指定档案：尚无 publication 的 Source 应自动选择 index。
+	first, err := client.CreateScanJobWithResponse(context.Background(), sourceResponse.JSON201.Id, &api.CreateScanJobParams{
+		XGalleryCSRF: exchange.JSON201.CsrfToken,
+	}, api.ScanJobCreateRequest{}, mutation)
+	if err != nil || first.JSON202 == nil {
+		t.Fatalf("首次扫描创建失败: %v status=%d", err, first.StatusCode())
+	}
+	firstCompleted := waitForJob(t, client, first.JSON202.Id)
+	if firstCompleted.ScanProfile == nil || string(*firstCompleted.ScanProfile) != "index" {
+		t.Fatalf("首次扫描 Job 应持久化实际执行的 index 档案: %+v", firstCompleted)
+	}
+	worksResponse, err := client.ListWorksWithResponse(context.Background(), nil)
+	if err != nil || worksResponse.JSON200 == nil || len(worksResponse.JSON200.Works) != 1 {
+		t.Fatalf("Work 查询失败: %v", err)
+	}
+	mediaResponse, err := client.ListWorkMediaWithResponse(context.Background(), worksResponse.JSON200.Works[0].Id)
+	if err != nil || mediaResponse.JSON200 == nil || len(mediaResponse.JSON200.Media) != 1 {
+		t.Fatalf("Media 查询失败: %v", err)
+	}
+	firstMedia := mediaResponse.JSON200.Media[0]
+	if !firstMedia.Available || firstMedia.Blob != nil || firstMedia.ContentVerificationState != api.LocatedUnverified || firstMedia.VerifiedAt != nil {
+		t.Fatalf("index 档案媒体的 API 表达错误: %+v", firstMedia)
+	}
+	contentResponse, err := client.GetMediaContentWithResponse(context.Background(), firstMedia.Id, &api.GetMediaContentParams{})
+	if err != nil || contentResponse.JSON409 == nil || contentResponse.JSON409.Error.Code != api.CONTENTNOTVERIFIED {
+		t.Fatalf("未确认媒体内容端点未返回 CONTENT_NOT_VERIFIED: %v status=%d body=%s", err, contentResponse.StatusCode(), contentResponse.Body)
+	}
+
+	// 已发布 Source 显式请求 index 必须被拒绝为结构化冲突，不创建 Job。
+	indexProfile := api.ScanJobCreateRequestScanProfileIndex
+	rejected, err := client.CreateScanJobWithResponse(context.Background(), sourceResponse.JSON201.Id, &api.CreateScanJobParams{
+		XGalleryCSRF: exchange.JSON201.CsrfToken,
+	}, api.ScanJobCreateRequest{ScanProfile: &indexProfile}, mutation)
+	if err != nil || rejected.JSON409 == nil || rejected.JSON409.Error.Code != api.CONFLICT {
+		t.Fatalf("已发布 Source 显式 index 未被拒绝: %v status=%d body=%s", err, rejected.StatusCode(), rejected.Body)
+	}
+
+	// 未显式指定档案：已有 publication 的 Source 应自动选择 incremental 并完成内容确认。
+	second, err := client.CreateScanJobWithResponse(context.Background(), sourceResponse.JSON201.Id, &api.CreateScanJobParams{
+		XGalleryCSRF: exchange.JSON201.CsrfToken,
+	}, api.ScanJobCreateRequest{}, mutation)
+	if err != nil || second.JSON202 == nil {
+		t.Fatalf("第二次扫描创建失败: %v", err)
+	}
+	secondCompleted := waitForJob(t, client, second.JSON202.Id)
+	if secondCompleted.ScanProfile == nil || string(*secondCompleted.ScanProfile) != "incremental" {
+		t.Fatalf("已发布 Source 的默认扫描 Job 应持久化 incremental: %+v", secondCompleted)
+	}
+	mediaAfter, err := client.ListWorkMediaWithResponse(context.Background(), worksResponse.JSON200.Works[0].Id)
+	if err != nil || mediaAfter.JSON200 == nil || len(mediaAfter.JSON200.Media) != 1 {
+		t.Fatalf("确认后 Media 查询失败: %v", err)
+	}
+	confirmedMedia := mediaAfter.JSON200.Media[0]
+	if confirmedMedia.Blob == nil || confirmedMedia.ContentVerificationState != api.ContentVerified || confirmedMedia.VerifiedAt == nil {
+		t.Fatalf("index → 默认 incremental 后媒体应完成确认: %+v", confirmedMedia)
+	}
+	confirmedContent, err := client.GetMediaContentWithResponse(context.Background(), firstMedia.Id, &api.GetMediaContentParams{})
+	if err != nil || confirmedContent.StatusCode() != http.StatusOK || !bytes.Equal(confirmedContent.Body, mediaContent) {
+		t.Fatalf("确认后的内容端点应返回真实媒体正文: %v status=%d", err, confirmedContent.StatusCode())
+	}
+	jobsList, err := client.ListJobsWithResponse(context.Background(), nil)
+	if err != nil || jobsList.JSON200 == nil {
+		t.Fatalf("Job 列表查询失败: %v", err)
+	}
+	for _, job := range jobsList.JSON200.Jobs {
+		if job.Type == "scan" && job.ScanProfile == nil {
+			t.Fatalf("GET /jobs 未返回 scan Job 的 scanProfile: %+v", job)
+		}
 	}
 }
 
