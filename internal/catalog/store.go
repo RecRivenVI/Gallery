@@ -163,7 +163,46 @@ func NewStore(db *sql.DB, clock ports.Clock, ids ports.IDGenerator) (*Store, err
 	return &Store{db: db, clock: clock, ids: ids}, nil
 }
 
+// BeginCandidate 是同一逻辑 Job 多 Attempt 下候选构建的幂等入口：Candidate 归 Job 所有
+// （同一 job_id 任一时刻至多一行 catalog_revisions），而不是归某次 Attempt 所有。调用前
+// 先查询该 Job 既有的 catalog_revisions 行：
+//
+//   - 不存在：正常创建全新 staging candidate（与此前行为一致）；
+//   - 存在且 status 为 staging 或 aborted（上次 Attempt 未完成或已被清理）：视为可安全重建，
+//     在同一事务内先删除该行（级联清理全部 Source-derived 事实与查询投影，并显式清理不受
+//     外键管理的 FTS5 work_search 行），再插入全新 revision，不复用可能部分写入的 staging
+//     结果；
+//   - 存在且 status 为 published：说明该 Job 已经真正完成过发布，只是 control 侧尚未收到
+//     completed（Saga gap）。此时绝不能再次构建或再次发布，返回
+//     CodeCatalogCandidatePublished 交由调用方通过 PublicationForJob 对账为 completed。
+//
+// job_id 上的 UNIQUE 约束因此保持不变：它表达的是“同一 Job 任一时刻至多一个 Catalog
+// revision 归属”，而不是“该 Job 一辈子只能拥有一行”。
 func (s *Store) BeginCandidate(ctx context.Context, jobID, sourceID string, controlWatermark int64) (Candidate, error) {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return Candidate{}, fault.New(fault.CodeInternal, true, err)
+	}
+	defer tx.Rollback()
+
+	var existingRevisionID, existingStatus string
+	err = tx.QueryRowContext(ctx, `SELECT catalog_revision_id, status FROM catalog_revisions WHERE job_id=?`, jobID).
+		Scan(&existingRevisionID, &existingStatus)
+	switch {
+	case errors.Is(err, sql.ErrNoRows):
+		// 该 Job 从未拥有过 candidate，按原有路径创建。
+	case err != nil:
+		return Candidate{}, fault.New(fault.CodeInternal, true, err)
+	case existingStatus == "published":
+		return Candidate{}, fault.New(fault.CodeCatalogCandidatePublished, false, nil)
+	case existingStatus == "staging" || existingStatus == "aborted":
+		if err := resetCandidateRevision(ctx, tx, existingRevisionID); err != nil {
+			return Candidate{}, fault.New(fault.CodeInternal, true, err)
+		}
+	default:
+		return Candidate{}, fault.New(fault.CodeCatalogCandidateInvalid, false, nil)
+	}
+
 	catalogID, err := s.ids.New(domain.IDCatalogRevision)
 	if err != nil {
 		return Candidate{}, fault.New(fault.CodeInternal, true, err)
@@ -173,11 +212,6 @@ func (s *Store) BeginCandidate(ctx context.Context, jobID, sourceID string, cont
 		return Candidate{}, fault.New(fault.CodeInternal, true, err)
 	}
 	candidate := Candidate{CatalogRevisionID: catalogID.String(), OverlayRevisionID: overlayID.String(), JobID: jobID, SourceID: sourceID, ControlWatermark: controlWatermark}
-	tx, err := s.db.BeginTx(ctx, nil)
-	if err != nil {
-		return Candidate{}, fault.New(fault.CodeInternal, true, err)
-	}
-	defer tx.Rollback()
 	now := s.clock.Now().Unix()
 	if _, err := tx.ExecContext(ctx, `INSERT INTO catalog_revisions
 (catalog_revision_id, job_id, source_id, status, created_at) VALUES (?, ?, ?, 'staging', ?)`, candidate.CatalogRevisionID, jobID, sourceID, now); err != nil {
@@ -194,6 +228,23 @@ func (s *Store) BeginCandidate(ctx context.Context, jobID, sourceID string, cont
 		return Candidate{}, fault.New(fault.CodeInternal, true, err)
 	}
 	return candidate, nil
+}
+
+// resetCandidateRevision 删除一个尚未发布（staging 或 aborted）的 catalog_revisions 行。
+// 外键级联清理 overlay_projection_revisions、source_works/source_media/source_creators、
+// content_blobs/file_locations、work_projections/media_projections/creator_projections、
+// work_creator_relations；work_search 是 FTS5 虚表，SQLite 不对其应用外键级联，必须在同一
+// 事务内显式删除，否则会残留孤儿全文索引行。调用方必须保证该 revision 从未进入
+// published 状态——已发布 revision 由 query_publications 的 ON DELETE RESTRICT 外键保护，
+// 误删会直接失败而不是静默丢失数据。
+func resetCandidateRevision(ctx context.Context, tx *sql.Tx, catalogRevisionID string) error {
+	if _, err := tx.ExecContext(ctx, `DELETE FROM work_search WHERE catalog_revision_id=?`, catalogRevisionID); err != nil {
+		return err
+	}
+	if _, err := tx.ExecContext(ctx, `DELETE FROM catalog_revisions WHERE catalog_revision_id=?`, catalogRevisionID); err != nil {
+		return err
+	}
+	return nil
 }
 
 func (s *Store) Stage(ctx context.Context, candidate Candidate, works []WorkFact, media []MediaFact) error {

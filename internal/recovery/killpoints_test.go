@@ -53,17 +53,16 @@ func TestRealProcessKillpointMatrix(t *testing.T) {
 		derivedStatus string
 		// verifyBackoffRetry 为 true 时，本 case 还会在退避到期后显式推进 clk 并重新
 		// reconcile，验证同一 Job ID 产生新 Attempt 并最终完成。partial_staging/
-		// candidate_complete 已经在 BeginCandidate 阶段写入 catalog_revisions；
-		// 该表当前 job_id 是跨全部历史行的扁平 UNIQUE 约束（阶段 3 之前遗留、与
-		// “同一逻辑 Job 多 Attempt”设计不一致的独立缺陷，修复需要重建被十余张
-		// 表级联/限制引用的核心表，风险和范围超出本轮），因此这两个 case 不在本轮
-		// 断言退避重试一定成功，只保留“不污染 active publication 且保持 failed”
-		// 的既有保证；该发现记录在 EV-27，留待后续独立评估。
+		// candidate_complete 此前会在 Attempt 2 重新调用 BeginCandidate 时因
+		// catalog_revisions.job_id 的扁平 UNIQUE 约束稳定失败（EV-27 记录的已知限制）；
+		// BeginCandidate 现在是幂等恢复入口，会先删除同一 Job 归属的 staging/aborted
+		// candidate 再重建，因此这两个 case 现在与 full_hash_read 一样验证退避重试
+		// 真正完成（见 EV-28）。
 		verifyBackoffRetry bool
 	}{
 		{"job_queued", jobs.StatusCompleted, "new", 1, "", false},
-		{"partial_staging", jobs.StatusFailed, "old", 0, "", false},
-		{"candidate_complete", jobs.StatusFailed, "old", 0, "", false},
+		{"partial_staging", jobs.StatusFailed, "old", 0, "", true},
+		{"candidate_complete", jobs.StatusFailed, "old", 0, "", true},
 		{"publication_control_gap", jobs.StatusCompleted, "new", 1, "", false},
 		{"overlay_fact_preprojection", jobs.StatusCompleted, "new", 1, "", false},
 		{"qpub_switched_pre_ws", jobs.StatusCompleted, "new", 1, "", false},

@@ -419,6 +419,9 @@ func (s *Service) Execute(ctx context.Context, jobID string) error {
 	}
 	candidate, err := s.catalog.BeginCandidate(ctx, job.ID, source.ID, controlWatermark)
 	if err != nil {
+		if isCatalogCandidatePublished(err) {
+			return s.recoverAlreadyPublished(ctx, job.ID)
+		}
 		return s.fail(ctx, job.ID, err)
 	}
 	works := make([]catalog.WorkFact, 0, len(discovered))
@@ -610,6 +613,34 @@ func isNotFound(err error) bool {
 	}
 	var structured *fault.Error
 	return errors.As(err, &structured) && structured.Code == fault.CodeNotFound
+}
+
+func isCatalogCandidatePublished(err error) bool {
+	if err == nil {
+		return false
+	}
+	var structured *fault.Error
+	return errors.As(err, &structured) && structured.Code == fault.CodeCatalogCandidatePublished
+}
+
+// recoverAlreadyPublished 处理 BeginCandidate 检测到的 Saga gap：该 Job 已经真正完成过
+// Catalog 发布，只是 control 侧尚未收到 completed。不得再次构建或再次发布，只把已有
+// publication 对账为 control 侧 completed，且不重复发出 PublicationPublished 事件——那是
+// 首次发布时已经交付过的依赖通知。
+func (s *Service) recoverAlreadyPublished(ctx context.Context, jobID string) error {
+	publication, err := s.catalog.PublicationForJob(ctx, jobID)
+	if err != nil {
+		return s.fail(ctx, jobID, err)
+	}
+	if err := s.resources.MarkOverlaySnapshotPublished(ctx, publication.ControlWatermark, publication.ID); err != nil {
+		return err
+	}
+	job, err := s.jobs.RecoverCompleted(ctx, jobID, publication.ID)
+	if err != nil {
+		return err
+	}
+	s.notifier.JobChanged(job)
+	return nil
 }
 
 type discoveredWork struct {
