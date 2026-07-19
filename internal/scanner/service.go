@@ -99,12 +99,15 @@ type scanRequest struct {
 	ScanProfile string `json:"scanProfile,omitempty"`
 }
 
-func normalizeScanProfile(value string) string {
+// validateScanProfile 只接受空字符串（表示未显式指定，交由调用方按 Source 是否已发布决定
+// 实际档案）与三个正式档案值；任何拼写错误或未知值都必须返回结构化 VALIDATION_ERROR，
+// 不得静默归一化为 incremental。
+func validateScanProfile(value string) (string, error) {
 	switch value {
-	case ScanProfileIndex, ScanProfileVerify:
-		return value
+	case "", ScanProfileIndex, ScanProfileIncremental, ScanProfileVerify:
+		return value, nil
 	default:
-		return ScanProfileIncremental
+		return "", fault.WithField(fault.CodeValidation, "scanProfile", nil)
 	}
 }
 
@@ -116,7 +119,10 @@ func scanProfileFromJob(job jobs.Job) string {
 	if err := json.Unmarshal(job.RequestJSON, &request); err != nil {
 		return ScanProfileIncremental
 	}
-	return normalizeScanProfile(request.ScanProfile)
+	if request.ScanProfile == ScanProfileIndex || request.ScanProfile == ScanProfileVerify {
+		return request.ScanProfile
+	}
+	return ScanProfileIncremental
 }
 
 func (s *Service) CreateScan(ctx context.Context, sourceID, createdBy string) (jobs.Job, error) {
@@ -124,15 +130,39 @@ func (s *Service) CreateScan(ctx context.Context, sourceID, createdBy string) (j
 }
 
 func (s *Service) CreateScanWithIdempotency(ctx context.Context, sourceID, createdBy, idempotencyKey string) (jobs.Job, error) {
-	return s.CreateScanWithProfile(ctx, sourceID, createdBy, idempotencyKey, ScanProfileIncremental)
+	return s.CreateScanWithProfile(ctx, sourceID, createdBy, idempotencyKey, "")
 }
 
-// CreateScanWithProfile 是唯一实际创建扫描 Job 的入口；CreateScan/CreateScanWithIdempotency
-// 固定使用 incremental 档案以保持既有调用方（Watcher 周期收敛、启动 reconciliation、既有
-// 测试）行为不变。
+// CreateScanWithProfile 是唯一实际创建扫描 Job 的入口。scanProfile 为空表示未显式指定：
+// Source 尚无已发布 Catalog 时自动选择 index，已有 publication 时自动选择 incremental；
+// 两种情况下持久化的都是最终实际决定的档案，绝不保存含糊的 "auto"。显式指定的
+// index/incremental/verify 必须被尊重；已有 publication 的 Source 显式请求 index 会绕过
+// 阶段 1 依赖 ContentBlob digest 的 SourceWork 拆分/合并结构审查，因此拒绝并保持
+// Binding/Catalog 不变，不创建 Job。
 func (s *Service) CreateScanWithProfile(ctx context.Context, sourceID, createdBy, idempotencyKey, scanProfile string) (jobs.Job, error) {
+	requested, err := validateScanProfile(scanProfile)
+	if err != nil {
+		return jobs.Job{}, err
+	}
 	if _, err := s.resources.GetSource(ctx, sourceID); err != nil {
 		return jobs.Job{}, err
+	}
+	published, err := s.catalog.SourcePublished(ctx, sourceID)
+	if err != nil {
+		return jobs.Job{}, err
+	}
+	effective := requested
+	switch requested {
+	case "":
+		if published {
+			effective = ScanProfileIncremental
+		} else {
+			effective = ScanProfileIndex
+		}
+	case ScanProfileIndex:
+		if published {
+			return jobs.Job{}, fault.New(fault.CodeConflict, false, nil)
+		}
 	}
 	binding, err := s.resources.BindingForSource(ctx, sourceID)
 	if err != nil {
@@ -148,7 +178,7 @@ func (s *Service) CreateScanWithProfile(ctx context.Context, sourceID, createdBy
 		CompilerVersion: rules.CompilerVersion, CELProfileVersion: rules.CELProfileVersion,
 		ExtensionRegistryVersion: version.IR.ExtensionRegistryVersion,
 	}
-	requestJSON, err := json.Marshal(scanRequest{ScanProfile: normalizeScanProfile(scanProfile)})
+	requestJSON, err := json.Marshal(scanRequest{ScanProfile: effective})
 	if err != nil {
 		return jobs.Job{}, fault.New(fault.CodeInternal, true, err)
 	}
