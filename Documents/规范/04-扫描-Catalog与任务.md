@@ -129,6 +129,8 @@ startup: reconcile publications ↔ jobs
 
 Job 是逻辑任务，Attempt 是该 Job 的一次实际执行。重试保持原 Job ID、增加 attempt number、保留全部历史 Attempt，并沿用请求、幂等身份和规则快照；`retry_of` 只保留为 v18 及更早子 Job 的兼容来源字段，新重试不再创建子 Job。只有 retryable 终态可重试，取消、完成和超过最大次数的 Job 不会自动重试。
 
+**Candidate 归逻辑 Job 所有，不归某次 Attempt 所有**：同一 `job_id` 任一时刻至多一个 `catalog_revisions` 候选行；多个 Attempt 共同推进或从头重建该候选，而不是各自拥有独立候选。`BeginCandidate(jobID, sourceID, watermark)` 是幂等恢复入口，调用前先按 `job_id` 查询既有候选状态：不存在则正常创建；存在且为 `staging`（进行中）或 `aborted`（已被前一次 Attempt 或 Reconcile 标记中止）则在同一事务内先删除该行（外键级联清理全部从属 Source-derived 事实与查询投影，并显式清理不受外键管理的 FTS5 `work_search` 行），再插入全新 revision，不复用可能部分写入的 staging 结果；存在且已 `published` 说明该 Job 已经真正完成发布、只是 control 侧尚未收到 `completed`（见下方启动 reconciliation），此时必须拒绝再次构建或再次发布，只允许调用方按已有 publication 对账为 completed。`catalog_revisions.job_id`、`query_publications.job_id` 均保持扁平 `UNIQUE`：前者表达"同一 Job 任一时刻至多一行候选"（由 `BeginCandidate` 的幂等重置维护），后者表达"同一 Job 最终最多一个 publication"。
+
 ## 取消、崩溃和离线
 
 - **构建中取消/崩溃**：旧 revision 元组继续服务；候选按 job ID 清理。
