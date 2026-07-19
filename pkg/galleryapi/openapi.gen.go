@@ -352,6 +352,7 @@ const (
 	CONTENTCHANGEDDURINGHASH      ErrorCode = "CONTENT_CHANGED_DURING_HASH"
 	CONTENTDISAPPEARED            ErrorCode = "CONTENT_DISAPPEARED"
 	CONTENTHASHPENDING            ErrorCode = "CONTENT_HASH_PENDING"
+	CONTENTNOTVERIFIED            ErrorCode = "CONTENT_NOT_VERIFIED"
 	CSRFINVALID                   ErrorCode = "CSRF_INVALID"
 	CURSOREXPIRED                 ErrorCode = "CURSOR_EXPIRED"
 	CURSORINVALID                 ErrorCode = "CURSOR_INVALID"
@@ -440,6 +441,8 @@ func (e ErrorCode) Valid() bool {
 	case CONTENTDISAPPEARED:
 		return true
 	case CONTENTHASHPENDING:
+		return true
+	case CONTENTNOTVERIFIED:
 		return true
 	case CSRFINVALID:
 		return true
@@ -12911,6 +12914,7 @@ type CreateScanJobResponse struct {
 	Body         []byte
 	HTTPResponse *http.Response
 	JSON202      *Job
+	JSON400      *ValidationError
 	JSON401      *UnauthenticatedError
 	JSON403      *ForbiddenError
 	JSON404      *NotFoundError
@@ -18463,6 +18467,13 @@ func ParseCreateScanJobResponse(rsp *http.Response) (*CreateScanJobResponse, err
 			return nil, err
 		}
 		response.JSON202 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 400:
+		var dest ValidationError
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON400 = &dest
 
 	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 401:
 		var dest UnauthenticatedError
