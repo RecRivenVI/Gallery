@@ -208,9 +208,20 @@ func TestReconcileQueuedAndPublicationControlGap(t *testing.T) {
 		t.Fatal(err)
 	}
 	secondRestart.Wait()
+	// 无 publication 的 queued Job 只由中央 Recovery Service 的 ListRunnable/Submit 领取，
+	// Reconcile 本身不再自行 Start，避免与中央循环对同一 Job 形成竞争领取窗口（见
+	// killpoints_test.go 的 overlay_fact_preprojection 场景）；这里直接模拟中央循环调用
+	// Execute 完成领取。
 	queuedJob, _ := secondRestart.jobs.Get(ctx, queued.ProjectionJobID)
+	if queuedJob.Status != jobs.StatusQueued {
+		t.Fatalf("queued Job 不应被 Reconcile 自行领取: %+v", queuedJob)
+	}
+	if err := secondRestart.Execute(ctx, queued.ProjectionJobID); err != nil {
+		t.Fatal(err)
+	}
+	queuedJob, _ = secondRestart.jobs.Get(ctx, queued.ProjectionJobID)
 	if queuedJob.Status != jobs.StatusCompleted {
-		t.Fatalf("queued Job 未在重启后执行: %+v", queuedJob)
+		t.Fatalf("queued Job 未在中央领取后完成: %+v", queuedJob)
 	}
 }
 
