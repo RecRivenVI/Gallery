@@ -21,6 +21,8 @@ import (
 	"github.com/RecRivenVI/gallery/internal/jobs"
 	"github.com/RecRivenVI/gallery/internal/maintenance"
 	"github.com/RecRivenVI/gallery/internal/media"
+	"github.com/RecRivenVI/gallery/internal/platform/clock"
+	"github.com/RecRivenVI/gallery/internal/ports"
 	"github.com/RecRivenVI/gallery/internal/rules"
 )
 
@@ -57,6 +59,23 @@ type Service struct {
 	hash        *hashjob.Service
 	maintenance *maintenance.Coordinator
 	space       SpaceGate
+	clock       ports.Clock
+
+	// preReuseHook 仅供确定性测试使用：在准备复用既往已确认 digest、重新 Stat 当前文件前
+	// 触发一次，用于模拟 discovery 观察之后、复用决策之前的文件替换竞争。生产路径始终为 nil。
+	preReuseHook func(relativePath string)
+}
+
+// SetPreReuseHook 仅供确定性测试注入；生产 bootstrap 不得调用。
+func (s *Service) SetPreReuseHook(hook func(relativePath string)) { s.preReuseHook = hook }
+
+// SetClock 注入内容确认时间来源；未注入时使用系统时钟。测试可注入可推进的时钟以确定性地
+// 验证"复用摘要保留旧确认时间、真正完成哈希才推进确认时间"的语义。
+func (s *Service) SetClock(value ports.Clock) {
+	if value == nil {
+		value = clock.System{}
+	}
+	s.clock = value
 }
 
 // SetDispatcher 注入中央调度器；注入后 Start 通过调度器领取执行并接受其 context 取消。
@@ -79,7 +98,7 @@ func New(ctx context.Context, resources *application.Resources, jobStore *jobs.S
 	if notifier == nil {
 		notifier = nopNotifier{}
 	}
-	return &Service{context: ctx, resources: resources, jobs: jobStore, catalog: catalogStore, notifier: notifier}, nil
+	return &Service{context: ctx, resources: resources, jobs: jobStore, catalog: catalogStore, notifier: notifier, clock: clock.System{}}, nil
 }
 
 // 扫描档案（scanProfile）决定媒体内容如何被确认，三者互不冒充：
@@ -279,21 +298,37 @@ func (s *Service) Execute(ctx context.Context, jobID string) error {
 				if prior.Found && prior.ContentVerificationState == catalog.ContentVerificationStateContentVerified &&
 					prior.Size == item.ExpectedSize && prior.MTimeNanos == item.ExpectedModTimeNanos {
 					// 组合身份证据（同 Source、规范化路径、大小、mtime）未变化，且既往已完成完整
-					// 确认：直接复用既往摘要，不重新读取文件正文。
+					// 确认：候选复用既往摘要。但 discovery 阶段的 Stat 与此刻之间存在窗口，
+					// 复用前必须重新打开并 Stat 当前文件；只有这次重新句柄得到的 size/mtime
+					// 也同时与 discovery 观察一致才允许复用，任一证据在此窗口内变化都必须放弃
+					// 复用、降级为下方完整 Hash Job，不得把旧 digest 与新文件属性混合发布。
+					if s.preReuseHook != nil {
+						s.preReuseHook(item.RelativePath)
+					}
 					located, locateErr := media.LocateSourceFile(source.RootPath, item.RelativePath)
 					if locateErr != nil {
 						return s.fail(ctx, job.ID, locateErr)
 					}
-					blob, blobErr := domain.ParseContentBlobRef(prior.Algorithm, prior.Digest)
-					if blobErr != nil {
-						return s.fail(ctx, job.ID, blobErr)
+					if located.Size == item.ExpectedSize && located.ModTimeNanos == item.ExpectedModTimeNanos {
+						blob, blobErr := domain.ParseContentBlobRef(prior.Algorithm, prior.Digest)
+						if blobErr != nil {
+							return s.fail(ctx, job.ID, blobErr)
+						}
+						item.Hash = media.HashResult{
+							Blob: blob, Size: located.Size, LocationKey: located.LocationKey, RelativePath: located.RelativePath,
+						}
+						verificationState[item.RelativePath] = catalog.ContentVerificationStateContentVerified
+						// 复用摘要不改变确认时间：保留既往真正完成完整哈希时的时间，不得因为
+						// 本次只是复用旧摘要就把 last_confirmed_at 推进到现在。
+						lastConfirmedAt[item.RelativePath] = prior.LastConfirmedAt
+						skipHash = true
+					} else {
+						// 复用前证据已变化：放弃复用，改走下方完整 Hash Job；以刚获得的当前
+						// 状态作为本次哈希的期望身份，避免与已经过期的 discovery 观察比较、
+						// 对本来只是稍后处理的合法文件产生误报的 CONTENT_CHANGED_DURING_HASH。
+						item.ExpectedSize = located.Size
+						item.ExpectedModTimeNanos = located.ModTimeNanos
 					}
-					item.Hash = media.HashResult{
-						Blob: blob, Size: located.Size, LocationKey: located.LocationKey, RelativePath: located.RelativePath,
-					}
-					verificationState[item.RelativePath] = catalog.ContentVerificationStateContentVerified
-					lastConfirmedAt[item.RelativePath] = time.Now().UTC()
-					skipHash = true
 				} else if scanProfile == ScanProfileIndex {
 					// index 档案对新增或疑似变化媒体也不建立 Hash Job，只定位并标记未确认。
 					located, locateErr := media.LocateSourceFile(source.RootPath, item.RelativePath)
