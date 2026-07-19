@@ -22,7 +22,32 @@ validate Source/SourceRuleBinding
   → schedule derived assets and maintenance
 ```
 
-发现阶段只读 Source。相对路径、FileID/inode、大小和快速指纹用于判断是否需要进一步读取；新内容或冲突候选在建立 ContentBlob 时必须由持久哈希任务完成完整 SHA-256。首次哈希成功前 SourceMedia 保持 staging `hash_pending`，默认阻塞受影响 Source publication；超大文件或网络盘只延长带进度、可取消的候选构建，不能降低身份强度。mtime 不得成为实体身份或唯一变化依据。具体失败、重试和续算语义见 [文件系统与媒体处理](08-文件系统与媒体处理.md)。
+发现阶段只读 Source。相对路径、FileID/inode、大小和 mtime 用于判断是否需要进一步读取，是常见、廉价且有价值的组合证据，但都只能产生候选，不能单独确认内容；新内容或冲突候选在建立 ContentBlob 时必须由持久哈希任务完成完整 SHA-256，任何时候都不得以这些线索伪造或替代 digest。`verify` 档案与默认 `incremental` 档案对新增或疑似变化媒体，首次哈希成功前 SourceMedia 保持 staging `hash_pending`，默认阻塞受影响 Source publication；超大文件或网络盘只延长带进度、可取消的候选构建，不能降低身份强度。`index` 档案是唯一例外，允许媒体以 `located_unverified` 状态正式发布而不建立 ContentBlob，详见下一节。具体失败、重试和续算语义见 [文件系统与媒体处理](08-文件系统与媒体处理.md)。
+
+## 扫描档案与内容确认状态
+
+扫描把“媒体已被发现”和“媒体内容已完整确认”拆成两件事，媒体在 SourceMedia/MediaProjection 上有明确的 `content_verification_state`：
+
+```text
+located_unverified   已发现、metadata 已解析、可浏览基本信息，尚无已确认 ContentBlob
+content_verified     已通过完整 SHA-256 确认，ContentBlob/FileLocation 记录存在
+```
+
+`located_unverified` 与 `content_verified` 都是发布出的合法查询状态，不是构建中的半发布 candidate；ValidateCandidate 与短事务发布不因 `located_unverified` 媒体存在而拒绝发布，也不允许一次发布内混合不同 revision。
+
+扫描请求携带 `scanProfile`，三者互不冒充：
+
+| scanProfile | 语义 | 是否读取媒体正文 |
+| --- | --- | --- |
+| `index` | 首次快速建立可浏览 Catalog；发现容器、解析 metadata，媒体一律以 `located_unverified` 发布，不建立 Hash Job | 否 |
+| `incremental`（默认） | 按 Source、规范化相对路径、大小、mtime（可用时含平台文件身份线索）组合证据，与既往 `content_verified` 观察比较；证据一致则复用既往摘要，不新增 Hash Job；新增或证据不一致的媒体建立 Hash Job 完整确认 | 仅新增/变化部分 |
+| `verify` | 忽略既往观察，对本次扫描到的媒体强制重新建立 Hash Job、重新完整哈希，用于显式、低频的完整性校验 | 是，全部 |
+
+`incremental` 复用只在满足下列全部条件时发生：同一 `source_id`；规范化相对路径相同；`size_bytes` 相同；`mtime_ns` 相同；既往 SourceMedia 处于 `content_verified`。任一条件不满足（含首次出现、`RuleVersion` 变化不影响此判断——digest 只描述字节内容）都视为需要重新确认。降级范围限定到具体文件，不因单个文件的证据变化而对整个 Source 强制完整重新哈希。
+
+`index`/`incremental` 未确认媒体不写入 `content_blobs`/`file_locations`，只在 SourceMedia 记录发现时的观察证据（`mtime_ns`、`platform_identity_kind`/`platform_identity_value`、`container_signature`）与 `content_verification_state`；`MediaProjection.location_status` 相应携带 `located_unverified`，与 `present`/`offline`/`missing`/`inaccessible` 正交，不改变后者语义。媒体从 `located_unverified` 提升为 `content_verified` 只能通过持久 Hash Job 成功完成，绝不使用 mtime、size 或路径伪造 digest。
+
+`platform_identity_kind`/`platform_identity_value` 是可选的平台文件身份线索槽位；当前实现尚未接入真实 Windows FileID 或 `dev+inode`（见 [跨平台与客户端](09-跨平台与客户端.md) 的 `FileIdentityProvider` 端口现状），只使用路径、大小、mtime 的组合证据，接入真实平台身份是后续文件身份门禁的一部分，不阻塞本节语义。`container_signature` 是为容器级（整个作品目录）跳过预留的版本化签名字段，本轮只记录、不作为复用判断的门槛，未来可在不改变实体边界的前提下扩展为目录级跳过优化。
 
 ## 默认提交模型
 

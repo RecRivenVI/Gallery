@@ -15,7 +15,7 @@
 - 代码、仓库、包、命令和服务代号：`gallery`。
 - 建议后端命令：`galleryd`；建议 CLI：`galleryctl`。
 - Gallery 是独立的净室产品，不以任何旧 Gallery 的数据库、配置、API、目录结构或行为作为兼容、迁移或对拍目标。
-- 当前仓库已有正式产品代码（`cmd/`、`internal/`、`pkg/`）。阶段 0 契约骨架、Walking Skeleton、Architecture Proof 正确性切片、阶段 1「领域和数据所有权」、阶段 2「规则闭环」与阶段 3「扫描、任务和 Catalog」均已完成代码与合成 Correctness 实现，并完成阶段 3 Correctness 修正。已落地并配套 API 的能力包括：Personal 配对/Session/capability、Library/Source/RuleVersion/SourceRuleBinding、限定同一父 Scan 的持久 Hash Job 与完整 SHA-256 publication、同一逻辑 Job 的多 Attempt/租约回收/退避重试、六类非阻塞有界调度池、Watcher dirty/overflow/动态 Source/失败重启与低频周期收敛、任务临时目录所有权、服务端维护空间估算与 publication 互斥，以及既有双 revision 查询、Overlay、Catalog 重建、八点强杀恢复、Canonical/Binding/规则/备份恢复等 Correctness 能力。尚未完成：真实 HDD、SMB/NAS、网络挂载和正式 Reference/Degradation Performance Gate，以及查询/媒体/安全/Web/平台发行等后续能力。
+- 当前仓库已有正式产品代码（`cmd/`、`internal/`、`pkg/`）。阶段 0 契约骨架、Walking Skeleton、Architecture Proof 正确性切片、阶段 1「领域和数据所有权」、阶段 2「规则闭环」与阶段 3「扫描、任务和 Catalog」均已完成代码与合成 Correctness 实现，并完成阶段 3 Correctness 修正与真实 SSD/HDD 大数据集验收引发的扫描档案重构（见 [验证记录 EV-25](Documents/证据/验证记录.md)）。已落地并配套 API 的能力包括：Personal 配对/Session/capability、Library/Source/RuleVersion/SourceRuleBinding、按 `scanProfile`（`index`/`incremental` 默认/`verify`）区分的持久 Hash Job 与完整 SHA-256 publication（`incremental` 按 Source/相对路径/大小/mtime 组合证据跨扫描复用既往已确认摘要，`index` 发布 `located_unverified` 媒体但不建立 ContentBlob）、同一逻辑 Job 的多 Attempt/租约回收/退避重试、六类非阻塞有界调度池、Watcher dirty/overflow/动态 Source/失败重启与低频周期收敛、任务临时目录所有权、服务端维护空间估算与 publication 互斥，以及既有双 revision 查询、Overlay、Catalog 重建、八点强杀恢复、Canonical/Binding/规则/备份恢复等 Correctness 能力。尚未完成：真实全量规模 HDD 性能特征、SMB/NAS、网络挂载、真实平台文件身份（FileID/`dev+inode`）接入和正式 Reference/Degradation Performance Gate，以及查询/媒体/安全/Web/平台发行等后续能力。
 - 本文件是需要随真实开发状态持续维护的 Agent 规则；发现与代码、有效 ADR 或规范不一致时应更新本文件，但不得放宽安全、只读 Source、Git、签名或测试要求，也不得把临时实装写成已冻结决策。
 
 ## 权威资料与阅读顺序
