@@ -112,17 +112,25 @@ type Work struct {
 }
 
 type Media struct {
-	ID             string
-	WorkID         string
-	SourceID       string
-	Kind           string
-	MIME           string
-	Size           int64
-	Algorithm      string
-	Digest         string
+	ID        string
+	WorkID    string
+	SourceID  string
+	Kind      string
+	MIME      string
+	Size      int64
+	Algorithm string
+	Digest    string
+	// LocationStatus 只表达位置可用性（present/offline/missing/inaccessible），与内容是否
+	// 已完整确认正交；不得再借用它表达 located_unverified。
 	LocationStatus string
-	Ordinal        int
-	RelativePath   string
+	// ContentVerificationState 是 "located_unverified" 或 "content_verified"；前者的
+	// Algorithm/Digest 为空，不指向任何已确认 ContentBlob。
+	ContentVerificationState string
+	// VerifiedAt 是媒体最近一次真正完成完整 SHA-256 确认的时间；located_unverified 媒体
+	// 恒为零值，API 必须据此返回 null 而不是伪造时间。
+	VerifiedAt   time.Time
+	Ordinal      int
+	RelativePath string
 }
 
 type GCResult struct {
@@ -333,9 +341,12 @@ FROM work_projections WHERE catalog_revision_id=? AND overlay_revision_id=?`,
 		return OverlayCandidate{}, fault.New(fault.CodeInternal, true, err)
 	}
 	if _, err := tx.ExecContext(ctx, `INSERT INTO media_projections
+(catalog_revision_id, overlay_revision_id, media_id, work_id, source_id, source_key, relative_path,
+ media_kind, mime_type, size_bytes, algorithm, digest, location_status, ordinal, hidden, base_ordinal,
+ content_verification_state, verified_at)
 SELECT catalog_revision_id, ?, media_id, work_id, source_id, source_key, relative_path,
 media_kind, mime_type, size_bytes, algorithm, digest, location_status, base_ordinal,
-hidden, base_ordinal
+hidden, base_ordinal, content_verification_state, verified_at
 FROM media_projections WHERE catalog_revision_id=? AND overlay_revision_id=?`,
 		candidate.OverlayRevisionID, candidate.CatalogRevisionID, candidate.BaseOverlayRevisionID); err != nil {
 		return OverlayCandidate{}, fault.New(fault.CodeInternal, true, err)
@@ -683,17 +694,21 @@ func (s *Store) GetMedia(ctx context.Context, id string) (Publication, Media, er
 		return Publication{}, Media{}, err
 	}
 	var media Media
+	var verifiedAt sql.NullInt64
 	err = s.db.QueryRowContext(ctx, `SELECT media_id, work_id, source_id, media_kind, mime_type, size_bytes,
-algorithm, digest, location_status, ordinal, relative_path FROM media_projections
+algorithm, digest, location_status, content_verification_state, verified_at, ordinal, relative_path FROM media_projections
 WHERE catalog_revision_id = ? AND overlay_revision_id = ? AND media_id = ?`, publication.CatalogRevisionID, publication.OverlayRevisionID, id).Scan(
 		&media.ID, &media.WorkID, &media.SourceID, &media.Kind, &media.MIME, &media.Size,
-		&media.Algorithm, &media.Digest, &media.LocationStatus, &media.Ordinal, &media.RelativePath,
+		&media.Algorithm, &media.Digest, &media.LocationStatus, &media.ContentVerificationState, &verifiedAt, &media.Ordinal, &media.RelativePath,
 	)
 	if errors.Is(err, sql.ErrNoRows) {
 		return Publication{}, Media{}, fault.New(fault.CodeNotFound, false, nil)
 	}
 	if err != nil {
 		return Publication{}, Media{}, fault.New(fault.CodeInternal, true, err)
+	}
+	if verifiedAt.Valid {
+		media.VerifiedAt = time.Unix(verifiedAt.Int64, 0).UTC()
 	}
 	return publication, media, nil
 }
@@ -704,7 +719,7 @@ func (s *Store) ListMediaForWork(ctx context.Context, workID string) (Publicatio
 		return Publication{}, nil, err
 	}
 	rows, err := s.db.QueryContext(ctx, `SELECT media_id, work_id, source_id, media_kind, mime_type, size_bytes,
-algorithm, digest, location_status, ordinal, relative_path FROM media_projections
+algorithm, digest, location_status, content_verification_state, verified_at, ordinal, relative_path FROM media_projections
 WHERE catalog_revision_id = ? AND overlay_revision_id = ? AND work_id = ? ORDER BY ordinal, media_id`, publication.CatalogRevisionID, publication.OverlayRevisionID, workID)
 	if err != nil {
 		return Publication{}, nil, fault.New(fault.CodeInternal, true, err)
@@ -713,8 +728,12 @@ WHERE catalog_revision_id = ? AND overlay_revision_id = ? AND work_id = ? ORDER 
 	var items []Media
 	for rows.Next() {
 		var media Media
-		if err := rows.Scan(&media.ID, &media.WorkID, &media.SourceID, &media.Kind, &media.MIME, &media.Size, &media.Algorithm, &media.Digest, &media.LocationStatus, &media.Ordinal, &media.RelativePath); err != nil {
+		var verifiedAt sql.NullInt64
+		if err := rows.Scan(&media.ID, &media.WorkID, &media.SourceID, &media.Kind, &media.MIME, &media.Size, &media.Algorithm, &media.Digest, &media.LocationStatus, &media.ContentVerificationState, &verifiedAt, &media.Ordinal, &media.RelativePath); err != nil {
 			return Publication{}, nil, fault.New(fault.CodeInternal, true, err)
+		}
+		if verifiedAt.Valid {
+			media.VerifiedAt = time.Unix(verifiedAt.Int64, 0).UTC()
 		}
 		items = append(items, media)
 	}
@@ -1046,14 +1065,17 @@ VALUES (?, ?, ?, ?, ?, ?, ?, 'present')`, candidate.CatalogRevisionID, item.Sour
 				return fault.New(fault.CodeInternal, true, err)
 			}
 		}
+		// location_status 只表达位置可用性；扫描发现的文件位置始终 present，无论内容是否
+		// 已完整确认，两者是正交语义，不得再把 located_unverified 混进 location_status。
 		locationStatus := "present"
-		if !verified {
-			locationStatus = ContentVerificationStateLocatedUnverified
+		var verifiedAt any
+		if verified && !item.LastConfirmedAt.IsZero() {
+			verifiedAt = item.LastConfirmedAt.UTC().Unix()
 		}
 		if _, err := tx.ExecContext(ctx, `INSERT INTO media_projections
 (catalog_revision_id, overlay_revision_id, media_id, work_id, source_id, source_key, relative_path,
- media_kind, mime_type, size_bytes, algorithm, digest, location_status, ordinal, base_ordinal)
-VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`, candidate.CatalogRevisionID, candidate.OverlayRevisionID, item.MediaID, item.WorkID, item.SourceID, item.SourceKey, item.RelativePath, item.Kind, item.MIME, item.Size, item.Algorithm, item.Digest, locationStatus, item.Ordinal, item.Ordinal); err != nil {
+ media_kind, mime_type, size_bytes, algorithm, digest, location_status, content_verification_state, verified_at, ordinal, base_ordinal)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`, candidate.CatalogRevisionID, candidate.OverlayRevisionID, item.MediaID, item.WorkID, item.SourceID, item.SourceKey, item.RelativePath, item.Kind, item.MIME, item.Size, item.Algorithm, item.Digest, locationStatus, state, verifiedAt, item.Ordinal, item.Ordinal); err != nil {
 			return fault.New(fault.CodeInternal, true, err)
 		}
 	}
@@ -1072,29 +1094,60 @@ type PriorObservation struct {
 	ContentVerificationState string
 	Algorithm                string
 	Digest                   string
+	// LastConfirmedAt 是既往完成完整 SHA-256 确认的时间；复用摘要时必须原样保留这个时间，
+	// 不得因为本次扫描只是复用旧摘要就把它当作新一轮确认时间。
+	LastConfirmedAt time.Time
 }
 
 // LookupPriorObservation 在当前活动 query publication 内按 (source_id, relative_path) 查找
 // 既往观察，供 incremental 扫描档案组合 size/mtime 证据判断是否可复用已确认 digest，
 // 不产生任何文件 I/O。真实规模下依赖 source_media_identity_idx 索引，不做全表扫描。
 func (s *Store) LookupPriorObservation(ctx context.Context, sourceID, relativePath string) (PriorObservation, error) {
-	var size, mtimeNs sql.NullInt64
+	var size, mtimeNs, lastConfirmedAt sql.NullInt64
 	var state, algorithm, digest sql.NullString
-	err := s.db.QueryRowContext(ctx, `SELECT m.size_bytes, m.mtime_ns, m.content_verification_state, m.last_confirmed_algorithm, m.last_confirmed_digest
+	err := s.db.QueryRowContext(ctx, `SELECT m.size_bytes, m.mtime_ns, m.content_verification_state, m.last_confirmed_algorithm, m.last_confirmed_digest, m.last_confirmed_at
 FROM source_media m
 JOIN active_query_publication a ON a.singleton=1 JOIN query_publications q ON q.query_publication_id=a.query_publication_id
 WHERE m.catalog_revision_id=q.catalog_revision_id AND m.source_id=? AND m.relative_path=?`, sourceID, relativePath).
-		Scan(&size, &mtimeNs, &state, &algorithm, &digest)
+		Scan(&size, &mtimeNs, &state, &algorithm, &digest, &lastConfirmedAt)
 	if errors.Is(err, sql.ErrNoRows) {
 		return PriorObservation{}, nil
 	}
 	if err != nil {
 		return PriorObservation{}, fault.New(fault.CodeInternal, true, err)
 	}
-	return PriorObservation{
+	observation := PriorObservation{
 		Found: true, Size: size.Int64, MTimeNanos: mtimeNs.Int64,
 		ContentVerificationState: state.String, Algorithm: algorithm.String, Digest: digest.String,
-	}, nil
+	}
+	if lastConfirmedAt.Valid {
+		observation.LastConfirmedAt = time.Unix(lastConfirmedAt.Int64, 0).UTC()
+	}
+	return observation, nil
+}
+
+// SourcePublished 报告该 Source 是否已在当前活动 query publication 中拥有至少一条
+// Source-derived 数据，即是否已经完成过至少一次成功扫描发布。尚无任何活动 publication
+// （产品首次启动、从未有任何 Source 发布成功）视为未发布，不是错误。
+func (s *Store) SourcePublished(ctx context.Context, sourceID string) (bool, error) {
+	publication, err := s.Current(ctx)
+	if err != nil {
+		if isNotFoundErr(err) {
+			return false, nil
+		}
+		return false, err
+	}
+	var count int
+	if err := s.db.QueryRowContext(ctx, `SELECT count(*) FROM source_works w
+WHERE w.catalog_revision_id=? AND w.source_id=?`, publication.CatalogRevisionID, sourceID).Scan(&count); err != nil {
+		return false, fault.New(fault.CodeInternal, true, err)
+	}
+	return count > 0, nil
+}
+
+func isNotFoundErr(err error) bool {
+	var structured *fault.Error
+	return errors.As(err, &structured) && structured.Code == fault.CodeNotFound
 }
 
 func cloneUnchangedSources(ctx context.Context, tx *sql.Tx, candidate Candidate) error {
@@ -1128,7 +1181,11 @@ JOIN active_query_publication a ON a.singleton=1 JOIN query_publications q ON q.
 JOIN work_creator_relations r ON r.catalog_revision_id=q.catalog_revision_id AND r.overlay_revision_id=q.overlay_revision_id AND r.creator_id=c.creator_id
 JOIN work_projections w ON w.catalog_revision_id=r.catalog_revision_id AND w.overlay_revision_id=r.overlay_revision_id AND w.work_id=r.work_id
 WHERE c.catalog_revision_id=q.catalog_revision_id AND c.overlay_revision_id=q.overlay_revision_id AND w.source_id<>?`, []any{candidate.CatalogRevisionID, candidate.OverlayRevisionID, candidate.SourceID}},
-		{`INSERT INTO media_projections SELECT ?, ?, m.media_id, m.work_id, m.source_id, m.source_key, m.relative_path, m.media_kind, m.mime_type, m.size_bytes, m.algorithm, m.digest, m.location_status, m.ordinal, m.hidden, m.base_ordinal FROM media_projections m
+		{`INSERT INTO media_projections
+(catalog_revision_id, overlay_revision_id, media_id, work_id, source_id, source_key, relative_path,
+ media_kind, mime_type, size_bytes, algorithm, digest, location_status, ordinal, hidden, base_ordinal,
+ content_verification_state, verified_at)
+SELECT ?, ?, m.media_id, m.work_id, m.source_id, m.source_key, m.relative_path, m.media_kind, m.mime_type, m.size_bytes, m.algorithm, m.digest, m.location_status, m.ordinal, m.hidden, m.base_ordinal, m.content_verification_state, m.verified_at FROM media_projections m
 JOIN active_query_publication a ON a.singleton=1 JOIN query_publications q ON q.query_publication_id=a.query_publication_id
 WHERE m.catalog_revision_id=q.catalog_revision_id AND m.overlay_revision_id=q.overlay_revision_id AND m.source_id<>?`, []any{candidate.CatalogRevisionID, candidate.OverlayRevisionID, candidate.SourceID}},
 		{`INSERT INTO work_search (catalog_revision_id, overlay_revision_id, work_id, normalized_original_text, cjk_bigram_token_text, latin_trigram_token_text)

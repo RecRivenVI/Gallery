@@ -30,7 +30,7 @@ func openTestStore(t *testing.T) (*Store, appdirs.Dirs) {
 
 func TestIndependentWALMigrationsAndBackup(t *testing.T) {
 	store, dirs := openTestStore(t)
-	wantVersions := map[Role]int{RoleControl: 19, RoleCatalog: 8}
+	wantVersions := map[Role]int{RoleControl: 19, RoleCatalog: 9}
 	for _, database := range []*Database{store.Control, store.Catalog} {
 		var version int
 		if err := database.db.QueryRow("PRAGMA user_version").Scan(&version); err != nil {
@@ -138,6 +138,102 @@ INSERT INTO overlay_projection_revisions
 VALUES ('ovr_new', 'cat_new', 0, 'published', 3, 4);
 INSERT INTO query_publications VALUES ('qpub_bad', 'cat_old', 'ovr_new', 'job_bad', 0, 4)`); err == nil {
 		t.Fatal("schema 接受了不合法的 catalog/overlay revision 组合")
+	}
+}
+
+// TestMediaVerificationMigrationUpgradesPopulatedV8Catalog 验证 00009 迁移把历史上借用
+// media_projections.location_status='located_unverified' 表达的行正确拆分为独立的
+// content_verification_state（位置本身仍是 present）与 verified_at（从 source_media 的
+// last_confirmed_at 回填已确认媒体的真实确认时间），不产生伪造时间。
+func TestMediaVerificationMigrationUpgradesPopulatedV8Catalog(t *testing.T) {
+	ctx := context.Background()
+	path := filepath.Join(t.TempDir(), "catalog.db")
+	db, err := sql.Open("sqlite", "file:"+filepath.ToSlash(path)+"?_pragma=foreign_keys(ON)")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.ExecContext(ctx, `CREATE TABLE gallery_schema_migrations (
+version INTEGER PRIMARY KEY NOT NULL, name TEXT NOT NULL, sha256 TEXT NOT NULL,
+applied_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))) STRICT`); err != nil {
+		t.Fatal(err)
+	}
+	sub, err := fs.Sub(migrationFiles, "migrations/catalog")
+	if err != nil {
+		t.Fatal(err)
+	}
+	migrations, err := readMigrations(sub)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, item := range migrations[:8] {
+		if err := applyMigration(ctx, db, item); err != nil {
+			t.Fatal(err)
+		}
+	}
+	_, err = db.ExecContext(ctx, `
+INSERT INTO catalog_revisions VALUES ('cat_old', 'job_old', 'src_old', 'published', 1, 2);
+INSERT INTO overlay_projection_revisions
+(overlay_revision_id, catalog_revision_id, control_watermark, status, created_at, published_at)
+VALUES ('ovr_old', 'cat_old', 0, 'published', 1, 2);
+INSERT INTO query_publications VALUES ('qpub_old', 'cat_old', 'ovr_old', 'job_old', 0, 2);
+INSERT INTO active_query_publication VALUES (1, 'qpub_old');
+INSERT INTO source_media
+(catalog_revision_id, source_id, source_key, work_source_key, relative_path, media_kind, mime_type, size_bytes,
+ rule_key, mtime_ns, platform_identity_kind, platform_identity_value, container_signature, content_verification_state,
+ last_confirmed_algorithm, last_confirmed_digest, last_confirmed_at)
+VALUES
+('cat_old', 'src_old', 'work-key/med-unverified', 'work-key', 'work-key/one.bin', 'image', 'application/octet-stream', 100,
+ 'r1', 0, '', '', '', 'located_unverified', '', '', NULL),
+('cat_old', 'src_old', 'work-key/med-verified', 'work-key', 'work-key/two.bin', 'image', 'application/octet-stream', 200,
+ 'r2', 0, '', '', '', 'content_verified', 'sha256-v1', '11223344556677889900112233445566778899001122334455667788990011', 1700000000);
+INSERT INTO media_projections
+(catalog_revision_id, overlay_revision_id, media_id, work_id, source_id, source_key, relative_path,
+ media_kind, mime_type, size_bytes, algorithm, digest, location_status, ordinal, hidden, base_ordinal)
+VALUES
+('cat_old', 'ovr_old', 'med_unverified', 'wrk_old', 'src_old', 'work-key/med-unverified', 'work-key/one.bin',
+ 'image', 'application/octet-stream', 100, '', '', 'located_unverified', 0, 0, 0),
+('cat_old', 'ovr_old', 'med_verified', 'wrk_old', 'src_old', 'work-key/med-verified', 'work-key/two.bin',
+ 'image', 'application/octet-stream', 200, 'sha256-v1', '11223344556677889900112233445566778899001122334455667788990011', 'present', 1, 0, 1);`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	upgraded, err := openDatabase(ctx, RoleCatalog, path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer upgraded.Close()
+
+	var unverifiedLocation, unverifiedState string
+	var unverifiedAt sql.NullInt64
+	if err := upgraded.db.QueryRowContext(ctx, `SELECT location_status, content_verification_state, verified_at
+FROM media_projections WHERE media_id='med_unverified'`).Scan(&unverifiedLocation, &unverifiedState, &unverifiedAt); err != nil {
+		t.Fatal(err)
+	}
+	if unverifiedLocation != "present" {
+		t.Fatalf("借用 located_unverified 的 location_status 未拆分回 present: %q", unverifiedLocation)
+	}
+	if unverifiedState != "located_unverified" {
+		t.Fatalf("content_verification_state 未从历史 location_status 迁移: %q", unverifiedState)
+	}
+	if unverifiedAt.Valid {
+		t.Fatalf("located_unverified 媒体不应有 verified_at: %+v", unverifiedAt)
+	}
+
+	var verifiedLocation, verifiedState string
+	var verifiedAt sql.NullInt64
+	if err := upgraded.db.QueryRowContext(ctx, `SELECT location_status, content_verification_state, verified_at
+FROM media_projections WHERE media_id='med_verified'`).Scan(&verifiedLocation, &verifiedState, &verifiedAt); err != nil {
+		t.Fatal(err)
+	}
+	if verifiedLocation != "present" || verifiedState != "content_verified" {
+		t.Fatalf("已确认媒体的位置/确认状态错误: location=%q state=%q", verifiedLocation, verifiedState)
+	}
+	if !verifiedAt.Valid || verifiedAt.Int64 != 1700000000 {
+		t.Fatalf("verified_at 未从 source_media.last_confirmed_at 回填: %+v", verifiedAt)
 	}
 }
 
