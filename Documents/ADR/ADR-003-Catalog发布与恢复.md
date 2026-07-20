@@ -16,6 +16,8 @@
 
 跨库使用可恢复 Saga：control 创建 Job，Catalog 候选记录 job ID，Catalog publication 是扫描成功事实源，随后 control 投影 completed。启动 reconciliation 修复已发布但 Job 未完成的状态；Job completed 而无 publication 时标记 needs_repair。
 
+**媒体/DerivedAsset 读取同样只能通过 `query_publication_id` 选择合法组合**（2026-07-20 阶段 4 Correctness 收尾明确）：此前媒体详情、正文、按需内容确认 Job 与 DerivedAsset 创建都硬编码解析"当前 active publication"，客户端凭旧 cursor 拿到的 Work 可能在后台新 publication 发布后读到另一代媒体事实，与本 ADR"对外只允许通过 `query_publication_id` 选择合法组合"的既有决策不一致。修正后这些端点接受可选 `queryPublicationId`：省略为 current 模式（读当前 active，永不被 GC，不需要额外租约）；显式提供为 snapshot 模式，复用既有游标租约表与 GC 保护判据为该请求建立短期 publication 读取租约，不存在或已过期返回 `CURSOR_EXPIRED`。DerivedAsset 输入 ContentBlob 在创建时从该快照解析并冻结，不在异步生成期间改用之后的 active publication。
+
 **Candidate 归逻辑 Job 所有**（2026-07-20 由 EV-28 明确）：同一 `job_id` 任一时刻至多一个未发布候选，同一 Job 的多个 Attempt 共同推进或从头重建该候选，而不是各自持有独立候选。`BeginCandidate` 是幂等恢复入口：既有候选为 `staging`/`aborted` 时先删除（外键级联清理从属事实，显式清理不受级联管理的 FTS5 `work_search`）再重建；已 `published` 时拒绝重建，交由调用方按已有 publication 对账为 completed。`catalog_revisions.job_id`、`query_publications.job_id` 两处扁平 `UNIQUE` 约束均保持不变，未引入 schema 迁移；曾评估的"Candidate 归 Attempt 所有"（`(job_id, attempt_number)` 唯一）因需要重建被十余张表级联/限制引用的核心表且相对既有"同一 Job 最终最多一个 publication"语义没有额外收益，未被采用。
 
 ## 理由
