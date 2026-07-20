@@ -1289,6 +1289,45 @@ LIMIT 1`, algorithm, digest).Scan(&sourceID, &relativePath, &size)
 	return sourceID, relativePath, size, nil
 }
 
+// queryDependencyBackfillMetaKey 标记 migration 00010（v9→v10，新增 favorite/progress/
+// search_*_norm 快照列）后是否已经触发过一次性 Overlay 重投影回填。ALTER TABLE ADD
+// COLUMN 只能给既有 revision 的这些新列填入静态默认值（0/”），已经发布的旧 revision
+// 不会自动重新计算；这些字段真正的权威数据（favorite/progress 来自 control.db，
+// search_*_norm 可从同一 revision 里已有的 title/creator/tags_json/filenames_text 重新
+// 计算）必须通过一次真实的 Overlay 投影 Job 重新物化到当前 active revision，否则升级
+// 后重启的服务会用默认零值静默提供错误的过滤/排序/高亮结果。
+const queryDependencyBackfillMetaKey = "query_dependency_backfill_triggered"
+
+// NeedsQueryDependencyBackfill 报告是否仍需要触发一次性回填：只在从未触发过时为真。
+// 触发后无论当时是否存在 active publication 都会记录标记（见
+// MarkQueryDependencyBackfillTriggered），避免在此后的每次启动重复判断整个 Catalog；
+// 全新安装从建库起就使用已经包含这些列的 schema，没有需要回填的历史数据，检查本身
+// 代价是一次单行 SELECT，可以安全地在每次启动无条件执行。
+func (s *Store) NeedsQueryDependencyBackfill(ctx context.Context) (bool, error) {
+	var value string
+	err := s.db.QueryRowContext(ctx, "SELECT value FROM gallery_catalog_meta WHERE key=?", queryDependencyBackfillMetaKey).Scan(&value)
+	if errors.Is(err, sql.ErrNoRows) {
+		return true, nil
+	}
+	if err != nil {
+		return false, fault.New(fault.CodeInternal, true, err)
+	}
+	return false, nil
+}
+
+// MarkQueryDependencyBackfillTriggered 记录一次性回填已经触发，此后启动不再重复检查。
+// 调用方在成功排队（或确认当前没有 active publication、无需回填）之后调用；即使排队
+// 与标记之间跨进程重启也是安全的——重新触发只会让 EnqueueOverlayProjectionTx 合并出
+// 一个等价的 no-op 投影 Job，不会产生错误结果或第二套状态机。
+func (s *Store) MarkQueryDependencyBackfillTriggered(ctx context.Context) error {
+	_, err := s.db.ExecContext(ctx, `INSERT INTO gallery_catalog_meta (key, value) VALUES (?, '1')
+ON CONFLICT(key) DO UPDATE SET value=excluded.value`, queryDependencyBackfillMetaKey)
+	if err != nil {
+		return fault.New(fault.CodeInternal, true, err)
+	}
+	return nil
+}
+
 // SourcePublished 报告该 Source 是否已在当前活动 query publication 中拥有至少一条
 // Source-derived 数据，即是否已经完成过至少一次成功扫描发布。尚无任何活动 publication
 // （产品首次启动、从未有任何 Source 发布成功）视为未发布，不是错误。
