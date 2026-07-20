@@ -180,6 +180,142 @@ func TestMediaVerificationJobScopedToTargetMediaViaAPI(t *testing.T) {
 	}
 }
 
+// TestMediaVerificationJobRejectsExplicitHistoricalPublication 复现并回归本轮修复的核心
+// 缺口：媒体身份（GetMediaAt）与冻结 observation 曾经可能分别来自请求 publication 与
+// 当前 active publication。构造两次真实扫描——index 发布 P1（目标媒体 located_unverified）、
+// 随后一次普通 incremental 重扫把该媒体完整确认为 content_verified 并发布 P2（active）——
+// 使同一媒体在 P1、P2 下具有可区分的 observation，再显式针对已经不是 active 的历史
+// publication P1 发起按需确认请求。修复前该请求会把从 P1 解析出的媒体身份（仍显示
+// located_unverified）与从当前 active（P2，已经 content_verified）读取的 observation
+// 混在一起，静默建立一个针对"已经确认完成"媒体的确认 Job；修复后必须直接拒绝为结构化
+// CONFLICT，不创建 Job、不产生新的 Catalog revision/publication，也不改变 Source。
+func TestMediaVerificationJobRejectsExplicitHistoricalPublication(t *testing.T) {
+	ctx := context.Background()
+	_, client, mutation, csrf, cleanup := newPublicationBindingServer(t)
+	defer cleanup()
+
+	sourceRoot := filepath.Join(t.TempDir(), "source")
+	if err := os.MkdirAll(filepath.Join(sourceRoot, "work-one"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(sourceRoot, "work-one", "media-a.bin"), []byte("historical-publication-fixture"), 0o400); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(sourceRoot, "work-one", "metadata.json"), []byte(`{"creator":{"name":"Historical Creator"}}`), 0o400); err != nil {
+		t.Fatal(err)
+	}
+	libraryResponse, err := client.CreateLibraryWithResponse(ctx, &api.CreateLibraryParams{XGalleryCSRF: csrf}, api.LibraryCreateRequest{Name: "Historical"}, mutation)
+	if err != nil || libraryResponse.JSON201 == nil {
+		t.Fatalf("创建 Library 失败: %v", err)
+	}
+	sourceResponse, err := client.CreateSourceWithResponse(ctx, &api.CreateSourceParams{XGalleryCSRF: csrf},
+		api.SourceCreateRequest{LibraryId: libraryResponse.JSON201.Id, DisplayName: "Historical Source", RootPath: sourceRoot}, mutation)
+	if err != nil || sourceResponse.JSON201 == nil {
+		t.Fatalf("创建 Source 失败: %v", err)
+	}
+	ruleJSON, err := os.ReadFile(filepath.Join("..", "..", "rules", "testdata", "minimal-rule-package.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var rulePackage map[string]any
+	if err := json.Unmarshal(ruleJSON, &rulePackage); err != nil {
+		t.Fatal(err)
+	}
+	ruleResponse, err := client.CreateRuleVersionWithResponse(ctx, &api.CreateRuleVersionParams{XGalleryCSRF: csrf}, api.RuleVersionCreateRequest{Package: rulePackage}, mutation)
+	if err != nil || ruleResponse.JSON201 == nil {
+		t.Fatalf("创建 RuleVersion 失败: %v", err)
+	}
+	if _, err := client.CreateSourceRuleBindingWithResponse(ctx, &api.CreateSourceRuleBindingParams{XGalleryCSRF: csrf},
+		api.SourceRuleBindingCreateRequest{SourceId: sourceResponse.JSON201.Id, SemanticHash: ruleResponse.JSON201.SemanticHash, Parameters: map[string]any{}, Priority: 0}, mutation); err != nil {
+		t.Fatal(err)
+	}
+
+	// 第一次扫描：Source 尚无 publication，默认选择 index，媒体以 located_unverified 发布，
+	// 建立 P1。
+	firstScan, err := client.CreateScanJobWithResponse(ctx, sourceResponse.JSON201.Id, &api.CreateScanJobParams{XGalleryCSRF: csrf}, api.ScanJobCreateRequest{}, mutation)
+	if err != nil || firstScan.JSON202 == nil {
+		t.Fatalf("创建首次扫描失败: %v", err)
+	}
+	if completed := waitForJob(t, client, firstScan.JSON202.Id); string(completed.Status) != "completed" {
+		t.Fatalf("首次 index 扫描未完成: %+v", completed)
+	}
+	worksResponse, err := client.ListWorksWithResponse(ctx, nil)
+	if err != nil || worksResponse.JSON200 == nil || len(worksResponse.JSON200.Works) != 1 {
+		t.Fatalf("Work 查询失败: %v", err)
+	}
+	mediaResponse, err := client.ListWorkMediaWithResponse(ctx, worksResponse.JSON200.Works[0].Id, &api.ListWorkMediaParams{})
+	if err != nil || mediaResponse.JSON200 == nil || len(mediaResponse.JSON200.Media) != 1 {
+		t.Fatalf("Media 查询失败: %v", err)
+	}
+	if mediaResponse.JSON200.Media[0].ContentVerificationState != api.LocatedUnverified {
+		t.Fatalf("index 扫描后媒体应是 located_unverified: %+v", mediaResponse.JSON200.Media[0])
+	}
+	target := mediaResponse.JSON200.Media[0]
+	publicationP1 := mediaResponse.JSON200.QueryPublicationId
+
+	// 第二次扫描：Source 已发布，默认选择 incremental；目标媒体此前是 located_unverified
+	// 且未被列为确认目标，普通 incremental 档案仍会为它建立 Hash Job 并完整确认，产生
+	// P2（active）。P1、P2 现在对同一媒体具有可区分的 observation（located_unverified vs
+	// content_verified）。
+	secondScan, err := client.CreateScanJobWithResponse(ctx, sourceResponse.JSON201.Id, &api.CreateScanJobParams{XGalleryCSRF: csrf}, api.ScanJobCreateRequest{}, mutation)
+	if err != nil || secondScan.JSON202 == nil {
+		t.Fatalf("创建第二次扫描失败: %v", err)
+	}
+	if completed := waitForJob(t, client, secondScan.JSON202.Id); string(completed.Status) != "completed" {
+		t.Fatalf("第二次 incremental 扫描未完成: %+v", completed)
+	}
+	afterSecondScan, err := client.ListWorkMediaWithResponse(ctx, worksResponse.JSON200.Works[0].Id, &api.ListWorkMediaParams{})
+	if err != nil || afterSecondScan.JSON200 == nil || len(afterSecondScan.JSON200.Media) != 1 {
+		t.Fatalf("第二次扫描后 Media 查询失败: %v", err)
+	}
+	if afterSecondScan.JSON200.Media[0].ContentVerificationState != api.ContentVerified {
+		t.Fatalf("第二次扫描后媒体应已 content_verified: %+v", afterSecondScan.JSON200.Media[0])
+	}
+	publicationP2 := afterSecondScan.JSON200.QueryPublicationId
+	if publicationP2 == publicationP1 {
+		t.Fatal("第二次扫描应发布与 P1 不同的新 queryPublicationId")
+	}
+
+	jobsBefore, err := client.ListJobsWithResponse(ctx, nil)
+	if err != nil || jobsBefore.JSON200 == nil {
+		t.Fatalf("查询 Job 列表失败: %v", err)
+	}
+	jobCountBefore := len(jobsBefore.JSON200.Jobs)
+
+	// 显式针对已经不是 active 的历史 publication P1 请求确认：必须拒绝为结构化
+	// CONFLICT，不得把 P1 的媒体身份（仍显示 located_unverified）与当前 active P2 的
+	// observation（已经 content_verified）混在一起静默建立 Job。
+	rejected, err := client.CreateMediaVerificationJobWithResponse(ctx, target.Id, &api.CreateMediaVerificationJobParams{QueryPublicationId: &publicationP1, XGalleryCSRF: csrf}, mutation)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if rejected.JSON409 == nil || rejected.JSON409.Error.Code != api.CONFLICT {
+		t.Fatalf("显式历史 publication 的按需确认应返回结构化 CONFLICT: status=%d body=%s", rejected.StatusCode(), rejected.Body)
+	}
+	if rejected.JSON202 != nil {
+		t.Fatalf("被拒绝的请求不应返回 Job: %+v", rejected.JSON202)
+	}
+
+	// 不创建新 Job、不产生新 publication、Source 状态不变。
+	jobsAfter, err := client.ListJobsWithResponse(ctx, nil)
+	if err != nil || jobsAfter.JSON200 == nil {
+		t.Fatalf("查询 Job 列表失败: %v", err)
+	}
+	if len(jobsAfter.JSON200.Jobs) != jobCountBefore {
+		t.Fatalf("被拒绝的历史 publication 请求不应创建新 Job: before=%d after=%d", jobCountBefore, len(jobsAfter.JSON200.Jobs))
+	}
+	unchanged, err := client.ListWorkMediaWithResponse(ctx, worksResponse.JSON200.Works[0].Id, &api.ListWorkMediaParams{})
+	if err != nil || unchanged.JSON200 == nil || len(unchanged.JSON200.Media) != 1 {
+		t.Fatalf("查询 Media 失败: %v", err)
+	}
+	if unchanged.JSON200.QueryPublicationId != publicationP2 {
+		t.Fatalf("被拒绝的历史 publication 请求不应产生新 publication: got=%s want=%s", unchanged.JSON200.QueryPublicationId, publicationP2)
+	}
+	if unchanged.JSON200.Media[0].ContentVerificationState != api.ContentVerified {
+		t.Fatalf("被拒绝的请求不应改变媒体确认状态: %+v", unchanged.JSON200.Media[0])
+	}
+}
+
 // TestDerivedAssetInputBindsToRequestedPublication 覆盖 DerivedAsset 输入绑定：对同一
 // 媒体，指定确认前的 queryPublicationId 必须因为该快照下媒体仍未 content_verified 而
 // 拒绝创建；指定确认后的 queryPublicationId（或省略走 current）必须成功，且创建时

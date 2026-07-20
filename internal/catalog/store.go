@@ -1294,6 +1294,39 @@ WHERE m.catalog_revision_id=q.catalog_revision_id AND m.source_id=? AND m.relati
 	return observation, nil
 }
 
+// LookupObservationAt 在指定的具体 query publication 内按 (source_id, relative_path)
+// 查找既往观察，是 VerificationTarget 冻结身份在执行阶段真正校验所需的权威入口：必须
+// 读取请求当时冻结的那个 publication，绝不能像 LookupPriorObservation 那样隐式改读
+// 执行时刻恰好处于 active 的 publication——两者在 publication 切换后可能描述完全不同
+// 的 observation，混用会让确认结果绑定到用户从未请求过的快照。publicationID 必须是
+// 调用方已经确认存在的合法 publication（例如经 PublicationByID 或与 Current() 比对）；
+// 若该 publication 此刻已经不存在（GC 或从未存在），返回的 Found=false 与"该
+// publication 内没有此 SourceMedia 记录"无法区分，调用方需要区分二者时应自行先调用
+// PublicationByID。
+func (s *Store) LookupObservationAt(ctx context.Context, publicationID, sourceID, relativePath string) (PriorObservation, error) {
+	var size, mtimeNs, lastConfirmedAt sql.NullInt64
+	var state, algorithm, digest sql.NullString
+	err := s.db.QueryRowContext(ctx, `SELECT m.size_bytes, m.mtime_ns, m.content_verification_state, m.last_confirmed_algorithm, m.last_confirmed_digest, m.last_confirmed_at
+FROM source_media m
+JOIN query_publications q ON q.query_publication_id=?
+WHERE m.catalog_revision_id=q.catalog_revision_id AND m.source_id=? AND m.relative_path=?`, publicationID, sourceID, relativePath).
+		Scan(&size, &mtimeNs, &state, &algorithm, &digest, &lastConfirmedAt)
+	if errors.Is(err, sql.ErrNoRows) {
+		return PriorObservation{}, nil
+	}
+	if err != nil {
+		return PriorObservation{}, fault.New(fault.CodeInternal, true, err)
+	}
+	observation := PriorObservation{
+		Found: true, Size: size.Int64, MTimeNanos: mtimeNs.Int64,
+		ContentVerificationState: state.String, Algorithm: algorithm.String, Digest: digest.String,
+	}
+	if lastConfirmedAt.Valid {
+		observation.LastConfirmedAt = time.Unix(lastConfirmedAt.Int64, 0).UTC()
+	}
+	return observation, nil
+}
+
 // LocateBlobFile 把一个 ContentBlob 引用（algorithm+digest）解析为一个仍然 present 的
 // 源文件位置。DerivedAsset 的输入按内容寻址（见 derivedjob.Request 只携带 Blob，不携带
 // publication 引用）：创建请求时锁定的是这个 Blob，不是创建时刻恰好 active 的那个
