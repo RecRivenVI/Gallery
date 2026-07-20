@@ -313,6 +313,51 @@ ON CONFLICT(work_id) DO UPDATE SET
 	return PutResult{State: state, StartJob: startJob}, nil
 }
 
+// TriggerReprojection 排队一次不改变任何 work_overlays 事实、只重建当前 active
+// publication 整个查询投影的 Job，供迁移新增查询相关快照列（例如 favorite/progress/
+// search_*_norm）后一次性回填历史数据使用——不依赖用户恰好触碰某个 Overlay 字段才
+// 自然收敛。complete 复用与 Put 完全相同的 EnqueueOverlayProjectionTx/Execute 管线：
+// readFacts 按 query_watermark 读取 work_overlays 的全部现有事实（不是只读本次改变的
+// 字段），ApplyOverlayFacts 对整个 revision 的每个 Work 重新计算 favorite/progress 与
+// search_title_norm/search_creator_norm/search_tags_norm/search_filenames_norm（后者
+// 从该 revision 里已有的 source_works 数据推导，权威且不依赖重新扫描）。没有任何
+// active publication（全新安装或从未成功扫描过任何 Source）视为无需回填，返回
+// created=false 而不是错误。
+func (s *Service) TriggerReprojection(ctx context.Context, createdBy string) (jobs.Job, bool, error) {
+	current, err := s.catalog.Current(ctx)
+	if err != nil {
+		if isCode(err, fault.CodeNotFound) {
+			return jobs.Job{}, false, nil
+		}
+		return jobs.Job{}, false, err
+	}
+	tx, err := s.control.BeginTx(ctx, nil)
+	if err != nil {
+		return jobs.Job{}, false, fault.New(fault.CodeInternal, true, err)
+	}
+	defer tx.Rollback()
+	var watermark int64
+	if err := tx.QueryRowContext(ctx, `UPDATE gallery_control_sequence SET watermark=watermark+1
+WHERE singleton=1 RETURNING watermark`).Scan(&watermark); err != nil {
+		return jobs.Job{}, false, fault.New(fault.CodeInternal, true, err)
+	}
+	enqueued, err := s.jobs.EnqueueOverlayProjectionTx(ctx, tx, createdBy, current.CatalogRevisionID, current.ID, watermark)
+	if err != nil {
+		return jobs.Job{}, false, err
+	}
+	if err := tx.Commit(); err != nil {
+		return jobs.Job{}, false, fault.New(fault.CodeInternal, true, err)
+	}
+	job, err := s.jobs.Get(ctx, enqueued.JobID)
+	if err != nil {
+		return jobs.Job{}, false, err
+	}
+	if enqueued.Created {
+		s.notifier.JobChanged(job)
+	}
+	return job, enqueued.Created, nil
+}
+
 func (s *Service) Get(ctx context.Context, workID string) (State, error) {
 	if _, err := domain.ParseID(domain.IDCanonicalWork, workID); err != nil {
 		return State{}, fault.New(fault.CodeNotFound, false, nil)
