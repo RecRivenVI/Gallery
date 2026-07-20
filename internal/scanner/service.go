@@ -119,11 +119,27 @@ const (
 // 解析仍覆盖整个 Source（保持 SourceWork 拆分/合并结构审查正确），但只有此处列出的
 // 媒体跳过 incremental 既往摘要复用短路；未列出的媒体继续按当前 scanProfile 既有规则
 // 处理（复用、跳过或按需新增哈希），不因存在 target 而改变其余媒体的正确性。
+//
+// QueryPublicationID 冻结请求时刻用于解析 MediaID/RelativePath 的那个 publication——
+// 按需确认是"当前 publication 操作"，CreateVerificationScan 只接受等于当前 active
+// publication 的值（见该函数文档）。执行阶段的 observation 一致性校验必须读取这个
+// 冻结的 publication，绝不能像旧实现那样退回执行时刻恰好 active 的 publication：
+// 两者在 publication 切换后可能描述完全不同的事实，混用会让媒体身份与 observation
+// 来自不同快照。
 type VerificationTarget struct {
 	MediaID                string `json:"mediaId"`
 	SourceID               string `json:"sourceId"`
 	RelativePath           string `json:"relativePath"`
+	QueryPublicationID     string `json:"queryPublicationId"`
 	ObservationFingerprint string `json:"observationFingerprint,omitempty"`
+}
+
+// ObservationFingerprint 是 VerificationTarget.ObservationFingerprint 与执行阶段
+// verifyObservationUnchanged 比较值的唯一权威构造入口，避免 HTTP handler、Scanner
+// 执行阶段和测试各自手写同一字符串格式导致漂移。size/mtimeNanos 必须来自同一次最终
+// 定位观察，state 是该次观察时刻的 content_verification_state。
+func ObservationFingerprint(size, mtimeNanos int64, state string) string {
+	return fmt.Sprintf("%d:%d:%s", size, mtimeNanos, state)
 }
 
 type scanRequest struct {
@@ -158,10 +174,11 @@ func scanProfileFromJob(job jobs.Job) string {
 }
 
 // verificationTargetsFromJob 还原本次 Job 冻结的目标媒体集合，按规范化相对路径索引，
-// 保留完整冻结字段（MediaID、ObservationFingerprint）供执行阶段真正验证——不能只用
-// RelativePath 存在与否判断"是否是目标"，冻结的 Media 身份与 observation 指纹必须参与
-// 执行阶段的一致性检查，否则请求时冻结的语义在执行时会被静默丢弃。同一 Job 的重试
-// Attempt 复用同一 RequestJSON，因此目标集合天然与首次入队时一致。
+// 保留完整冻结字段（MediaID、QueryPublicationID、ObservationFingerprint）供执行阶段
+// 真正验证——不能只用 RelativePath 存在与否判断"是否是目标"，冻结的 Media 身份、
+// 请求所绑定的 publication 与 observation 指纹都必须参与执行阶段的一致性检查，否则
+// 请求时冻结的语义在执行时会被静默丢弃。同一 Job 的重试 Attempt 复用同一
+// RequestJSON，因此目标集合天然与首次入队时一致。
 func verificationTargetsFromJob(job jobs.Job) map[string]VerificationTarget {
 	if len(job.RequestJSON) == 0 {
 		return nil
@@ -207,6 +224,11 @@ func (s *Service) CreateScanWithProfile(ctx context.Context, sourceID, createdBy
 // 该 Source 必须已有 publication（单媒体按需确认只对已发布 Catalog 中的已知媒体有意义，
 // 因此始终显式使用 incremental，不落入 index/首次扫描判定）。Source discovery 和规则
 // 解析仍完整执行，其余媒体按既有 incremental 规则正常处理，不因存在 target 而改变。
+//
+// 每个 target 冻结的 QueryPublicationID 必须恰好等于当前 active publication——按需
+// 确认是"当前 publication 操作"，不承诺重新确认历史 publication 描述的旧 observation；
+// httpapi 层已经据此把该字段冻结为解析媒体身份时实际使用的 publication，这里再次校验
+// 是防止未来出现绕过 httpapi 直接调用本方法的路径重新引入混用 publication 的问题。
 func (s *Service) CreateVerificationScan(ctx context.Context, sourceID, createdBy, idempotencyKey string, targets []VerificationTarget) (jobs.Job, error) {
 	if len(targets) == 0 {
 		return jobs.Job{}, fault.WithField(fault.CodeValidation, "verificationTargets", nil)
@@ -237,6 +259,23 @@ func (s *Service) CreateVerificationScan(ctx context.Context, sourceID, createdB
 	}
 	if !published {
 		return jobs.Job{}, fault.New(fault.CodeConflict, false, nil)
+	}
+	// 只有确认 Source 已发布后，"冻结的 publication 是否等于当前 active" 才有意义
+	// 校验；未发布 Source 上一律先返回上面的 CONFLICT，不因为 QueryPublicationID
+	// 格式或取值而改变这个更基础的前置条件的错误码。
+	current, err := s.catalog.Current(ctx)
+	if err != nil {
+		return jobs.Job{}, err
+	}
+	for _, target := range normalizedTargets {
+		if _, err := domain.ParseID(domain.IDQueryPublication, target.QueryPublicationID); err != nil {
+			return jobs.Job{}, fault.WithField(fault.CodeValidation, "verificationTargets", err)
+		}
+		if target.QueryPublicationID != current.ID {
+			// 冻结的 publication 仍然存在，但已经不是当前 active publication：拒绝，
+			// 不创建 Job、不修改 Binding/Catalog/Overlay/Source。
+			return jobs.Job{}, fault.New(fault.CodeConflict, false, nil)
+		}
 	}
 	return s.createScan(ctx, sourceID, createdBy, idempotencyKey, ScanProfileIncremental, normalizedTargets)
 }
@@ -741,21 +780,33 @@ func isCatalogCandidatePublished(err error) bool {
 // verifyObservationUnchanged 校验一个冻结 VerificationTarget 的 ObservationFingerprint
 // 与执行时刻的真实观察是否一致。currentSize/currentModTimeNanos 必须来自本次执行开头
 // discover() 对磁盘的新鲜 Stat（而不是再次读取磁盘或复用 Catalog 里可能早已过期的旧
-// 记录），据此判断请求排队期间文件是否已经被替换、截断或以不同内容重新写入；同时把
-// Catalog 当前记录的 content_verification_state 与冻结指纹比较，判断是否已被另一个
-// 并发确认抢先完成。空 ObservationFingerprint 表示调用方未提供冻结指纹，跳过该项
-// 校验，仍然依赖调用方在循环中执行的目标消失与 MediaID 一致性检查。
+// 记录），据此判断请求排队期间文件是否已经被替换、截断或以不同内容重新写入；比较用的
+// 既往 content_verification_state 必须读取 target.QueryPublicationID 冻结的那个
+// publication（LookupObservationAt），不能像旧实现那样改读执行时刻恰好 active 的
+// publication——发起确认后、真正执行前 active publication 可能已经切换到另一个描述
+// 不同事实的快照，混用会让确认结果绑定到用户从未请求过的状态。空 QueryPublicationID
+// 表示这是本轮修复前排队、未冻结 publication 身份的历史 Job，无法安全证明 observation
+// 来自请求方原本绑定的快照，直接判定为不可恢复的目标失效。空 ObservationFingerprint
+// 表示调用方未提供冻结指纹，跳过该项校验，仍然依赖调用方在循环中执行的目标消失与
+// MediaID 一致性检查。
 func (s *Service) verifyObservationUnchanged(ctx context.Context, sourceID string, target VerificationTarget, currentSize, currentModTimeNanos int64) error {
+	if target.QueryPublicationID == "" {
+		return fault.New(fault.CodeVerificationTargetMismatch, false, nil)
+	}
 	if target.ObservationFingerprint == "" {
 		return nil
 	}
-	prior, err := s.catalog.LookupPriorObservation(ctx, sourceID, target.RelativePath)
+	prior, err := s.catalog.LookupObservationAt(ctx, target.QueryPublicationID, sourceID, target.RelativePath)
 	if err != nil {
 		return err
 	}
-	current := fmt.Sprintf("%d:%d:%s", currentSize, currentModTimeNanos, prior.ContentVerificationState)
+	current := ObservationFingerprint(currentSize, currentModTimeNanos, prior.ContentVerificationState)
 	if current != target.ObservationFingerprint {
-		return fault.New(fault.CodeContentChangedDuringHash, true, nil)
+		// 冻结 observation 在 Job 真正开始读取内容之前就已经与当前观察不一致：这是
+		// 请求目标本身已经失效（文件在排队期间被替换/截断，或冻结的 publication
+		// 描述的状态已经过期），不是"完整 Hash 读取过程中并发发生变化"的瞬时故障，
+		// 不得返回 retryable 的 CONTENT_CHANGED_DURING_HASH 无意义地耗尽重试次数。
+		return fault.New(fault.CodeVerificationTargetMismatch, false, nil)
 	}
 	return nil
 }

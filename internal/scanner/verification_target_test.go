@@ -96,16 +96,28 @@ func setupMultiMedia(t *testing.T) (*application.Resources, *jobs.Store, *catalo
 	return resources, jobStore, catalogStore, service, source, store
 }
 
-// observationFingerprintFor 按当前实际磁盘文件的 size/mtime 与给定 content_verification_state
-// 计算与生产代码（scanner.Service.verifyObservationUnchanged/httpapi.createMediaVerificationJob）
-// 完全一致格式的 ObservationFingerprint，供测试构造能够通过一致性校验的冻结目标。
+// observationFingerprintFor 按当前实际磁盘文件的 size/mtime 与给定 content_verification_state，
+// 通过唯一权威入口 scanner.ObservationFingerprint 计算与生产代码（Service.verifyObservationUnchanged/
+// httpapi.createMediaVerificationJob）完全一致的指纹，供测试构造能够通过一致性校验的冻结目标。
 func observationFingerprintFor(t *testing.T, sourceRoot, relativePath, state string) string {
 	t.Helper()
 	info, err := os.Stat(filepath.Join(sourceRoot, filepath.FromSlash(relativePath)))
 	if err != nil {
 		t.Fatal(err)
 	}
-	return fmt.Sprintf("%d:%d:%s", info.Size(), info.ModTime().UnixNano(), state)
+	return scanner.ObservationFingerprint(info.Size(), info.ModTime().UnixNano(), state)
+}
+
+// currentPublicationID 返回当前 active publication 的 ID，供测试构造 VerificationTarget
+// 时冻结 QueryPublicationID——CreateVerificationScan 只接受等于当前 active publication
+// 的值，因此测试必须显式提供这个字段，而不能像本轮修复前那样留空。
+func currentPublicationID(t *testing.T, catalogStore *catalog.Store) string {
+	t.Helper()
+	publication, err := catalogStore.Current(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	return publication.ID
 }
 
 func countHashJobs(t *testing.T, store *storage.Store) int {
@@ -154,7 +166,7 @@ func TestCreateVerificationScanOnlyForcesTargetMedia(t *testing.T) {
 	target := mediaBefore[7]
 	fingerprint := observationFingerprintFor(t, source.RootPath, target.RelativePath, catalog.ContentVerificationStateLocatedUnverified)
 	verifyJob, err := service.CreateVerificationScan(ctx, source.ID, "personal-owner", "", []scanner.VerificationTarget{
-		{MediaID: target.ID, SourceID: source.ID, RelativePath: target.RelativePath, ObservationFingerprint: fingerprint},
+		{MediaID: target.ID, SourceID: source.ID, RelativePath: target.RelativePath, QueryPublicationID: publicationBefore.ID, ObservationFingerprint: fingerprint},
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -255,7 +267,7 @@ func TestCreateVerificationScanReusesRunningJobForSameObservation(t *testing.T) 
 		t.Fatal(err)
 	}
 	target := mediaItems[3]
-	targets := []scanner.VerificationTarget{{MediaID: target.ID, SourceID: source.ID, RelativePath: target.RelativePath}}
+	targets := []scanner.VerificationTarget{{MediaID: target.ID, SourceID: source.ID, RelativePath: target.RelativePath, QueryPublicationID: currentPublicationID(t, catalogStore)}}
 
 	first, err := service.CreateVerificationScan(ctx, source.ID, "personal-owner", "idempotency-key-fixed", targets)
 	if err != nil {
@@ -306,18 +318,21 @@ func TestCreateVerificationScanDoesNotReuseAfterObservationChanges(t *testing.T)
 		t.Fatal(err)
 	}
 	target := mediaItems[5]
-	targets := []scanner.VerificationTarget{{MediaID: target.ID, SourceID: source.ID, RelativePath: target.RelativePath}}
+	firstTargets := []scanner.VerificationTarget{{MediaID: target.ID, SourceID: source.ID, RelativePath: target.RelativePath, QueryPublicationID: currentPublicationID(t, catalogStore)}}
 
-	first, err := service.CreateVerificationScan(ctx, source.ID, "personal-owner", "observation-key-v1", targets)
+	first, err := service.CreateVerificationScan(ctx, source.ID, "personal-owner", "observation-key-v1", firstTargets)
 	if err != nil {
 		t.Fatal(err)
 	}
 	// Source 单活跃扫描约束下，第二个请求必须等第一个 Job 进入终态后才能建立新 Job；
-	// 这里先让第一个 Job 完成，再验证不同 observation 的幂等键不会命中同一 Job。
+	// 这里先让第一个 Job 完成，再验证不同 observation 的幂等键不会命中同一 Job。第一个
+	// Job 完成会发布新 publication，第二个请求必须重新绑定这个新的当前 active publication，
+	// 否则会被 CreateVerificationScan 的"必须等于当前 active publication"校验拒绝。
 	if err := service.Execute(ctx, first.ID); err != nil {
 		t.Fatal(err)
 	}
-	second, err := service.CreateVerificationScan(ctx, source.ID, "personal-owner", "observation-key-v2", targets)
+	secondTargets := []scanner.VerificationTarget{{MediaID: target.ID, SourceID: source.ID, RelativePath: target.RelativePath, QueryPublicationID: currentPublicationID(t, catalogStore)}}
+	second, err := service.CreateVerificationScan(ctx, source.ID, "personal-owner", "observation-key-v2", secondTargets)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -351,6 +366,7 @@ func TestVerificationScanCompetesWithNormalScanUnderSingleActiveScanConstraint(t
 		t.Fatal(err)
 	}
 	target := mediaItems[0]
+	publicationBeforeBlocking := currentPublicationID(t, catalogStore)
 
 	// 建立一个从未 Execute（保持 queued/未终结）的普通扫描 Job，占住该 Source 的单活跃
 	// 扫描槽位；随后的目标化确认请求必须因为 Source 已有未终结 scan Job 而被数据库层
@@ -364,19 +380,20 @@ func TestVerificationScanCompetesWithNormalScanUnderSingleActiveScanConstraint(t
 	}
 
 	_, err = service.CreateVerificationScan(ctx, source.ID, "personal-owner", "", []scanner.VerificationTarget{
-		{MediaID: target.ID, SourceID: source.ID, RelativePath: target.RelativePath},
+		{MediaID: target.ID, SourceID: source.ID, RelativePath: target.RelativePath, QueryPublicationID: publicationBeforeBlocking},
 	})
 	var structured *fault.Error
 	if !errors.As(err, &structured) || structured.Code != fault.CodeScanAlreadyRunning {
 		t.Fatalf("普通扫描占位期间目标化确认应被拒绝为 SCAN_ALREADY_RUNNING: %v", err)
 	}
 
-	// 占位扫描完成终结后，目标化确认必须能正常建立。
+	// 占位扫描完成终结后，目标化确认必须能正常建立；占位扫描本身也会发布新
+	// publication，因此重新确认请求必须重新绑定这个新的当前 active publication。
 	if err := service.Execute(ctx, blocking.ID); err != nil {
 		t.Fatal(err)
 	}
 	verifyJob, err := service.CreateVerificationScan(ctx, source.ID, "personal-owner", "", []scanner.VerificationTarget{
-		{MediaID: target.ID, SourceID: source.ID, RelativePath: target.RelativePath},
+		{MediaID: target.ID, SourceID: source.ID, RelativePath: target.RelativePath, QueryPublicationID: currentPublicationID(t, catalogStore)},
 	})
 	if err != nil {
 		t.Fatalf("占位扫描终结后目标化确认应可正常建立: %v", err)
@@ -426,7 +443,7 @@ func TestCreateVerificationScanRecoversAfterRestart(t *testing.T) {
 	}
 	target := mediaItems[11]
 	verifyJob, err := service.CreateVerificationScan(ctx, source.ID, "personal-owner", "", []scanner.VerificationTarget{
-		{MediaID: target.ID, SourceID: source.ID, RelativePath: target.RelativePath},
+		{MediaID: target.ID, SourceID: source.ID, RelativePath: target.RelativePath, QueryPublicationID: currentPublicationID(t, catalogStore)},
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -460,9 +477,12 @@ func TestCreateVerificationScanRecoversAfterRestart(t *testing.T) {
 
 // TestCreateVerificationScanFailsWhenContentChangesBeforeExecute 覆盖阶段 4 收尾的核心
 // 缺口：请求排队后、真正 Execute 之前，如果目标文件的真实内容/大小/mtime 已经变化，
-// 必须返回结构化 CONTENT_CHANGED_DURING_HASH 并保持目标媒体仍为 located_unverified，
-// 不得静默把变化后的新内容当成用户原本请求确认的内容发布成功。这里真实修改临时文件，
-// 而不是只替换幂等键。
+// 必须返回结构化 VERIFICATION_TARGET_MISMATCH（不可重试）并保持目标媒体仍为
+// located_unverified，不得静默把变化后的新内容当成用户原本请求确认的内容发布成功。
+// 这是 Job 真正开始读取内容之前的前置身份校验，不是"完整 Hash 读取过程中并发发生
+// 变化"的瞬时故障，因此不能返回 retryable 的 CONTENT_CHANGED_DURING_HASH——否则请求
+// 快照本身并不会因为重试而改变，自动重试只会无意义地反复失败直至耗尽重试次数。这里
+// 真实修改临时文件，而不是只替换幂等键。
 func TestCreateVerificationScanFailsWhenContentChangesBeforeExecute(t *testing.T) {
 	_, _, catalogStore, service, source, store := setupMultiMedia(t)
 	defer store.Close()
@@ -486,7 +506,7 @@ func TestCreateVerificationScanFailsWhenContentChangesBeforeExecute(t *testing.T
 	target := mediaItems[9]
 	fingerprint := observationFingerprintFor(t, source.RootPath, target.RelativePath, catalog.ContentVerificationStateLocatedUnverified)
 	verifyJob, err := service.CreateVerificationScan(ctx, source.ID, "personal-owner", "", []scanner.VerificationTarget{
-		{MediaID: target.ID, SourceID: source.ID, RelativePath: target.RelativePath, ObservationFingerprint: fingerprint},
+		{MediaID: target.ID, SourceID: source.ID, RelativePath: target.RelativePath, QueryPublicationID: currentPublicationID(t, catalogStore), ObservationFingerprint: fingerprint},
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -502,8 +522,11 @@ func TestCreateVerificationScanFailsWhenContentChangesBeforeExecute(t *testing.T
 	}
 	err = service.Execute(ctx, verifyJob.ID)
 	var structured *fault.Error
-	if !errors.As(err, &structured) || structured.Code != fault.CodeContentChangedDuringHash {
-		t.Fatalf("请求冻结后文件变化应返回结构化 CONTENT_CHANGED_DURING_HASH: %v", err)
+	if !errors.As(err, &structured) || structured.Code != fault.CodeVerificationTargetMismatch {
+		t.Fatalf("请求冻结后文件变化应返回结构化 VERIFICATION_TARGET_MISMATCH: %v", err)
+	}
+	if structured.Retryable {
+		t.Fatalf("前置身份不匹配不得是 retryable: %+v", structured)
 	}
 	_, mediaAfter, err := catalogStore.ListMediaForWork(ctx, works[0].ID)
 	if err != nil || len(mediaAfter) != multiMediaCount {
@@ -543,7 +566,7 @@ func TestCreateVerificationScanFailsWhenTargetMediaIDMismatched(t *testing.T) {
 	}
 	pathTarget, foreignMedia := mediaItems[2], mediaItems[13]
 	verifyJob, err := service.CreateVerificationScan(ctx, source.ID, "personal-owner", "", []scanner.VerificationTarget{
-		{MediaID: foreignMedia.ID, SourceID: source.ID, RelativePath: pathTarget.RelativePath},
+		{MediaID: foreignMedia.ID, SourceID: source.ID, RelativePath: pathTarget.RelativePath, QueryPublicationID: currentPublicationID(t, catalogStore)},
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -589,9 +612,10 @@ func TestCreateVerificationScanFailsWhenTargetFileDisappears(t *testing.T) {
 		t.Fatal(err)
 	}
 	vanishing, stillPresent := mediaItems[4], mediaItems[16]
+	targetPublicationID := currentPublicationID(t, catalogStore)
 	verifyJob, err := service.CreateVerificationScan(ctx, source.ID, "personal-owner", "", []scanner.VerificationTarget{
-		{MediaID: vanishing.ID, SourceID: source.ID, RelativePath: vanishing.RelativePath},
-		{MediaID: stillPresent.ID, SourceID: source.ID, RelativePath: stillPresent.RelativePath},
+		{MediaID: vanishing.ID, SourceID: source.ID, RelativePath: vanishing.RelativePath, QueryPublicationID: targetPublicationID},
+		{MediaID: stillPresent.ID, SourceID: source.ID, RelativePath: stillPresent.RelativePath, QueryPublicationID: targetPublicationID},
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -615,5 +639,107 @@ func TestCreateVerificationScanFailsWhenTargetFileDisappears(t *testing.T) {
 		if item.ID == stillPresent.ID && item.ContentVerificationState != catalog.ContentVerificationStateLocatedUnverified {
 			t.Fatalf("多目标部分命中不得静默确认另一个仍然存在的目标: %+v", item)
 		}
+	}
+}
+
+// TestCreateVerificationScanRejectsTargetBoundToNonActiveHistoricalPublication 覆盖本轮
+// 修复的核心缺口在 scanner 层的防线：CreateVerificationScan 必须独立校验冻结的
+// QueryPublicationID 恰好等于当前 active publication，不能只依赖 httpapi 层的把关——
+// 这里先建立 publication P1，再对 Source 做一次不含 verification target 的普通
+// incremental 重扫（会把此前 located_unverified 的媒体顺带完整确认），产生新的 active
+// publication P2；随后仍然构造一个绑定旧 P1 的 target，必须被拒绝为结构化 CONFLICT，
+// 不创建任何新 Job。
+func TestCreateVerificationScanRejectsTargetBoundToNonActiveHistoricalPublication(t *testing.T) {
+	_, jobStore, catalogStore, service, source, store := setupMultiMedia(t)
+	defer store.Close()
+	ctx := context.Background()
+
+	indexJob, err := service.CreateScanWithProfile(ctx, source.ID, "personal-owner", "", scanner.ScanProfileIndex)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := service.Execute(ctx, indexJob.ID); err != nil {
+		t.Fatal(err)
+	}
+	_, works, err := catalogStore.ListWorks(ctx)
+	if err != nil || len(works) != 1 {
+		t.Fatal(err)
+	}
+	_, mediaBefore, err := catalogStore.ListMediaForWork(ctx, works[0].ID)
+	if err != nil || len(mediaBefore) != multiMediaCount {
+		t.Fatal(err)
+	}
+	target := mediaBefore[6]
+	stalePublicationID := currentPublicationID(t, catalogStore)
+
+	// 普通 incremental 重扫（不含任何 verification target）会把所有此前 located_unverified
+	// 的媒体顺带完整确认，发布一个新的 active publication，使上面记录的 stalePublicationID
+	// 不再是当前 active。
+	rescan, err := service.CreateScanWithProfile(ctx, source.ID, "personal-owner", "", scanner.ScanProfileIncremental)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := service.Execute(ctx, rescan.ID); err != nil {
+		t.Fatal(err)
+	}
+	currentAfterRescan := currentPublicationID(t, catalogStore)
+	if currentAfterRescan == stalePublicationID {
+		t.Fatalf("普通重扫后应产生不同的 active publication: 前=%s 后=%s", stalePublicationID, currentAfterRescan)
+	}
+
+	jobsBefore, err := jobStore.ListByStatuses(ctx, jobs.StatusQueued, jobs.StatusRunning, jobs.StatusPublishing, jobs.StatusCompleted)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	_, err = service.CreateVerificationScan(ctx, source.ID, "personal-owner", "", []scanner.VerificationTarget{
+		{MediaID: target.ID, SourceID: source.ID, RelativePath: target.RelativePath, QueryPublicationID: stalePublicationID},
+	})
+	var structured *fault.Error
+	if !errors.As(err, &structured) || structured.Code != fault.CodeConflict {
+		t.Fatalf("绑定已经不是 active 的历史 publication 应返回结构化 CONFLICT: %v", err)
+	}
+
+	jobsAfter, err := jobStore.ListByStatuses(ctx, jobs.StatusQueued, jobs.StatusRunning, jobs.StatusPublishing, jobs.StatusCompleted)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(jobsAfter) != len(jobsBefore) {
+		t.Fatalf("被拒绝的历史 publication 请求不应创建新 Job: before=%d after=%d", len(jobsBefore), len(jobsAfter))
+	}
+}
+
+// TestCreateVerificationScanRejectsMissingPublicationBinding 覆盖冻结输入完整性要求：
+// QueryPublicationID 缺失或格式不合法时必须返回结构化 VALIDATION_ERROR，不得把它当成
+// "未提供、跳过校验"的可选字段——按需确认的 publication 绑定是本轮修复新增的强制冻结
+// 字段，不是尽力而为的附加信息。
+func TestCreateVerificationScanRejectsMissingPublicationBinding(t *testing.T) {
+	_, _, catalogStore, service, source, store := setupMultiMedia(t)
+	defer store.Close()
+	ctx := context.Background()
+
+	indexJob, err := service.CreateScanWithProfile(ctx, source.ID, "personal-owner", "", scanner.ScanProfileIndex)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := service.Execute(ctx, indexJob.ID); err != nil {
+		t.Fatal(err)
+	}
+	_, works, err := catalogStore.ListWorks(ctx)
+	if err != nil || len(works) != 1 {
+		t.Fatal(err)
+	}
+	_, mediaItems, err := catalogStore.ListMediaForWork(ctx, works[0].ID)
+	if err != nil || len(mediaItems) != multiMediaCount {
+		t.Fatal(err)
+	}
+	target := mediaItems[1]
+
+	_, err = service.CreateVerificationScan(ctx, source.ID, "personal-owner", "", []scanner.VerificationTarget{
+		{MediaID: target.ID, SourceID: source.ID, RelativePath: target.RelativePath},
+	})
+	var structured *fault.Error
+	if !errors.As(err, &structured) || structured.Code != fault.CodeValidation {
+		t.Fatalf("缺少 QueryPublicationID 应返回结构化 VALIDATION_ERROR: %v", err)
 	}
 }
