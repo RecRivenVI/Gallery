@@ -654,6 +654,15 @@ func normalizeInput(input Input) (Input, error) {
 		if value == "" || len([]rune(value)) > 512 {
 			return Input{}, fault.WithField(fault.CodeOverlayFactInvalid, "manualTags", nil)
 		}
+		// Tag 取值最终按 querytext.FieldSeparator（U+001F）与其它 tag 拼接进
+		// search_tags_norm 单列；放行该字符会让一个内含分隔符的 tag 在存储层伪装成
+		// 两个取值，破坏 ranking/highlight 的取值边界。Tag 不像标题那样需要保留换行/
+		// 制表符，因此这里拒绝任何控制字符而不是只挑分隔符本身。
+		for _, r := range value {
+			if unicode.IsControl(r) {
+				return Input{}, fault.WithField(fault.CodeOverlayFactInvalid, "manualTags", nil)
+			}
+		}
 		if _, ok := seen[value]; !ok {
 			seen[value] = struct{}{}
 			tags = append(tags, value)
