@@ -100,6 +100,8 @@ type QueryOverlay struct {
 	ManualTags         []string
 	Hidden             bool
 	CustomCoverMediaID string
+	Favorite           bool
+	Progress           float64
 }
 
 type DiscoveredWork struct {
@@ -906,7 +908,7 @@ func (r *Resources) QueryOverlaySnapshot(ctx context.Context, workIDs []string) 
 	for _, id := range workIDs {
 		wanted[id] = struct{}{}
 	}
-	rows, err := tx.QueryContext(ctx, `SELECT work_id, title_override, manual_tags_json, hidden, custom_cover_media_id
+	rows, err := tx.QueryContext(ctx, `SELECT work_id, title_override, manual_tags_json, hidden, custom_cover_media_id, favorite, progress
 FROM work_overlays WHERE query_watermark<=? ORDER BY work_id`, watermark)
 	if err != nil {
 		return nil, nil, 0, fault.New(fault.CodeInternal, true, err)
@@ -916,9 +918,10 @@ FROM work_overlays WHERE query_watermark<=? ORDER BY work_id`, watermark)
 	for rows.Next() {
 		var id, tagsJSON string
 		var title string
-		var hidden int
+		var hidden, favorite int
+		var progress float64
 		var cover sql.NullString
-		if err := rows.Scan(&id, &title, &tagsJSON, &hidden, &cover); err != nil {
+		if err := rows.Scan(&id, &title, &tagsJSON, &hidden, &cover, &favorite, &progress); err != nil {
 			return nil, nil, 0, fault.New(fault.CodeInternal, true, err)
 		}
 		if len(wanted) > 0 {
@@ -930,7 +933,8 @@ FROM work_overlays WHERE query_watermark<=? ORDER BY work_id`, watermark)
 		if err := json.Unmarshal([]byte(tagsJSON), &tags); err != nil {
 			return nil, nil, 0, fault.New(fault.CodeInternal, false, err)
 		}
-		result[id] = QueryOverlay{TitleOverride: title, ManualTags: tags, Hidden: hidden != 0, CustomCoverMediaID: cover.String}
+		result[id] = QueryOverlay{TitleOverride: title, ManualTags: tags, Hidden: hidden != 0, CustomCoverMediaID: cover.String,
+			Favorite: favorite != 0, Progress: progress}
 	}
 	if err := rows.Err(); err != nil {
 		return nil, nil, 0, fault.New(fault.CodeInternal, true, err)

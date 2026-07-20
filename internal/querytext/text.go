@@ -13,11 +13,26 @@ import (
 
 var fold = cases.Fold()
 
+// FieldSeparator 是字段化多值搜索投影（Tags/Filenames）的取值分隔符：U+001F
+// INFORMATION SEPARATOR ONE，普通用户界面无法直接输入，用于在单个 TEXT 列内安全
+// 拼接多个规范化取值，同时保留可靠的取值边界（ranking/highlight 据此精确定位
+// "哪一个 tag/文件名命中"，不依赖脆弱的行号或子串猜测）。
+const FieldSeparator = "\x1f"
+
 type Document struct {
 	NormalizedOriginal string
 	CJKTokens          string
 	LatinTokens        string
 	SortTitleKey       string
+
+	// TitleNorm/CreatorNorm/TagsNorm/FilenamesNorm 是可重建的字段化搜索投影：前两者
+	// 各为单个规范化值，后两者是按 FieldSeparator 连接的多值列表（各取值已单独
+	// Normalize）。用于字段级 ranking 与高亮，避免继续从 NormalizedOriginal 拼接
+	// 文本里用换行位置近似猜测字段边界（标题本身允许包含字面换行，该近似并不可靠）。
+	TitleNorm     string
+	CreatorNorm   string
+	TagsNorm      string
+	FilenamesNorm string
 }
 
 type SearchPlan struct {
@@ -36,7 +51,19 @@ func BuildDocument(title, creator string, tags, filenames []string) Document {
 		CJKTokens:          strings.Join(CJKBigramTokens(normalized), " "),
 		LatinTokens:        strings.Join(TrigramTokens(normalized), " "),
 		SortTitleKey:       NaturalSortKey(title),
+		TitleNorm:          Normalize(title),
+		CreatorNorm:        Normalize(creator),
+		TagsNorm:           strings.Join(normalizeEach(tags), FieldSeparator),
+		FilenamesNorm:      strings.Join(normalizeEach(filenames), FieldSeparator),
 	}
+}
+
+func normalizeEach(values []string) []string {
+	result := make([]string, len(values))
+	for index, value := range values {
+		result[index] = Normalize(value)
+	}
+	return result
 }
 
 func Normalize(value string) string { return fold.String(norm.NFKC.String(value)) }

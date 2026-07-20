@@ -1565,13 +1565,23 @@ paths:
   /api/v1/works/{workId}/media:
     get:
       operationId: listWorkMedia
-      summary: 查询当前 publication 中作品的媒体
+      summary: 查询作品的媒体
+      description: >-
+        省略 queryPublicationId 为 current 模式，读当前 active publication，响应
+        queryPublicationId 字段返回实际使用的快照 ID。显式提供 queryPublicationId 为
+        snapshot 模式，只从该 publication 解析，媒体必须属于该快照中的这个作品，
+        publication 不存在或已过期返回 409 CURSOR_EXPIRED，不静默回退到 active。
       parameters:
         - name: workId
           in: path
           required: true
           schema:
             $ref: "#/components/schemas/CanonicalWorkId"
+        - name: queryPublicationId
+          in: query
+          required: false
+          schema:
+            $ref: "#/components/schemas/QueryPublicationId"
       responses:
         "200":
           description: MediaProjection 列表
@@ -1585,16 +1595,26 @@ paths:
           $ref: "#/components/responses/ForbiddenError"
         "404":
           $ref: "#/components/responses/NotFoundError"
+        "409":
+          $ref: "#/components/responses/ConflictError"
   /api/v1/media/{mediaId}:
     get:
       operationId: getMedia
-      summary: 读取稳定 Media ID 对应的当前 MediaProjection
+      summary: 读取稳定 Media ID 对应的 MediaProjection
+      description: >-
+        省略 queryPublicationId 为 current 模式；显式提供为 snapshot 模式，语义同
+        listWorkMedia。
       parameters:
         - name: mediaId
           in: path
           required: true
           schema:
             $ref: "#/components/schemas/CanonicalMediaId"
+        - name: queryPublicationId
+          in: query
+          required: false
+          schema:
+            $ref: "#/components/schemas/QueryPublicationId"
       responses:
         "200":
           description: MediaProjection
@@ -1608,6 +1628,8 @@ paths:
           $ref: "#/components/responses/ForbiddenError"
         "404":
           $ref: "#/components/responses/NotFoundError"
+        "409":
+          $ref: "#/components/responses/ConflictError"
   /api/v1/media/{mediaId}/content:
     parameters:
       - name: mediaId
@@ -1615,6 +1637,14 @@ paths:
         required: true
         schema:
           $ref: "#/components/schemas/CanonicalMediaId"
+      - name: queryPublicationId
+        in: query
+        required: false
+        description: >-
+          省略为 current 模式；显式提供为 snapshot 模式，只从该 publication 解析并读取
+          该快照下的 ContentBlob，语义同 listWorkMedia。
+        schema:
+          $ref: "#/components/schemas/QueryPublicationId"
       - name: Range
         in: header
         required: false
@@ -1693,15 +1723,23 @@ paths:
       operationId: createMediaVerificationJob
       summary: 为 located_unverified 媒体按需建立内容确认 Job
       description: >-
-        返回持久 Job 而不是同步阻塞计算完整 SHA-256。当前 verify scanProfile 的作用范围是
-        该媒体所属整个 Source；幂等键按媒体当前观察（Source、相对路径、size、mtime）派生，
-        文件未变化前的重复请求复用同一 Job。媒体已是 content_verified 时返回 409。
+        返回持久 Job 而不是同步阻塞计算完整 SHA-256。只强制该媒体重新完整哈希，不再
+        触发整个 Source 的 verify 档案，同 Source 其余媒体继续按既有 incremental 规则
+        处理。幂等键按媒体当前观察（媒体 ID、Source、相对路径、size、mtime、内容确认
+        状态、本次解析到的 queryPublicationId）派生，文件未变化且针对同一快照的重复
+        请求复用同一 Job。媒体已是 content_verified 时返回 409。
       parameters:
         - name: mediaId
           in: path
           required: true
           schema:
             $ref: "#/components/schemas/CanonicalMediaId"
+        - name: queryPublicationId
+          in: query
+          required: false
+          description: 省略为 current 模式；显式提供时目标媒体必须从该快照解析。
+          schema:
+            $ref: "#/components/schemas/QueryPublicationId"
         - $ref: "#/components/parameters/CSRFHeader"
       responses:
         "202":
@@ -1725,13 +1763,22 @@ paths:
       description: >-
         总是返回持久 Job；缓存命中时 Job 立即以 completed 态返回。媒体尚未
         content_verified 时返回 409；未知或不支持的 transformId/transformVersion 返回
-        400；外部 Resolver 未配置（Available()=false）时返回 503。
+        400；外部 Resolver 未配置（Available()=false）时返回 503。输入 ContentBlob 从
+        请求指定（或省略时当前 active）的 queryPublicationId 解析并冻结，不会在异步
+        生成期间改用之后的 active publication。需要 media.derive capability，只读
+        media.read 账户不能创建生成 Job。
       parameters:
         - name: mediaId
           in: path
           required: true
           schema:
             $ref: "#/components/schemas/CanonicalMediaId"
+        - name: queryPublicationId
+          in: query
+          required: false
+          description: 省略为 current 模式；显式提供时输入 ContentBlob 从该快照解析。
+          schema:
+            $ref: "#/components/schemas/QueryPublicationId"
         - $ref: "#/components/parameters/CSRFHeader"
       requestBody:
         required: true
@@ -2960,7 +3007,7 @@ components:
         parameters:
           type: object
           additionalProperties: true
-    HighlightSpan:
+    MatchSpan:
       type: object
       additionalProperties: false
       required: [start, end]
@@ -2969,6 +3016,40 @@ components:
       properties:
         start: {type: integer, minimum: 0}
         end: {type: integer, minimum: 0}
+    FieldMatch:
+      type: object
+      additionalProperties: false
+      required: [field, value, spans]
+      description: >-
+        通用、版本化的搜索命中表达，取代仅覆盖标题的 titleHighlights。field 为
+        title/creator/tag/filename 之一；value 是命中的原始显示值——tag/filename 是
+        具体命中的那一个取值（不是整个列表），filename 只是 path.Base 之后的安全
+        显示名，不泄露相对/绝对路径；同一字段可能出现多个条目（例如两个不同的 tag
+        分别命中）。单个 Work 的 matches 数与每个 value 的展示长度均有服务端截断。
+      properties:
+        field:
+          type: string
+          enum: [title, creator, tag, filename]
+        value:
+          type: string
+        spans:
+          type: array
+          items:
+            $ref: "#/components/schemas/MatchSpan"
+    DependencyField:
+      type: object
+      additionalProperties: false
+      required: [field, role]
+      description: >-
+        本次查询实际用到的一个依赖字段，由服务端 planner 按实际请求生成（不是把全部
+        已注册字段的静态能力表当成这次查询的依赖集合）。同一字段可能因为不同用途
+        出现多次。
+      properties:
+        field:
+          type: string
+        role:
+          type: string
+          enum: [predicate, ordering, search, membership, resource]
     Total:
       type: object
       additionalProperties: false
@@ -2990,7 +3071,7 @@ components:
     PublishedWork:
       type: object
       additionalProperties: false
-      required: [id, title, creator, tags, mediaCount, queryPublicationId]
+      required: [id, title, creator, tags, mediaCount, favorite, progress, queryPublicationId]
       properties:
         id:
           $ref: "#/components/schemas/CanonicalWorkId"
@@ -3004,17 +3085,28 @@ components:
         mediaCount:
           type: integer
           minimum: 0
-        titleHighlights:
+        favorite:
+          type: boolean
+          description: >-
+            本次查询所在 publication 冻结的 snapshot 值，用于解释本次结果的过滤/排序
+            判据；不是 control.db 当前 live 值。真正的 live 值见
+            GET /works/{workId}/overlay（也见响应 liveUserStateFields）。
+        progress:
+          type: number
+          minimum: 0
+          maximum: 1
+          description: 语义同 favorite：本字段是 snapshot 值，不是 live 值。
+        matches:
           type: array
-          description: 仅在请求携带非空 q 时可能出现；无搜索词时不返回伪相关性高亮
+          description: 仅在请求携带非空 q 时可能出现；无搜索词时不返回伪相关性命中
           items:
-            $ref: "#/components/schemas/HighlightSpan"
+            $ref: "#/components/schemas/FieldMatch"
         queryPublicationId:
           $ref: "#/components/schemas/QueryPublicationId"
     WorkListResponse:
       type: object
       additionalProperties: false
-      required: [queryPublicationId, catalogRevision, overlayProjectionRevision, sortProtocolVersion, rankProtocolVersion, total, works]
+      required: [queryPublicationId, catalogRevision, overlayProjectionRevision, sortProtocolVersion, rankProtocolVersion, total, works, dependencySet, liveUserStateFields]
       properties:
         queryPublicationId:
           $ref: "#/components/schemas/QueryPublicationId"
@@ -3023,13 +3115,28 @@ components:
           enum: [1]
         rankProtocolVersion:
           type: integer
-          enum: [1]
+          enum: [2]
         catalogRevision:
           type: string
         overlayProjectionRevision:
           type: string
         total:
           $ref: "#/components/schemas/Total"
+        dependencySet:
+          type: array
+          description: >-
+            本次查询实际用到的依赖字段列表，由服务端 planner 按本次请求生成，解释
+            为什么某个刚保存的 Overlay 写入尚未反映在这次（可能仍绑定旧 publication
+            的）结果里。
+          items:
+            $ref: "#/components/schemas/DependencyField"
+        liveUserStateFields:
+          type: array
+          description: >-
+            当前除 snapshot 值外还提供 control.db live 值的 Overlay 字段名静态列表
+            （通过 GET /works/{workId}/overlay 读取），当前为 ["favorite","progress"]。
+          items:
+            type: string
         nextCursor:
           type: string
         works:

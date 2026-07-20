@@ -37,6 +37,8 @@ type OverlayFact struct {
 	ManualTags         []string
 	Hidden             bool
 	CustomCoverMediaID string
+	Favorite           bool
+	Progress           float64
 }
 
 type WorkFact struct {
@@ -386,7 +388,8 @@ VALUES (?, ?, ?, 'staging', ?, ?)`, candidate.OverlayRevisionID, candidate.Catal
 	if _, err := tx.ExecContext(ctx, `INSERT INTO work_projections
 SELECT catalog_revision_id, ?, work_id, source_id, source_key, library_id, title, creator,
 tags_json, filenames_text, normalized_original_text, cjk_bigram_token_text,
-latin_trigram_token_text, sort_title_key, hidden
+latin_trigram_token_text, sort_title_key, hidden, favorite, progress,
+search_title_norm, search_creator_norm, search_tags_norm, search_filenames_norm
 FROM work_projections WHERE catalog_revision_id=? AND overlay_revision_id=?`,
 		candidate.OverlayRevisionID, candidate.CatalogRevisionID, candidate.BaseOverlayRevisionID); err != nil {
 		return OverlayCandidate{}, fault.New(fault.CodeInternal, true, err)
@@ -458,16 +461,22 @@ WHERE w.catalog_revision_id=? AND w.overlay_revision_id=? ORDER BY w.work_id`, c
 		tags = mergeStrings(tags, fact.ManualTags)
 		tagsJSON, _ := json.Marshal(tags)
 		document := querytext.BuildDocument(title, item.creator, tags, filenames)
-		hidden := 0
+		hidden, favorite := 0, 0
 		if fact.Hidden {
 			hidden = 1
 		}
+		if fact.Favorite {
+			favorite = 1
+		}
 		if _, err := tx.ExecContext(ctx, `UPDATE work_projections SET title=?, creator=?, tags_json=?,
 normalized_original_text=?, cjk_bigram_token_text=?, latin_trigram_token_text=?,
-sort_title_key=?, hidden=? WHERE catalog_revision_id=? AND overlay_revision_id=? AND work_id=?`,
+sort_title_key=?, hidden=?, favorite=?, progress=?,
+search_title_norm=?, search_creator_norm=?, search_tags_norm=?, search_filenames_norm=?
+WHERE catalog_revision_id=? AND overlay_revision_id=? AND work_id=?`,
 			title, item.creator, string(tagsJSON), document.NormalizedOriginal, document.CJKTokens,
-			document.LatinTokens, document.SortTitleKey, hidden, candidate.CatalogRevisionID,
-			candidate.OverlayRevisionID, item.id); err != nil {
+			document.LatinTokens, document.SortTitleKey, hidden, favorite, fact.Progress,
+			document.TitleNorm, document.CreatorNorm, document.TagsNorm, document.FilenamesNorm,
+			candidate.CatalogRevisionID, candidate.OverlayRevisionID, item.id); err != nil {
 			return fault.New(fault.CodeInternal, true, err)
 		}
 		if fact.CustomCoverMediaID != "" {
@@ -718,6 +727,41 @@ GROUP BY w.work_id, w.title, w.creator, w.tags_json ORDER BY w.sort_title_key, w
 	return publication, works, rows.Err()
 }
 
+// PublicationByID 按显式 query_publication_id 解析一个（可能不是当前 active 的）历史
+// publication；不存在或已被 GC 一律返回 CodeCursorExpired，与游标过期使用同一稳定错误，
+// 不向调用方暴露"从未存在"与"已被回收"的区别。
+func (s *Store) PublicationByID(ctx context.Context, id string) (Publication, error) {
+	if _, err := domain.ParseID(domain.IDQueryPublication, id); err != nil {
+		return Publication{}, fault.New(fault.CodeCursorExpired, true, nil)
+	}
+	var publication Publication
+	var createdAt int64
+	err := s.db.QueryRowContext(ctx, `SELECT query_publication_id, catalog_revision_id, overlay_revision_id,
+job_id, control_watermark, created_at FROM query_publications WHERE query_publication_id=?`, id).Scan(
+		&publication.ID, &publication.CatalogRevisionID, &publication.OverlayRevisionID,
+		&publication.JobID, &publication.ControlWatermark, &createdAt,
+	)
+	if errors.Is(err, sql.ErrNoRows) {
+		return Publication{}, fault.New(fault.CodeCursorExpired, true, nil)
+	}
+	if err != nil {
+		return Publication{}, fault.New(fault.CodeInternal, true, err)
+	}
+	publication.CreatedAt = time.Unix(createdAt, 0).UTC()
+	return publication, nil
+}
+
+// resolvePublication 是媒体/Work 读取端点快照绑定的唯一解析入口：空 publicationID 表示
+// 客户端未显式指定，退回当前 active publication（"current" 模式）；非空则必须精确解析为
+// 该 ID 对应的历史 publication（"snapshot" 模式），不得静默回退到 active，即使该 ID 已
+// 过期或不存在。
+func (s *Store) resolvePublication(ctx context.Context, publicationID string) (Publication, error) {
+	if publicationID == "" {
+		return s.Current(ctx)
+	}
+	return s.PublicationByID(ctx, publicationID)
+}
+
 func (s *Store) GetWork(ctx context.Context, id string) (Publication, Work, error) {
 	publication, err := s.Current(ctx)
 	if err != nil {
@@ -739,8 +783,16 @@ WHERE w.catalog_revision_id = ? AND w.overlay_revision_id = ? AND w.work_id = ? 
 	return publication, work, nil
 }
 
+// GetMedia 解析当前 active publication 中的媒体，等价于 GetMediaAt(ctx, "", id)。
 func (s *Store) GetMedia(ctx context.Context, id string) (Publication, Media, error) {
-	publication, err := s.Current(ctx)
+	return s.GetMediaAt(ctx, "", id)
+}
+
+// GetMediaAt 是媒体读取的快照绑定入口：publicationID 为空时退回当前 active publication
+// （"current" 模式，与既有行为一致）；非空时必须精确解析该历史 publication（"snapshot"
+// 模式），媒体必须真实存在于该 publication 的 revision 组合中，不得静默改读 active。
+func (s *Store) GetMediaAt(ctx context.Context, publicationID, id string) (Publication, Media, error) {
+	publication, err := s.resolvePublication(ctx, publicationID)
 	if err != nil {
 		return Publication{}, Media{}, err
 	}
@@ -764,8 +816,15 @@ WHERE catalog_revision_id = ? AND overlay_revision_id = ? AND media_id = ?`, pub
 	return publication, media, nil
 }
 
+// ListMediaForWork 列出当前 active publication 中某作品的媒体，等价于
+// ListMediaForWorkAt(ctx, "", workID)。
 func (s *Store) ListMediaForWork(ctx context.Context, workID string) (Publication, []Media, error) {
-	publication, err := s.Current(ctx)
+	return s.ListMediaForWorkAt(ctx, "", workID)
+}
+
+// ListMediaForWorkAt 是 ListMediaForWork 的快照绑定版本，语义同 GetMediaAt。
+func (s *Store) ListMediaForWorkAt(ctx context.Context, publicationID, workID string) (Publication, []Media, error) {
+	publication, err := s.resolvePublication(ctx, publicationID)
 	if err != nil {
 		return Publication{}, nil, err
 	}
@@ -1037,8 +1096,10 @@ VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`, candidate.CatalogRevisionID, work.SourceID,
 		}
 		if _, err := tx.ExecContext(ctx, `INSERT INTO work_projections
 (catalog_revision_id, overlay_revision_id, work_id, source_id, source_key, library_id, title, creator, tags_json, filenames_text,
- normalized_original_text, cjk_bigram_token_text, latin_trigram_token_text, sort_title_key, hidden)
-VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`, candidate.CatalogRevisionID, candidate.OverlayRevisionID, work.WorkID, work.SourceID, work.SourceKey, work.LibraryID, work.Title, work.Creator, string(tagsJSON), string(filenamesJSON), document.NormalizedOriginal, document.CJKTokens, document.LatinTokens, document.SortTitleKey, hidden); err != nil {
+ normalized_original_text, cjk_bigram_token_text, latin_trigram_token_text, sort_title_key, hidden,
+ search_title_norm, search_creator_norm, search_tags_norm, search_filenames_norm)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`, candidate.CatalogRevisionID, candidate.OverlayRevisionID, work.WorkID, work.SourceID, work.SourceKey, work.LibraryID, work.Title, work.Creator, string(tagsJSON), string(filenamesJSON), document.NormalizedOriginal, document.CJKTokens, document.LatinTokens, document.SortTitleKey, hidden,
+			document.TitleNorm, document.CreatorNorm, document.TagsNorm, document.FilenamesNorm); err != nil {
 			return fault.New(fault.CodeInternal, true, err)
 		}
 		if work.CreatorID != "" {
@@ -1245,7 +1306,7 @@ WHERE b.catalog_revision_id=q.catalog_revision_id AND m.source_id<>?`, []any{can
 		{`INSERT INTO file_locations SELECT ?, f.source_id, f.source_key, f.location_key, f.relative_path, f.algorithm, f.digest, f.status FROM file_locations f
 JOIN active_query_publication a ON a.singleton=1 JOIN query_publications q ON q.query_publication_id=a.query_publication_id
 WHERE f.catalog_revision_id=q.catalog_revision_id AND f.source_id<>?`, []any{candidate.CatalogRevisionID, candidate.SourceID}},
-		{`INSERT INTO work_projections SELECT ?, ?, w.work_id, w.source_id, w.source_key, w.library_id, w.title, w.creator, w.tags_json, w.filenames_text, w.normalized_original_text, w.cjk_bigram_token_text, w.latin_trigram_token_text, w.sort_title_key, w.hidden FROM work_projections w
+		{`INSERT INTO work_projections SELECT ?, ?, w.work_id, w.source_id, w.source_key, w.library_id, w.title, w.creator, w.tags_json, w.filenames_text, w.normalized_original_text, w.cjk_bigram_token_text, w.latin_trigram_token_text, w.sort_title_key, w.hidden, w.favorite, w.progress, w.search_title_norm, w.search_creator_norm, w.search_tags_norm, w.search_filenames_norm FROM work_projections w
 JOIN active_query_publication a ON a.singleton=1 JOIN query_publications q ON q.query_publication_id=a.query_publication_id
 WHERE w.catalog_revision_id=q.catalog_revision_id AND w.overlay_revision_id=q.overlay_revision_id AND w.source_id<>?`, []any{candidate.CatalogRevisionID, candidate.OverlayRevisionID, candidate.SourceID}},
 		{`INSERT OR IGNORE INTO creator_projections SELECT ?, ?, c.creator_id, c.name, c.sort_name_key FROM creator_projections c

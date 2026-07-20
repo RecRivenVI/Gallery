@@ -337,6 +337,33 @@ func (e CreatorSourceBindingStatus) Valid() bool {
 	}
 }
 
+// Defines values for DependencyFieldRole.
+const (
+	Membership DependencyFieldRole = "membership"
+	Ordering   DependencyFieldRole = "ordering"
+	Predicate  DependencyFieldRole = "predicate"
+	Resource   DependencyFieldRole = "resource"
+	Search     DependencyFieldRole = "search"
+)
+
+// Valid indicates whether the value is a known member of the DependencyFieldRole enum.
+func (e DependencyFieldRole) Valid() bool {
+	switch e {
+	case Membership:
+		return true
+	case Ordering:
+		return true
+	case Predicate:
+		return true
+	case Resource:
+		return true
+	case Search:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for ErrorCode.
 const (
 	APPDIRSSOURCEOVERLAP             ErrorCode = "APPDIRS_SOURCE_OVERLAP"
@@ -562,6 +589,30 @@ func (e ErrorCode) Valid() bool {
 	case VALIDATIONERROR:
 		return true
 	case WATCHEROVERFLOW:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for FieldMatchField.
+const (
+	FieldMatchFieldCreator  FieldMatchField = "creator"
+	FieldMatchFieldFilename FieldMatchField = "filename"
+	FieldMatchFieldTag      FieldMatchField = "tag"
+	FieldMatchFieldTitle    FieldMatchField = "title"
+)
+
+// Valid indicates whether the value is a known member of the FieldMatchField enum.
+func (e FieldMatchField) Valid() bool {
+	switch e {
+	case FieldMatchFieldCreator:
+		return true
+	case FieldMatchFieldFilename:
+		return true
+	case FieldMatchFieldTag:
+		return true
+	case FieldMatchFieldTitle:
 		return true
 	default:
 		return false
@@ -1395,13 +1446,13 @@ func (e TotalProtocolVersion) Valid() bool {
 
 // Defines values for WorkListResponseRankProtocolVersion.
 const (
-	WorkListResponseRankProtocolVersionN1 WorkListResponseRankProtocolVersion = 1
+	N2 WorkListResponseRankProtocolVersion = 2
 )
 
 // Valid indicates whether the value is a known member of the WorkListResponseRankProtocolVersion enum.
 func (e WorkListResponseRankProtocolVersion) Valid() bool {
 	switch e {
-	case WorkListResponseRankProtocolVersionN1:
+	case N2:
 		return true
 	default:
 		return false
@@ -1410,13 +1461,13 @@ func (e WorkListResponseRankProtocolVersion) Valid() bool {
 
 // Defines values for WorkListResponseSortProtocolVersion.
 const (
-	WorkListResponseSortProtocolVersionN1 WorkListResponseSortProtocolVersion = 1
+	N1 WorkListResponseSortProtocolVersion = 1
 )
 
 // Valid indicates whether the value is a known member of the WorkListResponseSortProtocolVersion enum.
 func (e WorkListResponseSortProtocolVersion) Valid() bool {
 	switch e {
-	case WorkListResponseSortProtocolVersionN1:
+	case N1:
 		return true
 	default:
 		return false
@@ -1841,6 +1892,15 @@ type CreatorSourceBinding struct {
 // CreatorSourceBindingStatus defines model for CreatorSourceBinding.Status.
 type CreatorSourceBindingStatus string
 
+// DependencyField 本次查询实际用到的一个依赖字段，由服务端 planner 按实际请求生成（不是把全部 已注册字段的静态能力表当成这次查询的依赖集合）。同一字段可能因为不同用途 出现多次。
+type DependencyField struct {
+	Field string              `json:"field"`
+	Role  DependencyFieldRole `json:"role"`
+}
+
+// DependencyFieldRole defines model for DependencyField.Role.
+type DependencyFieldRole string
+
 // DerivedAssetCreateRequest defines model for DerivedAssetCreateRequest.
 type DerivedAssetCreateRequest struct {
 	Parameters       *map[string]interface{} `json:"parameters,omitempty"`
@@ -1863,6 +1923,16 @@ type ErrorDetail struct {
 type ErrorEnvelope struct {
 	Error ErrorDetail `json:"error"`
 }
+
+// FieldMatch 通用、版本化的搜索命中表达，取代仅覆盖标题的 titleHighlights。field 为 title/creator/tag/filename 之一；value 是命中的原始显示值——tag/filename 是 具体命中的那一个取值（不是整个列表），filename 只是 path.Base 之后的安全 显示名，不泄露相对/绝对路径；同一字段可能出现多个条目（例如两个不同的 tag 分别命中）。单个 Work 的 matches 数与每个 value 的展示长度均有服务端截断。
+type FieldMatch struct {
+	Field FieldMatchField `json:"field"`
+	Spans []MatchSpan     `json:"spans"`
+	Value string          `json:"value"`
+}
+
+// FieldMatchField defines model for FieldMatch.Field.
+type FieldMatchField string
 
 // FileLocationRef defines model for FileLocationRef.
 type FileLocationRef struct {
@@ -1892,12 +1962,6 @@ type HealthResponseDatabasesControl string
 
 // HealthResponseStatus defines model for HealthResponse.Status.
 type HealthResponseStatus string
-
-// HighlightSpan 原文 code point（rune）偏移，左闭右开；不是 UTF-16 code unit，也不是字节偏移。
-type HighlightSpan struct {
-	End   int `json:"end"`
-	Start int `json:"start"`
-}
 
 // Job defines model for Job.
 type Job struct {
@@ -2015,6 +2079,12 @@ type MaintenanceJobResponse struct {
 	SpaceEstimate SpaceEstimate `json:"spaceEstimate"`
 }
 
+// MatchSpan 原文 code point（rune）偏移，左闭右开；不是 UTF-16 code unit，也不是字节偏移。
+type MatchSpan struct {
+	End   int `json:"end"`
+	Start int `json:"start"`
+}
+
 // MediaListResponse defines model for MediaListResponse.
 type MediaListResponse struct {
 	Media              []PublishedMedia   `json:"media"`
@@ -2104,15 +2174,21 @@ type PublishedMediaContentVerificationState string
 
 // PublishedWork defines model for PublishedWork.
 type PublishedWork struct {
-	Creator            string             `json:"creator"`
-	Id                 CanonicalWorkId    `json:"id"`
-	MediaCount         int                `json:"mediaCount"`
+	Creator string `json:"creator"`
+
+	// Favorite 本次查询所在 publication 冻结的 snapshot 值，用于解释本次结果的过滤/排序 判据；不是 control.db 当前 live 值。真正的 live 值见 GET /works/{workId}/overlay（也见响应 liveUserStateFields）。
+	Favorite bool            `json:"favorite"`
+	Id       CanonicalWorkId `json:"id"`
+
+	// Matches 仅在请求携带非空 q 时可能出现；无搜索词时不返回伪相关性命中
+	Matches    *[]FieldMatch `json:"matches,omitempty"`
+	MediaCount int           `json:"mediaCount"`
+
+	// Progress 语义同 favorite：本字段是 snapshot 值，不是 live 值。
+	Progress           float32            `json:"progress"`
 	QueryPublicationId QueryPublicationId `json:"queryPublicationId"`
 	Tags               []string           `json:"tags"`
 	Title              string             `json:"title"`
-
-	// TitleHighlights 仅在请求携带非空 q 时可能出现；无搜索词时不返回伪相关性高亮
-	TitleHighlights *[]HighlightSpan `json:"titleHighlights,omitempty"`
 }
 
 // QueryPublication defines model for QueryPublication.
@@ -2638,7 +2714,13 @@ type TotalProtocolVersion int
 
 // WorkListResponse defines model for WorkListResponse.
 type WorkListResponse struct {
-	CatalogRevision           string                              `json:"catalogRevision"`
+	CatalogRevision string `json:"catalogRevision"`
+
+	// DependencySet 本次查询实际用到的依赖字段列表，由服务端 planner 按本次请求生成，解释 为什么某个刚保存的 Overlay 写入尚未反映在这次（可能仍绑定旧 publication 的）结果里。
+	DependencySet []DependencyField `json:"dependencySet"`
+
+	// LiveUserStateFields 当前除 snapshot 值外还提供 control.db live 值的 Overlay 字段名静态列表 （通过 GET /works/{workId}/overlay 读取），当前为 ["favorite","progress"]。
+	LiveUserStateFields       []string                            `json:"liveUserStateFields"`
 	NextCursor                *string                             `json:"nextCursor,omitempty"`
 	OverlayProjectionRevision string                              `json:"overlayProjectionRevision"`
 	QueryPublicationId        QueryPublicationId                  `json:"queryPublicationId"`
@@ -2842,10 +2924,17 @@ type CreateLibraryParams struct {
 	XGalleryCSRF CSRFHeader `json:"X-Gallery-CSRF"`
 }
 
+// GetMediaParams defines parameters for GetMedia.
+type GetMediaParams struct {
+	QueryPublicationId *QueryPublicationId `form:"queryPublicationId,omitempty" json:"queryPublicationId,omitempty"`
+}
+
 // GetMediaContentParams defines parameters for GetMediaContent.
 type GetMediaContentParams struct {
-	Range       *string `json:"Range,omitempty"`
-	IfNoneMatch *string `json:"If-None-Match,omitempty"`
+	// QueryPublicationId 省略为 current 模式；显式提供为 snapshot 模式，只从该 publication 解析并读取 该快照下的 ContentBlob，语义同 listWorkMedia。
+	QueryPublicationId *QueryPublicationId `form:"queryPublicationId,omitempty" json:"queryPublicationId,omitempty"`
+	Range              *string             `json:"Range,omitempty"`
+	IfNoneMatch        *string             `json:"If-None-Match,omitempty"`
 
 	// IfRange 与当前 ETag 不一致时忽略 Range，退回完整 200 响应，避免拼接不同内容版本的字节。
 	IfRange *string `json:"If-Range,omitempty"`
@@ -2853,8 +2942,10 @@ type GetMediaContentParams struct {
 
 // HeadMediaContentParams defines parameters for HeadMediaContent.
 type HeadMediaContentParams struct {
-	Range       *string `json:"Range,omitempty"`
-	IfNoneMatch *string `json:"If-None-Match,omitempty"`
+	// QueryPublicationId 省略为 current 模式；显式提供为 snapshot 模式，只从该 publication 解析并读取 该快照下的 ContentBlob，语义同 listWorkMedia。
+	QueryPublicationId *QueryPublicationId `form:"queryPublicationId,omitempty" json:"queryPublicationId,omitempty"`
+	Range              *string             `json:"Range,omitempty"`
+	IfNoneMatch        *string             `json:"If-None-Match,omitempty"`
 
 	// IfRange 与当前 ETag 不一致时忽略 Range，退回完整 200 响应，避免拼接不同内容版本的字节。
 	IfRange *string `json:"If-Range,omitempty"`
@@ -2862,12 +2953,16 @@ type HeadMediaContentParams struct {
 
 // CreateDerivedAssetParams defines parameters for CreateDerivedAsset.
 type CreateDerivedAssetParams struct {
-	XGalleryCSRF CSRFHeader `json:"X-Gallery-CSRF"`
+	// QueryPublicationId 省略为 current 模式；显式提供时输入 ContentBlob 从该快照解析。
+	QueryPublicationId *QueryPublicationId `form:"queryPublicationId,omitempty" json:"queryPublicationId,omitempty"`
+	XGalleryCSRF       CSRFHeader          `json:"X-Gallery-CSRF"`
 }
 
 // CreateMediaVerificationJobParams defines parameters for CreateMediaVerificationJob.
 type CreateMediaVerificationJobParams struct {
-	XGalleryCSRF CSRFHeader `json:"X-Gallery-CSRF"`
+	// QueryPublicationId 省略为 current 模式；显式提供时目标媒体必须从该快照解析。
+	QueryPublicationId *QueryPublicationId `form:"queryPublicationId,omitempty" json:"queryPublicationId,omitempty"`
+	XGalleryCSRF       CSRFHeader          `json:"X-Gallery-CSRF"`
 }
 
 // ListOrphanCandidatesParams defines parameters for ListOrphanCandidates.
@@ -3135,6 +3230,11 @@ type ListWorksParams struct {
 
 // ListWorksParamsSortDirection defines parameters for ListWorks.
 type ListWorksParamsSortDirection string
+
+// ListWorkMediaParams defines parameters for ListWorkMedia.
+type ListWorkMediaParams struct {
+	QueryPublicationId *QueryPublicationId `form:"queryPublicationId,omitempty" json:"queryPublicationId,omitempty"`
+}
 
 // PutWorkOverlayParams defines parameters for PutWorkOverlay.
 type PutWorkOverlayParams struct {
@@ -3461,7 +3561,7 @@ type ClientInterface interface {
 	GetLibrary(ctx context.Context, libraryId LibraryId, reqEditors ...RequestEditorFn) (*http.Response, error)
 
 	// GetMedia request
-	GetMedia(ctx context.Context, mediaId CanonicalMediaId, reqEditors ...RequestEditorFn) (*http.Response, error)
+	GetMedia(ctx context.Context, mediaId CanonicalMediaId, params *GetMediaParams, reqEditors ...RequestEditorFn) (*http.Response, error)
 
 	// GetMediaContent request
 	GetMediaContent(ctx context.Context, mediaId CanonicalMediaId, params *GetMediaContentParams, reqEditors ...RequestEditorFn) (*http.Response, error)
@@ -3696,7 +3796,7 @@ type ClientInterface interface {
 	GetWork(ctx context.Context, workId CanonicalWorkId, reqEditors ...RequestEditorFn) (*http.Response, error)
 
 	// ListWorkMedia request
-	ListWorkMedia(ctx context.Context, workId CanonicalWorkId, reqEditors ...RequestEditorFn) (*http.Response, error)
+	ListWorkMedia(ctx context.Context, workId CanonicalWorkId, params *ListWorkMediaParams, reqEditors ...RequestEditorFn) (*http.Response, error)
 
 	// GetWorkOverlay request
 	GetWorkOverlay(ctx context.Context, workId CanonicalWorkId, reqEditors ...RequestEditorFn) (*http.Response, error)
@@ -4235,8 +4335,8 @@ func (c *Client) GetLibrary(ctx context.Context, libraryId LibraryId, reqEditors
 	return c.Client.Do(req)
 }
 
-func (c *Client) GetMedia(ctx context.Context, mediaId CanonicalMediaId, reqEditors ...RequestEditorFn) (*http.Response, error) {
-	req, err := NewGetMediaRequest(c.Server, mediaId)
+func (c *Client) GetMedia(ctx context.Context, mediaId CanonicalMediaId, params *GetMediaParams, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewGetMediaRequest(c.Server, mediaId, params)
 	if err != nil {
 		return nil, err
 	}
@@ -5291,8 +5391,8 @@ func (c *Client) GetWork(ctx context.Context, workId CanonicalWorkId, reqEditors
 	return c.Client.Do(req)
 }
 
-func (c *Client) ListWorkMedia(ctx context.Context, workId CanonicalWorkId, reqEditors ...RequestEditorFn) (*http.Response, error) {
-	req, err := NewListWorkMediaRequest(c.Server, workId)
+func (c *Client) ListWorkMedia(ctx context.Context, workId CanonicalWorkId, params *ListWorkMediaParams, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewListWorkMediaRequest(c.Server, workId, params)
 	if err != nil {
 		return nil, err
 	}
@@ -6821,7 +6921,7 @@ func NewGetLibraryRequest(server string, libraryId LibraryId) (*http.Request, er
 }
 
 // NewGetMediaRequest generates requests for GetMedia
-func NewGetMediaRequest(server string, mediaId CanonicalMediaId) (*http.Request, error) {
+func NewGetMediaRequest(server string, mediaId CanonicalMediaId, params *GetMediaParams) (*http.Request, error) {
 	var err error
 
 	var pathParam0 string
@@ -6844,6 +6944,33 @@ func NewGetMediaRequest(server string, mediaId CanonicalMediaId) (*http.Request,
 	queryURL, err := serverURL.Parse(operationPath)
 	if err != nil {
 		return nil, err
+	}
+
+	if params != nil {
+		// queryValues collects non-styled parameters (passthrough, JSON)
+		// that are safe to round-trip through url.Values.Encode().
+		queryValues := queryURL.Query()
+		// rawQueryFragments collects pre-encoded query fragments from
+		// styled parameters, preserving literal commas as delimiters
+		// per the OpenAPI spec (e.g. "color=blue,black,brown").
+		var rawQueryFragments []string
+
+		if params.QueryPublicationId != nil {
+
+			if queryFrag, err := runtime.StyleParamWithOptions("form", true, "queryPublicationId", *params.QueryPublicationId, runtime.StyleParamOptions{ParamLocation: runtime.ParamLocationQuery, Type: "string", Format: ""}); err != nil {
+				return nil, err
+			} else {
+				for _, qp := range strings.Split(queryFrag, "&") {
+					rawQueryFragments = append(rawQueryFragments, qp)
+				}
+			}
+
+		}
+
+		if encoded := queryValues.Encode(); encoded != "" {
+			rawQueryFragments = append(rawQueryFragments, encoded)
+		}
+		queryURL.RawQuery = strings.Join(rawQueryFragments, "&")
 	}
 
 	req, err := http.NewRequest(http.MethodGet, queryURL.String(), nil)
@@ -6878,6 +7005,33 @@ func NewGetMediaContentRequest(server string, mediaId CanonicalMediaId, params *
 	queryURL, err := serverURL.Parse(operationPath)
 	if err != nil {
 		return nil, err
+	}
+
+	if params != nil {
+		// queryValues collects non-styled parameters (passthrough, JSON)
+		// that are safe to round-trip through url.Values.Encode().
+		queryValues := queryURL.Query()
+		// rawQueryFragments collects pre-encoded query fragments from
+		// styled parameters, preserving literal commas as delimiters
+		// per the OpenAPI spec (e.g. "color=blue,black,brown").
+		var rawQueryFragments []string
+
+		if params.QueryPublicationId != nil {
+
+			if queryFrag, err := runtime.StyleParamWithOptions("form", true, "queryPublicationId", *params.QueryPublicationId, runtime.StyleParamOptions{ParamLocation: runtime.ParamLocationQuery, Type: "string", Format: ""}); err != nil {
+				return nil, err
+			} else {
+				for _, qp := range strings.Split(queryFrag, "&") {
+					rawQueryFragments = append(rawQueryFragments, qp)
+				}
+			}
+
+		}
+
+		if encoded := queryValues.Encode(); encoded != "" {
+			rawQueryFragments = append(rawQueryFragments, encoded)
+		}
+		queryURL.RawQuery = strings.Join(rawQueryFragments, "&")
 	}
 
 	req, err := http.NewRequest(http.MethodGet, queryURL.String(), nil)
@@ -6949,6 +7103,33 @@ func NewHeadMediaContentRequest(server string, mediaId CanonicalMediaId, params 
 	queryURL, err := serverURL.Parse(operationPath)
 	if err != nil {
 		return nil, err
+	}
+
+	if params != nil {
+		// queryValues collects non-styled parameters (passthrough, JSON)
+		// that are safe to round-trip through url.Values.Encode().
+		queryValues := queryURL.Query()
+		// rawQueryFragments collects pre-encoded query fragments from
+		// styled parameters, preserving literal commas as delimiters
+		// per the OpenAPI spec (e.g. "color=blue,black,brown").
+		var rawQueryFragments []string
+
+		if params.QueryPublicationId != nil {
+
+			if queryFrag, err := runtime.StyleParamWithOptions("form", true, "queryPublicationId", *params.QueryPublicationId, runtime.StyleParamOptions{ParamLocation: runtime.ParamLocationQuery, Type: "string", Format: ""}); err != nil {
+				return nil, err
+			} else {
+				for _, qp := range strings.Split(queryFrag, "&") {
+					rawQueryFragments = append(rawQueryFragments, qp)
+				}
+			}
+
+		}
+
+		if encoded := queryValues.Encode(); encoded != "" {
+			rawQueryFragments = append(rawQueryFragments, encoded)
+		}
+		queryURL.RawQuery = strings.Join(rawQueryFragments, "&")
 	}
 
 	req, err := http.NewRequest(http.MethodHead, queryURL.String(), nil)
@@ -7033,6 +7214,33 @@ func NewCreateDerivedAssetRequestWithBody(server string, mediaId CanonicalMediaI
 		return nil, err
 	}
 
+	if params != nil {
+		// queryValues collects non-styled parameters (passthrough, JSON)
+		// that are safe to round-trip through url.Values.Encode().
+		queryValues := queryURL.Query()
+		// rawQueryFragments collects pre-encoded query fragments from
+		// styled parameters, preserving literal commas as delimiters
+		// per the OpenAPI spec (e.g. "color=blue,black,brown").
+		var rawQueryFragments []string
+
+		if params.QueryPublicationId != nil {
+
+			if queryFrag, err := runtime.StyleParamWithOptions("form", true, "queryPublicationId", *params.QueryPublicationId, runtime.StyleParamOptions{ParamLocation: runtime.ParamLocationQuery, Type: "string", Format: ""}); err != nil {
+				return nil, err
+			} else {
+				for _, qp := range strings.Split(queryFrag, "&") {
+					rawQueryFragments = append(rawQueryFragments, qp)
+				}
+			}
+
+		}
+
+		if encoded := queryValues.Encode(); encoded != "" {
+			rawQueryFragments = append(rawQueryFragments, encoded)
+		}
+		queryURL.RawQuery = strings.Join(rawQueryFragments, "&")
+	}
+
 	req, err := http.NewRequest(http.MethodPost, queryURL.String(), body)
 	if err != nil {
 		return nil, err
@@ -7080,6 +7288,33 @@ func NewCreateMediaVerificationJobRequest(server string, mediaId CanonicalMediaI
 	queryURL, err := serverURL.Parse(operationPath)
 	if err != nil {
 		return nil, err
+	}
+
+	if params != nil {
+		// queryValues collects non-styled parameters (passthrough, JSON)
+		// that are safe to round-trip through url.Values.Encode().
+		queryValues := queryURL.Query()
+		// rawQueryFragments collects pre-encoded query fragments from
+		// styled parameters, preserving literal commas as delimiters
+		// per the OpenAPI spec (e.g. "color=blue,black,brown").
+		var rawQueryFragments []string
+
+		if params.QueryPublicationId != nil {
+
+			if queryFrag, err := runtime.StyleParamWithOptions("form", true, "queryPublicationId", *params.QueryPublicationId, runtime.StyleParamOptions{ParamLocation: runtime.ParamLocationQuery, Type: "string", Format: ""}); err != nil {
+				return nil, err
+			} else {
+				for _, qp := range strings.Split(queryFrag, "&") {
+					rawQueryFragments = append(rawQueryFragments, qp)
+				}
+			}
+
+		}
+
+		if encoded := queryValues.Encode(); encoded != "" {
+			rawQueryFragments = append(rawQueryFragments, encoded)
+		}
+		queryURL.RawQuery = strings.Join(rawQueryFragments, "&")
 	}
 
 	req, err := http.NewRequest(http.MethodPost, queryURL.String(), nil)
@@ -9956,7 +10191,7 @@ func NewGetWorkRequest(server string, workId CanonicalWorkId) (*http.Request, er
 }
 
 // NewListWorkMediaRequest generates requests for ListWorkMedia
-func NewListWorkMediaRequest(server string, workId CanonicalWorkId) (*http.Request, error) {
+func NewListWorkMediaRequest(server string, workId CanonicalWorkId, params *ListWorkMediaParams) (*http.Request, error) {
 	var err error
 
 	var pathParam0 string
@@ -9979,6 +10214,33 @@ func NewListWorkMediaRequest(server string, workId CanonicalWorkId) (*http.Reque
 	queryURL, err := serverURL.Parse(operationPath)
 	if err != nil {
 		return nil, err
+	}
+
+	if params != nil {
+		// queryValues collects non-styled parameters (passthrough, JSON)
+		// that are safe to round-trip through url.Values.Encode().
+		queryValues := queryURL.Query()
+		// rawQueryFragments collects pre-encoded query fragments from
+		// styled parameters, preserving literal commas as delimiters
+		// per the OpenAPI spec (e.g. "color=blue,black,brown").
+		var rawQueryFragments []string
+
+		if params.QueryPublicationId != nil {
+
+			if queryFrag, err := runtime.StyleParamWithOptions("form", true, "queryPublicationId", *params.QueryPublicationId, runtime.StyleParamOptions{ParamLocation: runtime.ParamLocationQuery, Type: "string", Format: ""}); err != nil {
+				return nil, err
+			} else {
+				for _, qp := range strings.Split(queryFrag, "&") {
+					rawQueryFragments = append(rawQueryFragments, qp)
+				}
+			}
+
+		}
+
+		if encoded := queryValues.Encode(); encoded != "" {
+			rawQueryFragments = append(rawQueryFragments, encoded)
+		}
+		queryURL.RawQuery = strings.Join(rawQueryFragments, "&")
 	}
 
 	req, err := http.NewRequest(http.MethodGet, queryURL.String(), nil)
@@ -10247,7 +10509,7 @@ type ClientWithResponsesInterface interface {
 	GetLibraryWithResponse(ctx context.Context, libraryId LibraryId, reqEditors ...RequestEditorFn) (*GetLibraryResponse, error)
 
 	// GetMediaWithResponse request
-	GetMediaWithResponse(ctx context.Context, mediaId CanonicalMediaId, reqEditors ...RequestEditorFn) (*GetMediaResponse, error)
+	GetMediaWithResponse(ctx context.Context, mediaId CanonicalMediaId, params *GetMediaParams, reqEditors ...RequestEditorFn) (*GetMediaResponse, error)
 
 	// GetMediaContentWithResponse request
 	GetMediaContentWithResponse(ctx context.Context, mediaId CanonicalMediaId, params *GetMediaContentParams, reqEditors ...RequestEditorFn) (*GetMediaContentResponse, error)
@@ -10482,7 +10744,7 @@ type ClientWithResponsesInterface interface {
 	GetWorkWithResponse(ctx context.Context, workId CanonicalWorkId, reqEditors ...RequestEditorFn) (*GetWorkResponse, error)
 
 	// ListWorkMediaWithResponse request
-	ListWorkMediaWithResponse(ctx context.Context, workId CanonicalWorkId, reqEditors ...RequestEditorFn) (*ListWorkMediaResponse, error)
+	ListWorkMediaWithResponse(ctx context.Context, workId CanonicalWorkId, params *ListWorkMediaParams, reqEditors ...RequestEditorFn) (*ListWorkMediaResponse, error)
 
 	// GetWorkOverlayWithResponse request
 	GetWorkOverlayWithResponse(ctx context.Context, workId CanonicalWorkId, reqEditors ...RequestEditorFn) (*GetWorkOverlayResponse, error)
@@ -11568,6 +11830,7 @@ type GetMediaResponse struct {
 	JSON401      *UnauthenticatedError
 	JSON403      *ForbiddenError
 	JSON404      *NotFoundError
+	JSON409      *ConflictError
 }
 
 // Status returns HTTPResponse.Status
@@ -13547,6 +13810,7 @@ type ListWorkMediaResponse struct {
 	JSON401      *UnauthenticatedError
 	JSON403      *ForbiddenError
 	JSON404      *NotFoundError
+	JSON409      *ConflictError
 }
 
 // Status returns HTTPResponse.Status
@@ -14025,8 +14289,8 @@ func (c *ClientWithResponses) GetLibraryWithResponse(ctx context.Context, librar
 }
 
 // GetMediaWithResponse request returning *GetMediaResponse
-func (c *ClientWithResponses) GetMediaWithResponse(ctx context.Context, mediaId CanonicalMediaId, reqEditors ...RequestEditorFn) (*GetMediaResponse, error) {
-	rsp, err := c.GetMedia(ctx, mediaId, reqEditors...)
+func (c *ClientWithResponses) GetMediaWithResponse(ctx context.Context, mediaId CanonicalMediaId, params *GetMediaParams, reqEditors ...RequestEditorFn) (*GetMediaResponse, error) {
+	rsp, err := c.GetMedia(ctx, mediaId, params, reqEditors...)
 	if err != nil {
 		return nil, err
 	}
@@ -14788,8 +15052,8 @@ func (c *ClientWithResponses) GetWorkWithResponse(ctx context.Context, workId Ca
 }
 
 // ListWorkMediaWithResponse request returning *ListWorkMediaResponse
-func (c *ClientWithResponses) ListWorkMediaWithResponse(ctx context.Context, workId CanonicalWorkId, reqEditors ...RequestEditorFn) (*ListWorkMediaResponse, error) {
-	rsp, err := c.ListWorkMedia(ctx, workId, reqEditors...)
+func (c *ClientWithResponses) ListWorkMediaWithResponse(ctx context.Context, workId CanonicalWorkId, params *ListWorkMediaParams, reqEditors ...RequestEditorFn) (*ListWorkMediaResponse, error) {
+	rsp, err := c.ListWorkMedia(ctx, workId, params, reqEditors...)
 	if err != nil {
 		return nil, err
 	}
@@ -16451,6 +16715,13 @@ func ParseGetMediaResponse(rsp *http.Response) (*GetMediaResponse, error) {
 			return nil, err
 		}
 		response.JSON404 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 409:
+		var dest ConflictError
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON409 = &dest
 
 	}
 
@@ -19388,6 +19659,13 @@ func ParseListWorkMediaResponse(rsp *http.Response) (*ListWorkMediaResponse, err
 			return nil, err
 		}
 		response.JSON404 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 409:
+		var dest ConflictError
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON409 = &dest
 
 	}
 

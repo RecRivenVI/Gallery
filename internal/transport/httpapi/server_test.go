@@ -276,7 +276,7 @@ func TestPersonalPairingIsSingleUseAndRevocationInvalidatesREST(t *testing.T) {
 	if err != nil || worksResponse.JSON200 == nil || len(worksResponse.JSON200.Works) != 1 {
 		t.Fatalf("公开 Work 查询失败: %v status=%d", err, worksResponse.StatusCode())
 	}
-	mediaResponse, err := client.ListWorkMediaWithResponse(context.Background(), worksResponse.JSON200.Works[0].Id)
+	mediaResponse, err := client.ListWorkMediaWithResponse(context.Background(), worksResponse.JSON200.Works[0].Id, &api.ListWorkMediaParams{})
 	if err != nil || mediaResponse.JSON200 == nil || len(mediaResponse.JSON200.Media) != 1 {
 		t.Fatalf("公开 Media 查询失败: %v status=%d", err, mediaResponse.StatusCode())
 	}
@@ -554,7 +554,7 @@ func TestScanProfileDefaultSelectionValidationConflictAndContentVerificationAPI(
 	if err != nil || worksResponse.JSON200 == nil || len(worksResponse.JSON200.Works) != 1 {
 		t.Fatalf("Work 查询失败: %v", err)
 	}
-	mediaResponse, err := client.ListWorkMediaWithResponse(context.Background(), worksResponse.JSON200.Works[0].Id)
+	mediaResponse, err := client.ListWorkMediaWithResponse(context.Background(), worksResponse.JSON200.Works[0].Id, &api.ListWorkMediaParams{})
 	if err != nil || mediaResponse.JSON200 == nil || len(mediaResponse.JSON200.Media) != 1 {
 		t.Fatalf("Media 查询失败: %v", err)
 	}
@@ -586,7 +586,7 @@ func TestScanProfileDefaultSelectionValidationConflictAndContentVerificationAPI(
 	if string(verifyCompleted.Status) != "completed" {
 		t.Fatalf("按需内容确认 Job 未完成: %+v", verifyCompleted)
 	}
-	verifiedMediaResponse, err := client.ListWorkMediaWithResponse(context.Background(), worksResponse.JSON200.Works[0].Id)
+	verifiedMediaResponse, err := client.ListWorkMediaWithResponse(context.Background(), worksResponse.JSON200.Works[0].Id, &api.ListWorkMediaParams{})
 	if err != nil || verifiedMediaResponse.JSON200 == nil || len(verifiedMediaResponse.JSON200.Media) != 1 {
 		t.Fatalf("按需确认后 Media 查询失败: %v", err)
 	}
@@ -625,7 +625,7 @@ func TestScanProfileDefaultSelectionValidationConflictAndContentVerificationAPI(
 	if secondCompleted.ScanProfile == nil || string(*secondCompleted.ScanProfile) != "incremental" {
 		t.Fatalf("已发布 Source 的默认扫描 Job 应持久化 incremental: %+v", secondCompleted)
 	}
-	mediaAfter, err := client.ListWorkMediaWithResponse(context.Background(), worksResponse.JSON200.Works[0].Id)
+	mediaAfter, err := client.ListWorkMediaWithResponse(context.Background(), worksResponse.JSON200.Works[0].Id, &api.ListWorkMediaParams{})
 	if err != nil || mediaAfter.JSON200 == nil || len(mediaAfter.JSON200.Media) != 1 {
 		t.Fatalf("确认后 Media 查询失败: %v", err)
 	}
@@ -807,7 +807,7 @@ func TestDerivedAssetThumbnailEndToEnd(t *testing.T) {
 	if err != nil || worksResponse.JSON200 == nil || len(worksResponse.JSON200.Works) != 1 {
 		t.Fatalf("Work 查询失败: %v", err)
 	}
-	mediaResponse, err := client.ListWorkMediaWithResponse(ctx, worksResponse.JSON200.Works[0].Id)
+	mediaResponse, err := client.ListWorkMediaWithResponse(ctx, worksResponse.JSON200.Works[0].Id, &api.ListWorkMediaParams{})
 	if err != nil || mediaResponse.JSON200 == nil || len(mediaResponse.JSON200.Media) != 1 {
 		t.Fatalf("Media 查询失败: %v", err)
 	}
