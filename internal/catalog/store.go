@@ -249,7 +249,31 @@ func resetCandidateRevision(ctx context.Context, tx *sql.Tx, catalogRevisionID s
 	return nil
 }
 
+// validateSearchFieldValues 拒绝 Tag/文件名中出现 querytext.FieldSeparator（U+001F）：
+// search_tags_norm/search_filenames_norm 用该字符拼接多个取值，一旦某个取值本身携带
+// 分隔符就会在存储层伪装成两个取值，破坏 ranking/highlight 的取值边界。这里覆盖规则
+// 与 metadata 产生的 Tag（不止用户手动输入才算输入来源）；文件名来自实际扫描到的
+// 相对路径 basename，理论上只受宿主文件系统限制，但同样在权威边界统一拒绝。
+func validateSearchFieldValues(work WorkFact) error {
+	for _, tag := range work.Tags {
+		if strings.Contains(tag, querytext.FieldSeparator) {
+			return fault.WithField(fault.CodeValidation, "tags", nil)
+		}
+	}
+	for _, filename := range work.Filenames {
+		if strings.Contains(filename, querytext.FieldSeparator) {
+			return fault.WithField(fault.CodeValidation, "filenames", nil)
+		}
+	}
+	return nil
+}
+
 func (s *Store) Stage(ctx context.Context, candidate Candidate, works []WorkFact, media []MediaFact) error {
+	for _, work := range works {
+		if err := validateSearchFieldValues(work); err != nil {
+			return err
+		}
+	}
 	for start := 0; start < len(works); start += 100 {
 		end := min(start+100, len(works))
 		if err := s.stageWorks(ctx, candidate, works[start:end]); err != nil {
