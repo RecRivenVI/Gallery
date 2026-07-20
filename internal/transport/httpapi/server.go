@@ -1468,6 +1468,7 @@ func (s *Server) listWorks(w http.ResponseWriter, r *http.Request) {
 		SortDirection: r.URL.Query().Get("sortDirection"), Limit: limit, Cursor: r.URL.Query().Get("cursor"),
 		QueryPublicationID: r.URL.Query().Get("queryPublicationId"), OmitTotal: omitTotal,
 		AuthorizationScope: queryservice.AuthorizationScope(session.PrincipalID, session.Capabilities),
+		Capabilities:       session.Capabilities,
 	})
 	if err != nil {
 		s.writeRequestError(w, err)
@@ -1477,16 +1478,25 @@ func (s *Server) listWorks(w http.ResponseWriter, r *http.Request) {
 	for _, work := range result.Items {
 		dto := api.PublishedWork{
 			Id: work.ID, Title: work.Title, Creator: work.Creator, Tags: work.Tags,
-			MediaCount: work.MediaCount, QueryPublicationId: result.QueryPublicationID,
+			MediaCount: work.MediaCount, Favorite: work.Favorite, Progress: float32(work.Progress),
+			QueryPublicationId: result.QueryPublicationID,
 		}
-		if len(work.TitleHighlights) > 0 {
-			highlights := make([]api.HighlightSpan, 0, len(work.TitleHighlights))
-			for _, span := range work.TitleHighlights {
-				highlights = append(highlights, api.HighlightSpan{Start: span.Start, End: span.End})
+		if len(work.Matches) > 0 {
+			matches := make([]api.FieldMatch, 0, len(work.Matches))
+			for _, match := range work.Matches {
+				spans := make([]api.MatchSpan, 0, len(match.Spans))
+				for _, span := range match.Spans {
+					spans = append(spans, api.MatchSpan{Start: span.Start, End: span.End})
+				}
+				matches = append(matches, api.FieldMatch{Field: api.FieldMatchField(match.Field), Value: match.Value, Spans: spans})
 			}
-			dto.TitleHighlights = &highlights
+			dto.Matches = &matches
 		}
 		items = append(items, dto)
+	}
+	dependencySet := make([]api.DependencyField, 0, len(result.DependencySet))
+	for _, field := range result.DependencySet {
+		dependencySet = append(dependencySet, api.DependencyField{Field: field.Field, Role: api.DependencyFieldRole(field.Role)})
 	}
 	response := api.WorkListResponse{
 		QueryPublicationId: result.QueryPublicationID, CatalogRevision: result.CatalogRevision,
@@ -1494,7 +1504,7 @@ func (s *Server) listWorks(w http.ResponseWriter, r *http.Request) {
 		SortProtocolVersion:       api.WorkListResponseSortProtocolVersion(result.SortProtocolVersion),
 		RankProtocolVersion:       api.WorkListResponseRankProtocolVersion(result.RankProtocolVersion),
 		Total:                     api.Total{Mode: api.TotalMode(result.Total.Mode), Value: result.Total.Value, ProtocolVersion: api.TotalProtocolVersion(result.Total.ProtocolVersion)},
-		Works:                     items,
+		Works:                     items, DependencySet: dependencySet, LiveUserStateFields: result.LiveUserStateFields,
 	}
 	if result.NextCursor != "" {
 		response.NextCursor = &result.NextCursor
@@ -1570,11 +1580,19 @@ func (s *Server) putWorkOverlay(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) listWorkMedia(w http.ResponseWriter, r *http.Request) {
-	if _, err := s.requireCapability(r, "media.read"); err != nil {
+	session, err := s.requireCapability(r, "media.read")
+	if err != nil {
 		s.writeRequestError(w, err)
 		return
 	}
-	publication, items, err := s.catalog.ListMediaForWork(r.Context(), r.PathValue("workId"))
+	requestedPub := r.URL.Query().Get("queryPublicationId")
+	release, err := s.acquirePublicationLeaseIfExplicit(r, session, requestedPub)
+	if err != nil {
+		s.writeRequestError(w, err)
+		return
+	}
+	defer release()
+	publication, items, err := s.catalog.ListMediaForWorkAt(r.Context(), requestedPub, r.PathValue("workId"))
 	if err != nil {
 		s.writeRequestError(w, err)
 		return
@@ -1587,11 +1605,19 @@ func (s *Server) listWorkMedia(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) getMedia(w http.ResponseWriter, r *http.Request) {
-	if _, err := s.requireCapability(r, "media.read"); err != nil {
+	session, err := s.requireCapability(r, "media.read")
+	if err != nil {
 		s.writeRequestError(w, err)
 		return
 	}
-	publication, item, err := s.catalog.GetMedia(r.Context(), r.PathValue("mediaId"))
+	requestedPub := r.URL.Query().Get("queryPublicationId")
+	release, err := s.acquirePublicationLeaseIfExplicit(r, session, requestedPub)
+	if err != nil {
+		s.writeRequestError(w, err)
+		return
+	}
+	defer release()
+	publication, item, err := s.catalog.GetMediaAt(r.Context(), requestedPub, r.PathValue("mediaId"))
 	if err != nil {
 		s.writeRequestError(w, err)
 		return
@@ -1600,11 +1626,19 @@ func (s *Server) getMedia(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) mediaContent(w http.ResponseWriter, r *http.Request) {
-	if _, err := s.requireCapability(r, "media.read"); err != nil {
+	session, err := s.requireCapability(r, "media.read")
+	if err != nil {
 		s.writeRequestError(w, err)
 		return
 	}
-	_, item, err := s.catalog.GetMedia(r.Context(), r.PathValue("mediaId"))
+	requestedPub := r.URL.Query().Get("queryPublicationId")
+	release, err := s.acquirePublicationLeaseIfExplicit(r, session, requestedPub)
+	if err != nil {
+		s.writeRequestError(w, err)
+		return
+	}
+	defer release()
+	_, item, err := s.catalog.GetMediaAt(r.Context(), requestedPub, r.PathValue("mediaId"))
 	if err != nil {
 		s.writeRequestError(w, err)
 		return
@@ -1680,11 +1714,12 @@ func (s *Server) mediaContent(w http.ResponseWriter, r *http.Request) {
 }
 
 // createMediaVerificationJob 为 located_unverified 媒体建立按需内容确认闭环：不在 HTTP
-// 请求内同步阻塞计算完整 SHA-256，而是复用既有 verify scanProfile 与持久 Scan Job 管线
-// （scanner+hashjob+catalog publication），返回可轮询/可通过 WebSocket 观察的 Job。verify
-// 档案的作用范围是该媒体所属整个 Source（当前扫描模型没有单文件级 scanProfile），因此
-// 幂等键按该媒体当前观察（Source、相对路径、size、mtime）派生，文件未变化前的重复请求
-// 复用同一 Job；文件已变化或已完成的旧 Job 不会被这把 key 命中，从而不复用过期 observation。
+// 请求内同步阻塞计算完整 SHA-256，而是建立一个只强制该媒体重新完整哈希的 incremental
+// 扫描 Job（scanner.CreateVerificationScan），不再触发整个 Source 的 verify 档案——同一
+// Source 内其余媒体继续按既有 incremental 规则处理，不被这次按需确认强制重新哈希。
+// 幂等键按该媒体当前观察（媒体 ID、Source、相对路径、size、mtime、内容确认状态、本次
+// 解析到的 queryPublicationId）派生：文件未变化且请求针对同一快照时重复请求复用同一
+// Job；文件已变化、媒体已确认或快照已切换的旧 Job 不会被这把 key 命中。
 func (s *Server) createMediaVerificationJob(w http.ResponseWriter, r *http.Request) {
 	session, err := s.requireCapability(r, "scan.run")
 	if err != nil {
@@ -1695,7 +1730,14 @@ func (s *Server) createMediaVerificationJob(w http.ResponseWriter, r *http.Reque
 		s.writeRequestError(w, err)
 		return
 	}
-	_, item, err := s.catalog.GetMedia(r.Context(), r.PathValue("mediaId"))
+	requestedPub := r.URL.Query().Get("queryPublicationId")
+	release, err := s.acquirePublicationLeaseIfExplicit(r, session, requestedPub)
+	if err != nil {
+		s.writeRequestError(w, err)
+		return
+	}
+	defer release()
+	_, item, err := s.catalog.GetMediaAt(r.Context(), requestedPub, r.PathValue("mediaId"))
 	if err != nil {
 		s.writeRequestError(w, err)
 		return
@@ -1709,8 +1751,13 @@ func (s *Server) createMediaVerificationJob(w http.ResponseWriter, r *http.Reque
 		s.writeRequestError(w, err)
 		return
 	}
-	idempotencyKey := fmt.Sprintf("verify-media:%s:%s:%d:%d", item.SourceID, item.RelativePath, observation.Size, observation.MTimeNanos)
-	job, err := s.scanner.CreateScanWithProfile(r.Context(), item.SourceID, session.PrincipalID, idempotencyKey, scanner.ScanProfileVerify)
+	observationFingerprint := fmt.Sprintf("%d:%d:%s", observation.Size, observation.MTimeNanos, observation.ContentVerificationState)
+	idempotencyKey := fmt.Sprintf("verify-media:v2:%s:%s:%s:%s", item.ID, item.SourceID, observationFingerprint, item.RelativePath)
+	target := scanner.VerificationTarget{
+		MediaID: item.ID, SourceID: item.SourceID, RelativePath: item.RelativePath,
+		ObservationFingerprint: observationFingerprint,
+	}
+	job, err := s.scanner.CreateVerificationScan(r.Context(), item.SourceID, session.PrincipalID, idempotencyKey, []scanner.VerificationTarget{target})
 	if err != nil {
 		s.writeRequestError(w, err)
 		return
@@ -1721,9 +1768,13 @@ func (s *Server) createMediaVerificationJob(w http.ResponseWriter, r *http.Reque
 
 // createDerivedAsset 请求生成或复用一个 DerivedAsset。总是返回持久 Job（缓存命中时
 // Job 立即以 completed 态返回，不需要客户端区分"新生成"与"命中缓存"两种响应形状），
-// 媒体尚未 content_verified 时拒绝，外部 Resolver 未配置时返回稳定 unavailable。
+// 媒体尚未 content_verified 时拒绝，外部 Resolver 未配置时返回稳定 unavailable。生成
+// 需要独立的 media.derive capability，不再复用只读的 media.read——只读媒体账户可以读
+// 已生成资源（derivedAssetContent 仍检查 media.read），但不能触发新的生成工作。输入
+// ContentBlob 从请求指定（或省略时当前 active）的 queryPublicationId 解析，不重新从
+// active publication 寻找"当前 Blob"代替请求时刻的 Blob。
 func (s *Server) createDerivedAsset(w http.ResponseWriter, r *http.Request) {
-	session, err := s.requireCapability(r, "media.read")
+	session, err := s.requireCapability(r, "media.derive")
 	if err != nil {
 		s.writeRequestError(w, err)
 		return
@@ -1747,7 +1798,14 @@ func (s *Server) createDerivedAsset(w http.ResponseWriter, r *http.Request) {
 		s.writeRequestError(w, fault.WithField(fault.CodeDerivedAssetInvalid, "transformId", nil))
 		return
 	}
-	_, item, err := s.catalog.GetMedia(r.Context(), r.PathValue("mediaId"))
+	requestedPub := r.URL.Query().Get("queryPublicationId")
+	release, err := s.acquirePublicationLeaseIfExplicit(r, session, requestedPub)
+	if err != nil {
+		s.writeRequestError(w, err)
+		return
+	}
+	defer release()
+	_, item, err := s.catalog.GetMediaAt(r.Context(), requestedPub, r.PathValue("mediaId"))
 	if err != nil {
 		s.writeRequestError(w, err)
 		return
@@ -1815,6 +1873,28 @@ func etagMatches(header, current string) bool {
 		}
 	}
 	return false
+}
+
+// acquirePublicationLeaseIfExplicit 是媒体/DerivedAsset 快照绑定读取的公共入口：
+// requested 为空表示客户端未显式指定 queryPublicationId（current 模式，读当前 active
+// publication，永不被 GC，不需要额外 lease）；非空表示显式快照模式，必须先验证该
+// publication 真实存在，再建立短期 lease 覆盖本次请求剩余处理时间，防止在解析媒体、
+// 读取正文期间被 GarbageCollect 回收——不得静默回退到 active publication。返回的
+// release 函数在两种模式下都可安全无条件 defer 调用。
+func (s *Server) acquirePublicationLeaseIfExplicit(r *http.Request, session auth.Session, requested string) (func(), error) {
+	if requested == "" {
+		return func() {}, nil
+	}
+	publication, err := s.catalog.PublicationByID(r.Context(), requested)
+	if err != nil {
+		return func() {}, err
+	}
+	authHash := queryservice.AuthorizationScope(session.PrincipalID, session.Capabilities)
+	lease, err := s.catalog.AcquirePublicationLease(r.Context(), publication.ID, authHash)
+	if err != nil {
+		return func() {}, err
+	}
+	return func() { _ = lease.Close() }, nil
 }
 
 func (s *Server) writeRequestError(w http.ResponseWriter, err error) {

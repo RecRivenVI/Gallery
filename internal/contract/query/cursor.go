@@ -19,7 +19,15 @@ const SortProtocolVersion = 1
 // RankProtocolVersion 标识排序结果内使用的 ranking tier 算法版本。任何改变 tier 计算
 // 方式的变更都必须递增本常量，使旧 cursor 随之失效而不是静默产生不一致的续页顺序。
 // tier 权重数值本身在正式压力测试前保持 PRE_FREEZE，但协议版本字段是冻结兼容点。
-const RankProtocolVersion = 1
+//
+// v2：从"只有标题"的 0..3 单一档位改为标题/Creator/Tag/文件名字段级 ranking，
+// rank_tier 变为 match_class*10+field_priority 的组合值（0..33），因此 v1 签发的
+// cursor 必须失效，不能按新算法重新解释旧 rank_tier。
+const RankProtocolVersion = 2
+
+// MaxRankTier 是 rank_tier 的最大合法值：match_class（0..3）* 10 + field_priority
+// （0..3），即 3*10+3=33。
+const MaxRankTier = 33
 
 type CursorClaims struct {
 	QueryFingerprint       string    `json:"queryFingerprint"`
@@ -103,7 +111,7 @@ func validateClaims(claims CursorClaims) error {
 	if claims.RankProtocolVersion != RankProtocolVersion {
 		return fmt.Errorf("rank protocol version 不匹配")
 	}
-	if claims.LastRankTier < 0 || claims.LastRankTier > 3 {
+	if claims.LastRankTier < 0 || claims.LastRankTier > MaxRankTier {
 		return fmt.Errorf("rank tier 超出范围")
 	}
 	if !isLowerHexSHA256(claims.QueryFingerprint) || !isLowerHexSHA256(claims.AuthorizationScopeHash) {
