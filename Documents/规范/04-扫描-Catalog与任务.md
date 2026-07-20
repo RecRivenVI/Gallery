@@ -172,7 +172,9 @@ Job 是逻辑任务，Attempt 是该 Job 的一次实际执行。重试保持原
 
 forward-only migration 给 `work_projections`/`media_projections` 等既有表新增查询相关快照列（例如 `favorite`/`progress`/`search_*_norm`）时，只能用 `ALTER TABLE ADD COLUMN` 的静态默认值填充已发布 revision 的既有行；这些默认值对已经存在的用户事实和 Source-derived 文本而言通常是错误的（例如已收藏作品的 `favorite` 被回填成 `0`），必须在服务真正开始对外提供查询之前收敛，不能依赖用户此后恰好触发一次无关的写入才顺带修复。
 
-标准做法是复用既有 Overlay 投影管线触发一次不改变任何 `work_overlays` 事实、只重建当前 active revision 整个查询投影的 Job（`overlay.Service.TriggerReprojection`）：`ApplyOverlayFacts` 本身已经对 revision 内每一个 Work 重新计算这些字段——快照类 Overlay 字段（如 `favorite`/`progress`）的权威来源是 control.db 的既有事实，可从中安全重新计算；纯文本派生字段（如 `search_*_norm`）的权威来源是同一 revision 里已经存在的 `source_works` 原始文本，同样可以安全重新计算，不需要重新扫描、也不伪造任何无法从既有数据推导的事实。启动流程在完成迁移与既有 Job/Overlay reconciliation 之后、开始监听服务请求之前，检查是否已经为本次新增列触发过这次回填（持久标记，只在首次检测到未触发时执行一次）；没有 active publication（全新安装）视为无需回填。这一模式不引入第二套 Job/状态机：中断后由既有 Job 恢复循环正常收敛，重复触发会与既有非终态 Job 安全合并。
+标准做法是复用既有 Overlay 投影管线触发一次不改变任何 `work_overlays` 事实、只重建当前 active revision 整个查询投影的 Job（`overlay.Service.TriggerReprojection`）：`ApplyOverlayFacts` 本身已经对 revision 内每一个 Work 重新计算这些字段——快照类 Overlay 字段（如 `favorite`/`progress`）的权威来源是 control.db 的既有事实，可从中安全重新计算；纯文本派生字段（如 `search_*_norm`）的权威来源是同一 revision 里已经存在的 `source_works` 原始文本，同样可以安全重新计算，不需要重新扫描、也不伪造任何无法从既有数据推导的事实。启动流程在完成迁移与既有 Job/Overlay reconciliation 之后、开始监听服务请求之前，检查是否已经为本次新增列完成过这次回填（持久标记）；没有 active publication（全新安装）视为无需回填。
+
+持久标记表达的是"这次回填已经确认完成"，不是"已经排队"或"已经尝试过"：`EnqueueOverlayProjectionTx` 可能把这次请求合并到一个既有的 `queued`/`running`/`publishing` overlay_projection Job（例如与另一个无关的 Overlay 写入排队竞争、或是上一次进程崩溃遗留的行）而不是新建一个，这种情况下不能因为"Job 已经存在"就提前写入完成标记；启动流程必须先把这个 Job（无论是否本次创建）驱动到真正的 `completed`——沿用既有 `Retry`/`Execute`/`ReconcileAttempts` 收敛陈旧租约与可重试失败，不新增等待或超时语义——才允许写入标记。若该 Job 排队、执行或重试期间遇到不可恢复的失败，启动本身失败并保持标记未写入，不得把"曾经触发"误当作"已经完成"而放行服务；下一次启动会重新观察到未回填、重新执行整个流程。这一模式不引入第二套 Job/状态机：完成判定完全基于既有 Job 状态机的终态，中断后由既有 Job 恢复循环正常收敛，重复触发会与既有非终态 Job 安全合并。
 
 ## 取消、崩溃和离线
 
