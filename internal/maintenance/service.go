@@ -14,6 +14,8 @@ import (
 	"github.com/RecRivenVI/gallery/internal/catalog"
 	"github.com/RecRivenVI/gallery/internal/contract/fault"
 	"github.com/RecRivenVI/gallery/internal/derived"
+	"github.com/RecRivenVI/gallery/internal/derivedjob"
+	"github.com/RecRivenVI/gallery/internal/domain"
 	"github.com/RecRivenVI/gallery/internal/jobs"
 	"github.com/RecRivenVI/gallery/internal/platform/appdirs"
 	"github.com/RecRivenVI/gallery/internal/ports"
@@ -171,7 +173,11 @@ func (s *Service) RunGC(ctx context.Context, retention time.Duration, dryRun boo
 	for _, job := range active {
 		activeIDs = append(activeIDs, job.ID)
 	}
-	result, err := s.catalog.GarbageCollectWithOptions(ctx, catalog.GCOptions{Retention: retention, ActiveJobIDs: activeIDs, DryRun: dryRun})
+	protectedBlobs, err := s.protectedDerivedBlobs(ctx, active)
+	if err != nil {
+		return GCReport{}, err
+	}
+	result, err := s.catalog.GarbageCollectWithOptions(ctx, catalog.GCOptions{Retention: retention, ActiveJobIDs: activeIDs, ProtectedBlobs: protectedBlobs, DryRun: dryRun})
 	if err != nil {
 		return GCReport{}, err
 	}
@@ -256,6 +262,41 @@ func (s *Service) CheckSpace(ctx context.Context, operation string, additionalBy
 	}
 	_, err = s.Preflight(ctx, report.RequiredBytes+additionalBytes)
 	return err
+}
+
+// protectedDerivedBlobs 收集当前仍可能被 DerivedAsset Job 使用的 ContentBlob 摘要：
+// Job 排队等待调度、正在真正生成、或已失败但仍处于退避等待期（尚未耗尽重试次数）都算
+// 在内。media.BlobReadLease 只提供固定 TTL 的时间保护，无法覆盖"排队等待超过 TTL"、
+// "退避等待超过 TTL"或"单次生成耗时超过 TTL"——这些场景下 Job 依然可能在之后重新读取
+// 同一 Blob，因此 GC 必须额外参照 Job 表本身的非终态状态，而不能只信任租约是否过期。
+// active 是调用方已经为 staging candidate 保护查询过的同一批非终态 Job，这里直接复用、
+// 再补上一次针对 derived 类型的退避等待期查询，不重复扫描整张 Job 表。
+func (s *Service) protectedDerivedBlobs(ctx context.Context, active []jobs.Job) ([]domain.ContentBlobRef, error) {
+	retrying, err := s.jobs.ListRetryPending(ctx, jobs.ResourceDerived)
+	if err != nil {
+		return nil, err
+	}
+	blobs := make([]domain.ContentBlobRef, 0, len(active)+len(retrying))
+	appendDerivedBlob := func(job jobs.Job) {
+		if job.Type != jobs.ResourceDerived || len(job.RequestJSON) == 0 {
+			return
+		}
+		var request derivedjob.Request
+		if err := json.Unmarshal(job.RequestJSON, &request); err != nil {
+			return
+		}
+		if request.BlobAlgorithm == "" || request.BlobDigest == "" {
+			return
+		}
+		blobs = append(blobs, domain.ContentBlobRef{Algorithm: request.BlobAlgorithm, Digest: request.BlobDigest})
+	}
+	for _, job := range active {
+		appendDerivedBlob(job)
+	}
+	for _, job := range retrying {
+		appendDerivedBlob(job)
+	}
+	return blobs, nil
 }
 
 func (s *Service) Checkpoint(ctx context.Context) error {
