@@ -2963,7 +2963,7 @@ type CreateDerivedAssetParams struct {
 
 // CreateMediaVerificationJobParams defines parameters for CreateMediaVerificationJob.
 type CreateMediaVerificationJobParams struct {
-	// QueryPublicationId 省略为 current 模式；显式提供时目标媒体必须从该快照解析。
+	// QueryPublicationId 省略为 current 模式，解析当前 active publication；显式提供时必须精确等于 当前 active publication，否则返回 409（按需确认不支持针对历史快照重新 确认）。
 	QueryPublicationId *QueryPublicationId `form:"queryPublicationId,omitempty" json:"queryPublicationId,omitempty"`
 	XGalleryCSRF       CSRFHeader          `json:"X-Gallery-CSRF"`
 }
