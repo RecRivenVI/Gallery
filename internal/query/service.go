@@ -469,6 +469,12 @@ SELECT work_id, title, creator, tags_json, filenames_text, sort_title_key, favor
 // computeMatches 为标题/Creator/Tag/文件名逐一计算命中区间，产出通用高亮 DTO。同一
 // 字段可能出现多个条目（例如两个不同的 tag 分别命中，各自携带自己的 spans）；结果按
 // maxMatchesPerWork 截断，value 按 maxMatchValueRunes 截断（防御性上限）。
+//
+// span 必须先针对完整原文计算（HighlightSpans 依赖簇边界与规范化折叠映射，不能对已经
+// 截断的半截文本重新计算，否则会改变簇划分与命中结果），再按截断后实际返回的 value
+// 裁剪：起点落在截断边界之后的 span 整体丢弃（用户看不到这次命中，展示它没有意义），
+// 跨越边界的 span 把 End 收紧到截断长度，确保每个返回的 span 都满足
+// 0 <= start <= end <= runeCount(value)，不指向 value 之外的字符。
 func computeMatches(normalizedQuery, title, creator string, tags, filenames []string) []FieldMatch {
 	var matches []FieldMatch
 	add := func(field, value string) {
@@ -479,11 +485,26 @@ func computeMatches(normalizedQuery, title, creator string, tags, filenames []st
 		if len(spans) == 0 {
 			return
 		}
+		truncated := truncateRunes(value, maxMatchValueRunes)
+		truncatedRuneCount := len([]rune(truncated))
 		converted := make([]MatchSpan, 0, len(spans))
 		for _, span := range spans {
-			converted = append(converted, MatchSpan{Start: span.Start, End: span.End})
+			if span.Start >= truncatedRuneCount {
+				continue
+			}
+			end := span.End
+			if end > truncatedRuneCount {
+				end = truncatedRuneCount
+			}
+			if end <= span.Start {
+				continue
+			}
+			converted = append(converted, MatchSpan{Start: span.Start, End: end})
 		}
-		matches = append(matches, FieldMatch{Field: field, Value: truncateRunes(value, maxMatchValueRunes), Spans: converted})
+		if len(converted) == 0 {
+			return
+		}
+		matches = append(matches, FieldMatch{Field: field, Value: truncated, Spans: converted})
 	}
 	add("title", title)
 	add("creator", creator)
