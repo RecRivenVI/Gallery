@@ -1730,7 +1730,14 @@ func (s *Server) createMediaVerificationJob(w http.ResponseWriter, r *http.Reque
 		s.writeRequestError(w, err)
 		return
 	}
-	_, item, err := s.catalog.GetMedia(r.Context(), r.PathValue("mediaId"))
+	requestedPub := r.URL.Query().Get("queryPublicationId")
+	release, err := s.acquirePublicationLeaseIfExplicit(r, session, requestedPub)
+	if err != nil {
+		s.writeRequestError(w, err)
+		return
+	}
+	defer release()
+	_, item, err := s.catalog.GetMediaAt(r.Context(), requestedPub, r.PathValue("mediaId"))
 	if err != nil {
 		s.writeRequestError(w, err)
 		return
@@ -1744,8 +1751,13 @@ func (s *Server) createMediaVerificationJob(w http.ResponseWriter, r *http.Reque
 		s.writeRequestError(w, err)
 		return
 	}
-	idempotencyKey := fmt.Sprintf("verify-media:%s:%s:%d:%d", item.SourceID, item.RelativePath, observation.Size, observation.MTimeNanos)
-	job, err := s.scanner.CreateScanWithProfile(r.Context(), item.SourceID, session.PrincipalID, idempotencyKey, scanner.ScanProfileVerify)
+	observationFingerprint := fmt.Sprintf("%d:%d:%s", observation.Size, observation.MTimeNanos, observation.ContentVerificationState)
+	idempotencyKey := fmt.Sprintf("verify-media:v2:%s:%s:%s:%s", item.ID, item.SourceID, observationFingerprint, item.RelativePath)
+	target := scanner.VerificationTarget{
+		MediaID: item.ID, SourceID: item.SourceID, RelativePath: item.RelativePath,
+		ObservationFingerprint: observationFingerprint,
+	}
+	job, err := s.scanner.CreateVerificationScan(r.Context(), item.SourceID, session.PrincipalID, idempotencyKey, []scanner.VerificationTarget{target})
 	if err != nil {
 		s.writeRequestError(w, err)
 		return
@@ -1756,9 +1768,13 @@ func (s *Server) createMediaVerificationJob(w http.ResponseWriter, r *http.Reque
 
 // createDerivedAsset 请求生成或复用一个 DerivedAsset。总是返回持久 Job（缓存命中时
 // Job 立即以 completed 态返回，不需要客户端区分"新生成"与"命中缓存"两种响应形状），
-// 媒体尚未 content_verified 时拒绝，外部 Resolver 未配置时返回稳定 unavailable。
+// 媒体尚未 content_verified 时拒绝，外部 Resolver 未配置时返回稳定 unavailable。生成
+// 需要独立的 media.derive capability，不再复用只读的 media.read——只读媒体账户可以读
+// 已生成资源（derivedAssetContent 仍检查 media.read），但不能触发新的生成工作。输入
+// ContentBlob 从请求指定（或省略时当前 active）的 queryPublicationId 解析，不重新从
+// active publication 寻找"当前 Blob"代替请求时刻的 Blob。
 func (s *Server) createDerivedAsset(w http.ResponseWriter, r *http.Request) {
-	session, err := s.requireCapability(r, "media.read")
+	session, err := s.requireCapability(r, "media.derive")
 	if err != nil {
 		s.writeRequestError(w, err)
 		return

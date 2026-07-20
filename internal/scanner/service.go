@@ -115,8 +115,20 @@ const (
 	ScanProfileVerify      = "verify"
 )
 
+// VerificationTarget 描述本次扫描中必须强制重新完整哈希的单个媒体：discovery 与规则
+// 解析仍覆盖整个 Source（保持 SourceWork 拆分/合并结构审查正确），但只有此处列出的
+// 媒体跳过 incremental 既往摘要复用短路；未列出的媒体继续按当前 scanProfile 既有规则
+// 处理（复用、跳过或按需新增哈希），不因存在 target 而改变其余媒体的正确性。
+type VerificationTarget struct {
+	MediaID                string `json:"mediaId"`
+	SourceID               string `json:"sourceId"`
+	RelativePath           string `json:"relativePath"`
+	ObservationFingerprint string `json:"observationFingerprint,omitempty"`
+}
+
 type scanRequest struct {
-	ScanProfile string `json:"scanProfile,omitempty"`
+	ScanProfile         string               `json:"scanProfile,omitempty"`
+	VerificationTargets []VerificationTarget `json:"verificationTargets,omitempty"`
 }
 
 // validateScanProfile 只接受空字符串（表示未显式指定，交由调用方按 Source 是否已发布决定
@@ -145,6 +157,23 @@ func scanProfileFromJob(job jobs.Job) string {
 	return ScanProfileIncremental
 }
 
+// verificationTargetsFromJob 还原本次 Job 冻结的目标媒体集合，按规范化相对路径索引；
+// 同一 Job 的重试 Attempt 复用同一 RequestJSON，因此目标集合天然与首次入队时一致。
+func verificationTargetsFromJob(job jobs.Job) map[string]struct{} {
+	if len(job.RequestJSON) == 0 {
+		return nil
+	}
+	var request scanRequest
+	if err := json.Unmarshal(job.RequestJSON, &request); err != nil || len(request.VerificationTargets) == 0 {
+		return nil
+	}
+	result := make(map[string]struct{}, len(request.VerificationTargets))
+	for _, target := range request.VerificationTargets {
+		result[target.RelativePath] = struct{}{}
+	}
+	return result
+}
+
 func (s *Service) CreateScan(ctx context.Context, sourceID, createdBy string) (jobs.Job, error) {
 	return s.CreateScanWithIdempotency(ctx, sourceID, createdBy, "")
 }
@@ -167,6 +196,49 @@ func (s *Service) CreateScanWithIdempotency(ctx context.Context, sourceID, creat
 // verify 必须被尊重；已有 publication 或 Catalog 已丢失但仍有持久领域历史时显式请求 index
 // 都会绕过该审查，因此拒绝并保持 Binding/Catalog 不变，不创建 Job。
 func (s *Service) CreateScanWithProfile(ctx context.Context, sourceID, createdBy, idempotencyKey, scanProfile string) (jobs.Job, error) {
+	return s.createScan(ctx, sourceID, createdBy, idempotencyKey, scanProfile, nil)
+}
+
+// CreateVerificationScan 建立一个只强制 targets 中媒体重新完整哈希的 incremental 扫描
+// Job，取代"单媒体确认=整 Source verify"的旧语义。targets 必须全部属于 sourceID，且
+// 该 Source 必须已有 publication（单媒体按需确认只对已发布 Catalog 中的已知媒体有意义，
+// 因此始终显式使用 incremental，不落入 index/首次扫描判定）。Source discovery 和规则
+// 解析仍完整执行，其余媒体按既有 incremental 规则正常处理，不因存在 target 而改变。
+func (s *Service) CreateVerificationScan(ctx context.Context, sourceID, createdBy, idempotencyKey string, targets []VerificationTarget) (jobs.Job, error) {
+	if len(targets) == 0 {
+		return jobs.Job{}, fault.WithField(fault.CodeValidation, "verificationTargets", nil)
+	}
+	seen := make(map[string]struct{}, len(targets))
+	normalizedTargets := make([]VerificationTarget, len(targets))
+	for index, target := range targets {
+		if target.SourceID != sourceID {
+			return jobs.Job{}, fault.WithField(fault.CodeValidation, "verificationTargets", nil)
+		}
+		if _, err := domain.ParseID(domain.IDCanonicalMedia, target.MediaID); err != nil {
+			return jobs.Job{}, fault.WithField(fault.CodeValidation, "verificationTargets", err)
+		}
+		normalized, err := media.ValidateRelativePath(target.RelativePath)
+		if err != nil {
+			return jobs.Job{}, fault.WithField(fault.CodeValidation, "verificationTargets", err)
+		}
+		if _, dup := seen[normalized]; dup {
+			return jobs.Job{}, fault.WithField(fault.CodeValidation, "verificationTargets", nil)
+		}
+		seen[normalized] = struct{}{}
+		target.RelativePath = normalized
+		normalizedTargets[index] = target
+	}
+	published, err := s.catalog.SourcePublished(ctx, sourceID)
+	if err != nil {
+		return jobs.Job{}, err
+	}
+	if !published {
+		return jobs.Job{}, fault.New(fault.CodeConflict, false, nil)
+	}
+	return s.createScan(ctx, sourceID, createdBy, idempotencyKey, ScanProfileIncremental, normalizedTargets)
+}
+
+func (s *Service) createScan(ctx context.Context, sourceID, createdBy, idempotencyKey, scanProfile string, targets []VerificationTarget) (jobs.Job, error) {
 	requested, err := validateScanProfile(scanProfile)
 	if err != nil {
 		return jobs.Job{}, err
@@ -209,7 +281,7 @@ func (s *Service) CreateScanWithProfile(ctx context.Context, sourceID, createdBy
 		CompilerVersion: rules.CompilerVersion, CELProfileVersion: rules.CELProfileVersion,
 		ExtensionRegistryVersion: version.IR.ExtensionRegistryVersion,
 	}
-	requestJSON, err := json.Marshal(scanRequest{ScanProfile: effective})
+	requestJSON, err := json.Marshal(scanRequest{ScanProfile: effective, VerificationTargets: targets})
 	if err != nil {
 		return jobs.Job{}, fault.New(fault.CodeInternal, true, err)
 	}
@@ -290,6 +362,7 @@ func (s *Service) Execute(ctx context.Context, jobID string) error {
 		return s.fail(ctx, job.ID, fault.New(fault.CodeRuleEval, false, nil))
 	}
 	scanProfile := scanProfileFromJob(job)
+	forcedTargets := verificationTargetsFromJob(job)
 	current := int64(0)
 	verificationState := make(map[string]string, total)  // relative path -> state
 	lastConfirmedAt := make(map[string]time.Time, total) // relative path -> confirmation time
@@ -302,7 +375,8 @@ func (s *Service) Execute(ctx context.Context, jobID string) error {
 			}
 			item := &discovered[workIndex].Media[mediaIndex]
 			skipHash := false
-			if scanProfile != ScanProfileVerify {
+			_, forced := forcedTargets[item.RelativePath]
+			if scanProfile != ScanProfileVerify && !forced {
 				prior, lookupErr := s.catalog.LookupPriorObservation(ctx, source.ID, item.RelativePath)
 				if lookupErr != nil {
 					return s.fail(ctx, job.ID, lookupErr)
@@ -341,12 +415,17 @@ func (s *Service) Execute(ctx context.Context, jobID string) error {
 						item.ExpectedSize = located.Size
 						item.ExpectedModTimeNanos = located.ModTimeNanos
 					}
-				} else if scanProfile == ScanProfileIndex {
-					// index 档案对新增或疑似变化媒体也不建立 Hash Job，只定位并标记未确认。
-					// 一条 FileObservation 的 size、mtime、location key 必须来自同一次最终定位
-					// 观察：discovery 阶段的 Stat 与这次 Locate 之间可能存在窗口，只更新 Size
-					// 而保留 discovery 时的旧 ExpectedModTimeNanos 会持久化"当前 size + 较早
-					// mtime"的混合记录，因此这里必须同步刷新 ExpectedModTimeNanos。
+				} else if scanProfile == ScanProfileIndex ||
+					(len(forcedTargets) > 0 && prior.Found && prior.ContentVerificationState == catalog.ContentVerificationStateLocatedUnverified) {
+					// index 档案对新增或疑似变化媒体也不建立 Hash Job，只定位并标记未确认；
+					// 目标化确认扫描（forcedTargets 非空）额外把这一规则用于非目标的既有
+					// located_unverified 媒体——它们不是本次请求要强制确认的目标，即使
+					// scanProfile 是 incremental 也不得因为"存在 target"就被顺带强制哈希，
+					// 必须继续保持未确认、不产生 Hash Job。一条 FileObservation 的 size、
+					// mtime、location key 必须来自同一次最终定位观察：discovery 阶段的 Stat
+					// 与这次 Locate 之间可能存在窗口，只更新 Size 而保留 discovery 时的旧
+					// ExpectedModTimeNanos 会持久化"当前 size + 较早 mtime"的混合记录，因此
+					// 这里必须同步刷新 ExpectedModTimeNanos。
 					if s.preReuseHook != nil {
 						s.preReuseHook(item.RelativePath)
 					}
@@ -479,7 +558,8 @@ func (s *Service) Execute(ctx context.Context, jobID string) error {
 	overlayFacts := make(map[string]catalog.OverlayFact, len(overlays))
 	for workID, value := range overlays {
 		overlayFacts[workID] = catalog.OverlayFact{TitleOverride: value.TitleOverride, ManualTags: value.ManualTags,
-			Hidden: value.Hidden, CustomCoverMediaID: value.CustomCoverMediaID}
+			Hidden: value.Hidden, CustomCoverMediaID: value.CustomCoverMediaID,
+			Favorite: value.Favorite, Progress: value.Progress}
 	}
 	if err := s.catalog.ApplyCatalogCandidateOverlays(ctx, candidate, overlayFacts); err != nil {
 		_ = s.catalog.AbortCandidate(ctx, job.ID)
