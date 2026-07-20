@@ -180,6 +180,7 @@ func run(ctx context.Context, cfg config.Config, logger *slog.Logger, ready chan
 	if err != nil {
 		return err
 	}
+	derivedJobService.SetBlobLeaser(store.Catalog.SQL(), systemClock)
 	toolService, err := toolrunner.New(jobStore, platformprocess.Controller{}, nil)
 	if err != nil {
 		return err
