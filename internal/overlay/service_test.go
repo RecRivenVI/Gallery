@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/RecRivenVI/gallery/internal/catalog"
+	"github.com/RecRivenVI/gallery/internal/contract/fault"
 	"github.com/RecRivenVI/gallery/internal/jobs"
 	"github.com/RecRivenVI/gallery/internal/platform/appdirs"
 	"github.com/RecRivenVI/gallery/internal/platform/clock"
@@ -121,6 +122,19 @@ WHERE catalog_revision_id=? AND overlay_revision_id=? AND work_id=?`,
 	var pending int
 	if err := store.Catalog.SQL().QueryRowContext(ctx, "SELECT count(*) FROM overlay_projection_revisions WHERE status='staging'").Scan(&pending); err != nil || pending != 0 {
 		t.Fatalf("残留 staging candidate=%d err=%v", pending, err)
+	}
+}
+
+// TestPutRejectsManualTagContainingFieldSeparator 覆盖阶段 4 收尾：search_tags_norm 用
+// querytext.FieldSeparator（U+001F）拼接多个 tag 取值，一个内含该字符的 tag 会在存储层
+// 伪装成两个取值。ManualTags 是用户可直接输入的字段，必须在这个权威边界拒绝，而不是
+// 依赖“普通用户打不出这个字符”的假设。
+func TestPutRejectsManualTagContainingFieldSeparator(t *testing.T) {
+	ctx, _, service, _, _ := newFixture(t)
+	_, err := service.Put(ctx, testWorkID, "owner", Input{ManualTags: []string{"foo" + querytext.FieldSeparator + "bar"}})
+	var structured *fault.Error
+	if !errors.As(err, &structured) || structured.Code != fault.CodeOverlayFactInvalid {
+		t.Fatalf("包含 FieldSeparator 的 ManualTag 应被拒绝为结构化 OVERLAY_FACT_INVALID: %v", err)
 	}
 }
 
