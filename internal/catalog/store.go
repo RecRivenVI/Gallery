@@ -727,6 +727,41 @@ GROUP BY w.work_id, w.title, w.creator, w.tags_json ORDER BY w.sort_title_key, w
 	return publication, works, rows.Err()
 }
 
+// PublicationByID 按显式 query_publication_id 解析一个（可能不是当前 active 的）历史
+// publication；不存在或已被 GC 一律返回 CodeCursorExpired，与游标过期使用同一稳定错误，
+// 不向调用方暴露"从未存在"与"已被回收"的区别。
+func (s *Store) PublicationByID(ctx context.Context, id string) (Publication, error) {
+	if _, err := domain.ParseID(domain.IDQueryPublication, id); err != nil {
+		return Publication{}, fault.New(fault.CodeCursorExpired, true, nil)
+	}
+	var publication Publication
+	var createdAt int64
+	err := s.db.QueryRowContext(ctx, `SELECT query_publication_id, catalog_revision_id, overlay_revision_id,
+job_id, control_watermark, created_at FROM query_publications WHERE query_publication_id=?`, id).Scan(
+		&publication.ID, &publication.CatalogRevisionID, &publication.OverlayRevisionID,
+		&publication.JobID, &publication.ControlWatermark, &createdAt,
+	)
+	if errors.Is(err, sql.ErrNoRows) {
+		return Publication{}, fault.New(fault.CodeCursorExpired, true, nil)
+	}
+	if err != nil {
+		return Publication{}, fault.New(fault.CodeInternal, true, err)
+	}
+	publication.CreatedAt = time.Unix(createdAt, 0).UTC()
+	return publication, nil
+}
+
+// resolvePublication 是媒体/Work 读取端点快照绑定的唯一解析入口：空 publicationID 表示
+// 客户端未显式指定，退回当前 active publication（"current" 模式）；非空则必须精确解析为
+// 该 ID 对应的历史 publication（"snapshot" 模式），不得静默回退到 active，即使该 ID 已
+// 过期或不存在。
+func (s *Store) resolvePublication(ctx context.Context, publicationID string) (Publication, error) {
+	if publicationID == "" {
+		return s.Current(ctx)
+	}
+	return s.PublicationByID(ctx, publicationID)
+}
+
 func (s *Store) GetWork(ctx context.Context, id string) (Publication, Work, error) {
 	publication, err := s.Current(ctx)
 	if err != nil {
@@ -748,8 +783,16 @@ WHERE w.catalog_revision_id = ? AND w.overlay_revision_id = ? AND w.work_id = ? 
 	return publication, work, nil
 }
 
+// GetMedia 解析当前 active publication 中的媒体，等价于 GetMediaAt(ctx, "", id)。
 func (s *Store) GetMedia(ctx context.Context, id string) (Publication, Media, error) {
-	publication, err := s.Current(ctx)
+	return s.GetMediaAt(ctx, "", id)
+}
+
+// GetMediaAt 是媒体读取的快照绑定入口：publicationID 为空时退回当前 active publication
+// （"current" 模式，与既有行为一致）；非空时必须精确解析该历史 publication（"snapshot"
+// 模式），媒体必须真实存在于该 publication 的 revision 组合中，不得静默改读 active。
+func (s *Store) GetMediaAt(ctx context.Context, publicationID, id string) (Publication, Media, error) {
+	publication, err := s.resolvePublication(ctx, publicationID)
 	if err != nil {
 		return Publication{}, Media{}, err
 	}
@@ -773,8 +816,15 @@ WHERE catalog_revision_id = ? AND overlay_revision_id = ? AND media_id = ?`, pub
 	return publication, media, nil
 }
 
+// ListMediaForWork 列出当前 active publication 中某作品的媒体，等价于
+// ListMediaForWorkAt(ctx, "", workID)。
 func (s *Store) ListMediaForWork(ctx context.Context, workID string) (Publication, []Media, error) {
-	publication, err := s.Current(ctx)
+	return s.ListMediaForWorkAt(ctx, "", workID)
+}
+
+// ListMediaForWorkAt 是 ListMediaForWork 的快照绑定版本，语义同 GetMediaAt。
+func (s *Store) ListMediaForWorkAt(ctx context.Context, publicationID, workID string) (Publication, []Media, error) {
+	publication, err := s.resolvePublication(ctx, publicationID)
 	if err != nil {
 		return Publication{}, nil, err
 	}
