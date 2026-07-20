@@ -265,12 +265,20 @@ func run(ctx context.Context, cfg config.Config, logger *slog.Logger, ready chan
 		return err
 	}
 	if needsQueryDependencyBackfill {
-		backfillJob, created, err := overlayService.TriggerReprojection(ctx, "system:query-dependency-backfill")
+		backfillJob, _, err := overlayService.TriggerReprojection(ctx, "system:query-dependency-backfill")
 		if err != nil {
 			return err
 		}
-		if created {
-			if err := overlayService.Execute(ctx, backfillJob.ID); err != nil {
+		// EnqueueOverlayProjectionTx 在同一 catalog revision 已有 queued/running/publishing
+		// 的 overlay_projection Job 时返回 created=false 并把这个已存在的 Job 合并复用——
+		// 它可能是另一个 Overlay 写入排队的、也可能是上一次进程崩溃遗留的 running 行。无论
+		// 哪种情况，只要它还没有真正 completed，就不能提前写入回填完成标记：那会让"迁移
+		// 完成"与"查询快照列已经正确物化"这两个必须同时成立的前提被拆开，一旦这个被合并
+		// 的 Job 之后失败或永久卡住，服务会在不知情的情况下用默认零值对外提供查询。这里
+		// 复用既有 Job/Retry/Execute/ReconcileAttempts 机制驱动它到终态，不新增第二套状态
+		// 机；只有真正观察到 completed 才允许标记触发完成。
+		if backfillJob.ID != "" {
+			if err := driveOverlayProjectionJobToCompletion(ctx, jobStore, overlayService, backfillJob.ID, "system:query-dependency-backfill"); err != nil {
 				return err
 			}
 		}
@@ -336,4 +344,51 @@ func run(ctx context.Context, cfg config.Config, logger *slog.Logger, ready chan
 		}
 		return err
 	}
+}
+
+// driveOverlayProjectionJobToCompletionMaxAttempts 是同步驱动一个 overlay_projection Job
+// 到终态的最大循环次数：覆盖"queued 执行一次"“failed 但可重试立即 Retry”与"running/
+// publishing 停留状态先 ReconcileAttempts 再重新观察"三类分支各自需要的几轮迭代，避免
+// 因未预期的持续异常状态导致启动无界阻塞。
+const driveOverlayProjectionJobToCompletionMaxAttempts = 8
+
+// driveOverlayProjectionJobToCompletion 同步把一个 overlay_projection Job 驱动到 completed，
+// 用于 v9→v10 查询快照列启动期一次性回填：该 Job 可能是本次调用刚创建的，也可能是
+// EnqueueOverlayProjectionTx 合并到的一个既有 queued/running/publishing Job（例如上一次
+// 进程崩溃遗留的 running 行，或另一个 Overlay 写入排队的 Job）。无论哪种来源，只有观察
+// 到它真正 completed，才能证明"目标 schema generation 对应的查询投影已经成功发布"，调用
+// 方才能据此写入回填完成标记；这里复用既有 Job Store 的 Get/Execute/Retry/ReconcileAttempts，
+// 不引入独立于既有 Job 状态机之外的第二套等待或超时语义。
+func driveOverlayProjectionJobToCompletion(ctx context.Context, jobStore *jobs.Store, overlayService *overlay.Service, jobID, actor string) error {
+	for attempt := 0; attempt < driveOverlayProjectionJobToCompletionMaxAttempts; attempt++ {
+		job, err := jobStore.Get(ctx, jobID)
+		if err != nil {
+			return err
+		}
+		switch job.Status {
+		case jobs.StatusCompleted:
+			return nil
+		case jobs.StatusQueued:
+			if err := overlayService.Execute(ctx, jobID); err != nil {
+				return err
+			}
+		case jobs.StatusFailed, jobs.StatusNeedsRepair:
+			if !job.FailureRetryable {
+				return fault.New(fault.CodeInternal, false,
+					fmt.Errorf("查询快照列回填 Job %s 永久失败: %s", jobID, job.IssueCode))
+			}
+			if _, err := jobStore.Retry(ctx, jobID, actor); err != nil {
+				return err
+			}
+		default:
+			// running/publishing/cancelling：此刻调度器与恢复循环均未启动，单线程 bootstrap
+			// 不应有并发执行者持有这个 Attempt；出现即说明是上一次进程崩溃遗留的租约，交由
+			// 既有 ReconcileAttempts 按租约超时收敛为可重试的 failed 后重新观察。
+			if err := jobStore.ReconcileAttempts(ctx, jobLeaseTimeout); err != nil {
+				return err
+			}
+		}
+	}
+	return fault.New(fault.CodeInternal, true,
+		fmt.Errorf("查询快照列回填 Job %s 在 %d 次尝试后仍未完成", jobID, driveOverlayProjectionJobToCompletionMaxAttempts))
 }
