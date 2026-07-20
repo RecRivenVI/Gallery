@@ -37,6 +37,8 @@ type OverlayFact struct {
 	ManualTags         []string
 	Hidden             bool
 	CustomCoverMediaID string
+	Favorite           bool
+	Progress           float64
 }
 
 type WorkFact struct {
@@ -386,7 +388,8 @@ VALUES (?, ?, ?, 'staging', ?, ?)`, candidate.OverlayRevisionID, candidate.Catal
 	if _, err := tx.ExecContext(ctx, `INSERT INTO work_projections
 SELECT catalog_revision_id, ?, work_id, source_id, source_key, library_id, title, creator,
 tags_json, filenames_text, normalized_original_text, cjk_bigram_token_text,
-latin_trigram_token_text, sort_title_key, hidden
+latin_trigram_token_text, sort_title_key, hidden, favorite, progress,
+search_title_norm, search_creator_norm, search_tags_norm, search_filenames_norm
 FROM work_projections WHERE catalog_revision_id=? AND overlay_revision_id=?`,
 		candidate.OverlayRevisionID, candidate.CatalogRevisionID, candidate.BaseOverlayRevisionID); err != nil {
 		return OverlayCandidate{}, fault.New(fault.CodeInternal, true, err)
@@ -458,16 +461,22 @@ WHERE w.catalog_revision_id=? AND w.overlay_revision_id=? ORDER BY w.work_id`, c
 		tags = mergeStrings(tags, fact.ManualTags)
 		tagsJSON, _ := json.Marshal(tags)
 		document := querytext.BuildDocument(title, item.creator, tags, filenames)
-		hidden := 0
+		hidden, favorite := 0, 0
 		if fact.Hidden {
 			hidden = 1
 		}
+		if fact.Favorite {
+			favorite = 1
+		}
 		if _, err := tx.ExecContext(ctx, `UPDATE work_projections SET title=?, creator=?, tags_json=?,
 normalized_original_text=?, cjk_bigram_token_text=?, latin_trigram_token_text=?,
-sort_title_key=?, hidden=? WHERE catalog_revision_id=? AND overlay_revision_id=? AND work_id=?`,
+sort_title_key=?, hidden=?, favorite=?, progress=?,
+search_title_norm=?, search_creator_norm=?, search_tags_norm=?, search_filenames_norm=?
+WHERE catalog_revision_id=? AND overlay_revision_id=? AND work_id=?`,
 			title, item.creator, string(tagsJSON), document.NormalizedOriginal, document.CJKTokens,
-			document.LatinTokens, document.SortTitleKey, hidden, candidate.CatalogRevisionID,
-			candidate.OverlayRevisionID, item.id); err != nil {
+			document.LatinTokens, document.SortTitleKey, hidden, favorite, fact.Progress,
+			document.TitleNorm, document.CreatorNorm, document.TagsNorm, document.FilenamesNorm,
+			candidate.CatalogRevisionID, candidate.OverlayRevisionID, item.id); err != nil {
 			return fault.New(fault.CodeInternal, true, err)
 		}
 		if fact.CustomCoverMediaID != "" {
@@ -1037,8 +1046,10 @@ VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`, candidate.CatalogRevisionID, work.SourceID,
 		}
 		if _, err := tx.ExecContext(ctx, `INSERT INTO work_projections
 (catalog_revision_id, overlay_revision_id, work_id, source_id, source_key, library_id, title, creator, tags_json, filenames_text,
- normalized_original_text, cjk_bigram_token_text, latin_trigram_token_text, sort_title_key, hidden)
-VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`, candidate.CatalogRevisionID, candidate.OverlayRevisionID, work.WorkID, work.SourceID, work.SourceKey, work.LibraryID, work.Title, work.Creator, string(tagsJSON), string(filenamesJSON), document.NormalizedOriginal, document.CJKTokens, document.LatinTokens, document.SortTitleKey, hidden); err != nil {
+ normalized_original_text, cjk_bigram_token_text, latin_trigram_token_text, sort_title_key, hidden,
+ search_title_norm, search_creator_norm, search_tags_norm, search_filenames_norm)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`, candidate.CatalogRevisionID, candidate.OverlayRevisionID, work.WorkID, work.SourceID, work.SourceKey, work.LibraryID, work.Title, work.Creator, string(tagsJSON), string(filenamesJSON), document.NormalizedOriginal, document.CJKTokens, document.LatinTokens, document.SortTitleKey, hidden,
+			document.TitleNorm, document.CreatorNorm, document.TagsNorm, document.FilenamesNorm); err != nil {
 			return fault.New(fault.CodeInternal, true, err)
 		}
 		if work.CreatorID != "" {
@@ -1245,7 +1256,7 @@ WHERE b.catalog_revision_id=q.catalog_revision_id AND m.source_id<>?`, []any{can
 		{`INSERT INTO file_locations SELECT ?, f.source_id, f.source_key, f.location_key, f.relative_path, f.algorithm, f.digest, f.status FROM file_locations f
 JOIN active_query_publication a ON a.singleton=1 JOIN query_publications q ON q.query_publication_id=a.query_publication_id
 WHERE f.catalog_revision_id=q.catalog_revision_id AND f.source_id<>?`, []any{candidate.CatalogRevisionID, candidate.SourceID}},
-		{`INSERT INTO work_projections SELECT ?, ?, w.work_id, w.source_id, w.source_key, w.library_id, w.title, w.creator, w.tags_json, w.filenames_text, w.normalized_original_text, w.cjk_bigram_token_text, w.latin_trigram_token_text, w.sort_title_key, w.hidden FROM work_projections w
+		{`INSERT INTO work_projections SELECT ?, ?, w.work_id, w.source_id, w.source_key, w.library_id, w.title, w.creator, w.tags_json, w.filenames_text, w.normalized_original_text, w.cjk_bigram_token_text, w.latin_trigram_token_text, w.sort_title_key, w.hidden, w.favorite, w.progress, w.search_title_norm, w.search_creator_norm, w.search_tags_norm, w.search_filenames_norm FROM work_projections w
 JOIN active_query_publication a ON a.singleton=1 JOIN query_publications q ON q.query_publication_id=a.query_publication_id
 WHERE w.catalog_revision_id=q.catalog_revision_id AND w.overlay_revision_id=q.overlay_revision_id AND w.source_id<>?`, []any{candidate.CatalogRevisionID, candidate.OverlayRevisionID, candidate.SourceID}},
 		{`INSERT OR IGNORE INTO creator_projections SELECT ?, ?, c.creator_id, c.name, c.sort_name_key FROM creator_projections c

@@ -1468,6 +1468,7 @@ func (s *Server) listWorks(w http.ResponseWriter, r *http.Request) {
 		SortDirection: r.URL.Query().Get("sortDirection"), Limit: limit, Cursor: r.URL.Query().Get("cursor"),
 		QueryPublicationID: r.URL.Query().Get("queryPublicationId"), OmitTotal: omitTotal,
 		AuthorizationScope: queryservice.AuthorizationScope(session.PrincipalID, session.Capabilities),
+		Capabilities:       session.Capabilities,
 	})
 	if err != nil {
 		s.writeRequestError(w, err)
@@ -1477,16 +1478,25 @@ func (s *Server) listWorks(w http.ResponseWriter, r *http.Request) {
 	for _, work := range result.Items {
 		dto := api.PublishedWork{
 			Id: work.ID, Title: work.Title, Creator: work.Creator, Tags: work.Tags,
-			MediaCount: work.MediaCount, QueryPublicationId: result.QueryPublicationID,
+			MediaCount: work.MediaCount, Favorite: work.Favorite, Progress: float32(work.Progress),
+			QueryPublicationId: result.QueryPublicationID,
 		}
-		if len(work.TitleHighlights) > 0 {
-			highlights := make([]api.HighlightSpan, 0, len(work.TitleHighlights))
-			for _, span := range work.TitleHighlights {
-				highlights = append(highlights, api.HighlightSpan{Start: span.Start, End: span.End})
+		if len(work.Matches) > 0 {
+			matches := make([]api.FieldMatch, 0, len(work.Matches))
+			for _, match := range work.Matches {
+				spans := make([]api.MatchSpan, 0, len(match.Spans))
+				for _, span := range match.Spans {
+					spans = append(spans, api.MatchSpan{Start: span.Start, End: span.End})
+				}
+				matches = append(matches, api.FieldMatch{Field: api.FieldMatchField(match.Field), Value: match.Value, Spans: spans})
 			}
-			dto.TitleHighlights = &highlights
+			dto.Matches = &matches
 		}
 		items = append(items, dto)
+	}
+	dependencySet := make([]api.DependencyField, 0, len(result.DependencySet))
+	for _, field := range result.DependencySet {
+		dependencySet = append(dependencySet, api.DependencyField{Field: field.Field, Role: api.DependencyFieldRole(field.Role)})
 	}
 	response := api.WorkListResponse{
 		QueryPublicationId: result.QueryPublicationID, CatalogRevision: result.CatalogRevision,
@@ -1494,7 +1504,7 @@ func (s *Server) listWorks(w http.ResponseWriter, r *http.Request) {
 		SortProtocolVersion:       api.WorkListResponseSortProtocolVersion(result.SortProtocolVersion),
 		RankProtocolVersion:       api.WorkListResponseRankProtocolVersion(result.RankProtocolVersion),
 		Total:                     api.Total{Mode: api.TotalMode(result.Total.Mode), Value: result.Total.Value, ProtocolVersion: api.TotalProtocolVersion(result.Total.ProtocolVersion)},
-		Works:                     items,
+		Works:                     items, DependencySet: dependencySet, LiveUserStateFields: result.LiveUserStateFields,
 	}
 	if result.NextCursor != "" {
 		response.NextCursor = &result.NextCursor

@@ -173,7 +173,7 @@ func TestWalkingSkeletonPersistsAcrossRealGallerydRestart(t *testing.T) {
 	if err != nil || works.JSON200 == nil || len(works.JSON200.Works) != 1 {
 		t.Fatalf("重启后 Work 查询失败: %v status=%d", err, works.StatusCode())
 	}
-	mediaItems, err := client.ListWorkMediaWithResponse(context.Background(), works.JSON200.Works[0].Id)
+	mediaItems, err := client.ListWorkMediaWithResponse(context.Background(), works.JSON200.Works[0].Id, &api.ListWorkMediaParams{})
 	if err != nil || mediaItems.JSON200 == nil || len(mediaItems.JSON200.Media) != 1 {
 		t.Fatalf("重启后 Media 查询失败: %v status=%d", err, mediaItems.StatusCode())
 	}
