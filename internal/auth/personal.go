@@ -38,6 +38,7 @@ var PersonalOwnerCapabilities = []string{
 	"creators.write",
 	"library.read",
 	"library.write",
+	"media.derive",
 	"media.read",
 	"overlays.write",
 	"rules.read",
