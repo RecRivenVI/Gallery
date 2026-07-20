@@ -299,8 +299,17 @@ GitHub Actions 不使用本地硬编码用户路径，使用 `actions/setup-go` 
 
 - 修改前后检查 `git status --short`，保留并绕开用户已有改动。
 - 不使用 `git reset --hard`、`git checkout --` 等破坏性回退；只撤销本轮明确产生的内容。
-- 所有提交信息必须遵循下节“Git Commit Message 规范”；该节是仓库内唯一、强制的提交信息格式。
+- 所有提交信息必须遵循下节”Git Commit Message 规范”；该节是仓库内唯一、强制的提交信息格式。
 - 未经用户明确要求，不提交、不推送、不创建 PR，也不删除 cleanroom 大型历史结果。
+
+### 任务结束后的推送与 GitHub Actions 跟踪
+
+任务完成并通过本地门禁后，Agent 应主动推送当前任务产生的提交，并跟踪该 HEAD 对应的 GitHub Actions 至完成状态。若 Actions 失败，应获取失败 Job 中最小且直接相关的错误日志片段，并在最终报告中记录 Actions 失败及该日志片段；若成功，则记录 Actions 成功。完成该检查后不得因为 Actions 结果继续修改代码、测试、文档、提交或历史，也不得自行追加修复、重跑或掩盖失败，除非用户另行明确下令。
+
+- 只允许普通 fast-forward push；禁止裸 `--force`；本类普通开发任务也不得使用 `--force-with-lease`（历史重写场景的受限 `--force-with-lease` 用法见上文”签名、测试与历史重写”一节，二者不冲突）。
+- Actions 失败不等于允许 Agent 自行开启第二轮修复；发现失败后必须停止并如实汇报，交由用户决定下一步。
+- 最终报告中的 Actions 部分只记录：成功或失败；若失败，附失败步骤的最小相关日志片段。不得在该部分继续提出或执行修复方案、给出建议或描述后续计划。
+- 若 GitHub API/连接器无法读取 Actions 状态，应如实记录”无法取得状态”，不得伪造成功或假设已通过。
 
 ## Git Commit Message 规范
 
