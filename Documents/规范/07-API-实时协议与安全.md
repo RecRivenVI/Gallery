@@ -83,6 +83,7 @@ v1 事件至少覆盖 Job 状态/issue、Catalog publication、Overlay projectio
 library.read[:libraryId]
 media.read
 media.download
+media.derive
 scan.run[:sourceId]
 rules.read / rules.write / rules.publish / rules.debug
 overlays.write
@@ -98,6 +99,19 @@ service.control
 `available_capabilities` 是角色/Grant 能提供的上限；`effective_capabilities` 是 available 与部署模式、资源范围、Source 只读性、功能开关和 Session 状态的交集。API 和 UI 只按 effective 判定。
 
 每个服务方法必须在应用层检查 capability，不能依赖路由隐藏或前端按钮。Library/Source 级 grant 是授权边界，Provider 名称不是授权边界。
+
+HEAD/GET、下载 disposition、内容确认和派生生成不得全部隐含落在同一个过宽 capability 上：读取媒体 metadata/正文（含已生成的 DerivedAsset 正文）使用 `media.read`；建立按需内容确认 Job 使用 `scan.run`（它本质是一个受限扫描 Job）；**创建**新的 DerivedAsset 生成工作使用独立的 `media.derive`，与只读的 `media.read` 分离——只读媒体账户可以读取已生成资源，但不能触发新的 CPU/磁盘生成工作。Personal 模式当前只有单一 owner 角色，默认同时拥有全部以上 capability；阶段 5 引入多账户后才需要真正区分。
+
+## 媒体与 DerivedAsset 的查询快照绑定
+
+媒体读取（列出作品媒体、媒体详情、媒体正文 HEAD/GET、按需内容确认 Job、DerivedAsset 创建）都支持通过可选 `queryPublicationId` 查询参数绑定到具体快照：
+
+- 省略该参数是 **current 模式**：读当前 active publication，响应的 `queryPublicationId` 字段返回实际使用的快照 ID，不得与 snapshot 模式混淆；
+- 显式提供是 **snapshot 模式**：只从该 publication 的 `(catalog_revision, overlay_projection_revision)` 组合解析，媒体必须属于该快照中对应的作品；该 publication 不存在或已被 GC 一律返回稳定 `CURSOR_EXPIRED`，不静默回退到 active；
+- 服务端为显式快照读取的请求处理期间建立短期 publication 读取租约（复用既有 `query_publication_leases` 表与 GC 保护判据），防止解析、读取正文期间被 GC 回收；current 模式因为 active publication 永不被 GC 而不需要额外租约；
+- DerivedAsset 创建的输入 ContentBlob 从请求指定（或省略时当前 active）的快照解析并在创建时冻结，异步生成过程中不得重新从"之后可能变化的 active publication"寻找输入，保证同一 Job 的重试和幂等语义引用的是同一个输入 Blob。
+
+这解决了"客户端通过旧 cursor 拿到的 Work 引用了某个媒体，后台新 publication 发布后该媒体内容或存在性已变化"的快照一致性问题：媒体读取与 `/works` 列表查询遵循同一条"服务端签发/校验 `query_publication_id`，不允许客户端自行选择两类 revision 任意组合"的规则（见「查询响应与实时附加状态」）。
 
 ## Personal 模式
 
