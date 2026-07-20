@@ -60,15 +60,46 @@ func TestOverlayFactProjectionAndLiveState(t *testing.T) {
 		t.Fatalf("自定义封面未影响投影顺序: %+v %v", media, err)
 	}
 
+	// Favorite/Progress 现在参与查询过滤/排序（见 06-查询-搜索与排序.md「Overlay 查询
+	// 依赖」），因此写入必须像 TitleOverride/Hidden 一样触发新的投影 Job：GET .../overlay
+	// 的 live 读取立即反映新值，但下一次查询结果（snapshot 过滤/排序判据）只有在新
+	// publication 发布后才切换，且旧 publication 在这之前继续读取旧 snapshot 值。
 	publicationBeforeLive, _ := catalogStore.Current(ctx)
 	input.Favorite, input.Progress = false, 0.9
 	live, err := service.Put(ctx, testWorkID, "owner", input)
-	if err != nil || live.StartJob || live.ProjectionJobID != created.ProjectionJobID {
-		t.Fatalf("live state 意外创建 projection: %+v %v", live, err)
+	if err != nil || !live.StartJob || live.Favorite != false || live.Progress != 0.9 {
+		t.Fatalf("Favorite/Progress 写入未按 snapshot 字段排队新投影，或 live 读取未立即反映新值: %+v %v", live, err)
+	}
+	publicationBeforeExecute, _ := catalogStore.Current(ctx)
+	if publicationBeforeExecute.ID != publicationBeforeLive.ID {
+		t.Fatal("投影 Job 尚未 Execute 就已经改变了 query publication")
+	}
+	if err := service.Execute(ctx, live.ProjectionJobID); err != nil {
+		t.Fatal(err)
 	}
 	publicationAfterLive, _ := catalogStore.Current(ctx)
-	if publicationAfterLive.ID != publicationBeforeLive.ID {
-		t.Fatal("Favorite/Progress 改变了 query publication")
+	if publicationAfterLive.ID == publicationBeforeLive.ID {
+		t.Fatal("Favorite/Progress 投影完成后应发布新 query publication")
+	}
+	var oldFavorite int
+	var oldProgress float64
+	if err := store.Catalog.SQL().QueryRowContext(ctx, `SELECT favorite, progress FROM work_projections
+WHERE catalog_revision_id=? AND overlay_revision_id=? AND work_id=?`,
+		publicationBeforeLive.CatalogRevisionID, publicationBeforeLive.OverlayRevisionID, testWorkID).Scan(&oldFavorite, &oldProgress); err != nil {
+		t.Fatal(err)
+	}
+	if oldFavorite != 1 || oldProgress != 0.5 {
+		t.Fatalf("旧 publication 的 favorite/progress snapshot 不应被后续写入改变: favorite=%d progress=%v", oldFavorite, oldProgress)
+	}
+	var newFavorite int
+	var newProgress float64
+	if err := store.Catalog.SQL().QueryRowContext(ctx, `SELECT favorite, progress FROM work_projections
+WHERE catalog_revision_id=? AND overlay_revision_id=? AND work_id=?`,
+		publicationAfterLive.CatalogRevisionID, publicationAfterLive.OverlayRevisionID, testWorkID).Scan(&newFavorite, &newProgress); err != nil {
+		t.Fatal(err)
+	}
+	if newFavorite != 0 || newProgress != 0.9 {
+		t.Fatalf("新 publication 的 favorite/progress snapshot 应反映最新写入: favorite=%d progress=%v", newFavorite, newProgress)
 	}
 
 	cleared, err := service.Put(ctx, testWorkID, "owner", Input{Progress: 0.9})
@@ -315,20 +346,22 @@ VALUES (?, ?, ?, ?, 'src_test', 'media-2', 'work/02.jpg', 'image', 'image/jpeg',
 	return ctx, store, service, catalogStore, queryService
 }
 
-// TestOverlayDependencySetMatchesQueryAffectingBehavior 锁定 OverlayDependencySet
-// 这份服务端权威分类表与实际排队判据一致：Snapshot 字段单独变化必须触发
-// queryAffectingFieldsChanged，Live 字段单独变化绝不触发。字段名新增/移除时本测试
-// 会因未覆盖分支而失败，提醒同步更新分类表与本测试。
-func TestOverlayDependencySetMatchesQueryAffectingBehavior(t *testing.T) {
-	if len(OverlayDependencySet) != 6 {
-		t.Fatalf("OverlayDependencySet 字段数 = %d，注册表变化后请同步更新本测试", len(OverlayDependencySet))
+// TestOverlayFieldCapabilitiesMatchesWriteBarrierBehavior 锁定 OverlayFieldCapabilities
+// 这份服务端权威字段能力注册表与实际写后屏障判据一致：任何声明 Filter/Sort/Search/
+// Visibility/ResourceReference 能力的字段单独变化都必须触发 queryAffectingFieldsChanged
+// （因为具体查询是否用到它由 planner 按请求动态判断，写入端必须保守地对所有"可能被
+// 查询依赖"的字段建立屏障）。字段名新增/移除时本测试会因未覆盖分支而失败，提醒同步
+// 更新注册表与本测试。
+func TestOverlayFieldCapabilitiesMatchesWriteBarrierBehavior(t *testing.T) {
+	if len(OverlayFieldCapabilities) != 6 {
+		t.Fatalf("OverlayFieldCapabilities 字段数 = %d，注册表变化后请同步更新本测试", len(OverlayFieldCapabilities))
 	}
 	base := State{TitleOverride: "t", ManualTags: []string{"a"}, Hidden: false, CustomCoverMediaID: "med_x", Favorite: false, Progress: 0}
 	sameInput := Input{TitleOverride: base.TitleOverride, ManualTags: base.ManualTags, Hidden: base.Hidden, CustomCoverMediaID: base.CustomCoverMediaID, Favorite: base.Favorite, Progress: base.Progress}
 	if queryAffectingFieldsChanged(base, sameInput) {
 		t.Fatal("无变化不应触发 query-affecting")
 	}
-	for field, class := range OverlayDependencySet {
+	for field, capability := range OverlayFieldCapabilities {
 		mutated := sameInput
 		switch field {
 		case "titleOverride":
@@ -347,9 +380,9 @@ func TestOverlayDependencySetMatchesQueryAffectingBehavior(t *testing.T) {
 			t.Fatalf("测试未覆盖新字段 %q，请补充分支", field)
 		}
 		got := queryAffectingFieldsChanged(base, mutated)
-		want := class == DependencySnapshot
+		want := capability.Filter || capability.Sort || capability.Search || capability.Visibility || capability.ResourceReference
 		if got != want {
-			t.Fatalf("字段 %s（%s）单独变化 queryAffecting=%v，want %v", field, class, got, want)
+			t.Fatalf("字段 %s（%+v）单独变化 queryAffecting=%v，want %v", field, capability, got, want)
 		}
 	}
 }

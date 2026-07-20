@@ -48,10 +48,54 @@ type TotalInfo struct {
 	ProtocolVersion int       `json:"protocolVersion"`
 }
 
-type HighlightSpan struct {
+// MatchSpan 是原文 code point（rune）偏移，左闭右开；不是 UTF-16 code unit，也不是
+// 字节偏移。
+type MatchSpan struct {
 	Start int `json:"start"`
 	End   int `json:"end"`
 }
+
+// FieldMatch 是通用、版本化的命中表达：field 取值为 "title"、"creator"、"tag"、
+// "filename" 之一；value 是命中的原始显示值（tag/filename 为具体命中的那一个取值，
+// 不是整个列表；filename 只是 path.Base 之后的安全显示名，不泄露相对/绝对路径）；
+// spans 是该 value 内的命中区间列表（同一字段同一 value 可能有多段）。同一 Work 可以
+// 同时出现多个同字段条目（例如两个不同的 tag 分别命中）。
+type FieldMatch struct {
+	Field string      `json:"field"`
+	Value string      `json:"value"`
+	Spans []MatchSpan `json:"spans"`
+}
+
+// maxMatchesPerWork 是单个 Work 返回的命中条目数上限，避免病态数据（超大量 tag/文件名）
+// 让单条结果的高亮表达无界增长。
+const maxMatchesPerWork = 8
+
+// maxMatchValueRunes 是单个命中 value 展示文本的最大 rune 数，超出截断（标题已在写入
+// 时限制 4096 rune，这里是防御性上限，不代表当前存在更大的合法输入）。
+const maxMatchValueRunes = 512
+
+// DependencyField 是本次查询实际用到的一个依赖字段：Field 是字段名（复用 filter 字段
+// 命名空间，如 overlay.favorite，或 "title"/"creator"/"tag"/"filename" 表示参与搜索/
+// 排序的内容字段），Role 说明这次查询里它被用作什么用途。dependencySet 由 planner
+// 按实际请求生成，不是把全部已注册字段的静态能力表当成这次查询的依赖集合。
+type DependencyField struct {
+	Field string `json:"field"`
+	Role  string `json:"role"` // predicate | ordering | search | membership | resource
+}
+
+const (
+	DependencyRolePredicate  = "predicate"
+	DependencyRoleOrdering   = "ordering"
+	DependencyRoleSearch     = "search"
+	DependencyRoleMembership = "membership"
+	DependencyRoleResource   = "resource"
+)
+
+// LiveUserStateFields 列出当前哪些 Overlay 字段除了本响应中的 snapshot 值以外，还可以
+// 通过 GET /works/{workId}/overlay 读取 control.db 当前 live 值；不属于每次查询动态
+// 变化的 dependency set，是静态能力声明（见 overlay.OverlayFieldCapabilities 的
+// LiveUserState 能力位，两处必须保持一致，由 dependency_test.go 锁定）。
+var LiveUserStateFields = []string{"favorite", "progress"}
 
 type Request struct {
 	Search             string
@@ -64,29 +108,40 @@ type Request struct {
 	Cursor             string
 	QueryPublicationID string
 	AuthorizationScope string
-	OmitTotal          bool
+	// Capabilities 是调用方当前 effective capability 列表，用于判定是否允许显式查询
+	// overlay.hidden=true（见 requireHiddenCapability）。与 AuthorizationScope 分开
+	// 传递：后者只是不透明的游标/缓存身份熵输入，不应被反解析出 capability 列表。
+	Capabilities []string
+	OmitTotal    bool
 }
 
 type Result struct {
-	QueryPublicationID        string    `json:"queryPublicationId"`
-	CatalogRevision           string    `json:"catalogRevision"`
-	OverlayProjectionRevision string    `json:"overlayProjectionRevision"`
-	SortProtocolVersion       int       `json:"sortProtocolVersion"`
-	RankProtocolVersion       int       `json:"rankProtocolVersion"`
-	Items                     []Work    `json:"items"`
-	Total                     TotalInfo `json:"total"`
-	NextCursor                string    `json:"nextCursor,omitempty"`
+	QueryPublicationID        string            `json:"queryPublicationId"`
+	CatalogRevision           string            `json:"catalogRevision"`
+	OverlayProjectionRevision string            `json:"overlayProjectionRevision"`
+	SortProtocolVersion       int               `json:"sortProtocolVersion"`
+	RankProtocolVersion       int               `json:"rankProtocolVersion"`
+	Items                     []Work            `json:"items"`
+	Total                     TotalInfo         `json:"total"`
+	DependencySet             []DependencyField `json:"dependencySet"`
+	LiveUserStateFields       []string          `json:"liveUserStateFields"`
+	NextCursor                string            `json:"nextCursor,omitempty"`
 }
 
 type Work struct {
-	ID              string          `json:"id"`
-	Title           string          `json:"title"`
-	Creator         string          `json:"creator,omitempty"`
-	Tags            []string        `json:"tags"`
-	MediaCount      int             `json:"mediaCount"`
-	TitleHighlights []HighlightSpan `json:"titleHighlights,omitempty"`
-	SortKey         string          `json:"-"`
-	RankTier        int             `json:"-"`
+	ID         string   `json:"id"`
+	Title      string   `json:"title"`
+	Creator    string   `json:"creator,omitempty"`
+	Tags       []string `json:"tags"`
+	MediaCount int      `json:"mediaCount"`
+	// Favorite/Progress 是本次查询所在 publication 冻结的 snapshot 值（用于解释本次
+	// 结果的过滤/排序判据），不是 control.db 当前 live 值；真正的 live 值通过
+	// GET /works/{workId}/overlay 读取，见 LiveUserStateFields。
+	Favorite bool         `json:"favorite"`
+	Progress float64      `json:"progress"`
+	Matches  []FieldMatch `json:"matches,omitempty"`
+	SortKey  string       `json:"-"`
+	RankTier int          `json:"-"`
 }
 
 type publication struct{ ID, CatalogRevision, OverlayRevision string }
@@ -138,14 +193,26 @@ func (s *Service) Search(ctx context.Context, request Request) (Result, error) {
 	if err != nil {
 		return Result{}, err
 	}
+	// 显式查询 overlay.hidden 接管该字段的可见性语义，取代默认隐式 hidden=0 条件；
+	// 因为这会让原本默认隐藏的 Work 可能出现在结果中，要求 library.write capability，
+	// 避免只读账户绕过默认隐藏可见性。hidden=false 与默认行为等价，但同样按"显式接管"
+	// 统一要求，不制造"值不同、门槛不同"的隐性特例。
+	if filterReferencesField(filterNode, "overlay.hidden") && !hasCapability(request.Capabilities, "library.write") {
+		return Result{}, fault.New(fault.CodeForbidden, false, nil)
+	}
+	dependencySet := buildDependencySet(request, plan, filterNode)
 	var filterCanonical string
 	if filterNode != nil {
 		filterCanonical = filterNode.canonicalJSON()
 	}
+	dependencyFingerprint := make([]string, 0, len(dependencySet))
+	for _, field := range dependencySet {
+		dependencyFingerprint = append(dependencyFingerprint, field.Field+":"+field.Role)
+	}
 	queryFingerprint := fingerprint(map[string]any{
 		"q": plan.NormalizedQuery, "tag": request.Tag, "libraryId": request.LibraryID, "sourceId": request.SourceID,
 		"filter": filterCanonical, "sort": "title", "direction": request.SortDirection, "limit": request.Limit,
-		"rankProtocolVersion": contractquery.RankProtocolVersion,
+		"rankProtocolVersion": contractquery.RankProtocolVersion, "dependencySet": dependencyFingerprint,
 	})
 	authHash := fingerprint(strings.Split(request.AuthorizationScope, "\x00"))
 	var claims contractquery.CursorClaims
@@ -195,7 +262,7 @@ func (s *Service) Search(ctx context.Context, request Request) (Result, error) {
 	result := Result{
 		QueryPublicationID: pub.ID, CatalogRevision: pub.CatalogRevision, OverlayProjectionRevision: pub.OverlayRevision,
 		SortProtocolVersion: contractquery.SortProtocolVersion, RankProtocolVersion: contractquery.RankProtocolVersion,
-		Items: items, Total: total,
+		Items: items, Total: total, DependencySet: dependencySet, LiveUserStateFields: append([]string(nil), LiveUserStateFields...),
 	}
 	if more && len(items) > 0 {
 		last := items[len(items)-1]
@@ -213,16 +280,53 @@ func (s *Service) Search(ctx context.Context, request Request) (Result, error) {
 	return result, nil
 }
 
-// titleSegmentSQL 从 normalized_original_text（title\ncreator\ntag...\nfilenames 拼接）
-// 中提取标题段——BuildDocument 总是把 title 放在第一段，因此第一个 char(10) 之前即为
-// 规范化标题。复用既有列避免为 rank tier 新增 Schema 列。
-const titleSegmentSQL = "CASE WHEN instr(w.normalized_original_text, char(10)) = 0 THEN w.normalized_original_text ELSE substr(w.normalized_original_text, 1, instr(w.normalized_original_text, char(10)) - 1) END"
+// fieldPriority 是 ranking 元组的字段优先级分量：同一 match_class 下，标题优先于
+// Creator，优先于 Tag，优先于文件名。具体数值仍是 PRE_FREEZE（见 01-v1实施计划.md），
+// 但字段级结构本身（哪个字段更优先）已经冻结，变化需要升级 RankProtocolVersion。
+const (
+	fieldPriorityTitle    = 3
+	fieldPriorityCreator  = 2
+	fieldPriorityTag      = 1
+	fieldPriorityFilename = 0
+)
+
+// singleFieldTierSQL 为单值规范化字段（标题/Creator）构建 match_class 表达式：
+// 3=与查询完全相等，2=以查询为前缀，1=包含查询子串，0=都不匹配。三个占位符都绑定
+// 同一个 plan.NormalizedQuery 值。
+func singleFieldTierSQL(column string) string {
+	return fmt.Sprintf("CASE WHEN %s = ? THEN 3 WHEN instr(%s, ?) = 1 THEN 2 WHEN instr(%s, ?) > 0 THEN 1 ELSE 0 END", column, column, column)
+}
+
+// multiFieldTierSQL 为按 querytext.FieldSeparator（U+001F）连接的多值规范化字段
+// （Tag/文件名）构建同样的 match_class 表达式：3=某个取值与查询完全相等，2=某个取值
+// 以查询为前缀，1=连接文本中出现查询子串（可能跨越取值边界，作为召回层级的已记录
+// 简化，不影响"某个具体取值完全/前缀匹配"这两个更高层级的精确判定），0=都不匹配。
+// 分隔符是控制字符，不需要对查询值做 LIKE 通配符转义。
+func multiFieldTierSQL(column string) string {
+	wrapped := "(char(31) || " + column + " || char(31))"
+	return fmt.Sprintf("CASE WHEN instr(%s, char(31) || ? || char(31)) > 0 THEN 3 WHEN instr(%s, char(31) || ?) > 0 THEN 2 WHEN instr(%s, ?) > 0 THEN 1 ELSE 0 END", wrapped, wrapped, column)
+}
+
+// combinedFieldScoreSQL 把一个字段的 0..3 match_class 列（tierColumn，已在内层 CTE 计算
+// 好）与其固定 field_priority 合成一个可直接比较大小的整数：未命中(0)时贡献 0，
+// 命中时贡献 match_class*10+field_priority，从而保证"完全匹配优于前缀，前缀优于
+// 中缀"在任何字段组合下都成立（match_class 是十位，field_priority 只在同一
+// match_class 内部充当次级排序，不会让低 match_class 的高优先级字段反超）。
+func combinedFieldScoreSQL(tierColumn string, priority int) string {
+	return fmt.Sprintf("CASE WHEN %s = 0 THEN 0 ELSE %s * 10 + %d END", tierColumn, tierColumn, priority)
+}
 
 // baseFilter 构建结构化过滤、图书馆/来源/标签快捷参数与搜索召回共用的 WHERE 片段，
 // 供分页查询与 total 统计复用同一语义，避免两处判据分叉。
 func (s *Service) baseFilter(ctx context.Context, pub publication, request Request, plan querytext.SearchPlan, filterNode *FilterNode) ([]string, string, []any, error) {
 	args := []any{pub.CatalogRevision, pub.OverlayRevision}
-	where := []string{"w.catalog_revision_id = ?", "w.overlay_revision_id = ?", "w.hidden = 0"}
+	where := []string{"w.catalog_revision_id = ?", "w.overlay_revision_id = ?"}
+	// 客户端显式过滤 overlay.hidden 时由该谓词完全接管可见性语义（buildOverlayHidden
+	// 编译进 filterNode 的 SQL 片段），不再叠加默认隐式条件；未显式过滤时保持默认
+	// 隐藏 Hidden Work 的既有行为。二者不会同时生效，不产生双重语义。
+	if !filterReferencesField(filterNode, "overlay.hidden") {
+		where = append(where, "w.hidden = 0")
+	}
 	join := ""
 	if request.LibraryID != "" {
 		where = append(where, "w.library_id = ?")
@@ -262,15 +366,43 @@ func (s *Service) query(ctx context.Context, pub publication, request Request, p
 		return nil, false, err
 	}
 
-	// rank_tier 只在搜索词存在时区分层级（精确/前缀/中缀标题匹配，否则 0）；无搜索词
-	// 时恒为 0，ORDER BY 上的 DESC 是无操作，行为与不带 ranking 时完全一致，不产生
-	// 伪相关性排名。
-	rankExpr := "0"
+	mediaCountExpr := "(SELECT count(*) FROM media_projections m WHERE m.catalog_revision_id=w.catalog_revision_id AND m.overlay_revision_id=w.overlay_revision_id AND m.work_id=w.work_id AND m.hidden=0)"
+	var cte string
 	var selectArgs []any
 	if plan.NormalizedQuery != "" {
-		rankExpr = fmt.Sprintf("CASE WHEN %s = ? THEN 3 WHEN instr(%s, ?) = 1 THEN 2 WHEN instr(%s, ?) > 0 THEN 1 ELSE 0 END",
-			titleSegmentSQL, titleSegmentSQL, titleSegmentSQL)
-		selectArgs = []any{plan.NormalizedQuery, plan.NormalizedQuery, plan.NormalizedQuery}
+		// 字段级 ranking：标题/Creator/Tag/文件名各自在内层 tiers CTE 算出 0..3 的
+		// match_class，外层 scored CTE 用 combinedFieldScoreSQL 合成 match_class*10+
+		// field_priority 后取 max()，保证"完全匹配优于前缀，前缀优于中缀"对全部四个
+		// 字段一致成立，且同一 match_class 下按字段优先级排列（标题>Creator>Tag>
+		// 文件名）。无搜索词时完全跳过这层，rank_tier 恒为 0，与不带 ranking 时行为
+		// 一致。
+		titleTierSQL := singleFieldTierSQL("w.search_title_norm")
+		creatorTierSQL := singleFieldTierSQL("w.search_creator_norm")
+		tagTierSQL := multiFieldTierSQL("w.search_tags_norm")
+		filenameTierSQL := multiFieldTierSQL("w.search_filenames_norm")
+		cte = fmt.Sprintf(`WITH tiers AS (
+SELECT w.work_id, w.title, w.creator, w.tags_json, w.filenames_text, w.sort_title_key, w.favorite, w.progress,
+%s AS media_count,
+(%s) AS title_tier, (%s) AS creator_tier, (%s) AS tag_tier, (%s) AS filename_tier
+FROM work_projections w%s WHERE %s
+),
+scored AS (
+SELECT *, max(%s, %s, %s, %s) AS rank_tier FROM tiers
+)`, mediaCountExpr, titleTierSQL, creatorTierSQL, tagTierSQL, filenameTierSQL, join, strings.Join(where, " AND "),
+			combinedFieldScoreSQL("title_tier", fieldPriorityTitle), combinedFieldScoreSQL("creator_tier", fieldPriorityCreator),
+			combinedFieldScoreSQL("tag_tier", fieldPriorityTag), combinedFieldScoreSQL("filename_tier", fieldPriorityFilename))
+		selectArgs = []any{
+			plan.NormalizedQuery, plan.NormalizedQuery, plan.NormalizedQuery, // title
+			plan.NormalizedQuery, plan.NormalizedQuery, plan.NormalizedQuery, // creator
+			plan.NormalizedQuery, plan.NormalizedQuery, plan.NormalizedQuery, // tag
+			plan.NormalizedQuery, plan.NormalizedQuery, plan.NormalizedQuery, // filename
+		}
+	} else {
+		cte = fmt.Sprintf(`WITH scored AS (
+SELECT w.work_id, w.title, w.creator, w.tags_json, w.filenames_text, w.sort_title_key, w.favorite, w.progress,
+%s AS media_count, 0 AS rank_tier
+FROM work_projections w%s WHERE %s
+)`, mediaCountExpr, join, strings.Join(where, " AND "))
 	}
 
 	operator, direction := ">", "ASC"
@@ -287,13 +419,8 @@ func (s *Service) query(ctx context.Context, pub publication, request Request, p
 		outerArgs = append(outerArgs, claims.LastRankTier, claims.LastRankTier, claims.LastSortKey, claims.LastSortKey, claims.LastCanonicalWorkID)
 	}
 
-	statement := fmt.Sprintf(`WITH scored AS (
-SELECT w.work_id, w.title, w.creator, w.tags_json, w.sort_title_key,
-(SELECT count(*) FROM media_projections m WHERE m.catalog_revision_id=w.catalog_revision_id AND m.overlay_revision_id=w.overlay_revision_id AND m.work_id=w.work_id AND m.hidden=0) AS media_count,
-(%s) AS rank_tier
-FROM work_projections w%s WHERE %s
-)
-SELECT work_id, title, creator, tags_json, sort_title_key, media_count, rank_tier FROM scored`, rankExpr, join, strings.Join(where, " AND "))
+	statement := cte + `
+SELECT work_id, title, creator, tags_json, filenames_text, sort_title_key, favorite, progress, media_count, rank_tier FROM scored`
 
 	args := append(append([]any{}, selectArgs...), fromArgs...)
 	if len(outerWhere) > 0 {
@@ -311,18 +438,21 @@ SELECT work_id, title, creator, tags_json, sort_title_key, media_count, rank_tie
 	items := make([]Work, 0, request.Limit+1)
 	for rows.Next() {
 		var work Work
-		var tags string
-		if err := rows.Scan(&work.ID, &work.Title, &work.Creator, &tags, &work.SortKey, &work.MediaCount, &work.RankTier); err != nil {
+		var tags, filenames string
+		var favorite int
+		if err := rows.Scan(&work.ID, &work.Title, &work.Creator, &tags, &filenames, &work.SortKey,
+			&favorite, &work.Progress, &work.MediaCount, &work.RankTier); err != nil {
 			return nil, false, fault.New(fault.CodeInternal, true, err)
 		}
+		work.Favorite = favorite != 0
 		_ = json.Unmarshal([]byte(tags), &work.Tags)
 		if work.Tags == nil {
 			work.Tags = []string{}
 		}
 		if plan.NormalizedQuery != "" {
-			for _, span := range querytext.HighlightSpans(work.Title, plan.NormalizedQuery) {
-				work.TitleHighlights = append(work.TitleHighlights, HighlightSpan{Start: span.Start, End: span.End})
-			}
+			var filenameList []string
+			_ = json.Unmarshal([]byte(filenames), &filenameList)
+			work.Matches = computeMatches(plan.NormalizedQuery, work.Title, work.Creator, work.Tags, filenameList)
 		}
 		items = append(items, work)
 	}
@@ -334,6 +464,44 @@ SELECT work_id, title, creator, tags_json, sort_title_key, media_count, rank_tie
 		items = items[:request.Limit]
 	}
 	return items, more, nil
+}
+
+// computeMatches 为标题/Creator/Tag/文件名逐一计算命中区间，产出通用高亮 DTO。同一
+// 字段可能出现多个条目（例如两个不同的 tag 分别命中，各自携带自己的 spans）；结果按
+// maxMatchesPerWork 截断，value 按 maxMatchValueRunes 截断（防御性上限）。
+func computeMatches(normalizedQuery, title, creator string, tags, filenames []string) []FieldMatch {
+	var matches []FieldMatch
+	add := func(field, value string) {
+		if len(matches) >= maxMatchesPerWork {
+			return
+		}
+		spans := querytext.HighlightSpans(value, normalizedQuery)
+		if len(spans) == 0 {
+			return
+		}
+		converted := make([]MatchSpan, 0, len(spans))
+		for _, span := range spans {
+			converted = append(converted, MatchSpan{Start: span.Start, End: span.End})
+		}
+		matches = append(matches, FieldMatch{Field: field, Value: truncateRunes(value, maxMatchValueRunes), Spans: converted})
+	}
+	add("title", title)
+	add("creator", creator)
+	for _, tag := range tags {
+		add("tag", tag)
+	}
+	for _, filename := range filenames {
+		add("filename", filename)
+	}
+	return matches
+}
+
+func truncateRunes(value string, limit int) string {
+	runes := []rune(value)
+	if len(runes) <= limit {
+		return value
+	}
+	return string(runes[:limit])
 }
 
 // computeTotal 复用 baseFilter 的相同判据，只在命中行数超过 TotalBudget 时退化为
@@ -442,6 +610,54 @@ func asExpired(err error) error {
 		return fault.New(fault.CodeCursorExpired, true, nil)
 	}
 	return err
+}
+
+func hasCapability(capabilities []string, capability string) bool {
+	for _, value := range capabilities {
+		if value == capability {
+			return true
+		}
+	}
+	return false
+}
+
+// buildDependencySet 是查询 planner 的核心：根据本次实际请求（而不是字段的静态能力表）
+// 生成这次查询真正依赖的字段集合。默认隐式 hidden 可见性、显式过滤字段、搜索命中字段
+// 各自贡献一条或多条记录；同一字段在同一次查询里可能因为不同用途出现多次（如
+// overlay.progress 既作为过滤条件、"progress" 又作为搜索字段——当前搜索字段固定为
+// title/creator/tag/filename，不含 progress，因此暂不会重复，但结构上允许）。
+func buildDependencySet(request Request, plan querytext.SearchPlan, filterNode *FilterNode) []DependencyField {
+	var fields []DependencyField
+	if filterReferencesField(filterNode, "overlay.hidden") {
+		fields = append(fields, DependencyField{Field: "overlay.hidden", Role: DependencyRolePredicate})
+	} else {
+		fields = append(fields, DependencyField{Field: "overlay.hidden", Role: DependencyRoleMembership})
+	}
+	for _, name := range collectFilterFields(filterNode) {
+		if name == "overlay.hidden" {
+			continue
+		}
+		fields = append(fields, DependencyField{Field: name, Role: DependencyRolePredicate})
+	}
+	if request.Tag != "" {
+		fields = append(fields, DependencyField{Field: "tag", Role: DependencyRolePredicate})
+	}
+	if request.LibraryID != "" {
+		fields = append(fields, DependencyField{Field: "library.id", Role: DependencyRolePredicate})
+	}
+	if request.SourceID != "" {
+		fields = append(fields, DependencyField{Field: "source.id", Role: DependencyRolePredicate})
+	}
+	fields = append(fields, DependencyField{Field: "title", Role: DependencyRoleOrdering})
+	if plan.NormalizedQuery != "" {
+		fields = append(fields,
+			DependencyField{Field: "title", Role: DependencyRoleSearch},
+			DependencyField{Field: "creator", Role: DependencyRoleSearch},
+			DependencyField{Field: "tag", Role: DependencyRoleSearch},
+			DependencyField{Field: "filename", Role: DependencyRoleSearch},
+		)
+	}
+	return fields
 }
 
 func AuthorizationScope(principal string, capabilities []string) string {

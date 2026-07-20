@@ -39,31 +39,65 @@ const (
 	DependencyLive     DependencyClass = "live"
 )
 
-// OverlayDependencySet 是当前 Overlay 字段的服务端权威依赖分类表。TitleOverride、
-// ManualTags、Hidden、CustomCoverMediaID 参与查询过滤/排序/搜索或集合成员判断
-// （标题排序键、标签过滤、hidden 可见性、封面引用），因此是 Snapshot：写入只有在对应
-// 持久投影 Job 完成并进入新 query publication 后才反映到查询结果。Favorite、Progress
-// 目前不参与任何过滤/排序/搜索判据，是 Live：写入后立即可通过 GET .../overlay 或未来
-// 的实时展示接口读取最新值，不需要等待新 publication，也不会让客户端插入/删除/重排
-// 当前页成员。
-var OverlayDependencySet = map[string]DependencyClass{
-	"titleOverride":      DependencySnapshot,
-	"manualTags":         DependencySnapshot,
-	"hidden":             DependencySnapshot,
-	"customCoverMediaId": DependencySnapshot,
-	"favorite":           DependencyLive,
-	"progress":           DependencyLive,
+// FieldCapability 描述一个 Overlay 字段静态可以参与哪些查询用途——这是能力声明，
+// 不是任何具体查询的最终 dependency set。具体查询的 dependency set 必须由查询 planner
+// （见 internal/query 的 dependencySet 构建逻辑）根据实际请求（用了哪些过滤字段、
+// 排序依据、是否搜索）从这张能力表筛出真正相关的子集，不能反过来把这张静态表整体
+// 当作某次查询用到的字段集合。见 Documents/规范/06-查询-搜索与排序.md「Overlay 查询依赖」。
+type FieldCapability struct {
+	// Display 字段可以出现在展示层（列表/详情响应）。
+	Display bool
+	// Filter 字段可以作为结构化过滤谓词。
+	Filter bool
+	// Sort 字段可以作为排序依据。
+	Sort bool
+	// Search 字段参与全文/子串搜索召回与 ranking。
+	Search bool
+	// Visibility 字段影响作品是否出现在默认查询结果集合中。
+	Visibility bool
+	// ResourceReference 字段解析为另一个资源引用（如封面媒体）。
+	ResourceReference bool
+	// LiveUserState 字段除 snapshot 值外还可以提供 control.db 当前值用于即时展示。
+	LiveUserState bool
 }
 
-// QueryAffectingFieldsChanged 依据 OverlayDependencySet 判断 previous→normalized 之间
-// 的写入是否触碰了任何 Snapshot 字段，从而需要排队新的 overlay 投影 Job 并推进
-// query_watermark。只读遍历 Snapshot 分类，不在此处编码具体字段比较逻辑，使分类表
-// 与实际排队判据保持单一事实来源。
-func queryAffectingFieldsChanged(previous State, normalized Input) bool {
-	for field, class := range OverlayDependencySet {
-		if class != DependencySnapshot {
-			continue
+// OverlayFieldCapabilities 是 Overlay 字段能力注册表：登记每个字段静态支持哪些查询
+// 用途，供 planner 和文档/契约测试查阅。不表达"这个字段现在是 live 还是 snapshot"，
+// 那是每次查询按实际请求内容动态判定的（见 query.Service 的 dependencySet 构建）。
+var OverlayFieldCapabilities = map[string]FieldCapability{
+	"titleOverride":      {Display: true, Sort: true, Search: true},
+	"manualTags":         {Display: true, Filter: true, Search: true},
+	"hidden":             {Visibility: true, Filter: true},
+	"customCoverMediaId": {Display: true, ResourceReference: true},
+	"favorite":           {Display: true, Filter: true, LiveUserState: true},
+	"progress":           {Display: true, Filter: true, Sort: true, LiveUserState: true},
+}
+
+// snapshotWriteBarrierFields 是写入时必须先经过投影 Job（写后屏障）才能反映到下一次
+// 查询结果的字段集合：任何在 OverlayFieldCapabilities 中声明 Filter/Sort/Search/
+// Visibility/ResourceReference 能力的字段都必须在这里出现——具体查询是否真的用到某个
+// 字段由 planner 按请求动态判断，但写入端不知道未来会有哪些查询，因此任何"可能被查询
+// 依赖"的字段一律触发屏障，不能因为本次没人过滤/排序它就跳过投影。Favorite/Progress
+// 同时保留 LiveUserState 能力：GET .../overlay 与列表响应的 live 展示仍读取 control.db
+// 当前值，不需要等待新 publication；只有当查询把它们用作过滤/排序依据时才读取这里
+// 投影出的 snapshot 值。
+var snapshotWriteBarrierFields = buildSnapshotWriteBarrierFields()
+
+func buildSnapshotWriteBarrierFields() map[string]struct{} {
+	result := make(map[string]struct{})
+	for field, capability := range OverlayFieldCapabilities {
+		if capability.Filter || capability.Sort || capability.Search || capability.Visibility || capability.ResourceReference {
+			result[field] = struct{}{}
 		}
+	}
+	return result
+}
+
+// queryAffectingFieldsChanged 判断 previous→normalized 之间的写入是否触碰了任何具备
+// 查询依赖能力的字段（snapshotWriteBarrierFields），从而需要排队新的 overlay 投影
+// Job 并推进 query_watermark。
+func queryAffectingFieldsChanged(previous State, normalized Input) bool {
+	for field := range snapshotWriteBarrierFields {
 		switch field {
 		case "titleOverride":
 			if previous.TitleOverride != normalized.TitleOverride {
@@ -79,6 +113,14 @@ func queryAffectingFieldsChanged(previous State, normalized Input) bool {
 			}
 		case "customCoverMediaId":
 			if previous.CustomCoverMediaID != normalized.CustomCoverMediaID {
+				return true
+			}
+		case "favorite":
+			if previous.Favorite != normalized.Favorite {
+				return true
+			}
+		case "progress":
+			if previous.Progress != normalized.Progress {
 				return true
 			}
 		}
@@ -502,7 +544,7 @@ func (s *Service) Reconcile(ctx context.Context) error {
 }
 
 func (s *Service) readFacts(ctx context.Context, target int64) (map[string]catalog.OverlayFact, error) {
-	rows, err := s.control.QueryContext(ctx, `SELECT work_id, title_override, manual_tags_json, hidden, custom_cover_media_id
+	rows, err := s.control.QueryContext(ctx, `SELECT work_id, title_override, manual_tags_json, hidden, custom_cover_media_id, favorite, progress
 FROM work_overlays WHERE query_watermark<=? ORDER BY work_id`, target)
 	if err != nil {
 		return nil, fault.New(fault.CodeInternal, true, err)
@@ -511,16 +553,18 @@ FROM work_overlays WHERE query_watermark<=? ORDER BY work_id`, target)
 	result := make(map[string]catalog.OverlayFact)
 	for rows.Next() {
 		var workID, title, tagsJSON string
-		var hidden int
+		var hidden, favorite int
+		var progress float64
 		var cover sql.NullString
-		if err := rows.Scan(&workID, &title, &tagsJSON, &hidden, &cover); err != nil {
+		if err := rows.Scan(&workID, &title, &tagsJSON, &hidden, &cover, &favorite, &progress); err != nil {
 			return nil, fault.New(fault.CodeInternal, true, err)
 		}
 		var tags []string
 		if err := json.Unmarshal([]byte(tagsJSON), &tags); err != nil {
 			return nil, fault.New(fault.CodeInternal, false, err)
 		}
-		result[workID] = catalog.OverlayFact{TitleOverride: title, ManualTags: tags, Hidden: hidden != 0, CustomCoverMediaID: cover.String}
+		result[workID] = catalog.OverlayFact{TitleOverride: title, ManualTags: tags, Hidden: hidden != 0, CustomCoverMediaID: cover.String,
+			Favorite: favorite != 0, Progress: progress}
 	}
 	return result, rows.Err()
 }

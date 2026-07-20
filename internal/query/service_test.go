@@ -117,6 +117,8 @@ func TestFTSSnapshotKeysetCursorAndAuthorization(t *testing.T) {
 type seedWork struct {
 	title, creator  string
 	tags, filenames []string
+	favorite        bool
+	progress        float64
 }
 
 func seedPublication(t *testing.T, store *storage.Store, suffix string, works []seedWork) string {
@@ -142,10 +144,16 @@ VALUES (?, ?, 1, 'published', 1, 1)`, ov, cat); err != nil {
 		tags, _ := json.Marshal(value.tags)
 		filenames, _ := json.Marshal(value.filenames)
 		document := querytext.BuildDocument(value.title, value.creator, value.tags, value.filenames)
+		favorite := 0
+		if value.favorite {
+			favorite = 1
+		}
 		_, err := store.Catalog.SQL().ExecContext(ctx, `INSERT INTO work_projections
 (catalog_revision_id, overlay_revision_id, work_id, source_id, source_key, library_id, title, creator, tags_json, filenames_text,
- normalized_original_text, cjk_bigram_token_text, latin_trigram_token_text, sort_title_key, hidden)
-VALUES (?, ?, ?, 'src_test', ?, 'lib_test', ?, ?, ?, ?, ?, ?, ?, ?, 0)`, cat, ov, id, fmt.Sprintf("source-%d", index), value.title, value.creator, string(tags), string(filenames), document.NormalizedOriginal, document.CJKTokens, document.LatinTokens, document.SortTitleKey)
+ normalized_original_text, cjk_bigram_token_text, latin_trigram_token_text, sort_title_key, hidden, favorite, progress,
+ search_title_norm, search_creator_norm, search_tags_norm, search_filenames_norm)
+VALUES (?, ?, ?, 'src_test', ?, 'lib_test', ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?, ?, ?, ?, ?)`, cat, ov, id, fmt.Sprintf("source-%d", index), value.title, value.creator, string(tags), string(filenames), document.NormalizedOriginal, document.CJKTokens, document.LatinTokens, document.SortTitleKey,
+			favorite, value.progress, document.TitleNorm, document.CreatorNorm, document.TagsNorm, document.FilenamesNorm)
 		if err != nil {
 			t.Fatal(err)
 		}
