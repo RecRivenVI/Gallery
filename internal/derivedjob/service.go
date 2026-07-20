@@ -2,6 +2,7 @@ package derivedjob
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -11,6 +12,8 @@ import (
 	"github.com/RecRivenVI/gallery/internal/derived"
 	"github.com/RecRivenVI/gallery/internal/domain"
 	"github.com/RecRivenVI/gallery/internal/jobs"
+	"github.com/RecRivenVI/gallery/internal/media"
+	"github.com/RecRivenVI/gallery/internal/ports"
 )
 
 type Request struct {
@@ -34,10 +37,12 @@ type SpaceGate interface {
 }
 
 type Service struct {
-	jobs     *jobs.Store
-	assets   *derived.Service
-	resolver Resolver
-	space    SpaceGate
+	jobs      *jobs.Store
+	assets    *derived.Service
+	resolver  Resolver
+	space     SpaceGate
+	catalogDB *sql.DB
+	clock     ports.Clock
 }
 
 func New(jobStore *jobs.Store, assetService *derived.Service, resolver Resolver) (*Service, error) {
@@ -47,11 +52,33 @@ func New(jobStore *jobs.Store, assetService *derived.Service, resolver Resolver)
 	return &Service{jobs: jobStore, assets: assetService, resolver: resolver}, nil
 }
 
+// SetBlobLeaser 注入 catalog.db 连接与时钟，用于在创建与执行阶段为请求的 ContentBlob
+// 建立 media.BlobReadLease：Job 排队等待调度与真正生成之间可能有任意长的窗口，若没有
+// 显式租约，GC 可能在这段时间内回收该 digest 唯一剩余 occurrence 所在的 catalog_revision，
+// 即便这个 Job 仍然需要它。未注入时（例如不依赖 Catalog GC 时序的单元测试）跳过租约，
+// 只是不提供这层保护，不影响生成本身的正确性。
+func (s *Service) SetBlobLeaser(catalogDB *sql.DB, clock ports.Clock) {
+	s.catalogDB = catalogDB
+	s.clock = clock
+}
+
+// acquireBlobLease 为 blob 建立一次一次性、按 TTL 自然过期的占位租约，不显式 Close：
+// 它只需要覆盖"这一刻起一段时间内"该 digest 不被 GC 回收，不需要与调用方的生命周期
+// 绑定释放（提前 Close 反而会在窗口未过时就失去保护）。
+func (s *Service) acquireBlobLease(ctx context.Context, blob domain.ContentBlobRef) error {
+	if s.catalogDB == nil {
+		return nil
+	}
+	_, err := media.AcquireBlobReadLease(ctx, s.catalogDB, s.clock, blob, nil)
+	return err
+}
+
 func (s *Service) Create(ctx context.Context, request Request, createdBy string) (jobs.Job, error) {
 	if strings.TrimSpace(request.TransformID) == "" || strings.TrimSpace(request.TransformVersion) == "" || strings.TrimSpace(createdBy) == "" {
 		return jobs.Job{}, fault.New(fault.CodeValidation, false, nil)
 	}
-	if _, err := domain.ParseContentBlobRef(request.BlobAlgorithm, request.BlobDigest); err != nil {
+	blobRef, err := domain.ParseContentBlobRef(request.BlobAlgorithm, request.BlobDigest)
+	if err != nil {
 		return jobs.Job{}, fault.New(fault.CodeDerivedAssetInvalid, false, err)
 	}
 	if s.resolver == nil {
@@ -61,6 +88,11 @@ func (s *Service) Create(ctx context.Context, request Request, createdBy string)
 		if err := s.space.CheckSpace(ctx, "derived_asset", 0); err != nil {
 			return jobs.Job{}, err
 		}
+	}
+	// 在 Job 真正建立之前先为其输入 Blob 建立读取租约，覆盖创建到调度执行之间的等待
+	// 窗口：见 acquireBlobLease 与 catalog.Store.LocateBlobFile 的说明。
+	if err := s.acquireBlobLease(ctx, blobRef); err != nil {
+		return jobs.Job{}, err
 	}
 	payload, err := json.Marshal(request)
 	if err != nil {
@@ -89,9 +121,19 @@ func (s *Service) Execute(ctx context.Context, jobID string) error {
 	if err != nil {
 		return s.fail(ctx, jobID, fault.New(fault.CodeDerivedAssetInvalid, false, err))
 	}
+	// 真正解析/生成之前刷新一次租约，覆盖 Job 排队等待调度与本次实际生成的窗口：见
+	// acquireBlobLease 与 catalog.Store.LocateBlobFile 的说明。
+	if err := s.acquireBlobLease(ctx, blobRef); err != nil {
+		return s.fail(ctx, jobID, err)
+	}
 	generator, err := s.resolver.Resolve(ctx, request.TransformID, request.TransformVersion, blobRef)
 	if err != nil {
-		return s.fail(ctx, jobID, fault.New(fault.CodeDerivedAssetFailed, true, err))
+		// 直接透传 Resolver 返回的结构化错误（例如 LocateBlobFile 在内容/Source 确实不再
+		// 可解析时返回的 NOT_FOUND，或不支持的 transform 返回的 DERIVED_ASSET_INVALID），
+		// 不得不分青红皂白统一改写成 retryable 的 DERIVED_ASSET_FAILED——那会让一个永久性
+		// 失败被无谓地反复重试，也会让客户端无法区分"输入已经不存在"与"这次生成偶然失败"。
+		// fail() 本身已经会在错误不是 *fault.Error 时安全回退到 DERIVED_ASSET_FAILED。
+		return s.fail(ctx, jobID, err)
 	}
 	asset, err := s.assets.GetOrCreate(ctx, derived.Request{Blob: domain.ContentBlobRef{Algorithm: request.BlobAlgorithm, Digest: request.BlobDigest},
 		TransformID: request.TransformID, TransformVersion: request.TransformVersion, Parameters: request.Parameters, OverlayInputHash: request.OverlayInputHash}, generator)

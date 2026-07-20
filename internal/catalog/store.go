@@ -1262,17 +1262,23 @@ WHERE m.catalog_revision_id=q.catalog_revision_id AND m.source_id=? AND m.relati
 	return observation, nil
 }
 
-// LocateBlobFile 在当前活动 query publication 中为一个 ContentBlob 找到至少一个仍然
-// present 的 FileLocation，返回其 Source、相对路径与媒体大小，供 DerivedAsset 生成器
-// 在不持有 Catalog 内部 row ID 的前提下定位可读取的源文件。多个 occurrence 时任取其一
-// （内容相同，读取哪个位置对派生结果无影响）。
+// LocateBlobFile 把一个 ContentBlob 引用（algorithm+digest）解析为一个仍然 present 的
+// 源文件位置。DerivedAsset 的输入按内容寻址（见 derivedjob.Request 只携带 Blob，不携带
+// publication 引用）：创建请求时锁定的是这个 Blob，不是创建时刻恰好 active 的那个
+// publication；因此这里刻意不限定只查当前 active_query_publication——只要该 digest 在
+// 任意一个仍未被 GC 回收的 catalog_revision 中还有 present occurrence，就是有效输入，
+// active publication 在请求排队后切换到其它 revision 不应改变这次生成的可解析性。
+// 调用方必须在生成前后持有覆盖该 digest 的 media.BlobReadLease，防止这里读到的
+// occurrence 所在 revision 在生成完成前被 GarbageCollect 回收（GC 对任一未过期
+// blob_read_lease 覆盖的 revision 一律跳过，见 Store.GarbageCollect）。多个 revision
+// 都仍持有该 digest 时按 catalog_revision_id（UUIDv7，天然按创建时间排序）取最新一个，
+// 只是为了确定性，不代表其它仍然有效的 occurrence 不可用。
 func (s *Store) LocateBlobFile(ctx context.Context, algorithm, digest string) (sourceID, relativePath string, size int64, err error) {
 	err = s.db.QueryRowContext(ctx, `SELECT m.source_id, m.relative_path, m.size_bytes
 FROM media_projections m
-JOIN active_query_publication a ON a.singleton=1 JOIN query_publications q ON q.query_publication_id=a.query_publication_id
-JOIN file_locations f ON f.catalog_revision_id=q.catalog_revision_id AND f.source_id=m.source_id AND f.source_key=m.source_key AND f.status='present'
-WHERE m.catalog_revision_id=q.catalog_revision_id AND m.overlay_revision_id=q.overlay_revision_id
-  AND m.algorithm=? AND m.digest=? AND m.content_verification_state='content_verified'
+JOIN file_locations f ON f.catalog_revision_id=m.catalog_revision_id AND f.source_id=m.source_id AND f.source_key=m.source_key AND f.status='present'
+WHERE m.algorithm=? AND m.digest=? AND m.content_verification_state='content_verified'
+ORDER BY m.catalog_revision_id DESC
 LIMIT 1`, algorithm, digest).Scan(&sourceID, &relativePath, &size)
 	if errors.Is(err, sql.ErrNoRows) {
 		return "", "", 0, fault.New(fault.CodeNotFound, false, nil)
