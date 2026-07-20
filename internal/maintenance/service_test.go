@@ -2,13 +2,19 @@ package maintenance_test
 
 import (
 	"context"
+	"database/sql"
 	"errors"
+	"io"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/RecRivenVI/gallery/internal/catalog"
 	"github.com/RecRivenVI/gallery/internal/contract/fault"
+	"github.com/RecRivenVI/gallery/internal/derived"
+	"github.com/RecRivenVI/gallery/internal/derivedjob"
+	"github.com/RecRivenVI/gallery/internal/domain"
 	"github.com/RecRivenVI/gallery/internal/jobs"
 	"github.com/RecRivenVI/gallery/internal/maintenance"
 	"github.com/RecRivenVI/gallery/internal/platform/appdirs"
@@ -73,3 +79,239 @@ func TestPreflightRejectsInsufficientAppDirsSpace(t *testing.T) {
 }
 
 var _ ports.SpaceChecker = spaceChecker{}
+
+type maintenanceGCResolver struct{}
+
+func (maintenanceGCResolver) Resolve(context.Context, string, string, domain.ContentBlobRef) (derived.Generator, error) {
+	return func(_ context.Context, output io.Writer) (string, error) {
+		_, err := io.WriteString(output, "derived-output")
+		return "image/png", err
+	}, nil
+}
+
+// maintenanceGCFailingResolver 模拟 Resolve 在真正生成时失败，用于把 Derived Job 驱动进
+// failed 状态而不真正写出结果，覆盖退避等待期与永久失败两类保护边界。
+type maintenanceGCFailingResolver struct{ err error }
+
+func (f maintenanceGCFailingResolver) Resolve(context.Context, string, string, domain.ContentBlobRef) (derived.Generator, error) {
+	return nil, f.err
+}
+
+// insertGCEligibleRevision 构造一个满足 GC 全部其它回收条件（非 active、超过任意保留期、
+// 无查询游标租约）的旧 catalog_revision，并写入一个持有目标 digest 的 ContentBlob 行。
+// 唯一可能阻止回收的因素只剩下 blob_read_leases 或调用方显式声明的 ProtectedBlobs。
+func insertGCEligibleRevision(t *testing.T, db *sql.DB, revisionID, jobID, digest string) {
+	t.Helper()
+	if _, err := db.Exec(
+		"INSERT INTO catalog_revisions VALUES (?, ?, 'src_derived_gc', 'published', 1, 1)", revisionID, jobID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec(
+		"INSERT INTO content_blobs VALUES (?, 'sha256-v1', ?, 1)", revisionID, digest); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func revisionPresent(t *testing.T, db *sql.DB, revisionID string) bool {
+	t.Helper()
+	var count int
+	if err := db.QueryRow(
+		"SELECT count(*) FROM catalog_revisions WHERE catalog_revision_id=?", revisionID).Scan(&count); err != nil {
+		t.Fatal(err)
+	}
+	return count == 1
+}
+
+// TestRunGCProtectsBlobForQueuedDerivedJobBeyondLeaseTTL 覆盖阶段 4 收尾复核发现的核心
+// 缺口：media.BlobReadLease 只在 Create 与 Execute 开始时各建立一次固定 5 分钟 TTL 的
+// 一次性租约，不依赖"当前 transform 通常很快执行"的假设时，一个 Job 排队等待调度的
+// 时间完全可能超过这个 TTL——此时旧机制下租约已经过期，但 Job 依然 queued、随时可能被
+// 执行，其引用的 ContentBlob 所在 revision 不应被 GC 回收。
+func TestRunGCProtectsBlobForQueuedDerivedJobBeyondLeaseTTL(t *testing.T) {
+	ctx := context.Background()
+	dirs := appdirs.UnderRoot(filepath.Join(t.TempDir(), "app"))
+	if err := dirs.Ensure(filesystem.OS{}); err != nil {
+		t.Fatal(err)
+	}
+	store, err := storage.Open(ctx, dirs)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	clk := clock.NewManual(time.Date(2026, 7, 20, 8, 0, 0, 0, time.UTC))
+	ids := identity.NewGenerator(clk)
+	jobStore, err := jobs.NewStore(store.Control.SQL(), clk, ids)
+	if err != nil {
+		t.Fatal(err)
+	}
+	catalogStore, err := catalog.NewStore(store.Catalog.SQL(), clk, ids)
+	if err != nil {
+		t.Fatal(err)
+	}
+	assets, err := derived.New(store.Catalog.SQL(), dirs.Cache, clk, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	derivedJobs, err := derivedjob.New(jobStore, assets, maintenanceGCResolver{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	derivedJobs.SetBlobLeaser(store.Catalog.SQL(), clk)
+	const revisionID = "cat_018f47d2-5c16-7a44-a8a0-0000000000a1"
+	digest := strings.Repeat("4", 64)
+	insertGCEligibleRevision(t, store.Catalog.SQL(), revisionID, "job_018f47d2-5c16-7a44-a8a0-0000000000a1", digest)
+	job, err := derivedJobs.Create(ctx, derivedjob.Request{
+		BlobAlgorithm: "sha256-v1", BlobDigest: digest, TransformID: "thumbnail", TransformVersion: "v1", Parameters: []byte(`{}`),
+	}, "owner")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if job.Status != jobs.StatusQueued {
+		t.Fatalf("新建 Derived Job 应为 queued: %+v", job)
+	}
+	// 排队等待调度的时间超过固定 5 分钟 BlobReadLeaseDuration：Job 从未 Execute，Create 时
+	// 建立的租约早已过期。
+	clk.Advance(10 * time.Minute)
+	maintenanceService, err := maintenance.New(ctx, store.Control.SQL(), catalogStore, jobStore, assets, dirs, spaceChecker{free: 1 << 30}, clk)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := maintenanceService.RunGC(ctx, 0, false); err != nil {
+		t.Fatal(err)
+	}
+	if !revisionPresent(t, store.Catalog.SQL(), revisionID) {
+		t.Fatal("排队中的 Derived Job 引用的 Blob 所在 revision 不应在固定租约过期后被 GC 回收")
+	}
+}
+
+// TestRunGCProtectsBlobForRetryPendingDerivedJobBeyondLeaseTTL 覆盖退避等待窗口：Job 因
+// 可重试错误失败后短暂处于 status=failed，尚未耗尽重试次数、也尚未到达 next_attempt_at，
+// 随时可能被 RequeueDueFailures 重新排队执行。这段等待同样可能超过固定 Blob 租约 TTL。
+func TestRunGCProtectsBlobForRetryPendingDerivedJobBeyondLeaseTTL(t *testing.T) {
+	ctx := context.Background()
+	dirs := appdirs.UnderRoot(filepath.Join(t.TempDir(), "app"))
+	if err := dirs.Ensure(filesystem.OS{}); err != nil {
+		t.Fatal(err)
+	}
+	store, err := storage.Open(ctx, dirs)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	clk := clock.NewManual(time.Date(2026, 7, 20, 8, 0, 0, 0, time.UTC))
+	ids := identity.NewGenerator(clk)
+	jobStore, err := jobs.NewStore(store.Control.SQL(), clk, ids)
+	if err != nil {
+		t.Fatal(err)
+	}
+	catalogStore, err := catalog.NewStore(store.Catalog.SQL(), clk, ids)
+	if err != nil {
+		t.Fatal(err)
+	}
+	assets, err := derived.New(store.Catalog.SQL(), dirs.Cache, clk, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	derivedJobs, err := derivedjob.New(jobStore, assets, maintenanceGCFailingResolver{err: errors.New("transient upstream failure")})
+	if err != nil {
+		t.Fatal(err)
+	}
+	derivedJobs.SetBlobLeaser(store.Catalog.SQL(), clk)
+	const revisionID = "cat_018f47d2-5c16-7a44-a8a0-0000000000a2"
+	digest := strings.Repeat("5", 64)
+	insertGCEligibleRevision(t, store.Catalog.SQL(), revisionID, "job_018f47d2-5c16-7a44-a8a0-0000000000a2", digest)
+	job, err := derivedJobs.Create(ctx, derivedjob.Request{
+		BlobAlgorithm: "sha256-v1", BlobDigest: digest, TransformID: "thumbnail", TransformVersion: "v1", Parameters: []byte(`{}`),
+	}, "owner")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := derivedJobs.Execute(ctx, job.ID); err == nil {
+		t.Fatal("失败 Resolver 下 Execute 应返回错误")
+	}
+	failed, err := jobStore.Get(ctx, job.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if failed.Status != jobs.StatusFailed || !failed.FailureRetryable || failed.Attempt > failed.MaxRetries {
+		t.Fatalf("Job 应处于尚未耗尽重试次数的可重试 failed 状态: %+v", failed)
+	}
+	// 推进时钟越过退避等待与固定租约 TTL，但不调用 RequeueDueFailures，模拟仍在退避
+	// 窗口内（未到 next_attempt_at）而尚未被重新排队执行的状态。
+	clk.Advance(10 * time.Minute)
+	maintenanceService, err := maintenance.New(ctx, store.Control.SQL(), catalogStore, jobStore, assets, dirs, spaceChecker{free: 1 << 30}, clk)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := maintenanceService.RunGC(ctx, 0, false); err != nil {
+		t.Fatal(err)
+	}
+	if !revisionPresent(t, store.Catalog.SQL(), revisionID) {
+		t.Fatal("退避等待中的 Derived Job 引用的 Blob 所在 revision 不应在固定租约过期后被 GC 回收")
+	}
+}
+
+// TestRunGCReclaimsBlobAfterDerivedJobPermanentlyFails 是前两个保护测试的对照回归：一旦
+// Job 真正进入不可恢复的终态（non-retryable failed），不应被这项新增保护永久锁住资源，
+// 其引用的 Blob 在没有其它引用时必须仍能被正常回收。
+func TestRunGCReclaimsBlobAfterDerivedJobPermanentlyFails(t *testing.T) {
+	ctx := context.Background()
+	dirs := appdirs.UnderRoot(filepath.Join(t.TempDir(), "app"))
+	if err := dirs.Ensure(filesystem.OS{}); err != nil {
+		t.Fatal(err)
+	}
+	store, err := storage.Open(ctx, dirs)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	clk := clock.NewManual(time.Date(2026, 7, 20, 8, 0, 0, 0, time.UTC))
+	ids := identity.NewGenerator(clk)
+	jobStore, err := jobs.NewStore(store.Control.SQL(), clk, ids)
+	if err != nil {
+		t.Fatal(err)
+	}
+	catalogStore, err := catalog.NewStore(store.Catalog.SQL(), clk, ids)
+	if err != nil {
+		t.Fatal(err)
+	}
+	assets, err := derived.New(store.Catalog.SQL(), dirs.Cache, clk, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	derivedJobs, err := derivedjob.New(jobStore, assets, maintenanceGCFailingResolver{err: fault.New(fault.CodeNotFound, false, nil)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	derivedJobs.SetBlobLeaser(store.Catalog.SQL(), clk)
+	const revisionID = "cat_018f47d2-5c16-7a44-a8a0-0000000000a3"
+	digest := strings.Repeat("6", 64)
+	insertGCEligibleRevision(t, store.Catalog.SQL(), revisionID, "job_018f47d2-5c16-7a44-a8a0-0000000000a3", digest)
+	job, err := derivedJobs.Create(ctx, derivedjob.Request{
+		BlobAlgorithm: "sha256-v1", BlobDigest: digest, TransformID: "thumbnail", TransformVersion: "v1", Parameters: []byte(`{}`),
+	}, "owner")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := derivedJobs.Execute(ctx, job.ID); err == nil {
+		t.Fatal("失败 Resolver 下 Execute 应返回错误")
+	}
+	failed, err := jobStore.Get(ctx, job.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if failed.Status != jobs.StatusFailed || failed.FailureRetryable {
+		t.Fatalf("Job 应处于不可重试的永久 failed 状态: %+v", failed)
+	}
+	clk.Advance(10 * time.Minute)
+	maintenanceService, err := maintenance.New(ctx, store.Control.SQL(), catalogStore, jobStore, assets, dirs, spaceChecker{free: 1 << 30}, clk)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := maintenanceService.RunGC(ctx, 0, false); err != nil {
+		t.Fatal(err)
+	}
+	if revisionPresent(t, store.Catalog.SQL(), revisionID) {
+		t.Fatal("永久失败且无其它引用的 Derived Job 不应无限期阻止其 Blob 所在 revision 被回收")
+	}
+}

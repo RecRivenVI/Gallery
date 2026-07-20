@@ -147,9 +147,17 @@ type GCResult struct {
 }
 
 type GCOptions struct {
-	Retention    time.Duration
+	Retention time.Duration
+	// ActiveJobIDs 保护这些 Job 拥有的 staging candidate 不被当作遗留 staging 中止。
 	ActiveJobIDs []string
-	DryRun       bool
+	// ProtectedBlobs 是调用方（通常是 maintenance.Service，结合 jobs.Store 的非终态/退避
+	// 等待中 DerivedAsset Job）显式声明的仍在使用中的 ContentBlob 摘要：即便这些摘要当前
+	// 没有任何有效的 blob_read_leases 行（租约可能已按固定 TTL 过期，但引用它的 Job 仍在
+	// 排队、执行或退避等待、随时可能重新读取），持有它的 catalog_revision 也不得被本轮
+	// GC 回收。不引入第二套保护表，只是把既有 content_blobs 判据的输入来源之一从纯租约
+	// 扩展为"租约 OR 调用方显式声明仍在使用"。
+	ProtectedBlobs []domain.ContentBlobRef
+	DryRun         bool
 }
 
 type Store struct {
@@ -908,10 +916,32 @@ func (s *Store) AbortCandidate(ctx context.Context, jobID string) error {
 	return nil
 }
 
+// protectedBlobClause 为一组调用方显式声明的仍在使用中的 ContentBlob 摘要构造 SQL 排除
+// 条件：任何仍被非终态或退避等待中的 DerivedAsset Job 引用的摘要，即便没有当前有效的
+// blob_read_leases 行，也不得被本轮 GC 回收。revisionColumn 是该子查询里引用的
+// catalog_revision_id 列表达式；没有受保护摘要时返回空字符串和 nil 参数，不影响原有查询。
+func protectedBlobClause(revisionColumn string, blobs []domain.ContentBlobRef) (string, []any) {
+	if len(blobs) == 0 {
+		return "", nil
+	}
+	conditions := make([]string, 0, len(blobs))
+	args := make([]any, 0, len(blobs)*2)
+	for _, blob := range blobs {
+		conditions = append(conditions, "(pb.algorithm=? AND pb.digest=?)")
+		args = append(args, blob.Algorithm, blob.Digest)
+	}
+	return fmt.Sprintf(" AND NOT EXISTS (SELECT 1 FROM content_blobs pb WHERE pb.catalog_revision_id=%s AND (%s))",
+		revisionColumn, strings.Join(conditions, " OR ")), args
+}
+
 // GarbageCollect 回收超过保留期且未被活动 publication、游标租约或 Blob
 // 读取租约保护的查询快照。FTS5 表不受外键级联管理，必须与对应 Overlay
 // revision 在同一事务中显式删除。
 func (s *Store) GarbageCollect(ctx context.Context, retention time.Duration) (GCResult, error) {
+	return s.garbageCollect(ctx, retention, nil)
+}
+
+func (s *Store) garbageCollect(ctx context.Context, retention time.Duration, protectedBlobs []domain.ContentBlobRef) (GCResult, error) {
 	if retention < 0 {
 		return GCResult{}, fault.New(fault.CodeValidation, false, nil)
 	}
@@ -933,6 +963,7 @@ func (s *Store) GarbageCollect(ctx context.Context, retention time.Duration) (GC
 		return GCResult{}, fault.New(fault.CodeInternal, true, err)
 	}
 
+	publicationProtectedClause, publicationProtectedArgs := protectedBlobClause("q.catalog_revision_id", protectedBlobs)
 	type snapshot struct{ publication, catalog, overlay string }
 	rows, err := tx.QueryContext(ctx, `SELECT q.query_publication_id, q.catalog_revision_id, q.overlay_revision_id
 FROM query_publications q
@@ -946,8 +977,8 @@ AND NOT EXISTS (
   SELECT 1 FROM content_blobs b JOIN blob_read_leases l
     ON l.blob_algorithm=b.algorithm AND l.blob_digest=b.digest
   WHERE b.catalog_revision_id=q.catalog_revision_id AND l.expires_at>?
-)
-ORDER BY q.created_at, q.query_publication_id`, cutoff, now, now)
+)`+publicationProtectedClause+`
+ORDER BY q.created_at, q.query_publication_id`, append([]any{cutoff, now, now}, publicationProtectedArgs...)...)
 	if err != nil {
 		return GCResult{}, fault.New(fault.CodeInternal, true, err)
 	}
@@ -991,6 +1022,7 @@ ORDER BY q.created_at, q.query_publication_id`, cutoff, now, now)
 		}
 	}
 
+	revisionProtectedClause, revisionProtectedArgs := protectedBlobClause("catalog_revisions.catalog_revision_id", protectedBlobs)
 	result.CatalogRevisions, err = deleteCount(ctx, tx, `DELETE FROM catalog_revisions
 WHERE status IN ('published', 'aborted') AND created_at<=?
 AND NOT EXISTS (SELECT 1 FROM query_publications q WHERE q.catalog_revision_id=catalog_revisions.catalog_revision_id)
@@ -998,7 +1030,7 @@ AND NOT EXISTS (
   SELECT 1 FROM content_blobs b JOIN blob_read_leases l
     ON l.blob_algorithm=b.algorithm AND l.blob_digest=b.digest
   WHERE b.catalog_revision_id=catalog_revisions.catalog_revision_id AND l.expires_at>?
-)`, cutoff, now)
+)`+revisionProtectedClause, append([]any{cutoff, now}, revisionProtectedArgs...)...)
 	if err != nil {
 		return GCResult{}, fault.New(fault.CodeInternal, true, err)
 	}
@@ -1061,7 +1093,7 @@ func (s *Store) GarbageCollectWithOptions(ctx context.Context, options GCOptions
 			return GCResult{}, fault.New(fault.CodeInternal, true, err)
 		}
 	}
-	cleaned, err := s.GarbageCollect(ctx, options.Retention)
+	cleaned, err := s.garbageCollect(ctx, options.Retention, options.ProtectedBlobs)
 	if err != nil {
 		return GCResult{}, err
 	}

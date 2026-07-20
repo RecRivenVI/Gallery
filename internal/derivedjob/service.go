@@ -98,7 +98,16 @@ func (s *Service) Create(ctx context.Context, request Request, createdBy string)
 	if err != nil {
 		return jobs.Job{}, fault.New(fault.CodeInternal, true, err)
 	}
-	return s.jobs.CreateWithOptions(ctx, "derived", "", createdBy, jobs.CreateOptions{ResourceClass: jobs.ResourceDerived, RequestJSON: payload})
+	// MaxRetries/RetryPolicyJSON 此前完全未设置，CreateWithOptions 不像 CreateScanWithOptions
+	// 那样补默认值，导致 DerivedAsset Job 的 MaxRetries 恒为 0——FailWithRetryable 要求
+	// MaxRetries>0 才会计算 next_attempt_at，实际效果是任何标记为 retryable 的生成失败
+	// （例如一次性的 I/O 抖动）都不会被自动重试，与既有 hashjob/toolrunner 的默认重试策略
+	// 不一致，也让"退避等待期间保护输入 Blob"这一要求在生产环境里从未真正生效过。这里
+	// 复用与 hashjob 相同的指数退避参数，不引入新的数值方案。
+	return s.jobs.CreateWithOptions(ctx, "derived", "", createdBy, jobs.CreateOptions{
+		ResourceClass: jobs.ResourceDerived, RequestJSON: payload,
+		MaxRetries: 3, RetryPolicyJSON: []byte(`{"kind":"exponential","baseMs":250,"maxMs":30000}`),
+	})
 }
 
 func (s *Service) Available() bool { return s != nil && s.resolver != nil }
