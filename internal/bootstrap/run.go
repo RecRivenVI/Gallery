@@ -251,6 +251,33 @@ func run(ctx context.Context, cfg config.Config, logger *slog.Logger, ready chan
 	if err := overlayService.Reconcile(ctx); err != nil {
 		return err
 	}
+	// migration 00010（v9→v10）只能给已有 revision 的 favorite/progress/search_*_norm 新列
+	// 填入静态默认值，不会自动重新计算；升级后的服务在这里同步触发一次真实的 Overlay
+	// 投影 Job 重建当前 active revision 的这些字段，避免在用户下一次恰好触碰某个 Overlay
+	// 字段之前一直用默认零值静默提供错误的过滤/排序/高亮结果。只在从未触发过时执行一次
+	// （见 catalog.Store.NeedsQueryDependencyBackfill），全新安装或空 Catalog 直接标记为
+	// 无需回填。同步 Execute 而不是留给调度器异步执行，使得"迁移完成"与"这些字段已经
+	// 正确物化"在服务真正开始对外提供查询之前是同一个原子前提；如果这次调用只是与一个
+	// 已经存在的待处理投影 Job 合并（Created=false），说明有其它来源已经会驱动同一次
+	// 重建，这里不重复抢占执行。
+	needsQueryDependencyBackfill, err := catalogStore.NeedsQueryDependencyBackfill(ctx)
+	if err != nil {
+		return err
+	}
+	if needsQueryDependencyBackfill {
+		backfillJob, created, err := overlayService.TriggerReprojection(ctx, "system:query-dependency-backfill")
+		if err != nil {
+			return err
+		}
+		if created {
+			if err := overlayService.Execute(ctx, backfillJob.ID); err != nil {
+				return err
+			}
+		}
+		if err := catalogStore.MarkQueryDependencyBackfillTriggered(ctx); err != nil {
+			return err
+		}
+	}
 	if err := backupService.Reconcile(ctx); err != nil {
 		return err
 	}
