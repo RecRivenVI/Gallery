@@ -157,9 +157,12 @@ func scanProfileFromJob(job jobs.Job) string {
 	return ScanProfileIncremental
 }
 
-// verificationTargetsFromJob 还原本次 Job 冻结的目标媒体集合，按规范化相对路径索引；
-// 同一 Job 的重试 Attempt 复用同一 RequestJSON，因此目标集合天然与首次入队时一致。
-func verificationTargetsFromJob(job jobs.Job) map[string]struct{} {
+// verificationTargetsFromJob 还原本次 Job 冻结的目标媒体集合，按规范化相对路径索引，
+// 保留完整冻结字段（MediaID、ObservationFingerprint）供执行阶段真正验证——不能只用
+// RelativePath 存在与否判断"是否是目标"，冻结的 Media 身份与 observation 指纹必须参与
+// 执行阶段的一致性检查，否则请求时冻结的语义在执行时会被静默丢弃。同一 Job 的重试
+// Attempt 复用同一 RequestJSON，因此目标集合天然与首次入队时一致。
+func verificationTargetsFromJob(job jobs.Job) map[string]VerificationTarget {
 	if len(job.RequestJSON) == 0 {
 		return nil
 	}
@@ -167,9 +170,9 @@ func verificationTargetsFromJob(job jobs.Job) map[string]struct{} {
 	if err := json.Unmarshal(job.RequestJSON, &request); err != nil || len(request.VerificationTargets) == 0 {
 		return nil
 	}
-	result := make(map[string]struct{}, len(request.VerificationTargets))
+	result := make(map[string]VerificationTarget, len(request.VerificationTargets))
 	for _, target := range request.VerificationTargets {
-		result[target.RelativePath] = struct{}{}
+		result[target.RelativePath] = target
 	}
 	return result
 }
@@ -363,6 +366,7 @@ func (s *Service) Execute(ctx context.Context, jobID string) error {
 	}
 	scanProfile := scanProfileFromJob(job)
 	forcedTargets := verificationTargetsFromJob(job)
+	visitedTargets := make(map[string]struct{}, len(forcedTargets))
 	current := int64(0)
 	verificationState := make(map[string]string, total)  // relative path -> state
 	lastConfirmedAt := make(map[string]time.Time, total) // relative path -> confirmation time
@@ -375,7 +379,13 @@ func (s *Service) Execute(ctx context.Context, jobID string) error {
 			}
 			item := &discovered[workIndex].Media[mediaIndex]
 			skipHash := false
-			_, forced := forcedTargets[item.RelativePath]
+			target, forced := forcedTargets[item.RelativePath]
+			if forced {
+				visitedTargets[item.RelativePath] = struct{}{}
+				if err := s.verifyObservationUnchanged(ctx, source.ID, target, item.ExpectedSize, item.ExpectedModTimeNanos); err != nil {
+					return s.fail(ctx, job.ID, err)
+				}
+			}
 			if scanProfile != ScanProfileVerify && !forced {
 				prior, lookupErr := s.catalog.LookupPriorObservation(ctx, source.ID, item.RelativePath)
 				if lookupErr != nil {
@@ -476,6 +486,15 @@ func (s *Service) Execute(ctx context.Context, jobID string) error {
 			s.notifier.JobChanged(job)
 		}
 	}
+	// 目标消失检查：discovery 只遍历磁盘上真实存在的媒体，一个冻结目标如果对应的文件已经
+	// 被移动、改名或删除，它的 RelativePath 根本不会出现在 discovered 中，上面的循环也就
+	// 不会把它标记为已访问。多目标时必须逐个确认全部命中，不能因为其它目标成功就静默
+	// 当作整体成功发布一个没有完成用户请求的 Catalog。
+	for relativePath := range forcedTargets {
+		if _, visited := visitedTargets[relativePath]; !visited {
+			return s.fail(ctx, job.ID, fault.New(fault.CodeContentDisappeared, false, nil))
+		}
+	}
 	canonicalInput := make([]application.DiscoveredWork, 0, len(discovered))
 	for _, work := range discovered {
 		mediaItems := make([]application.DiscoveredMedia, len(work.Media))
@@ -491,6 +510,22 @@ func (s *Service) Execute(ctx context.Context, jobID string) error {
 	canonical, err := s.resources.EnsureCanonical(ctx, source.ID, canonicalInput)
 	if err != nil {
 		return s.fail(ctx, job.ID, err)
+	}
+	// 目标身份一致性检查：请求时冻结的 MediaID 必须恰好解析到本次扫描实际确认的媒体。
+	// discovery/规则/Binding 结构决策可能让同一相对路径在拆分、合并或重新绑定后对应到
+	// 不同的 CanonicalMedia；仅凭路径存在无法证明它仍是请求方原本指定的那个媒体，必须
+	// 显式比对，不一致时返回结构化 VERIFICATION_TARGET_MISMATCH，不得静默确认错误对象。
+	for _, work := range discovered {
+		canonicalWork := canonical[work.SourceKey]
+		for _, item := range work.Media {
+			target, forced := forcedTargets[item.RelativePath]
+			if !forced {
+				continue
+			}
+			if canonicalWork.Media[item.SourceKey].ID != target.MediaID {
+				return s.fail(ctx, job.ID, fault.New(fault.CodeVerificationTargetMismatch, false, nil))
+			}
+		}
 	}
 	overlays, creatorMerges, controlWatermark, err := s.resources.QueryOverlaySnapshot(ctx, nil)
 	if err != nil {
@@ -701,6 +736,28 @@ func isCatalogCandidatePublished(err error) bool {
 	}
 	var structured *fault.Error
 	return errors.As(err, &structured) && structured.Code == fault.CodeCatalogCandidatePublished
+}
+
+// verifyObservationUnchanged 校验一个冻结 VerificationTarget 的 ObservationFingerprint
+// 与执行时刻的真实观察是否一致。currentSize/currentModTimeNanos 必须来自本次执行开头
+// discover() 对磁盘的新鲜 Stat（而不是再次读取磁盘或复用 Catalog 里可能早已过期的旧
+// 记录），据此判断请求排队期间文件是否已经被替换、截断或以不同内容重新写入；同时把
+// Catalog 当前记录的 content_verification_state 与冻结指纹比较，判断是否已被另一个
+// 并发确认抢先完成。空 ObservationFingerprint 表示调用方未提供冻结指纹，跳过该项
+// 校验，仍然依赖调用方在循环中执行的目标消失与 MediaID 一致性检查。
+func (s *Service) verifyObservationUnchanged(ctx context.Context, sourceID string, target VerificationTarget, currentSize, currentModTimeNanos int64) error {
+	if target.ObservationFingerprint == "" {
+		return nil
+	}
+	prior, err := s.catalog.LookupPriorObservation(ctx, sourceID, target.RelativePath)
+	if err != nil {
+		return err
+	}
+	current := fmt.Sprintf("%d:%d:%s", currentSize, currentModTimeNanos, prior.ContentVerificationState)
+	if current != target.ObservationFingerprint {
+		return fault.New(fault.CodeContentChangedDuringHash, true, nil)
+	}
+	return nil
 }
 
 // recoverAlreadyPublished 处理 BeginCandidate 检测到的 Saga gap：该 Job 已经真正完成过
