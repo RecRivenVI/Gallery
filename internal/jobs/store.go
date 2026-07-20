@@ -994,6 +994,42 @@ ORDER BY created_at, job_id`, s.clock.Now().UTC().Unix())
 	return result, rows.Err()
 }
 
+// ListRetryPending 返回某一 job_type 中处于退避等待期的 Job：status 为 failed/needs_repair、
+// FailureRetryable 为真且尚未耗尽重试次数——不限定 next_attempt_at 是否已到期。调用方通常
+// 只关心"到期可恢复"的 Job（RequeueDueFailures/ListRunnable 已覆盖），但资源保护类判断
+// （例如 DerivedAsset 输入 Blob 是否仍可能被后续 Attempt 使用）必须覆盖整个退避等待窗口，
+// 不能只在到期后才生效，否则退避期间的资源会被错误地当作"不再需要"而回收。
+func (s *Store) ListRetryPending(ctx context.Context, jobType string) ([]Job, error) {
+	rows, err := s.db.QueryContext(ctx, `SELECT job_id FROM jobs
+WHERE job_type=? AND status IN ('failed','needs_repair') AND failure_retryable=1
+  AND max_retries>0 AND attempt<=max_retries
+ORDER BY created_at, job_id`, jobType)
+	if err != nil {
+		return nil, fault.New(fault.CodeInternal, true, err)
+	}
+	defer rows.Close()
+	var ids []string
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			return nil, fault.New(fault.CodeInternal, true, err)
+		}
+		ids = append(ids, id)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fault.New(fault.CodeInternal, true, err)
+	}
+	result := make([]Job, 0, len(ids))
+	for _, id := range ids {
+		job, err := s.Get(ctx, id)
+		if err != nil {
+			return nil, err
+		}
+		result = append(result, job)
+	}
+	return result, nil
+}
+
 func (s *Store) ListAttempts(ctx context.Context, jobID string) ([]Attempt, error) {
 	rows, err := s.db.QueryContext(ctx, `SELECT attempt_id, job_id, attempt, resource_class, status,
 started_at, heartbeat_at, finished_at, lease_owner, lease_expires_at, error_code, error_retryable,
