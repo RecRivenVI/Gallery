@@ -438,6 +438,7 @@ const (
 	SOURCEWORKSPLITREVIEWREQUIRED    ErrorCode = "SOURCE_WORK_SPLIT_REVIEW_REQUIRED"
 	UNAUTHENTICATED                  ErrorCode = "UNAUTHENTICATED"
 	VALIDATIONERROR                  ErrorCode = "VALIDATION_ERROR"
+	VERIFICATIONTARGETMISMATCH       ErrorCode = "VERIFICATION_TARGET_MISMATCH"
 	WATCHEROVERFLOW                  ErrorCode = "WATCHER_OVERFLOW"
 )
 
@@ -587,6 +588,8 @@ func (e ErrorCode) Valid() bool {
 	case UNAUTHENTICATED:
 		return true
 	case VALIDATIONERROR:
+		return true
+	case VERIFICATIONTARGETMISMATCH:
 		return true
 	case WATCHEROVERFLOW:
 		return true
