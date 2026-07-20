@@ -1725,9 +1725,12 @@ paths:
       description: >-
         返回持久 Job 而不是同步阻塞计算完整 SHA-256。只强制该媒体重新完整哈希，不再
         触发整个 Source 的 verify 档案，同 Source 其余媒体继续按既有 incremental 规则
-        处理。幂等键按媒体当前观察（媒体 ID、Source、相对路径、size、mtime、内容确认
-        状态、本次解析到的 queryPublicationId）派生，文件未变化且针对同一快照的重复
-        请求复用同一 Job。媒体已是 content_verified 时返回 409。
+        处理。幂等键按实际使用的 queryPublicationId、媒体 ID、Source、相对路径与
+        observation 指纹（size、mtime、内容确认状态）派生，文件未变化且针对同一快照
+        的重复请求复用同一 Job。媒体已是 content_verified 时返回 409。按需确认是
+        "当前 publication 操作"：显式提供的 queryPublicationId 必须等于当前 active
+        publication，仍存在但已经不是 active 的历史 publication 同样返回 409，不创建
+        Job。
       parameters:
         - name: mediaId
           in: path
@@ -1737,7 +1740,10 @@ paths:
         - name: queryPublicationId
           in: query
           required: false
-          description: 省略为 current 模式；显式提供时目标媒体必须从该快照解析。
+          description: >-
+            省略为 current 模式，解析当前 active publication；显式提供时必须精确等于
+            当前 active publication，否则返回 409（按需确认不支持针对历史快照重新
+            确认）。
           schema:
             $ref: "#/components/schemas/QueryPublicationId"
         - $ref: "#/components/parameters/CSRFHeader"

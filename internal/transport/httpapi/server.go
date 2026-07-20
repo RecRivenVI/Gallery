@@ -1717,9 +1717,16 @@ func (s *Server) mediaContent(w http.ResponseWriter, r *http.Request) {
 // 请求内同步阻塞计算完整 SHA-256，而是建立一个只强制该媒体重新完整哈希的 incremental
 // 扫描 Job（scanner.CreateVerificationScan），不再触发整个 Source 的 verify 档案——同一
 // Source 内其余媒体继续按既有 incremental 规则处理，不被这次按需确认强制重新哈希。
-// 幂等键按该媒体当前观察（媒体 ID、Source、相对路径、size、mtime、内容确认状态、本次
-// 解析到的 queryPublicationId）派生：文件未变化且请求针对同一快照时重复请求复用同一
-// Job；文件已变化、媒体已确认或快照已切换的旧 Job 不会被这把 key 命中。
+//
+// 按需确认是"当前 publication 操作"：省略 queryPublicationId 解析当前 active
+// publication；显式提供时必须精确等于当前 active publication，仍存在但已经不是
+// active 的历史 publication 一律拒绝为结构化 CONFLICT，不创建 Job、不修改
+// Binding/Catalog/Overlay/Source。媒体身份（MediaID/SourceID/RelativePath）与冻结
+// observation 一律从同一个已确认为 active 的 publication 解析，不混用请求 publication
+// 与 active publication。幂等键按实际使用的 queryPublicationId、媒体 ID、Source、
+// 相对路径与 observation 指纹（size、mtime、内容确认状态）派生：文件未变化且请求针对
+// 同一快照时重复请求复用同一 Job；publication 切换后即使媒体 ID 和相对路径相同，也
+// 不会误复用旧 publication 的 Job。
 func (s *Server) createMediaVerificationJob(w http.ResponseWriter, r *http.Request) {
 	session, err := s.requireCapability(r, "scan.run")
 	if err != nil {
@@ -1737,25 +1744,39 @@ func (s *Server) createMediaVerificationJob(w http.ResponseWriter, r *http.Reque
 		return
 	}
 	defer release()
-	_, item, err := s.catalog.GetMediaAt(r.Context(), requestedPub, r.PathValue("mediaId"))
+	resolvedPub, item, err := s.catalog.GetMediaAt(r.Context(), requestedPub, r.PathValue("mediaId"))
 	if err != nil {
 		s.writeRequestError(w, err)
 		return
+	}
+	if requestedPub != "" {
+		current, currentErr := s.catalog.Current(r.Context())
+		if currentErr != nil {
+			s.writeRequestError(w, currentErr)
+			return
+		}
+		if resolvedPub.ID != current.ID {
+			// 显式指定的 publication 仍然存在，但已经不是当前 active publication：
+			// 按需确认只承诺确认当前可见 Catalog 中的媒体，不重新确认历史快照描述的
+			// 旧 observation。
+			s.writeRequestError(w, fault.New(fault.CodeConflict, false, nil))
+			return
+		}
 	}
 	if item.ContentVerificationState == catalog.ContentVerificationStateContentVerified {
 		s.writeRequestError(w, fault.New(fault.CodeConflict, false, nil))
 		return
 	}
-	observation, err := s.catalog.LookupPriorObservation(r.Context(), item.SourceID, item.RelativePath)
+	observation, err := s.catalog.LookupObservationAt(r.Context(), resolvedPub.ID, item.SourceID, item.RelativePath)
 	if err != nil {
 		s.writeRequestError(w, err)
 		return
 	}
-	observationFingerprint := fmt.Sprintf("%d:%d:%s", observation.Size, observation.MTimeNanos, observation.ContentVerificationState)
-	idempotencyKey := fmt.Sprintf("verify-media:v2:%s:%s:%s:%s", item.ID, item.SourceID, observationFingerprint, item.RelativePath)
+	observationFingerprint := scanner.ObservationFingerprint(observation.Size, observation.MTimeNanos, observation.ContentVerificationState)
+	idempotencyKey := fmt.Sprintf("verify-media:v3:%s:%s:%s:%s:%s", resolvedPub.ID, item.ID, item.SourceID, item.RelativePath, observationFingerprint)
 	target := scanner.VerificationTarget{
 		MediaID: item.ID, SourceID: item.SourceID, RelativePath: item.RelativePath,
-		ObservationFingerprint: observationFingerprint,
+		QueryPublicationID: resolvedPub.ID, ObservationFingerprint: observationFingerprint,
 	}
 	job, err := s.scanner.CreateVerificationScan(r.Context(), item.SourceID, session.PrincipalID, idempotencyKey, []scanner.VerificationTarget{target})
 	if err != nil {
