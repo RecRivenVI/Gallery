@@ -8,12 +8,12 @@
 - 当前主要开发目标是阶段 4 的正式压力测试与 API 接口冻结，随后进入阶段 5（账户、安全与多客户端）。
 - 尚无稳定的数据库表结构或 API 兼容性承诺；接口和 Schema 仍可能在冻结前调整。
 
-详见 [README.md](README.md) 和 [开发进度.md](开发进度.md) 的总体进度表。
+详见 [README.md](README.md) 和 [PROJECT_STATUS.md](PROJECT_STATUS.md) 的总体进度表。
 
 ## 开始之前
 
 - 阅读 [README.md](README.md) 了解项目定位。
-- 阅读 [开发进度.md](开发进度.md) 了解当前阶段与已知缺口。
+- 阅读 [PROJECT_STATUS.md](PROJECT_STATUS.md) 了解当前阶段与已知缺口。
 - 从 [Documents/README.md](Documents/README.md) 进入权威工程文档（规范、ADR、实施计划、验证记录）。
 - 自动化 Agent 必须额外遵守 [AGENTS.md](AGENTS.md)。
 
