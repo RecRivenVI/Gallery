@@ -158,6 +158,15 @@ Walking Skeleton 功能可以少，但基础模型不能是临时替代品：
 - 发行前完成 OpenAPI/WS/规则/数据版本、许可证、SBOM、依赖安全、签名和升级/降级说明。
 - Windows、Linux、macOS、Docker 和网络盘能力分别验收，不从 Go 可交叉编译目标自动生成支持矩阵。
 
+### 第三方材料与依赖安全
+
+- 仓库中直接复制、改编或内嵌的第三方源码、字体、图片等资产必须保留原始版权与许可证声明，并登记在 `THIRD_PARTY_NOTICES.md`；不得把第三方文件重新声明为项目原创的 AGPL 材料。
+- `go.mod`/`package.json` 等 manifest 中声明的依赖关系是外部依赖，不等同于仓库复制了其源码；两者的合规处理方式不同，不得混淆。
+- 新增依赖前检查其许可证与仓库当前许可证的兼容性，标记未知许可证、强 copyleft 或条款不兼容的候选，不得默认接受。
+- Dependabot 等安全告警必须按 `manifest_path` 与该依赖是否真正被构建、测试、发行或运行使用来分类，不得仅凭目录名（例如 `Test-Bench`）判断告警可以忽略。
+- 不得批量、无具体理由地 dismiss 告警；确认某依赖不进入正式构建、测试、发行或运行后，dismiss 理由必须写明对应 manifest 路径和依据。历史实验依赖若仍被 CI 或人工流程实际使用，必须升级而不是 dismiss。
+- 不得为制造“无告警”的表面状态而关闭 Dependabot alerts、secret scanning、push protection 或 private vulnerability reporting 等已启用的安全功能。
+
 ## 固定工具链与多环境调用
 
 本节是后续 Agent 在 Windows 原生、Git Bash/MSYS、WSL2 Debian 和 GitHub Actions 四种环境下解析和调用 Go 工具链的唯一权威规则，优先于任何“PATH 中找不到 `go` 就判定工具链缺失并自动安装”的默认行为。
