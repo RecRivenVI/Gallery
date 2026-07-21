@@ -27,6 +27,6 @@ Closes #
 - [ ] 未引入 Provider 或平台特例分支
 - [ ] 未包含 secret、token、私人路径或真实媒体内容
 - [ ] API 变化已同步 OpenAPI、生成客户端和测试
-- [ ] 已检查 README.md 与 开发进度.md 是否需要同步
+- [ ] 已检查 README.md 与 PROJECT_STATUS.md 是否需要同步
 
 ## 补充说明
