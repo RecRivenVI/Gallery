@@ -5,7 +5,7 @@ body:
   - type: markdown
     attributes:
       value: |
-        提交前请确认：这不是安全漏洞（见 [SECURITY.md](../../SECURITY.md)），也不是安装或使用咨询（Gallery 目前尚无图形界面或安装包，见 [README.md](../../README.md)）。
+        提交前请确认：这不是安全漏洞（见 [SECURITY.md](https://github.com/RecRivenVI/Gallery/blob/main/SECURITY.md)），也不是安装或使用咨询（Gallery 目前尚无图形界面或安装包，见 [README.md](https://github.com/RecRivenVI/Gallery/blob/main/README.md)）。
 
   - type: input
     id: commit
@@ -28,7 +28,7 @@ body:
     id: goversion
     attributes:
       label: Go 版本
-      description: `go version` 的输出
+      description: "`go version` 的输出"
     validations:
       required: true
 
