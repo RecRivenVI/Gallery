@@ -1,0 +1,5 @@
+blank_issues_enabled: false
+contact_links:
+  - name: 安全漏洞报告
+    url: https://github.com/RecRivenVI/Gallery/security/advisories/new
+    about: 请勿通过公开 Issue 报告安全漏洞，改用 Private vulnerability reporting（见 SECURITY.md）

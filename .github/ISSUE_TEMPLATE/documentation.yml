@@ -1,0 +1,46 @@
+name: 文档问题
+description: 报告文档错误、缺失或与实际代码/规范不一致的地方
+labels: ["documentation"]
+body:
+  - type: input
+    id: location
+    attributes:
+      label: 文档位置
+      description: 文件路径，例如 README.md、开发进度.md 或 Documents/规范/xx.md
+    validations:
+      required: true
+
+  - type: textarea
+    id: issue
+    attributes:
+      label: 错误或缺失内容
+      description: 具体是哪一段、哪张表格，或缺少了什么信息
+    validations:
+      required: true
+
+  - type: textarea
+    id: evidence
+    attributes:
+      label: 事实代码或权威文档依据
+      description: 如果发现文档与实现不符，请指出对应代码路径或 Documents/ 下的权威规范/ADR/验证记录
+    validations:
+      required: false
+
+  - type: textarea
+    id: suggestion
+    attributes:
+      label: 建议修改
+    validations:
+      required: true
+
+  - type: dropdown
+    id: sync
+    attributes:
+      label: 是否涉及 README 与 开发进度.md 的同步
+      description: 这两份文档的总体进度表要求保持一致，见 AGENTS.md「文档维护」一节
+      options:
+        - "否，只涉及其它文档"
+        - "是，需要同步检查"
+        - "不确定"
+    validations:
+      required: true
