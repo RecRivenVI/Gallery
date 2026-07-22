@@ -1,0 +1,9 @@
+{
+  "id": 500000001,
+  "title": "黄金夹具示例贴文",
+  "creator": {"id": 900005, "full_name": "示例创作者", "first_name": "示例"},
+  "content": "示例说明文本",
+  "tags": ["原创"],
+  "date": "2026-01-01T00:00:00+00:00",
+  "url": "https://example.invalid/posts/500000001"
+}

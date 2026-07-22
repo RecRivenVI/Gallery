@@ -1,0 +1,9 @@
+{
+  "id": 600000001,
+  "title": "黄金夹具示例作品",
+  "user_profile": {"id": 900006, "name": "示例创作者"},
+  "content": "示例说明文本",
+  "tags": ["原创"],
+  "published": "2026-01-01T00:00:00+00:00",
+  "url": "https://example.invalid/works/600000001"
+}

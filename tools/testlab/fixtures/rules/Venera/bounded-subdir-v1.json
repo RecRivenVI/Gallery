@@ -1,0 +1,24 @@
+{
+  "rule_set_id": "rset_ca0135da-e1e1-49a4-aaaa-9354f5159409",
+  "version": "1.0.0",
+  "schema_version": 1,
+  "normalization_algorithm_version": "gallery-canonical-json-v1",
+  "compiler_requirement": "gallery-rule-compiler-v1",
+  "cel_profile_version": "gallery-cel-v1",
+  "parameter_schema": {"type": "object", "additionalProperties": false},
+  "provider_namespaces": ["testlab.venera-library-bounded"],
+  "primitives": [
+    {"id": "work", "kind": "path_match", "config": {"scope": "work_directory", "glob": "*", "title": "directory_name", "stable_key": "relative_path"}},
+    {"id": "media-jpg", "kind": "media_classify", "config": {"glob": "*.jpg", "kind": "image", "mime": "image/jpeg"}},
+    {"id": "media-jpeg", "kind": "media_classify", "config": {"glob": "*.jpeg", "kind": "image", "mime": "image/jpeg"}},
+    {"id": "media-png", "kind": "media_classify", "config": {"glob": "*.png", "kind": "image", "mime": "image/png"}},
+    {"id": "media-gif", "kind": "media_classify", "config": {"glob": "*.gif", "kind": "image", "mime": "image/gif"}},
+    {"id": "media-webp", "kind": "media_classify", "config": {"glob": "*.webp", "kind": "image", "mime": "image/webp"}},
+    {"id": "media-bmp", "kind": "media_classify", "config": {"glob": "*.bmp", "kind": "image", "mime": "image/bmp"}},
+    {"id": "media-tiff", "kind": "media_classify", "config": {"glob": "*.tiff", "kind": "image", "mime": "image/tiff"}},
+    {"id": "order", "kind": "media_order", "config": {"by": "path", "direction": "asc"}}
+  ],
+  "cel_expressions": [],
+  "tests": [{"id": "testlab-venera-library-bounded-smoke", "description": "500k/有界真实验证：Venera 有界子目录场景。metadata_file 显式省略（metadataRequired=false），无 metadata_map/selector/fallback primitive——不伪造 author/tags/description/sourceUrl，title 与 author 均只由 path_match 的 directory_name（path.author）承载，验证无 metadata.json 时仍能形成作品且路径是身份的唯一权威来源"}],
+  "extensions": {}
+}
