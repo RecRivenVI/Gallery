@@ -1,0 +1,23 @@
+{
+  "schemaVersion": 1,
+  "testRoots": {
+    "ssd": "<例如 F:\\Gallery-Test-Lab-SSD>",
+    "hdd": "<例如 G:\\Gallery-Test-Lab-HDD>"
+  },
+  "sources": {
+    "pixiv": "<路径>",
+    "pixivFANBOX": "<路径>",
+    "Gank": "<路径>",
+    "Fantia": "<路径>",
+    "Patreon": "<路径>",
+    "Pawchive": "<路径>",
+    "X": "<路径>",
+    "微博": "<G 盘物理路径，不得经由链接>",
+    "微博_Legacy": "<G 盘物理路径，不得经由链接，独立于微博>",
+    "Venera": "<路径>"
+  },
+  "goToolchain": {
+    "windows": "<固定 go.exe 绝对路径>",
+    "wsl": "<例如 $HOME/go-sdk/bin/go>"
+  }
+}
