@@ -1,0 +1,39 @@
+{
+  "rule_set_id": "rset_ca0135da-e1e1-49a4-aaaa-9354f5159403",
+  "version": "1.0.0",
+  "schema_version": 1,
+  "normalization_algorithm_version": "gallery-canonical-json-v1",
+  "compiler_requirement": "gallery-rule-compiler-v1",
+  "cel_profile_version": "gallery-cel-v1",
+  "parameter_schema": {"type": "object", "additionalProperties": false},
+  "provider_namespaces": ["testlab.gank-library-bounded"],
+  "primitives": [
+    {"id": "work", "kind": "path_match", "config": {"scope": "work_directory", "glob": "*", "title": "directory_name", "stable_key": "relative_path", "metadata_file": "metadata.json"}},
+    {"id": "title", "kind": "fallback", "config": {"target": "title", "pointers": ["/title"], "default": ""}},
+    {"id": "facts", "kind": "metadata_map", "config": {"fields": {
+      "external_id": ["/id"],
+      "provider_id": ["/user/id", "/author", "/authorUser/id"],
+      "creator": ["/user/nickname", "/authorUser/nickname"],
+      "description": ["/content"],
+      "tags": ["/tags"]
+    }}},
+    {"id": "url", "kind": "fallback", "config": {"target": "sourceUrl", "pointers": ["/postUrl", "/post_url", "/url", "/sourceUrl", "/source_url", "/permalink", "/link", "/source/url"], "default": ""}},
+    {"id": "media-jpg", "kind": "media_classify", "config": {"glob": "*.jpg", "kind": "image", "mime": "image/jpeg"}},
+    {"id": "media-jpeg", "kind": "media_classify", "config": {"glob": "*.jpeg", "kind": "image", "mime": "image/jpeg"}},
+    {"id": "media-png", "kind": "media_classify", "config": {"glob": "*.png", "kind": "image", "mime": "image/png"}},
+    {"id": "media-gif", "kind": "media_classify", "config": {"glob": "*.gif", "kind": "image", "mime": "image/gif"}},
+    {"id": "media-webp", "kind": "media_classify", "config": {"glob": "*.webp", "kind": "image", "mime": "image/webp"}},
+    {"id": "media-mp4", "kind": "media_classify", "config": {"glob": "*.mp4", "kind": "video", "mime": "video/mp4"}},
+    {"id": "media-mkv", "kind": "media_classify", "config": {"glob": "*.mkv", "kind": "video", "mime": "video/x-matroska"}},
+    {"id": "media-zip", "kind": "media_classify", "config": {"glob": "*.zip", "kind": "asset", "mime": "application/zip"}},
+    {"id": "media-rar", "kind": "media_classify", "config": {"glob": "*.rar", "kind": "asset", "mime": "application/vnd.rar"}},
+    {"id": "media-7z", "kind": "media_classify", "config": {"glob": "*.7z", "kind": "asset", "mime": "application/x-7z-compressed"}},
+    {"id": "cover-1", "kind": "cover_candidate", "config": {"glob": "1.*", "score": 90}},
+    {"id": "cover", "kind": "cover_candidate", "config": {"glob": "cover.*", "score": 100}},
+    {"id": "cover-dot", "kind": "cover_candidate", "config": {"glob": ".cover.*", "score": 100}},
+    {"id": "order", "kind": "media_order", "config": {"by": "path", "direction": "asc"}}
+  ],
+  "cel_expressions": [],
+  "tests": [{"id": "testlab-gank-library-bounded-smoke", "description": "500k/有界真实验证：Gank 有界子目录场景，通用字段回退链（provider_id: user.id -> author -> authorUser.id；creator: user.nickname -> authorUser.nickname）；MEGA 链接/压缩包解压预览隐藏与 1.<ext> 高优先级封面规则本轮标记 DEFERRED，见 fixtures/rules/Gank/README.md"}],
+  "extensions": {}
+}

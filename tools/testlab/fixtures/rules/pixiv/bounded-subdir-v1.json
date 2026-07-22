@@ -1,0 +1,35 @@
+{
+  "rule_set_id": "rset_ca0135da-e1e1-49a4-aaaa-9354f5159401",
+  "version": "1.0.0",
+  "schema_version": 1,
+  "normalization_algorithm_version": "gallery-canonical-json-v1",
+  "compiler_requirement": "gallery-rule-compiler-v1",
+  "cel_profile_version": "gallery-cel-v1",
+  "parameter_schema": {"type": "object", "additionalProperties": false},
+  "provider_namespaces": ["stage4.ssd-pixiv-library-bounded"],
+  "primitives": [
+    {"id": "work", "kind": "path_match", "config": {"scope": "work_directory", "glob": "*", "title": "directory_name", "stable_key": "relative_path", "metadata_file": "metadata.json"}},
+    {"id": "title", "kind": "selector", "config": {"target": "title", "pointers": ["/title"], "required": false}},
+    {"id": "facts", "kind": "metadata_map", "config": {"fields": {
+      "external_id": ["/id"],
+      "provider_id": ["/user/id"],
+      "creator": ["/user/name"],
+      "tags": ["/tags"]
+    }}},
+    {"id": "media-jpg", "kind": "media_classify", "config": {"glob": "*.jpg", "kind": "image", "mime": "image/jpeg"}},
+    {"id": "media-jpeg", "kind": "media_classify", "config": {"glob": "*.jpeg", "kind": "image", "mime": "image/jpeg"}},
+    {"id": "media-png", "kind": "media_classify", "config": {"glob": "*.png", "kind": "image", "mime": "image/png"}},
+    {"id": "media-gif", "kind": "media_classify", "config": {"glob": "*.gif", "kind": "image", "mime": "image/gif"}},
+    {"id": "media-webm", "kind": "media_classify", "config": {"glob": "*.webm", "kind": "video", "mime": "video/webm"}},
+    {"id": "media-mp4", "kind": "media_classify", "config": {"glob": "*.mp4", "kind": "video", "mime": "video/mp4"}},
+    {"id": "media-m4v", "kind": "media_classify", "config": {"glob": "*.m4v", "kind": "video", "mime": "video/mp4"}},
+    {"id": "media-mov", "kind": "media_classify", "config": {"glob": "*.mov", "kind": "video", "mime": "video/quicktime"}},
+    {"id": "media-zip", "kind": "media_classify", "config": {"glob": "*.zip", "kind": "asset", "mime": "application/zip"}},
+    {"id": "media-psd", "kind": "media_classify", "config": {"glob": "*.psd", "kind": "asset", "mime": "image/vnd.adobe.photoshop"}},
+    {"id": "media-clip", "kind": "media_classify", "config": {"glob": "*.clip", "kind": "asset", "mime": "application/octet-stream"}},
+    {"id": "order", "kind": "media_order", "config": {"by": "path", "direction": "asc"}}
+  ],
+  "cel_expressions": [],
+  "tests": [{"id": "stage4-ssd-pixiv-library-bounded-smoke", "description": "阶段 4 正式压力测试：SSD-Pixiv-Library 有界子目录场景，衍生自阶段 3 已验证的 pixiv-v1.json，仅把 work_directory glob 从两级 (*/*) 收窄为一级 (*)，因为本场景的 Source root 直接指向单个已经处于 user 层级的有界子目录，不含真实 metadata"}],
+  "extensions": {}
+}

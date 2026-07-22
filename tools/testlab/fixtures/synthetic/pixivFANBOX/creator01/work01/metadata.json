@@ -1,0 +1,9 @@
+{
+  "id": 200000001,
+  "title": "黄金夹具示例贴文",
+  "user": {"userId": 900002, "creatorId": "example-creator", "name": "示例创作者"},
+  "tags": ["原创"],
+  "text": "示例说明文本",
+  "date": "2026-01-01T00:00:00+00:00",
+  "post_url": "https://example.invalid/posts/200000001"
+}
