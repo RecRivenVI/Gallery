@@ -1,0 +1,37 @@
+{
+  "rule_set_id": "rset_ca0135da-e1e1-49a4-aaaa-9354f5159402",
+  "version": "1.0.0",
+  "schema_version": 1,
+  "normalization_algorithm_version": "gallery-canonical-json-v1",
+  "compiler_requirement": "gallery-rule-compiler-v1",
+  "cel_profile_version": "gallery-cel-v1",
+  "parameter_schema": {"type": "object", "additionalProperties": false},
+  "provider_namespaces": ["testlab.pixivfanbox-library-bounded"],
+  "primitives": [
+    {"id": "work", "kind": "path_match", "config": {"scope": "work_directory", "glob": "*", "title": "directory_name", "stable_key": "relative_path", "metadata_file": "metadata.json"}},
+    {"id": "title", "kind": "selector", "config": {"target": "title", "pointers": ["/title"], "required": false}},
+    {"id": "facts", "kind": "metadata_map", "config": {"fields": {
+      "external_id": ["/id"],
+      "provider_id": ["/user/userId", "/user/creatorId"],
+      "creator": ["/user/name", "/user/creatorId"],
+      "tags": ["/tags"]
+    }}},
+    {"id": "url", "kind": "fallback", "config": {"target": "sourceUrl", "pointers": ["/postUrl", "/post_url", "/url", "/sourceUrl", "/source_url", "/permalink", "/link", "/source/url"], "default": ""}},
+    {"id": "media-jpg", "kind": "media_classify", "config": {"glob": "*.jpg", "kind": "image", "mime": "image/jpeg"}},
+    {"id": "media-jpeg", "kind": "media_classify", "config": {"glob": "*.jpeg", "kind": "image", "mime": "image/jpeg"}},
+    {"id": "media-png", "kind": "media_classify", "config": {"glob": "*.png", "kind": "image", "mime": "image/png"}},
+    {"id": "media-gif", "kind": "media_classify", "config": {"glob": "*.gif", "kind": "image", "mime": "image/gif"}},
+    {"id": "media-bmp", "kind": "media_classify", "config": {"glob": "*.bmp", "kind": "image", "mime": "image/bmp"}},
+    {"id": "media-webp", "kind": "media_classify", "config": {"glob": "*.webp", "kind": "image", "mime": "image/webp"}},
+    {"id": "media-svg", "kind": "media_classify", "config": {"glob": "*.svg", "kind": "image", "mime": "image/svg+xml"}},
+    {"id": "media-mp4", "kind": "media_classify", "config": {"glob": "*.mp4", "kind": "video", "mime": "video/mp4"}},
+    {"id": "media-webm", "kind": "media_classify", "config": {"glob": "*.webm", "kind": "video", "mime": "video/webm"}},
+    {"id": "media-mov", "kind": "media_classify", "config": {"glob": "*.mov", "kind": "video", "mime": "video/quicktime"}},
+    {"id": "cover", "kind": "cover_candidate", "config": {"glob": "cover.*", "score": 100}},
+    {"id": "cover-dot", "kind": "cover_candidate", "config": {"glob": ".cover.*", "score": 100}},
+    {"id": "order", "kind": "media_order", "config": {"by": "path", "direction": "asc"}}
+  ],
+  "cel_expressions": [],
+  "tests": [{"id": "testlab-pixivfanbox-library-bounded-smoke", "description": "500k/有界真实验证：pixivFANBOX 有界子目录场景，author_work 结构单层收窄（Source root 直接指向已处于 creator 层级的有界子目录），字段回退链 user.name -> user.creatorId、user.userId -> user.creatorId、通用 URL 回退链"}],
+  "extensions": {}
+}
