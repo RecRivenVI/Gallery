@@ -1,0 +1,9 @@
+{
+  "id": 300000001,
+  "title": "黄金夹具示例发布",
+  "user": {"id": 900003, "nickname": "示例创作者"},
+  "content": "示例说明文本，不含 MEGA 链接",
+  "tags": ["原创"],
+  "date": "2026-01-01T00:00:00+00:00",
+  "url": "https://example.invalid/gank/300000001"
+}

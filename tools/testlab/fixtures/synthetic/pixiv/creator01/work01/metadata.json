@@ -1,0 +1,9 @@
+{
+  "id": 100000001,
+  "title": {"text": "黄金夹具示例作品"},
+  "user": {"id": 900001, "name": "示例创作者"},
+  "tags": ["原创", "插画"],
+  "caption": "示例说明文本",
+  "date": "2026-01-01T00:00:00+00:00",
+  "postUrl": "https://example.invalid/artworks/100000001"
+}

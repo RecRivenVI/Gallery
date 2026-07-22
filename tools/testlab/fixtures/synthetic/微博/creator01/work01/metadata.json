@@ -1,0 +1,8 @@
+{
+  "idstr": "800000001",
+  "user": {"idstr": "900008", "screen_name": "示例创作者"},
+  "text_raw": "示例说明文本",
+  "tags": ["原创"],
+  "date": "2026-01-01T00:00:00+00:00",
+  "url": "https://example.invalid/status/800000001"
+}
