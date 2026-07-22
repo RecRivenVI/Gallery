@@ -35,3 +35,8 @@ Test-Bench/**/results/**/bleve/
 Test-Bench/**/*.bolt
 Test-Bench/**/*.zap
 Test-Bench/**/*.bin
+
+# 本机测试环境路径与机器配置：只提交同目录下的 *.example.* 模板
+/Documents/本地/测试环境.local.md
+/Documents/本地/testlab.local.json
+/Documents/本地/≥1M测试清理清单.local.md
