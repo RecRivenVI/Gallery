@@ -133,17 +133,26 @@ func run(ctx context.Context, cfg config.Config, logger *slog.Logger, ready chan
 		logger.Info("control_restore_applied", "backup", restoreOutcome.BackupID)
 	}
 
-	listener, err := net.Listen("tcp", cfg.Listen)
-	if err != nil {
-		return fmt.Errorf("监听失败: %w", err)
-	}
-	defer listener.Close()
-
 	systemClock := clock.System{}
 	personal, err := auth.NewPersonal(store.Control.SQL(), systemClock, identity.NewGenerator(systemClock), nil)
 	if err != nil {
 		return err
 	}
+	if cfg.Mode == config.ModeLAN && !config.IsLoopbackListen(cfg.Listen) {
+		initialized, err := personal.LANInitialized(ctx)
+		if err != nil {
+			return err
+		}
+		if !initialized {
+			return fault.New(fault.CodeLANOwnerRequired, false, fmt.Errorf("LAN Owner 尚未初始化；先以 loopback 启动 LAN 模式完成初始化"))
+		}
+	}
+	// 非 loopback LAN 只有在 control.db 已确认存在 Owner 后才真正绑定，避免未初始化服务暴露。
+	listener, err := net.Listen("tcp", cfg.Listen)
+	if err != nil {
+		return fmt.Errorf("监听失败: %w", err)
+	}
+	defer listener.Close()
 	resources, err := application.NewResources(store.Control.SQL(), cfg.AppDirs, fileSystem, systemClock, identity.NewGenerator(systemClock))
 	if err != nil {
 		return err
