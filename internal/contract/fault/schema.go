@@ -19,6 +19,8 @@ func AllCodes() []Code {
 		CodeExternalToolUnavailable, CodeExternalToolFailed,
 		CodeContentChangedDuringHash, CodeMediaOffline, CodeContentNotVerified, CodeHostRejected, CodeOriginRejected,
 		CodeCSRFInvalid, CodePairingInvalid, CodePairingExpired, CodeSourcePathInvalid,
+		CodeInvalidCredentials, CodeRateLimited, CodeLANOwnerRequired, CodeLANAlreadyInitialized,
+		CodeUserDisabled, CodeTokenInvalid, CodeTokenExpired,
 		CodeRuleParameterInvalid, CodeRuleDraftConflict, CodeRulePackageConflict,
 		CodeRuleParameterConflict, CodeRulePublishBlocked, CodeRuleRollbackBlocked,
 		CodeRuleVersionInUse, CodeRuleImportInvalid, CodeRuleBindingConflict, CodeJobStateConflict, CodeScanAlreadyRunning,
