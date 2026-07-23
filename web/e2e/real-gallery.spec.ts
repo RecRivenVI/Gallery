@@ -75,3 +75,40 @@ test('真实后端拒绝恶意 Origin 的写请求 @real', async ({ request }) =
   expect(response.status()).toBe(403);
   expect(((await response.json()) as { error: { code: string } }).error.code).toBe('ORIGIN_REJECTED');
 });
+
+test('真实后端建立 WebSocket 并且没有 CSP 违规 @real', async ({ page }) => {
+  // 这条用例锁定 EV-39 的 WS-1、WS-2 与 CSP 三项修复：
+  // 服务端曾要求浏览器在 WebSocket 握手中不会发送的 Sec-Fetch-Site 头，使 /ws/v1 对
+  // Chrome/Edge 恒定 403；前端曾读取 `type` 而契约字段是 `eventType`；React Aria 注入的
+  // 内联样式曾被 style-src 拦截。三者都只有真实浏览器 + 真实后端才能发现。
+  const violations: string[] = [];
+  await page.addInitScript(() => {
+    (window as unknown as { __csp: string[] }).__csp = [];
+    document.addEventListener('securitypolicyviolation', (event) => {
+      (window as unknown as { __csp: string[] }).__csp.push(
+        `${event.effectiveDirective} ${event.blockedURI}`
+      );
+    });
+  });
+  const socketErrors: string[] = [];
+  let framesReceived = 0;
+  page.on('websocket', (socket) => {
+    socket.on('socketerror', (error) => socketErrors.push(error));
+    socket.on('framereceived', () => {
+      framesReceived += 1;
+    });
+  });
+
+  await page.goto('/');
+  const pair = page.getByRole('button', { name: '在此浏览器完成一次性配对' });
+  if (await pair.isVisible().catch(() => false)) {
+    await pair.click();
+  }
+  await expect(page.getByRole('heading', { name: '浏览作品' })).toBeVisible();
+  await expect(page.getByText('实时', { exact: false })).toBeVisible();
+  await expect.poll(() => framesReceived, { timeout: 15_000 }).toBeGreaterThan(0);
+  expect(socketErrors).toEqual([]);
+
+  violations.push(...(await page.evaluate(() => (window as unknown as { __csp: string[] }).__csp)));
+  expect(violations).toEqual([]);
+});
