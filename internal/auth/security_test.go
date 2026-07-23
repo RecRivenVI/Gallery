@@ -6,6 +6,8 @@ import (
 	"encoding/base64"
 	"errors"
 	"fmt"
+	"net/http"
+	"net/http/httptest"
 	"strings"
 	"sync"
 	"testing"
@@ -364,4 +366,60 @@ func faultCode(err error) fault.Code {
 		return structured.Code
 	}
 	return ""
+}
+
+// TestWebSocketOriginAcceptsBrowserHandshakeWithoutFetchMetadata 锁定 WebSocket 握手
+// 的同源判定形态。Chrome 与 Edge 的同源 ws:// 握手只发送 Origin，不发送任何
+// Sec-Fetch-* 头；若沿用要求 Sec-Fetch-Site 的普通 HTTP 判定，/ws/v1 会对所有主流
+// 浏览器恒定返回 ORIGIN_REJECTED。本测试在修复前会失败。
+func TestWebSocketOriginAcceptsBrowserHandshakeWithoutFetchMetadata(t *testing.T) {
+	const host = "127.0.0.1:18080"
+	newRequest := func(origin, fetchSite string) *http.Request {
+		request := httptest.NewRequest(http.MethodGet, "/ws/v1", nil)
+		request.Host = host
+		if origin != "" {
+			request.Header.Set("Origin", origin)
+		}
+		if fetchSite != "" {
+			request.Header.Set("Sec-Fetch-Site", fetchSite)
+		}
+		return request
+	}
+	allowed := []string{host}
+
+	// 真实浏览器形态：同源 Origin、无任何 Fetch Metadata。
+	if err := auth.ValidateWebSocketOriginAllowed(newRequest("http://"+host, ""), allowed); err != nil {
+		t.Fatalf("浏览器形态的 WebSocket 握手被拒绝: %v", err)
+	}
+	// 该形态在普通 HTTP 判定下必须仍被拒绝，证明两条路径确实不同。
+	if err := auth.ValidateOriginAllowed(newRequest("http://"+host, ""), allowed); err == nil {
+		t.Fatal("普通 HTTP 变更请求在缺少 Fetch Metadata 时被接受")
+	}
+
+	rejected := []struct {
+		name      string
+		origin    string
+		fetchSite string
+	}{
+		{"跨站 Origin", "http://attacker.invalid", ""},
+		{"缺少 Origin", "", ""},
+		{"非 HTTP scheme", "file://" + host, ""},
+		{"存在但非同源的 Fetch Metadata", "http://" + host, "cross-site"},
+	}
+	for _, testCase := range rejected {
+		err := auth.ValidateWebSocketOriginAllowed(newRequest(testCase.origin, testCase.fetchSite), allowed)
+		var structured *fault.Error
+		if !errors.As(err, &structured) || structured.Code != fault.CodeOriginRejected {
+			t.Fatalf("%s 未被拒绝为 ORIGIN_REJECTED: %v", testCase.name, err)
+		}
+	}
+
+	// Host allowlist 仍然优先生效。
+	other := newRequest("http://127.0.0.1:19999", "")
+	other.Host = "127.0.0.1:19999"
+	err := auth.ValidateWebSocketOriginAllowed(other, allowed)
+	var structured *fault.Error
+	if !errors.As(err, &structured) || structured.Code != fault.CodeHostRejected {
+		t.Fatalf("allowlist 之外的 Host 未被拒绝: %v", err)
+	}
 }
