@@ -7,9 +7,9 @@
 | `main` / pre-alpha | 尽力处理 |
 | 已发布版本 | 当前没有正式发行版本 |
 
-Gallery 目前处于 pre-alpha 阶段，尚无图形界面、安装包或正式发行版本，也没有面向普通用户的公开部署。安全政策的主要目的是为早期代码审阅者和贡献者提供一条私密报告渠道，而不是承诺已经具备成熟的漏洞响应 SLA。
+Gallery 目前处于 pre-alpha 阶段，已有同源内嵌 Web/PWA 代码基线，但尚无安装包或正式发行版本，也没有面向普通用户的公开部署。安全政策的主要目的是为早期代码审阅者和贡献者提供一条私密报告渠道，而不是承诺已经具备成熟的漏洞响应 SLA。
 
-当前正式后端已实现 Personal 配对、LAN 本地账户、Argon2id、服务端 Session、API Token、资源 Grant 与即时吊销，以及带 scope/过期/吊销/固定 Blob 语义的匿名 Work/Media/媒体正文分享，但阶段 5 Security Gate 尚未通过。Personal 只用于 loopback；LAN 只适用于受信私网并要求先在 loopback 初始化 Owner；Remote/OIDC 与公网反向代理部署不受支持。当前剩余安全门禁主要是真实 LAN 多设备/浏览器与目标设备 Argon2id 延迟/并发验证。
+当前正式后端已实现 Personal 配对、LAN 本地账户、Argon2id、服务端 Session、API Token、资源 Grant 与即时吊销，以及带 scope/过期/吊销/固定 Blob 语义的匿名 Work/Media/媒体正文分享；Web/PWA 不把 Session、CSRF、secret、publication、cursor 或业务事实写入持久浏览器存储，Service Worker 也不缓存 API、WebSocket 或媒体响应。Chrome/Edge 已通过同机 Personal/LAN 主路径与 Session 吊销验证，但阶段 5 Security Gate 尚未通过。Personal 只用于 loopback；LAN 只适用于受信私网并要求先在 loopback 初始化 Owner；Remote/OIDC 与公网反向代理部署不受支持。当前剩余安全门禁主要是真实 LAN 多设备、目标低端设备 Argon2id 延迟/并发、真实恶意容器和外部工具资源上限验证。
 
 ## 报告安全问题
 
