@@ -114,6 +114,9 @@ func New(mode config.Mode, store *storage.Store, clock ports.Clock, personal *au
 	mux.HandleFunc("POST /api/v1/account/password", server.changePassword)
 	mux.HandleFunc("POST /api/v1/admin/users/{userId}/grants", server.createGrant)
 	mux.HandleFunc("DELETE /api/v1/admin/grants/{grantId}", server.revokeGrant)
+	mux.HandleFunc("GET /api/v1/api-tokens", server.listAPITokens)
+	mux.HandleFunc("POST /api/v1/api-tokens", server.createAPIToken)
+	mux.HandleFunc("DELETE /api/v1/api-tokens/{tokenId}", server.revokeAPIToken)
 	mux.HandleFunc("GET /api/v1/shares", server.listShares)
 	mux.HandleFunc("POST /api/v1/shares", server.createShare)
 	mux.HandleFunc("DELETE /api/v1/shares/{shareId}", server.revokeShare)
@@ -684,6 +687,73 @@ func (s *Server) revokeGrant(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusNoContent)
 }
 
+func (s *Server) listAPITokens(w http.ResponseWriter, r *http.Request) {
+	actor, err := s.requireCapability(r, "tokens.manage")
+	if err != nil {
+		s.writeRequestError(w, err)
+		return
+	}
+	tokens, err := s.auth.ListAPITokens(r.Context(), actor.PrincipalID)
+	if err != nil {
+		s.writeRequestError(w, err)
+		return
+	}
+	items := make([]map[string]any, 0, len(tokens))
+	for _, token := range tokens {
+		items = append(items, tokenDTO(token))
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"tokens": items})
+}
+
+func (s *Server) createAPIToken(w http.ResponseWriter, r *http.Request) {
+	actor, err := s.requireCapability(r, "tokens.manage")
+	if err != nil {
+		s.writeRequestError(w, err)
+		return
+	}
+	if err := s.validateMutation(r, actor); err != nil {
+		s.writeRequestError(w, err)
+		return
+	}
+	var request struct {
+		Name         string               `json:"name"`
+		Capabilities []string             `json:"capabilities"`
+		Scopes       []auth.ResourceScope `json:"scopes"`
+		ExpiresAt    *time.Time           `json:"expiresAt"`
+	}
+	if err := decodeJSON(r, &request); err != nil {
+		s.writeRequestError(w, fault.WithField(fault.CodeValidation, "body", err))
+		return
+	}
+	created, err := s.auth.CreateAPIToken(r.Context(), actor, request.Name, request.Capabilities, request.Scopes, request.ExpiresAt)
+	if err != nil {
+		s.writeRequestError(w, err)
+		return
+	}
+	response := tokenDTO(created.Token)
+	response["secret"] = created.Secret
+	writeJSON(w, http.StatusCreated, response)
+}
+
+func (s *Server) revokeAPIToken(w http.ResponseWriter, r *http.Request) {
+	actor, err := s.requireCapability(r, "tokens.manage")
+	if err != nil {
+		s.writeRequestError(w, err)
+		return
+	}
+	if err := s.validateMutation(r, actor); err != nil {
+		s.writeRequestError(w, err)
+		return
+	}
+	tokenID := r.PathValue("tokenId")
+	if err := s.auth.RevokeAPIToken(r.Context(), actor.PrincipalID, tokenID); err != nil {
+		s.writeRequestError(w, err)
+		return
+	}
+	s.hub.RevokeSession(tokenID)
+	w.WriteHeader(http.StatusNoContent)
+}
+
 func (s *Server) listShares(w http.ResponseWriter, r *http.Request) {
 	actor, err := s.requireCapability(r, "shares.create")
 	if err != nil {
@@ -972,6 +1042,13 @@ func userDTO(user auth.User) map[string]any {
 func grantDTO(grant auth.Grant) map[string]any {
 	return map[string]any{"id": grant.ID, "principalId": grant.PrincipalID, "effect": grant.Effect,
 		"capability": grant.Capability, "scope": grant.Scope, "revoked": grant.Revoked}
+}
+
+func tokenDTO(token auth.APIToken) map[string]any {
+	return map[string]any{"id": token.ID, "principalId": token.PrincipalID, "name": token.Name,
+		"secretPrefix": token.SecretPrefix, "capabilities": token.Capabilities, "scopes": token.Scopes,
+		"createdAt": token.CreatedAt, "expiresAt": token.ExpiresAt, "lastUsedAt": token.LastUsedAt,
+		"revoked": token.RevokedAt != nil}
 }
 
 func shareDTO(share auth.Share) map[string]any {
@@ -2930,6 +3007,13 @@ func mediaDTO(publication catalog.Publication, value catalog.Media) api.Publishe
 }
 
 func (s *Server) authenticate(r *http.Request) (auth.Session, error) {
+	if authorization := r.Header.Get("Authorization"); authorization != "" {
+		scheme, value, ok := strings.Cut(authorization, " ")
+		if !ok || !strings.EqualFold(scheme, "Bearer") || strings.TrimSpace(value) == "" {
+			return auth.Session{}, fault.New(fault.CodeTokenInvalid, false, nil)
+		}
+		return s.auth.AuthenticateAPIToken(r.Context(), strings.TrimSpace(value))
+	}
 	cookie, err := r.Cookie(auth.CookieName)
 	if err != nil {
 		return auth.Session{}, fault.New(fault.CodeUnauthenticated, false, nil)

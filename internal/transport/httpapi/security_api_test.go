@@ -335,6 +335,52 @@ func TestSecurityAuditAccessControl(t *testing.T) {
 	_ = denied.Body.Close()
 }
 
+func TestAPITokenLifecycleAndBearerAuthentication(t *testing.T) {
+	server, store := newLANSecurityServer(t, false)
+	client, csrf := establishLANOwner(t, server)
+
+	tokenResponse := requestJSON(t, client, http.MethodPost, server.URL+"/api/v1/api-tokens", server.URL, csrf,
+		map[string]any{"name": "automation", "capabilities": []string{"library.read"}, "scopes": []map[string]string{{"kind": "global"}}})
+	tokenBody := readAndClose(t, tokenResponse)
+	if tokenResponse.StatusCode != http.StatusCreated {
+		t.Fatalf("Token 创建 status=%d body=%s", tokenResponse.StatusCode, tokenBody)
+	}
+	var token struct{ ID, Secret string }
+	if err := json.Unmarshal(tokenBody, &token); err != nil || token.ID == "" || token.Secret == "" {
+		t.Fatalf("Token 创建响应无一次性 secret: %v body=%s", err, tokenBody)
+	}
+	list := requestJSON(t, client, http.MethodGet, server.URL+"/api/v1/api-tokens", "", "", nil)
+	listBody := readAndClose(t, list)
+	if list.StatusCode != http.StatusOK || bytes.Contains(listBody, []byte(token.Secret)) || bytes.Contains(listBody, []byte(`"secret"`)) {
+		t.Fatalf("Token 列表泄露 secret: status=%d body=%s", list.StatusCode, listBody)
+	}
+	var stored string
+	if err := store.Control.SQL().QueryRow("SELECT secret_hash FROM api_tokens WHERE token_id=?", token.ID).Scan(&stored); err != nil || stored == token.Secret || len(stored) != 64 {
+		t.Fatalf("Token 数据库存储不安全: len=%d err=%v", len(stored), err)
+	}
+
+	bearer, _ := http.NewRequest(http.MethodGet, server.URL+"/api/v1/bootstrap", nil)
+	bearer.Header.Set("Authorization", "Bearer "+token.Secret)
+	bearerResponse, err := http.DefaultClient.Do(bearer)
+	if err != nil || bearerResponse.StatusCode != http.StatusOK || !bytes.Contains(readAndClose(t, bearerResponse), []byte(`"authenticated":true`)) {
+		t.Fatalf("Bearer Token 未认证: status=%d err=%v", bearerResponse.StatusCode, err)
+	}
+	revoke := requestJSON(t, client, http.MethodDelete, server.URL+"/api/v1/api-tokens/"+token.ID, server.URL, csrf, nil)
+	if revoke.StatusCode != http.StatusNoContent {
+		t.Fatalf("Token 吊销 status=%d", revoke.StatusCode)
+	}
+	_ = revoke.Body.Close()
+	bearer, _ = http.NewRequest(http.MethodGet, server.URL+"/api/v1/bootstrap", nil)
+	bearer.Header.Set("Authorization", "Bearer "+token.Secret)
+	bearerResponse, err = http.DefaultClient.Do(bearer)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Contains(readAndClose(t, bearerResponse), []byte(`"authenticated":false`)) {
+		t.Fatal("已吊销 Token 仍被 bootstrap 视为已认证")
+	}
+}
+
 func newLANSecurityServer(t *testing.T, tls bool) (*httptest.Server, *storage.Store) {
 	t.Helper()
 	dirs := appdirs.UnderRoot(filepath.Join(t.TempDir(), "app"))
