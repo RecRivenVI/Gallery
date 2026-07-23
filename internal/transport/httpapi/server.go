@@ -117,6 +117,9 @@ func New(mode config.Mode, store *storage.Store, clock ports.Clock, personal *au
 	mux.HandleFunc("GET /api/v1/shares", server.listShares)
 	mux.HandleFunc("POST /api/v1/shares", server.createShare)
 	mux.HandleFunc("DELETE /api/v1/shares/{shareId}", server.revokeShare)
+	mux.HandleFunc("GET /api/v1/public/shares/{credential}", server.resolveShare)
+	mux.HandleFunc("GET /api/v1/public/shares/{credential}/media/{mediaId}/content", server.publicShareMediaContent)
+	mux.HandleFunc("HEAD /api/v1/public/shares/{credential}/media/{mediaId}/content", server.publicShareMediaContent)
 	mux.HandleFunc("POST /api/v1/libraries", server.createLibrary)
 	mux.HandleFunc("GET /api/v1/libraries/{libraryId}", server.getLibrary)
 	mux.HandleFunc("POST /api/v1/sources", server.createSource)
@@ -753,6 +756,20 @@ func (s *Server) revokeShare(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusNoContent)
 }
 
+func (s *Server) resolveShare(w http.ResponseWriter, r *http.Request) {
+	share, err := s.auth.ResolveShare(r.Context(), r.PathValue("credential"))
+	if err != nil {
+		s.writeRequestError(w, err)
+		return
+	}
+	response, err := s.publicShareResource(r, share)
+	if err != nil {
+		s.writeRequestError(w, concealPublicShareError(err))
+		return
+	}
+	writeJSON(w, http.StatusOK, response)
+}
+
 func (s *Server) validateShareTarget(r *http.Request, actor auth.Session, scopeKind, scopeID, fixedAlgorithm, fixedDigest string) error {
 	switch scopeKind {
 	case "library":
@@ -799,6 +816,128 @@ func (s *Server) validateShareTarget(r *http.Request, actor auth.Session, scopeK
 	default:
 		return fault.WithField(fault.CodeValidation, "scopeKind", nil)
 	}
+}
+
+func (s *Server) publicShareResource(r *http.Request, share auth.Share) (map[string]any, error) {
+	response := map[string]any{
+		"scopeKind": share.ScopeKind, "scopeId": share.ScopeID, "permissions": share.Permissions,
+		"expiresAt": share.ExpiresAt, "fixed": share.FixedBlobAlgorithm != "",
+	}
+	switch share.ScopeKind {
+	case "library":
+		library, err := s.data.GetLibrary(r.Context(), share.ScopeID)
+		if err != nil {
+			return nil, err
+		}
+		response["library"] = libraryDTO(library)
+	case "work":
+		publication, work, err := s.catalog.GetWork(r.Context(), share.ScopeID)
+		if err != nil {
+			return nil, err
+		}
+		_, items, err := s.catalog.ListMediaForWorkAt(r.Context(), publication.ID, work.ID)
+		if err != nil {
+			return nil, err
+		}
+		mediaItems := make([]api.PublishedMedia, 0, len(items))
+		for _, item := range items {
+			mediaItems = append(mediaItems, mediaDTO(publication, item))
+		}
+		response["queryPublicationId"], response["work"], response["mediaItems"] = publication.ID, workDTO(publication, work), mediaItems
+	case "media":
+		if share.FixedBlobAlgorithm != "" {
+			locations, err := s.catalog.BlobLocations(r.Context(), domain.ContentBlobRef{Algorithm: share.FixedBlobAlgorithm, Digest: share.FixedBlobDigest})
+			if err != nil {
+				return nil, err
+			}
+			response["fixedBlob"] = map[string]any{"algorithm": share.FixedBlobAlgorithm, "digest": share.FixedBlobDigest,
+				"sizeBytes": locations[0].Size, "mimeType": locations[0].MIME}
+			if publication, item, currentErr := s.catalog.GetMedia(r.Context(), share.ScopeID); currentErr == nil &&
+				item.Algorithm == share.FixedBlobAlgorithm && item.Digest == share.FixedBlobDigest {
+				response["queryPublicationId"], response["media"] = publication.ID, mediaDTO(publication, item)
+			}
+			break
+		}
+		publication, item, err := s.catalog.GetMedia(r.Context(), share.ScopeID)
+		if err != nil {
+			return nil, err
+		}
+		response["queryPublicationId"], response["media"] = publication.ID, mediaDTO(publication, item)
+	default:
+		return nil, fault.New(fault.CodeNotFound, false, nil)
+	}
+	return response, nil
+}
+
+func (s *Server) publicShareMediaContent(w http.ResponseWriter, r *http.Request) {
+	share, err := s.auth.ResolveShare(r.Context(), r.PathValue("credential"))
+	if err != nil {
+		s.writeRequestError(w, err)
+		return
+	}
+	download := r.URL.Query().Get("download") == "true"
+	if (!shareHasPermission(share, "view") && !shareHasPermission(share, "download")) ||
+		(download && !shareHasPermission(share, "download")) {
+		s.writeRequestError(w, fault.New(fault.CodeForbidden, false, nil))
+		return
+	}
+	mediaID := r.PathValue("mediaId")
+	if _, err := domain.ParseID(domain.IDCanonicalMedia, mediaID); err != nil {
+		s.writeRequestError(w, fault.New(fault.CodeNotFound, false, nil))
+		return
+	}
+	if share.FixedBlobAlgorithm != "" {
+		if share.ScopeKind != "media" || mediaID != share.ScopeID {
+			s.writeRequestError(w, fault.New(fault.CodeNotFound, false, nil))
+			return
+		}
+		s.serveFixedShareBlob(w, r, share, download)
+		return
+	}
+	_, item, err := s.catalog.GetMedia(r.Context(), mediaID)
+	if err != nil {
+		s.writeRequestError(w, concealPublicShareError(err))
+		return
+	}
+	switch share.ScopeKind {
+	case "media":
+		if item.ID != share.ScopeID {
+			err = fault.New(fault.CodeNotFound, false, nil)
+		}
+	case "work":
+		if item.WorkID != share.ScopeID {
+			err = fault.New(fault.CodeNotFound, false, nil)
+		}
+	case "library":
+		source, sourceErr := s.data.GetSource(r.Context(), item.SourceID)
+		if sourceErr != nil || source.LibraryID != share.ScopeID {
+			err = fault.New(fault.CodeNotFound, false, nil)
+		}
+	default:
+		err = fault.New(fault.CodeNotFound, false, nil)
+	}
+	if err != nil {
+		s.writeRequestError(w, err)
+		return
+	}
+	s.serveMediaItem(w, r, item, download)
+}
+
+func shareHasPermission(share auth.Share, permission string) bool {
+	for _, value := range share.Permissions {
+		if value == permission {
+			return true
+		}
+	}
+	return false
+}
+
+func concealPublicShareError(err error) error {
+	var structured *fault.Error
+	if errors.As(err, &structured) && structured.Code == fault.CodeInternal {
+		return err
+	}
+	return fault.New(fault.CodeNotFound, false, nil)
 }
 
 func (s *Server) setSessionCookie(w http.ResponseWriter, r *http.Request, session auth.Session, value string) {
@@ -2068,6 +2207,14 @@ func (s *Server) mediaContent(w http.ResponseWriter, r *http.Request) {
 		s.writeRequestError(w, err)
 		return
 	}
+	if err := s.authorizeSession(r, session, "media.read", auth.ResourceScope{Kind: "source", ID: item.SourceID}); err != nil {
+		s.writeRequestError(w, concealForbidden(err))
+		return
+	}
+	s.serveMediaItem(w, r, item, false)
+}
+
+func (s *Server) serveMediaItem(w http.ResponseWriter, r *http.Request, item catalog.Media, download bool) {
 	if item.LocationStatus != "present" {
 		s.writeRequestError(w, fault.New(fault.CodeMediaOffline, true, nil))
 		return
@@ -2100,11 +2247,59 @@ func (s *Server) mediaContent(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	defer snapshot.Close()
-	etag := `"gallery-` + item.Algorithm + `-` + item.Digest + `"`
+	s.writeMediaSnapshot(w, r, snapshot, item.Algorithm, item.Digest, item.MIME, download)
+}
+
+func (s *Server) serveFixedShareBlob(w http.ResponseWriter, r *http.Request, share auth.Share, download bool) {
+	blob := domain.ContentBlobRef{Algorithm: share.FixedBlobAlgorithm, Digest: share.FixedBlobDigest}
+	locations, err := s.catalog.BlobLocations(r.Context(), blob)
+	if err != nil {
+		s.writeRequestError(w, concealPublicShareError(err))
+		return
+	}
+	lease, err := media.AcquireBlobReadLease(r.Context(), s.store.Catalog.SQL(), s.clock, blob, nil)
+	if err != nil {
+		s.writeRequestError(w, err)
+		return
+	}
+	defer lease.Close()
+	var lastErr error
+	for _, location := range locations {
+		source, sourceErr := s.data.GetSource(r.Context(), location.SourceID)
+		if sourceErr != nil {
+			lastErr = sourceErr
+			continue
+		}
+		snapshot, snapshotErr := media.PrepareSnapshot(source.RootPath, location.RelativePath,
+			location.Algorithm, location.Digest, location.Size, s.data.TempRoot())
+		if snapshotErr != nil {
+			lastErr = snapshotErr
+			continue
+		}
+		s.writeMediaSnapshot(w, r, snapshot, location.Algorithm, location.Digest, location.MIME, download)
+		_ = snapshot.Close()
+		return
+	}
+	if lastErr == nil {
+		lastErr = fault.New(fault.CodeMediaOffline, true, nil)
+	}
+	var structured *fault.Error
+	if errors.As(lastErr, &structured) && structured.Code == fault.CodeInternal {
+		s.writeRequestError(w, lastErr)
+		return
+	}
+	s.writeRequestError(w, fault.New(fault.CodeMediaOffline, true, nil))
+}
+
+func (s *Server) writeMediaSnapshot(w http.ResponseWriter, r *http.Request, snapshot *media.Snapshot, algorithm, digest, mimeType string, download bool) {
+	etag := `"gallery-` + algorithm + `-` + digest + `"`
 	w.Header().Set("Accept-Ranges", "bytes")
 	w.Header().Set("ETag", etag)
-	w.Header().Set("Content-Type", item.MIME)
+	w.Header().Set("Content-Type", mimeType)
 	w.Header().Set("X-Content-Type-Options", "nosniff")
+	if download {
+		w.Header().Set("Content-Disposition", `attachment; filename="gallery-media"`)
+	}
 	if etagMatches(r.Header.Get("If-None-Match"), etag) {
 		w.WriteHeader(http.StatusNotModified)
 		return
