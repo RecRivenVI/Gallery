@@ -21,9 +21,11 @@ tools/testlab/
 │   ├── report/       Finding/LatencySample/Report，脱敏与原子持久化
 │   └── sourceguard/   真实 Source 只读清单与零写入校验
 ├── stages/
-│   └── stage4/
+│   ├── stage4/
 │       ├── query/  结构化过滤/搜索/排序/Ranking/Total/Cursor/性能矩阵
 │       └── media/  真实/合成 Source 建立、按需确认、Range/ETag、DerivedAsset
+│   └── stage5/
+│       └── security/  LAN Owner、Session、Grant、API Token、路径/metadata/媒体/恢复攻击输入与安全报告闭环
 ├── fixtures/
 │   ├── rules/       全部 10 个目标来源的规则包，见 fixtures/rules/README.md
 │   └── synthetic/   小型合成目录夹具
