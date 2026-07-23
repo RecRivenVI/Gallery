@@ -302,6 +302,39 @@ func TestAnonymousShareConsumption(t *testing.T) {
 	_ = afterRevoke.Body.Close()
 }
 
+func TestSecurityAuditAccessControl(t *testing.T) {
+	server, _ := newLANSecurityServer(t, false)
+	client, csrf := establishLANOwner(t, server)
+
+	audits := requestJSON(t, client, http.MethodGet, server.URL+"/api/v1/admin/security-audits", "", "", nil)
+	auditsBody := readAndClose(t, audits)
+	if audits.StatusCode != http.StatusOK || !bytes.Contains(auditsBody, []byte(`"audits"`)) ||
+		bytes.Contains(auditsBody, []byte("owner-password-strong")) {
+		t.Fatalf("审计读取或脱敏错误: status=%d body=%s", audits.StatusCode, auditsBody)
+	}
+
+	viewerCreate := requestJSON(t, client, http.MethodPost, server.URL+"/api/v1/admin/users", server.URL, csrf,
+		map[string]any{"username": "auditless", "displayName": "Auditless", "password": "auditless-password-strong", "roles": []string{"viewer"}})
+	if viewerCreate.StatusCode != http.StatusCreated {
+		t.Fatalf("创建无审计权限账户 status=%d body=%s", viewerCreate.StatusCode, readAndClose(t, viewerCreate))
+	}
+	_ = viewerCreate.Body.Close()
+	viewerJar, _ := cookiejar.New(nil)
+	viewerClient := &http.Client{Jar: viewerJar}
+	viewerCSRF := bootstrapCSRF(t, viewerClient, server.URL)
+	viewerLogin := requestJSON(t, viewerClient, http.MethodPost, server.URL+"/api/v1/auth/login", server.URL, viewerCSRF,
+		map[string]any{"username": "auditless", "password": "auditless-password-strong"})
+	if viewerLogin.StatusCode != http.StatusCreated {
+		t.Fatalf("无审计权限账户登录失败: %d body=%s", viewerLogin.StatusCode, readAndClose(t, viewerLogin))
+	}
+	_ = viewerLogin.Body.Close()
+	denied := requestJSON(t, viewerClient, http.MethodGet, server.URL+"/api/v1/admin/security-audits", "", "", nil)
+	if denied.StatusCode != http.StatusForbidden {
+		t.Fatalf("缺少 audit.read 未拒绝: %d body=%s", denied.StatusCode, readAndClose(t, denied))
+	}
+	_ = denied.Body.Close()
+}
+
 func newLANSecurityServer(t *testing.T, tls bool) (*httptest.Server, *storage.Store) {
 	t.Helper()
 	dirs := appdirs.UnderRoot(filepath.Join(t.TempDir(), "app"))
