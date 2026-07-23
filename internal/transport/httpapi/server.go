@@ -3145,8 +3145,26 @@ func statusForFault(err error) int {
 
 func requestLog(logger *slog.Logger, next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		logger.InfoContext(r.Context(), "http_request", "method", r.Method, "route", r.URL.Path)
 		next.ServeHTTP(w, r)
+		route := r.Pattern
+		if _, path, ok := strings.Cut(route, " "); ok {
+			route = path
+		}
+		if route == "" {
+			route = redactedRequestPath(r.URL.Path)
+		}
+		logger.InfoContext(r.Context(), "http_request", "method", r.Method, "route", route)
 	})
 }
 
+func redactedRequestPath(path string) string {
+	const prefix = "/api/v1/public/shares/"
+	if !strings.HasPrefix(path, prefix) {
+		return path
+	}
+	remainder := strings.TrimPrefix(path, prefix)
+	if slash := strings.IndexByte(remainder, '/'); slash >= 0 {
+		return prefix + "{credential}" + remainder[slash:]
+	}
+	return prefix + "{credential}"
+}
