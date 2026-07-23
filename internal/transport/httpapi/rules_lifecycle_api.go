@@ -439,6 +439,23 @@ func (s *Server) createRuleParameterSet(w http.ResponseWriter, r *http.Request) 
 	writeJSON(w, http.StatusCreated, ruleParameterMap(item))
 }
 
+func (s *Server) listRuleParameterSets(w http.ResponseWriter, r *http.Request) {
+	if _, err := s.requireCapability(r, "rules.read"); err != nil {
+		s.writeRequestError(w, err)
+		return
+	}
+	items, err := s.data.ListRuleParameterSets(r.Context(), r.URL.Query().Get("semanticHash"), r.URL.Query().Get("status"))
+	if err != nil {
+		s.writeRequestError(w, err)
+		return
+	}
+	result := make([]map[string]any, 0, len(items))
+	for _, item := range items {
+		result = append(result, ruleParameterMap(item))
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"parameterSets": result})
+}
+
 func (s *Server) getRuleParameterSet(w http.ResponseWriter, r *http.Request) {
 	if _, err := s.requireCapability(r, "rules.read"); err != nil {
 		s.writeRequestError(w, err)
