@@ -15,6 +15,7 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/RecRivenVI/gallery/internal/application"
 	"github.com/RecRivenVI/gallery/internal/auth"
@@ -113,6 +114,9 @@ func New(mode config.Mode, store *storage.Store, clock ports.Clock, personal *au
 	mux.HandleFunc("POST /api/v1/account/password", server.changePassword)
 	mux.HandleFunc("POST /api/v1/admin/users/{userId}/grants", server.createGrant)
 	mux.HandleFunc("DELETE /api/v1/admin/grants/{grantId}", server.revokeGrant)
+	mux.HandleFunc("GET /api/v1/shares", server.listShares)
+	mux.HandleFunc("POST /api/v1/shares", server.createShare)
+	mux.HandleFunc("DELETE /api/v1/shares/{shareId}", server.revokeShare)
 	mux.HandleFunc("POST /api/v1/libraries", server.createLibrary)
 	mux.HandleFunc("GET /api/v1/libraries/{libraryId}", server.getLibrary)
 	mux.HandleFunc("POST /api/v1/sources", server.createSource)
@@ -676,6 +680,127 @@ func (s *Server) revokeGrant(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusNoContent)
 }
 
+func (s *Server) listShares(w http.ResponseWriter, r *http.Request) {
+	actor, err := s.requireCapability(r, "shares.create")
+	if err != nil {
+		s.writeRequestError(w, err)
+		return
+	}
+	shares, err := s.auth.ListShares(r.Context(), actor.PrincipalID)
+	if err != nil {
+		s.writeRequestError(w, err)
+		return
+	}
+	items := make([]map[string]any, 0, len(shares))
+	for _, share := range shares {
+		items = append(items, shareDTO(share))
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"shares": items})
+}
+
+func (s *Server) createShare(w http.ResponseWriter, r *http.Request) {
+	actor, err := s.requireCapability(r, "shares.create")
+	if err != nil {
+		s.writeRequestError(w, err)
+		return
+	}
+	if err := s.validateMutation(r, actor); err != nil {
+		s.writeRequestError(w, err)
+		return
+	}
+	var request struct {
+		ScopeKind          string    `json:"scopeKind"`
+		ScopeID            string    `json:"scopeId"`
+		Permissions        []string  `json:"permissions"`
+		FixedBlobAlgorithm string    `json:"fixedBlobAlgorithm"`
+		FixedBlobDigest    string    `json:"fixedBlobDigest"`
+		ExpiresAt          time.Time `json:"expiresAt"`
+	}
+	if err := decodeJSON(r, &request); err != nil {
+		s.writeRequestError(w, fault.WithField(fault.CodeValidation, "body", err))
+		return
+	}
+	if err := s.validateShareTarget(r, actor, request.ScopeKind, request.ScopeID,
+		request.FixedBlobAlgorithm, request.FixedBlobDigest); err != nil {
+		s.writeRequestError(w, err)
+		return
+	}
+	created, err := s.auth.CreateShare(r.Context(), actor, request.ScopeKind, request.ScopeID, request.Permissions,
+		request.FixedBlobAlgorithm, request.FixedBlobDigest, request.ExpiresAt)
+	if err != nil {
+		s.writeRequestError(w, err)
+		return
+	}
+	response := shareDTO(created.Share)
+	response["secret"] = created.Secret
+	writeJSON(w, http.StatusCreated, response)
+}
+
+func (s *Server) revokeShare(w http.ResponseWriter, r *http.Request) {
+	actor, err := s.requireCapability(r, "shares.create")
+	if err != nil {
+		s.writeRequestError(w, err)
+		return
+	}
+	if err := s.validateMutation(r, actor); err != nil {
+		s.writeRequestError(w, err)
+		return
+	}
+	if err := s.auth.RevokeShare(r.Context(), actor.PrincipalID, r.PathValue("shareId")); err != nil {
+		s.writeRequestError(w, err)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+func (s *Server) validateShareTarget(r *http.Request, actor auth.Session, scopeKind, scopeID, fixedAlgorithm, fixedDigest string) error {
+	switch scopeKind {
+	case "library":
+		if _, err := domain.ParseID(domain.IDLibrary, scopeID); err != nil {
+			return fault.WithField(fault.CodeValidation, "scopeId", err)
+		}
+		if fixedAlgorithm != "" || fixedDigest != "" {
+			return fault.WithField(fault.CodeValidation, "fixedBlobAlgorithm", nil)
+		}
+		if _, err := s.data.GetLibrary(r.Context(), scopeID); err != nil {
+			return err
+		}
+		return concealForbidden(s.authorizeSession(r, actor, "library.read", auth.ResourceScope{Kind: "library", ID: scopeID}))
+	case "work":
+		if _, err := domain.ParseID(domain.IDCanonicalWork, scopeID); err != nil {
+			return fault.WithField(fault.CodeValidation, "scopeId", err)
+		}
+		if fixedAlgorithm != "" || fixedDigest != "" {
+			return fault.WithField(fault.CodeValidation, "fixedBlobAlgorithm", nil)
+		}
+		_, work, err := s.catalog.GetWork(r.Context(), scopeID)
+		if err != nil {
+			return err
+		}
+		return concealForbidden(s.authorizeSession(r, actor, "library.read", auth.ResourceScope{Kind: "source", ID: work.SourceID}))
+	case "media":
+		if _, err := domain.ParseID(domain.IDCanonicalMedia, scopeID); err != nil {
+			return fault.WithField(fault.CodeValidation, "scopeId", err)
+		}
+		_, item, err := s.catalog.GetMedia(r.Context(), scopeID)
+		if err != nil {
+			return err
+		}
+		if err := s.authorizeSession(r, actor, "media.read", auth.ResourceScope{Kind: "source", ID: item.SourceID}); err != nil {
+			return concealForbidden(err)
+		}
+		if fixedAlgorithm != "" || fixedDigest != "" {
+			if item.ContentVerificationState != catalog.ContentVerificationStateContentVerified ||
+				fixedAlgorithm != item.Algorithm || fixedDigest != item.Digest {
+				return fault.WithField(fault.CodeValidation, "fixedBlobDigest", nil)
+			}
+		}
+		return nil
+	default:
+		return fault.WithField(fault.CodeValidation, "scopeKind", nil)
+	}
+}
+
 func (s *Server) setSessionCookie(w http.ResponseWriter, r *http.Request, session auth.Session, value string) {
 	maxAge := int(session.ExpiresAt.Sub(s.clock.Now().UTC()).Seconds())
 	if maxAge < 0 {
@@ -694,6 +819,20 @@ func userDTO(user auth.User) map[string]any {
 func grantDTO(grant auth.Grant) map[string]any {
 	return map[string]any{"id": grant.ID, "principalId": grant.PrincipalID, "effect": grant.Effect,
 		"capability": grant.Capability, "scope": grant.Scope, "revoked": grant.Revoked}
+}
+
+func shareDTO(share auth.Share) map[string]any {
+	return map[string]any{"id": share.ID, "createdBy": share.CreatedBy, "scopeKind": share.ScopeKind,
+		"scopeId": share.ScopeID, "permissions": share.Permissions, "secretPrefix": share.SecretPrefix,
+		"fixedBlobAlgorithm": nullableString(share.FixedBlobAlgorithm), "fixedBlobDigest": nullableString(share.FixedBlobDigest),
+		"createdAt": share.CreatedAt, "expiresAt": share.ExpiresAt, "revoked": share.RevokedAt != nil}
+}
+
+func nullableString(value string) any {
+	if value == "" {
+		return nil
+	}
+	return value
 }
 
 func (s *Server) listSessions(w http.ResponseWriter, r *http.Request) {
