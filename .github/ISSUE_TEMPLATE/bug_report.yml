@@ -5,7 +5,7 @@ body:
   - type: markdown
     attributes:
       value: |
-        提交前请确认：这不是安全漏洞（见 [SECURITY.md](https://github.com/RecRivenVI/Gallery/blob/main/SECURITY.md)），也不是安装或使用咨询（Gallery 目前尚无图形界面或安装包，见 [README.md](https://github.com/RecRivenVI/Gallery/blob/main/README.md)）。
+        提交前请确认：这不是安全漏洞（见 [SECURITY.md](https://github.com/RecRivenVI/Gallery/blob/main/SECURITY.md)），也不是安装或使用咨询（Gallery 仍处于 pre-alpha，Web/PWA 不是正式发行版本，见 [README.md](https://github.com/RecRivenVI/Gallery/blob/main/README.md)）。
 
   - type: input
     id: commit
@@ -28,9 +28,17 @@ body:
     id: goversion
     attributes:
       label: Go 版本
-      description: "`go version` 的输出"
+      description: "涉及后端或构建时填写 `go version`；纯 Web 运行时问题可填不适用"
     validations:
       required: true
+
+  - type: input
+    id: browser
+    attributes:
+      label: 浏览器与 viewport（如适用）
+      description: 例如 Chrome 140 / Edge 140、桌面 1440x900 或移动 390x844；不涉及 Web 可留空
+    validations:
+      required: false
 
   - type: textarea
     id: command
@@ -44,7 +52,7 @@ body:
     id: module
     attributes:
       label: 涉及模块
-      description: 例如 scanner / catalog / rules / media 等
+      description: 例如 scanner / catalog / rules / media / web / pwa 等
     validations:
       required: false
 

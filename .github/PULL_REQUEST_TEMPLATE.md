@@ -27,6 +27,7 @@ Closes #
 - [ ] 未引入 Provider 或平台特例分支
 - [ ] 未包含 secret、token、私人路径或真实媒体内容
 - [ ] API 变化已同步 OpenAPI、生成客户端和测试
-- [ ] 已检查 README.md 与 PROJECT_STATUS.md 是否需要同步
+- [ ] Web 变化未缓存 API/WS/媒体/授权响应，且未把 secret 或业务事实写入浏览器持久存储
+- [ ] 已完成 AGENTS.md 所列仓库级文档与元数据影响检查（不只 README.md / PROJECT_STATUS.md）
 
 ## 补充说明

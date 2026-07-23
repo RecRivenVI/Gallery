@@ -22,6 +22,7 @@
 | [ADR-006 API 与安全](ADR-006-API与安全.md) | 接受 | REST/OpenAPI、版本化 WebSocket、Principal/Role/Grant capability、Personal 配对、LAN 账户与摘要凭据 |
 | [ADR-007 跨平台适配层](ADR-007-跨平台适配层.md) | 接受 | 核心与 OS/文件系统/系统能力通过端口隔离 |
 | [ADR-008 可替换桌面壳](ADR-008-可替换桌面壳.md) | 有条件接受 | Wails 是当前 Windows 优先候选，壳不是后端依赖 |
+| [ADR-009 Web 与 PWA 交付架构](ADR-009-Web与PWA交付架构.md) | 接受 | React/TypeScript API-first Web、同源嵌入资产、静态壳 PWA 与 HTTP snapshot 事实源 |
 
 ## 延期决策登记
 
