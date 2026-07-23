@@ -122,6 +122,65 @@ func revisionPresent(t *testing.T, db *sql.DB, revisionID string) bool {
 	return count == 1
 }
 
+// TestRunGCProtectsFixedShareBlobUntilRevoked 覆盖固定媒体 Share 的核心语义：只要
+// Share 仍有效，它固定的完整摘要就必须跨 Catalog revision 保留；吊销后则恢复正常 GC。
+func TestRunGCProtectsFixedShareBlobUntilRevoked(t *testing.T) {
+	ctx := context.Background()
+	dirs := appdirs.UnderRoot(filepath.Join(t.TempDir(), "app"))
+	if err := dirs.Ensure(filesystem.OS{}); err != nil {
+		t.Fatal(err)
+	}
+	store, err := storage.Open(ctx, dirs)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	clk := clock.NewManual(time.Date(2026, 7, 23, 8, 0, 0, 0, time.UTC))
+	ids := identity.NewGenerator(clk)
+	jobStore, err := jobs.NewStore(store.Control.SQL(), clk, ids)
+	if err != nil {
+		t.Fatal(err)
+	}
+	catalogStore, err := catalog.NewStore(store.Catalog.SQL(), clk, ids)
+	if err != nil {
+		t.Fatal(err)
+	}
+	maintenanceService, err := maintenance.New(ctx, store.Control.SQL(), catalogStore, jobStore, nil, dirs, spaceChecker{free: 1 << 30}, clk)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	const revisionID = "cat_018f47d2-5c16-7a44-a8a0-0000000000b1"
+	digest := strings.Repeat("b", 64)
+	insertGCEligibleRevision(t, store.Catalog.SQL(), revisionID, "job_018f47d2-5c16-7a44-a8a0-0000000000b1", digest)
+	if _, err := store.Control.SQL().ExecContext(ctx, `INSERT INTO shares
+(share_id, secret_hash, secret_prefix, created_by, scope_kind, scope_id,
+ permissions_json, fixed_blob_algorithm, fixed_blob_digest, created_at, expires_at)
+VALUES (?, ?, ?, 'personal-owner', 'media', ?, '["view"]', 'sha256-v1', ?, ?, ?)`,
+		"shr_018f47d2-5c16-7a44-a8a0-0000000000b1", strings.Repeat("a", 64), "share-test",
+		"med_018f47d2-5c16-7a44-a8a0-0000000000b1", digest, clk.Now().Unix(), clk.Now().Add(time.Hour).Unix()); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := maintenanceService.RunGC(ctx, 0, false); err != nil {
+		t.Fatal(err)
+	}
+	if !revisionPresent(t, store.Catalog.SQL(), revisionID) {
+		t.Fatal("有效固定 Share 引用的 Blob 所在 revision 不应被 GC 回收")
+	}
+
+	if _, err := store.Control.SQL().ExecContext(ctx,
+		"UPDATE shares SET revoked_at=? WHERE share_id=?", clk.Now().Unix(), "shr_018f47d2-5c16-7a44-a8a0-0000000000b1"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := maintenanceService.RunGC(ctx, 0, false); err != nil {
+		t.Fatal(err)
+	}
+	if revisionPresent(t, store.Catalog.SQL(), revisionID) {
+		t.Fatal("固定 Share 吊销且无其它引用后不应继续阻止其 Blob 所在 revision 被回收")
+	}
+}
+
 // TestRunGCProtectsBlobForQueuedDerivedJobBeyondLeaseTTL 覆盖阶段 4 收尾复核发现的核心
 // 缺口：media.BlobReadLease 只在 Create 与 Execute 开始时各建立一次固定 5 分钟 TTL 的
 // 一次性租约，不依赖"当前 transform 通常很快执行"的假设时，一个 Job 排队等待调度的

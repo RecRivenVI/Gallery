@@ -177,6 +177,11 @@ func (s *Service) RunGC(ctx context.Context, retention time.Duration, dryRun boo
 	if err != nil {
 		return GCReport{}, err
 	}
+	shareBlobs, err := s.protectedShareBlobs(ctx)
+	if err != nil {
+		return GCReport{}, err
+	}
+	protectedBlobs = append(protectedBlobs, shareBlobs...)
 	result, err := s.catalog.GarbageCollectWithOptions(ctx, catalog.GCOptions{Retention: retention, ActiveJobIDs: activeIDs, ProtectedBlobs: protectedBlobs, DryRun: dryRun})
 	if err != nil {
 		return GCReport{}, err
@@ -297,6 +302,32 @@ func (s *Service) protectedDerivedBlobs(ctx context.Context, active []jobs.Job) 
 		appendDerivedBlob(job)
 	}
 	return blobs, nil
+}
+
+// protectedShareBlobs 把未过期、未吊销的固定 Blob 分享纳入既有 Catalog GC 保护集合。
+// Share 是 control.db 的持久事实，不能依赖短期读取 lease 才避免其引用的已发布 revision 被回收。
+func (s *Service) protectedShareBlobs(ctx context.Context) ([]domain.ContentBlobRef, error) {
+	rows, err := s.control.QueryContext(ctx, `SELECT DISTINCT fixed_blob_algorithm, fixed_blob_digest
+FROM shares WHERE revoked_at IS NULL AND expires_at>? AND fixed_blob_algorithm IS NOT NULL`, s.clock.Now().UTC().Unix())
+	if err != nil {
+		return nil, fault.New(fault.CodeInternal, true, err)
+	}
+	defer rows.Close()
+	var result []domain.ContentBlobRef
+	for rows.Next() {
+		var blob domain.ContentBlobRef
+		if err := rows.Scan(&blob.Algorithm, &blob.Digest); err != nil {
+			return nil, fault.New(fault.CodeInternal, true, err)
+		}
+		if _, err := domain.ParseContentBlobRef(blob.Algorithm, blob.Digest); err != nil {
+			return nil, fault.New(fault.CodeInternal, false, err)
+		}
+		result = append(result, blob)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fault.New(fault.CodeInternal, true, err)
+	}
+	return result, nil
 }
 
 func (s *Service) Checkpoint(ctx context.Context) error {
