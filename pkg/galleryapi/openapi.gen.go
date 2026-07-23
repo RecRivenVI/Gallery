@@ -22,6 +22,42 @@ const (
 	SessionCookieScopes sessionCookieContextKey = "sessionCookie.Scopes"
 )
 
+// Defines values for AuthorizationGrantEffect.
+const (
+	AuthorizationGrantEffectAllow AuthorizationGrantEffect = "allow"
+	AuthorizationGrantEffectDeny  AuthorizationGrantEffect = "deny"
+)
+
+// Valid indicates whether the value is a known member of the AuthorizationGrantEffect enum.
+func (e AuthorizationGrantEffect) Valid() bool {
+	switch e {
+	case AuthorizationGrantEffectAllow:
+		return true
+	case AuthorizationGrantEffectDeny:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for AuthorizationGrantInputEffect.
+const (
+	AuthorizationGrantInputEffectAllow AuthorizationGrantInputEffect = "allow"
+	AuthorizationGrantInputEffectDeny  AuthorizationGrantInputEffect = "deny"
+)
+
+// Valid indicates whether the value is a known member of the AuthorizationGrantInputEffect enum.
+func (e AuthorizationGrantInputEffect) Valid() bool {
+	switch e {
+	case AuthorizationGrantInputEffectAllow:
+		return true
+	case AuthorizationGrantInputEffectDeny:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for BindingActionResultEntityKind.
 const (
 	BindingActionResultEntityKindMedia BindingActionResultEntityKind = "media"
@@ -252,13 +288,13 @@ func (e BootstrapResponseWebsocketProtocolVersion) Valid() bool {
 
 // Defines values for ContentBlobRefAlgorithm.
 const (
-	Sha256V1 ContentBlobRefAlgorithm = "sha256-v1"
+	ContentBlobRefAlgorithmSha256V1 ContentBlobRefAlgorithm = "sha256-v1"
 )
 
 // Valid indicates whether the value is a known member of the ContentBlobRefAlgorithm enum.
 func (e ContentBlobRefAlgorithm) Valid() bool {
 	switch e {
-	case Sha256V1:
+	case ContentBlobRefAlgorithmSha256V1:
 		return true
 	default:
 		return false
@@ -394,10 +430,13 @@ const (
 	FORBIDDEN                        ErrorCode = "FORBIDDEN"
 	HOSTREJECTED                     ErrorCode = "HOST_REJECTED"
 	INTERNALERROR                    ErrorCode = "INTERNAL_ERROR"
+	INVALIDCREDENTIALS               ErrorCode = "INVALID_CREDENTIALS"
 	JOBCANCELLATIONREQUESTED         ErrorCode = "JOB_CANCELLATION_REQUESTED"
 	JOBPROGRESSREGRESSION            ErrorCode = "JOB_PROGRESS_REGRESSION"
 	JOBRETRYEXHAUSTED                ErrorCode = "JOB_RETRY_EXHAUSTED"
 	JOBSTATECONFLICT                 ErrorCode = "JOB_STATE_CONFLICT"
+	LANALREADYINITIALIZED            ErrorCode = "LAN_ALREADY_INITIALIZED"
+	LANOWNERREQUIRED                 ErrorCode = "LAN_OWNER_REQUIRED"
 	MAINTENANCEBLOCKED               ErrorCode = "MAINTENANCE_BLOCKED"
 	MEDIAOFFLINE                     ErrorCode = "MEDIA_OFFLINE"
 	MIGRATIONFAILED                  ErrorCode = "MIGRATION_FAILED"
@@ -411,6 +450,7 @@ const (
 	PROCESSINTERRUPTED               ErrorCode = "PROCESS_INTERRUPTED"
 	QUERYTOOSHORT                    ErrorCode = "QUERY_TOO_SHORT"
 	RANGEINVALID                     ErrorCode = "RANGE_INVALID"
+	RATELIMITED                      ErrorCode = "RATE_LIMITED"
 	RESTOREFAILED                    ErrorCode = "RESTORE_FAILED"
 	RULEBINDINGCONFLICT              ErrorCode = "RULE_BINDING_CONFLICT"
 	RULECELLIMIT                     ErrorCode = "RULE_CEL_LIMIT"
@@ -436,7 +476,10 @@ const (
 	SOURCEUNAVAILABLE                ErrorCode = "SOURCE_UNAVAILABLE"
 	SOURCEWORKMERGEREVIEWREQUIRED    ErrorCode = "SOURCE_WORK_MERGE_REVIEW_REQUIRED"
 	SOURCEWORKSPLITREVIEWREQUIRED    ErrorCode = "SOURCE_WORK_SPLIT_REVIEW_REQUIRED"
+	TOKENEXPIRED                     ErrorCode = "TOKEN_EXPIRED"
+	TOKENINVALID                     ErrorCode = "TOKEN_INVALID"
 	UNAUTHENTICATED                  ErrorCode = "UNAUTHENTICATED"
+	USERDISABLED                     ErrorCode = "USER_DISABLED"
 	VALIDATIONERROR                  ErrorCode = "VALIDATION_ERROR"
 	VERIFICATIONTARGETMISMATCH       ErrorCode = "VERIFICATION_TARGET_MISMATCH"
 	WATCHEROVERFLOW                  ErrorCode = "WATCHER_OVERFLOW"
@@ -501,6 +544,8 @@ func (e ErrorCode) Valid() bool {
 		return true
 	case INTERNALERROR:
 		return true
+	case INVALIDCREDENTIALS:
+		return true
 	case JOBCANCELLATIONREQUESTED:
 		return true
 	case JOBPROGRESSREGRESSION:
@@ -508,6 +553,10 @@ func (e ErrorCode) Valid() bool {
 	case JOBRETRYEXHAUSTED:
 		return true
 	case JOBSTATECONFLICT:
+		return true
+	case LANALREADYINITIALIZED:
+		return true
+	case LANOWNERREQUIRED:
 		return true
 	case MAINTENANCEBLOCKED:
 		return true
@@ -534,6 +583,8 @@ func (e ErrorCode) Valid() bool {
 	case QUERYTOOSHORT:
 		return true
 	case RANGEINVALID:
+		return true
+	case RATELIMITED:
 		return true
 	case RESTOREFAILED:
 		return true
@@ -585,7 +636,13 @@ func (e ErrorCode) Valid() bool {
 		return true
 	case SOURCEWORKSPLITREVIEWREQUIRED:
 		return true
+	case TOKENEXPIRED:
+		return true
+	case TOKENINVALID:
+		return true
 	case UNAUTHENTICATED:
+		return true
+	case USERDISABLED:
 		return true
 	case VALIDATIONERROR:
 		return true
@@ -817,6 +874,69 @@ func (e JobAttemptStatus) Valid() bool {
 	}
 }
 
+// Defines values for LocalUserRoles.
+const (
+	LocalUserRolesOperator LocalUserRoles = "operator"
+	LocalUserRolesOwner    LocalUserRoles = "owner"
+	LocalUserRolesViewer   LocalUserRoles = "viewer"
+)
+
+// Valid indicates whether the value is a known member of the LocalUserRoles enum.
+func (e LocalUserRoles) Valid() bool {
+	switch e {
+	case LocalUserRolesOperator:
+		return true
+	case LocalUserRolesOwner:
+		return true
+	case LocalUserRolesViewer:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for LocalUserStatus.
+const (
+	LocalUserStatusActive   LocalUserStatus = "active"
+	LocalUserStatusDeleted  LocalUserStatus = "deleted"
+	LocalUserStatusDisabled LocalUserStatus = "disabled"
+)
+
+// Valid indicates whether the value is a known member of the LocalUserStatus enum.
+func (e LocalUserStatus) Valid() bool {
+	switch e {
+	case LocalUserStatusActive:
+		return true
+	case LocalUserStatusDeleted:
+		return true
+	case LocalUserStatusDisabled:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for LocalUserCreateRequestRoles.
+const (
+	LocalUserCreateRequestRolesOperator LocalUserCreateRequestRoles = "operator"
+	LocalUserCreateRequestRolesOwner    LocalUserCreateRequestRoles = "owner"
+	LocalUserCreateRequestRolesViewer   LocalUserCreateRequestRoles = "viewer"
+)
+
+// Valid indicates whether the value is a known member of the LocalUserCreateRequestRoles enum.
+func (e LocalUserCreateRequestRoles) Valid() bool {
+	switch e {
+	case LocalUserCreateRequestRolesOperator:
+		return true
+	case LocalUserCreateRequestRolesOwner:
+		return true
+	case LocalUserCreateRequestRolesViewer:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for OrphanCandidateEntityType.
 const (
 	OrphanCandidateEntityTypeCreator OrphanCandidateEntityType = "creator"
@@ -909,19 +1029,73 @@ func (e OrphanDecisionResultEntityType) Valid() bool {
 
 // Defines values for OrphanDecisionResultNewStatus.
 const (
-	OrphanDecisionResultNewStatusInactive      OrphanDecisionResultNewStatus = "inactive"
-	OrphanDecisionResultNewStatusManualUnbound OrphanDecisionResultNewStatus = "manual_unbound"
-	OrphanDecisionResultNewStatusOrphaned      OrphanDecisionResultNewStatus = "orphaned"
+	Inactive      OrphanDecisionResultNewStatus = "inactive"
+	ManualUnbound OrphanDecisionResultNewStatus = "manual_unbound"
+	Orphaned      OrphanDecisionResultNewStatus = "orphaned"
 )
 
 // Valid indicates whether the value is a known member of the OrphanDecisionResultNewStatus enum.
 func (e OrphanDecisionResultNewStatus) Valid() bool {
 	switch e {
-	case OrphanDecisionResultNewStatusInactive:
+	case Inactive:
 		return true
-	case OrphanDecisionResultNewStatusManualUnbound:
+	case ManualUnbound:
 		return true
-	case OrphanDecisionResultNewStatusOrphaned:
+	case Orphaned:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for PublicShareResourcePermissions.
+const (
+	PublicShareResourcePermissionsDownload PublicShareResourcePermissions = "download"
+	PublicShareResourcePermissionsView     PublicShareResourcePermissions = "view"
+)
+
+// Valid indicates whether the value is a known member of the PublicShareResourcePermissions enum.
+func (e PublicShareResourcePermissions) Valid() bool {
+	switch e {
+	case PublicShareResourcePermissionsDownload:
+		return true
+	case PublicShareResourcePermissionsView:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for PublicShareResourceScopeKind.
+const (
+	PublicShareResourceScopeKindLibrary PublicShareResourceScopeKind = "library"
+	PublicShareResourceScopeKindMedia   PublicShareResourceScopeKind = "media"
+	PublicShareResourceScopeKindWork    PublicShareResourceScopeKind = "work"
+)
+
+// Valid indicates whether the value is a known member of the PublicShareResourceScopeKind enum.
+func (e PublicShareResourceScopeKind) Valid() bool {
+	switch e {
+	case PublicShareResourceScopeKindLibrary:
+		return true
+	case PublicShareResourceScopeKindMedia:
+		return true
+	case PublicShareResourceScopeKindWork:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for PublicSharedBlobAlgorithm.
+const (
+	PublicSharedBlobAlgorithmSha256V1 PublicSharedBlobAlgorithm = "sha256-v1"
+)
+
+// Valid indicates whether the value is a known member of the PublicSharedBlobAlgorithm enum.
+func (e PublicSharedBlobAlgorithm) Valid() bool {
+	switch e {
+	case PublicSharedBlobAlgorithmSha256V1:
 		return true
 	default:
 		return false
@@ -940,6 +1114,27 @@ func (e PublishedMediaContentVerificationState) Valid() bool {
 	case ContentVerified:
 		return true
 	case LocatedUnverified:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for ResourceScopeKind.
+const (
+	ResourceScopeKindGlobal  ResourceScopeKind = "global"
+	ResourceScopeKindLibrary ResourceScopeKind = "library"
+	ResourceScopeKindSource  ResourceScopeKind = "source"
+)
+
+// Valid indicates whether the value is a known member of the ResourceScopeKind enum.
+func (e ResourceScopeKind) Valid() bool {
+	switch e {
+	case ResourceScopeKindGlobal:
+		return true
+	case ResourceScopeKindLibrary:
+		return true
+	case ResourceScopeKindSource:
 		return true
 	default:
 		return false
@@ -1240,6 +1435,186 @@ func (e ScanJobCreateRequestScanProfile) Valid() bool {
 	}
 }
 
+// Defines values for SessionSummaryAuthMethod.
+const (
+	Password        SessionSummaryAuthMethod = "password"
+	PersonalPairing SessionSummaryAuthMethod = "personal_pairing"
+)
+
+// Valid indicates whether the value is a known member of the SessionSummaryAuthMethod enum.
+func (e SessionSummaryAuthMethod) Valid() bool {
+	switch e {
+	case Password:
+		return true
+	case PersonalPairing:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for ShareFixedBlobAlgorithm.
+const (
+	ShareFixedBlobAlgorithmSha256V1 ShareFixedBlobAlgorithm = "sha256-v1"
+)
+
+// Valid indicates whether the value is a known member of the ShareFixedBlobAlgorithm enum.
+func (e ShareFixedBlobAlgorithm) Valid() bool {
+	switch e {
+	case ShareFixedBlobAlgorithmSha256V1:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for SharePermissions.
+const (
+	SharePermissionsDownload SharePermissions = "download"
+	SharePermissionsView     SharePermissions = "view"
+)
+
+// Valid indicates whether the value is a known member of the SharePermissions enum.
+func (e SharePermissions) Valid() bool {
+	switch e {
+	case SharePermissionsDownload:
+		return true
+	case SharePermissionsView:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for ShareScopeKind.
+const (
+	ShareScopeKindLibrary ShareScopeKind = "library"
+	ShareScopeKindMedia   ShareScopeKind = "media"
+	ShareScopeKindWork    ShareScopeKind = "work"
+)
+
+// Valid indicates whether the value is a known member of the ShareScopeKind enum.
+func (e ShareScopeKind) Valid() bool {
+	switch e {
+	case ShareScopeKindLibrary:
+		return true
+	case ShareScopeKindMedia:
+		return true
+	case ShareScopeKindWork:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for ShareCreateRequestFixedBlobAlgorithm.
+const (
+	ShareCreateRequestFixedBlobAlgorithmSha256V1 ShareCreateRequestFixedBlobAlgorithm = "sha256-v1"
+)
+
+// Valid indicates whether the value is a known member of the ShareCreateRequestFixedBlobAlgorithm enum.
+func (e ShareCreateRequestFixedBlobAlgorithm) Valid() bool {
+	switch e {
+	case ShareCreateRequestFixedBlobAlgorithmSha256V1:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for ShareCreateRequestPermissions.
+const (
+	ShareCreateRequestPermissionsDownload ShareCreateRequestPermissions = "download"
+	ShareCreateRequestPermissionsView     ShareCreateRequestPermissions = "view"
+)
+
+// Valid indicates whether the value is a known member of the ShareCreateRequestPermissions enum.
+func (e ShareCreateRequestPermissions) Valid() bool {
+	switch e {
+	case ShareCreateRequestPermissionsDownload:
+		return true
+	case ShareCreateRequestPermissionsView:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for ShareCreateRequestScopeKind.
+const (
+	ShareCreateRequestScopeKindLibrary ShareCreateRequestScopeKind = "library"
+	ShareCreateRequestScopeKindMedia   ShareCreateRequestScopeKind = "media"
+	ShareCreateRequestScopeKindWork    ShareCreateRequestScopeKind = "work"
+)
+
+// Valid indicates whether the value is a known member of the ShareCreateRequestScopeKind enum.
+func (e ShareCreateRequestScopeKind) Valid() bool {
+	switch e {
+	case ShareCreateRequestScopeKindLibrary:
+		return true
+	case ShareCreateRequestScopeKindMedia:
+		return true
+	case ShareCreateRequestScopeKindWork:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for ShareCreatedFixedBlobAlgorithm.
+const (
+	Sha256V1 ShareCreatedFixedBlobAlgorithm = "sha256-v1"
+)
+
+// Valid indicates whether the value is a known member of the ShareCreatedFixedBlobAlgorithm enum.
+func (e ShareCreatedFixedBlobAlgorithm) Valid() bool {
+	switch e {
+	case Sha256V1:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for ShareCreatedPermissions.
+const (
+	ShareCreatedPermissionsDownload ShareCreatedPermissions = "download"
+	ShareCreatedPermissionsView     ShareCreatedPermissions = "view"
+)
+
+// Valid indicates whether the value is a known member of the ShareCreatedPermissions enum.
+func (e ShareCreatedPermissions) Valid() bool {
+	switch e {
+	case ShareCreatedPermissionsDownload:
+		return true
+	case ShareCreatedPermissionsView:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for ShareCreatedScopeKind.
+const (
+	ShareCreatedScopeKindLibrary ShareCreatedScopeKind = "library"
+	ShareCreatedScopeKindMedia   ShareCreatedScopeKind = "media"
+	ShareCreatedScopeKindWork    ShareCreatedScopeKind = "work"
+)
+
+// Valid indicates whether the value is a known member of the ShareCreatedScopeKind enum.
+func (e ShareCreatedScopeKind) Valid() bool {
+	switch e {
+	case ShareCreatedScopeKindLibrary:
+		return true
+	case ShareCreatedScopeKindMedia:
+		return true
+	case ShareCreatedScopeKindWork:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for SourceRuleBindingStatus.
 const (
 	SourceRuleBindingStatusActive  SourceRuleBindingStatus = "active"
@@ -1447,6 +1822,27 @@ func (e TotalProtocolVersion) Valid() bool {
 	}
 }
 
+// Defines values for UserStatusRequestStatus.
+const (
+	UserStatusRequestStatusActive   UserStatusRequestStatus = "active"
+	UserStatusRequestStatusDeleted  UserStatusRequestStatus = "deleted"
+	UserStatusRequestStatusDisabled UserStatusRequestStatus = "disabled"
+)
+
+// Valid indicates whether the value is a known member of the UserStatusRequestStatus enum.
+func (e UserStatusRequestStatus) Valid() bool {
+	switch e {
+	case UserStatusRequestStatusActive:
+		return true
+	case UserStatusRequestStatusDeleted:
+		return true
+	case UserStatusRequestStatusDisabled:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for WorkListResponseRankProtocolVersion.
 const (
 	N2 WorkListResponseRankProtocolVersion = 2
@@ -1584,19 +1980,19 @@ func (e ExportRuleVersionParamsFormat) Valid() bool {
 
 // Defines values for UpdateSourceRuleBindingJSONBodyStatus.
 const (
-	Active  UpdateSourceRuleBindingJSONBodyStatus = "active"
-	Invalid UpdateSourceRuleBindingJSONBodyStatus = "invalid"
-	Paused  UpdateSourceRuleBindingJSONBodyStatus = "paused"
+	UpdateSourceRuleBindingJSONBodyStatusActive  UpdateSourceRuleBindingJSONBodyStatus = "active"
+	UpdateSourceRuleBindingJSONBodyStatusInvalid UpdateSourceRuleBindingJSONBodyStatus = "invalid"
+	UpdateSourceRuleBindingJSONBodyStatusPaused  UpdateSourceRuleBindingJSONBodyStatus = "paused"
 )
 
 // Valid indicates whether the value is a known member of the UpdateSourceRuleBindingJSONBodyStatus enum.
 func (e UpdateSourceRuleBindingJSONBodyStatus) Valid() bool {
 	switch e {
-	case Active:
+	case UpdateSourceRuleBindingJSONBodyStatusActive:
 		return true
-	case Invalid:
+	case UpdateSourceRuleBindingJSONBodyStatusInvalid:
 		return true
-	case Paused:
+	case UpdateSourceRuleBindingJSONBodyStatusPaused:
 		return true
 	default:
 		return false
@@ -1638,6 +2034,74 @@ func (e ListWorksParamsSortDirection) Valid() bool {
 		return false
 	}
 }
+
+// APIToken defines model for APIToken.
+type APIToken struct {
+	Capabilities []string        `json:"capabilities"`
+	CreatedAt    time.Time       `json:"createdAt"`
+	ExpiresAt    *time.Time      `json:"expiresAt,omitempty"`
+	Id           APITokenId      `json:"id"`
+	LastUsedAt   *time.Time      `json:"lastUsedAt,omitempty"`
+	Name         string          `json:"name"`
+	PrincipalId  string          `json:"principalId"`
+	Revoked      bool            `json:"revoked"`
+	Scopes       []ResourceScope `json:"scopes"`
+	SecretPrefix string          `json:"secretPrefix"`
+}
+
+// APITokenCreateRequest defines model for APITokenCreateRequest.
+type APITokenCreateRequest struct {
+	Capabilities []string        `json:"capabilities"`
+	ExpiresAt    *time.Time      `json:"expiresAt,omitempty"`
+	Name         string          `json:"name"`
+	Scopes       []ResourceScope `json:"scopes"`
+}
+
+// APITokenCreated defines model for APITokenCreated.
+type APITokenCreated struct {
+	Capabilities []string        `json:"capabilities"`
+	CreatedAt    time.Time       `json:"createdAt"`
+	ExpiresAt    *time.Time      `json:"expiresAt,omitempty"`
+	Id           APITokenId      `json:"id"`
+	LastUsedAt   *time.Time      `json:"lastUsedAt,omitempty"`
+	Name         string          `json:"name"`
+	PrincipalId  string          `json:"principalId"`
+	Revoked      bool            `json:"revoked"`
+	Scopes       []ResourceScope `json:"scopes"`
+	Secret       string          `json:"secret"`
+	SecretPrefix string          `json:"secretPrefix"`
+}
+
+// APITokenId defines model for APITokenId.
+type APITokenId = string
+
+// APITokenListResponse defines model for APITokenListResponse.
+type APITokenListResponse struct {
+	Tokens []APIToken `json:"tokens"`
+}
+
+// AuthorizationGrant defines model for AuthorizationGrant.
+type AuthorizationGrant struct {
+	Capability  string                   `json:"capability"`
+	Effect      AuthorizationGrantEffect `json:"effect"`
+	Id          GrantId                  `json:"id"`
+	PrincipalId string                   `json:"principalId"`
+	Revoked     bool                     `json:"revoked"`
+	Scope       ResourceScope            `json:"scope"`
+}
+
+// AuthorizationGrantEffect defines model for AuthorizationGrant.Effect.
+type AuthorizationGrantEffect string
+
+// AuthorizationGrantInput defines model for AuthorizationGrantInput.
+type AuthorizationGrantInput struct {
+	Capability string                        `json:"capability"`
+	Effect     AuthorizationGrantInputEffect `json:"effect"`
+	Scope      ResourceScope                 `json:"scope"`
+}
+
+// AuthorizationGrantInputEffect defines model for AuthorizationGrantInput.Effect.
+type AuthorizationGrantInputEffect string
 
 // BindingActionResult defines model for BindingActionResult.
 type BindingActionResult struct {
@@ -1732,6 +2196,7 @@ type BootstrapResponse struct {
 	AvailableCapabilities    []string                                  `json:"availableCapabilities"`
 	CsrfToken                string                                    `json:"csrfToken"`
 	EffectiveCapabilities    []string                                  `json:"effectiveCapabilities"`
+	LanInitialized           bool                                      `json:"lanInitialized"`
 	Mode                     BootstrapResponseMode                     `json:"mode"`
 	PrincipalId              *string                                   `json:"principalId,omitempty"`
 	RuleSchemaVersion        BootstrapResponseRuleSchemaVersion        `json:"ruleSchemaVersion"`
@@ -1799,6 +2264,7 @@ type ControlBackupManifest struct {
 		Note                string `json:"note"`
 		PairingCredentials  string `json:"pairingCredentials"`
 		Sessions            string `json:"sessions"`
+		Shares              string `json:"shares"`
 	} `json:"security"`
 }
 
@@ -1944,6 +2410,9 @@ type FileLocationRef struct {
 	SourceId        SourceId `json:"sourceId"`
 }
 
+// GrantId defines model for GrantId.
+type GrantId = string
+
 // HealthResponse defines model for HealthResponse.
 type HealthResponse struct {
 	ApiVersion HealthResponseApiVersion `json:"apiVersion"`
@@ -2055,6 +2524,13 @@ type JobListResponse struct {
 	Jobs []Job `json:"jobs"`
 }
 
+// LANOwnerInitializeRequest defines model for LANOwnerInitializeRequest.
+type LANOwnerInitializeRequest struct {
+	DisplayName string `json:"displayName"`
+	Password    string `json:"password"`
+	Username    string `json:"username"`
+}
+
 // Library defines model for Library.
 type Library struct {
 	CreatedAt time.Time `json:"createdAt"`
@@ -2069,6 +2545,48 @@ type LibraryCreateRequest struct {
 
 // LibraryId defines model for LibraryId.
 type LibraryId = string
+
+// LocalUser defines model for LocalUser.
+type LocalUser struct {
+	CreatedAt       time.Time        `json:"createdAt"`
+	DisplayName     string           `json:"displayName"`
+	Id              UserId           `json:"id"`
+	Roles           []LocalUserRoles `json:"roles"`
+	SecurityVersion int64            `json:"securityVersion"`
+	Status          LocalUserStatus  `json:"status"`
+	UpdatedAt       time.Time        `json:"updatedAt"`
+	Username        string           `json:"username"`
+}
+
+// LocalUserRoles defines model for LocalUser.Roles.
+type LocalUserRoles string
+
+// LocalUserStatus defines model for LocalUser.Status.
+type LocalUserStatus string
+
+// LocalUserCreateRequest defines model for LocalUserCreateRequest.
+type LocalUserCreateRequest struct {
+	DisplayName string                        `json:"displayName"`
+	Grants      []AuthorizationGrantInput     `json:"grants"`
+	Password    string                        `json:"password"`
+	Roles       []LocalUserCreateRequestRoles `json:"roles"`
+	Username    string                        `json:"username"`
+}
+
+// LocalUserCreateRequestRoles defines model for LocalUserCreateRequest.Roles.
+type LocalUserCreateRequestRoles string
+
+// LocalUserListResponse defines model for LocalUserListResponse.
+type LocalUserListResponse struct {
+	Users []LocalUser `json:"users"`
+}
+
+// LoginRequest defines model for LoginRequest.
+type LoginRequest struct {
+	ClientLabel *string `json:"clientLabel,omitempty"`
+	Password    string  `json:"password"`
+	Username    string  `json:"username"`
+}
 
 // MaintenanceGCRequest defines model for MaintenanceGCRequest.
 type MaintenanceGCRequest struct {
@@ -2155,6 +2673,44 @@ type PairingExchangeRequest struct {
 	Credential string `json:"credential"`
 }
 
+// PasswordChangeRequest defines model for PasswordChangeRequest.
+type PasswordChangeRequest struct {
+	CurrentPassword string `json:"currentPassword"`
+	NewPassword     string `json:"newPassword"`
+}
+
+// PublicShareResource defines model for PublicShareResource.
+type PublicShareResource struct {
+	ExpiresAt          time.Time                        `json:"expiresAt"`
+	Fixed              bool                             `json:"fixed"`
+	FixedBlob          *PublicSharedBlob                `json:"fixedBlob,omitempty"`
+	Library            *Library                         `json:"library,omitempty"`
+	Media              *PublishedMedia                  `json:"media,omitempty"`
+	MediaItems         *[]PublishedMedia                `json:"mediaItems,omitempty"`
+	Permissions        []PublicShareResourcePermissions `json:"permissions"`
+	QueryPublicationId *QueryPublicationId              `json:"queryPublicationId,omitempty"`
+	ScopeId            string                           `json:"scopeId"`
+	ScopeKind          PublicShareResourceScopeKind     `json:"scopeKind"`
+	Work               *PublishedWork                   `json:"work,omitempty"`
+}
+
+// PublicShareResourcePermissions defines model for PublicShareResource.Permissions.
+type PublicShareResourcePermissions string
+
+// PublicShareResourceScopeKind defines model for PublicShareResource.ScopeKind.
+type PublicShareResourceScopeKind string
+
+// PublicSharedBlob defines model for PublicSharedBlob.
+type PublicSharedBlob struct {
+	Algorithm PublicSharedBlobAlgorithm `json:"algorithm"`
+	Digest    string                    `json:"digest"`
+	MimeType  string                    `json:"mimeType"`
+	SizeBytes int64                     `json:"sizeBytes"`
+}
+
+// PublicSharedBlobAlgorithm defines model for PublicSharedBlob.Algorithm.
+type PublicSharedBlobAlgorithm string
+
 // PublishedMedia defines model for PublishedMedia.
 type PublishedMedia struct {
 	Available bool `json:"available"`
@@ -2206,6 +2762,15 @@ type QueryPublication struct {
 
 // QueryPublicationId defines model for QueryPublicationId.
 type QueryPublicationId = string
+
+// ResourceScope defines model for ResourceScope.
+type ResourceScope struct {
+	Id   *string           `json:"id,omitempty"`
+	Kind ResourceScopeKind `json:"kind"`
+}
+
+// ResourceScopeKind defines model for ResourceScope.Kind.
+type ResourceScopeKind string
 
 // RuleCompileRequest defines model for RuleCompileRequest.
 type RuleCompileRequest struct {
@@ -2556,6 +3121,23 @@ type ScanJobCreateRequest struct {
 // ScanJobCreateRequestScanProfile index 快速发布未确认媒体不计算内容摘要；incremental（默认）按既往观察复用未变化媒体的已确认摘要，仅对新增或疑似变化媒体计算摘要；verify 忽略既往观察，对本次扫描到的媒体强制重新计算完整摘要
 type ScanJobCreateRequestScanProfile string
 
+// SecurityAudit defines model for SecurityAudit.
+type SecurityAudit struct {
+	Action     string                 `json:"action"`
+	ActorId    string                 `json:"actorId"`
+	CreatedAt  time.Time              `json:"createdAt"`
+	Detail     map[string]interface{} `json:"detail"`
+	Id         string                 `json:"id"`
+	Outcome    string                 `json:"outcome"`
+	TargetId   string                 `json:"targetId"`
+	TargetKind string                 `json:"targetKind"`
+}
+
+// SecurityAuditListResponse defines model for SecurityAuditListResponse.
+type SecurityAuditListResponse struct {
+	Audits []SecurityAudit `json:"audits"`
+}
+
 // SessionEstablishedResponse defines model for SessionEstablishedResponse.
 type SessionEstablishedResponse struct {
 	CsrfToken             string         `json:"csrfToken"`
@@ -2568,12 +3150,95 @@ type SessionId = string
 
 // SessionSummary defines model for SessionSummary.
 type SessionSummary struct {
-	CreatedAt   time.Time `json:"createdAt"`
-	ExpiresAt   time.Time `json:"expiresAt"`
-	Id          SessionId `json:"id"`
-	LastSeenAt  time.Time `json:"lastSeenAt"`
-	PrincipalId string    `json:"principalId"`
-	Revoked     bool      `json:"revoked"`
+	AuthMethod  SessionSummaryAuthMethod `json:"authMethod"`
+	ClientLabel string                   `json:"clientLabel"`
+	CreatedAt   time.Time                `json:"createdAt"`
+	ExpiresAt   time.Time                `json:"expiresAt"`
+	Id          SessionId                `json:"id"`
+	LastSeenAt  time.Time                `json:"lastSeenAt"`
+	PrincipalId string                   `json:"principalId"`
+	Revoked     bool                     `json:"revoked"`
+}
+
+// SessionSummaryAuthMethod defines model for SessionSummary.AuthMethod.
+type SessionSummaryAuthMethod string
+
+// Share defines model for Share.
+type Share struct {
+	CreatedAt          time.Time                `json:"createdAt"`
+	CreatedBy          string                   `json:"createdBy"`
+	ExpiresAt          time.Time                `json:"expiresAt"`
+	FixedBlobAlgorithm *ShareFixedBlobAlgorithm `json:"fixedBlobAlgorithm,omitempty"`
+	FixedBlobDigest    *string                  `json:"fixedBlobDigest,omitempty"`
+	Id                 ShareId                  `json:"id"`
+	Permissions        []SharePermissions       `json:"permissions"`
+	Revoked            bool                     `json:"revoked"`
+	ScopeId            string                   `json:"scopeId"`
+	ScopeKind          ShareScopeKind           `json:"scopeKind"`
+	SecretPrefix       string                   `json:"secretPrefix"`
+}
+
+// ShareFixedBlobAlgorithm defines model for Share.FixedBlobAlgorithm.
+type ShareFixedBlobAlgorithm string
+
+// SharePermissions defines model for Share.Permissions.
+type SharePermissions string
+
+// ShareScopeKind defines model for Share.ScopeKind.
+type ShareScopeKind string
+
+// ShareCreateRequest defines model for ShareCreateRequest.
+type ShareCreateRequest struct {
+	ExpiresAt time.Time `json:"expiresAt"`
+
+	// FixedBlobAlgorithm 仅 media scope 可用，且必须与创建时当前 publication 的已确认媒体 Blob 一致。
+	FixedBlobAlgorithm *ShareCreateRequestFixedBlobAlgorithm `json:"fixedBlobAlgorithm,omitempty"`
+	FixedBlobDigest    *string                               `json:"fixedBlobDigest,omitempty"`
+	Permissions        []ShareCreateRequestPermissions       `json:"permissions"`
+	ScopeId            string                                `json:"scopeId"`
+	ScopeKind          ShareCreateRequestScopeKind           `json:"scopeKind"`
+}
+
+// ShareCreateRequestFixedBlobAlgorithm 仅 media scope 可用，且必须与创建时当前 publication 的已确认媒体 Blob 一致。
+type ShareCreateRequestFixedBlobAlgorithm string
+
+// ShareCreateRequestPermissions defines model for ShareCreateRequest.Permissions.
+type ShareCreateRequestPermissions string
+
+// ShareCreateRequestScopeKind defines model for ShareCreateRequest.ScopeKind.
+type ShareCreateRequestScopeKind string
+
+// ShareCreated defines model for ShareCreated.
+type ShareCreated struct {
+	CreatedAt          time.Time                       `json:"createdAt"`
+	CreatedBy          string                          `json:"createdBy"`
+	ExpiresAt          time.Time                       `json:"expiresAt"`
+	FixedBlobAlgorithm *ShareCreatedFixedBlobAlgorithm `json:"fixedBlobAlgorithm,omitempty"`
+	FixedBlobDigest    *string                         `json:"fixedBlobDigest,omitempty"`
+	Id                 ShareId                         `json:"id"`
+	Permissions        []ShareCreatedPermissions       `json:"permissions"`
+	Revoked            bool                            `json:"revoked"`
+	ScopeId            string                          `json:"scopeId"`
+	ScopeKind          ShareCreatedScopeKind           `json:"scopeKind"`
+	Secret             string                          `json:"secret"`
+	SecretPrefix       string                          `json:"secretPrefix"`
+}
+
+// ShareCreatedFixedBlobAlgorithm defines model for ShareCreated.FixedBlobAlgorithm.
+type ShareCreatedFixedBlobAlgorithm string
+
+// ShareCreatedPermissions defines model for ShareCreated.Permissions.
+type ShareCreatedPermissions string
+
+// ShareCreatedScopeKind defines model for ShareCreated.ScopeKind.
+type ShareCreatedScopeKind string
+
+// ShareId defines model for ShareId.
+type ShareId = string
+
+// ShareListResponse defines model for ShareListResponse.
+type ShareListResponse struct {
+	Shares []Share `json:"shares"`
 }
 
 // Source defines model for Source.
@@ -2715,6 +3380,17 @@ type TotalMode string
 // TotalProtocolVersion defines model for Total.ProtocolVersion.
 type TotalProtocolVersion int
 
+// UserId defines model for UserId.
+type UserId = string
+
+// UserStatusRequest defines model for UserStatusRequest.
+type UserStatusRequest struct {
+	Status UserStatusRequestStatus `json:"status"`
+}
+
+// UserStatusRequestStatus defines model for UserStatusRequest.Status.
+type UserStatusRequestStatus string
+
 // WorkListResponse defines model for WorkListResponse.
 type WorkListResponse struct {
 	CatalogRevision string `json:"catalogRevision"`
@@ -2799,6 +3475,9 @@ type NotFoundError = ErrorEnvelope
 // RangeError defines model for RangeError.
 type RangeError = ErrorEnvelope
 
+// RateLimitedError defines model for RateLimitedError.
+type RateLimitedError = ErrorEnvelope
+
 // UnauthenticatedError defines model for UnauthenticatedError.
 type UnauthenticatedError = ErrorEnvelope
 
@@ -2810,6 +3489,11 @@ type apiTokenContextKey string
 
 // sessionCookieContextKey is the context key for sessionCookie security scheme
 type sessionCookieContextKey string
+
+// ChangeOwnPasswordParams defines parameters for ChangeOwnPassword.
+type ChangeOwnPasswordParams struct {
+	XGalleryCSRF CSRFHeader `json:"X-Gallery-CSRF"`
+}
 
 // CreateControlBackupParams defines parameters for CreateControlBackup.
 type CreateControlBackupParams struct {
@@ -2826,6 +3510,11 @@ type VerifyControlRestoreParams struct {
 	XGalleryCSRF CSRFHeader `json:"X-Gallery-CSRF"`
 }
 
+// RevokeAuthorizationGrantParams defines parameters for RevokeAuthorizationGrant.
+type RevokeAuthorizationGrantParams struct {
+	XGalleryCSRF CSRFHeader `json:"X-Gallery-CSRF"`
+}
+
 // CreateCatalogCheckpointJobParams defines parameters for CreateCatalogCheckpointJob.
 type CreateCatalogCheckpointJobParams struct {
 	XGalleryCSRF CSRFHeader `json:"X-Gallery-CSRF"`
@@ -2838,6 +3527,41 @@ type CreateCatalogGCJobParams struct {
 
 // CreateCatalogVacuumJobParams defines parameters for CreateCatalogVacuumJob.
 type CreateCatalogVacuumJobParams struct {
+	XGalleryCSRF CSRFHeader `json:"X-Gallery-CSRF"`
+}
+
+// CreateLocalUserParams defines parameters for CreateLocalUser.
+type CreateLocalUserParams struct {
+	XGalleryCSRF CSRFHeader `json:"X-Gallery-CSRF"`
+}
+
+// CreateAuthorizationGrantParams defines parameters for CreateAuthorizationGrant.
+type CreateAuthorizationGrantParams struct {
+	XGalleryCSRF CSRFHeader `json:"X-Gallery-CSRF"`
+}
+
+// SetLocalUserStatusParams defines parameters for SetLocalUserStatus.
+type SetLocalUserStatusParams struct {
+	XGalleryCSRF CSRFHeader `json:"X-Gallery-CSRF"`
+}
+
+// CreateAPITokenParams defines parameters for CreateAPIToken.
+type CreateAPITokenParams struct {
+	XGalleryCSRF CSRFHeader `json:"X-Gallery-CSRF"`
+}
+
+// RevokeAPITokenParams defines parameters for RevokeAPIToken.
+type RevokeAPITokenParams struct {
+	XGalleryCSRF CSRFHeader `json:"X-Gallery-CSRF"`
+}
+
+// LoginParams defines parameters for Login.
+type LoginParams struct {
+	XGalleryCSRF CSRFHeader `json:"X-Gallery-CSRF"`
+}
+
+// LogoutParams defines parameters for Logout.
+type LogoutParams struct {
 	XGalleryCSRF CSRFHeader `json:"X-Gallery-CSRF"`
 }
 
@@ -2922,6 +3646,11 @@ type RetryJobParams struct {
 	XGalleryCSRF CSRFHeader `json:"X-Gallery-CSRF"`
 }
 
+// InitializeLANOwnerParams defines parameters for InitializeLANOwner.
+type InitializeLANOwnerParams struct {
+	XGalleryCSRF CSRFHeader `json:"X-Gallery-CSRF"`
+}
+
 // CreateLibraryParams defines parameters for CreateLibrary.
 type CreateLibraryParams struct {
 	XGalleryCSRF CSRFHeader `json:"X-Gallery-CSRF"`
@@ -2992,6 +3721,24 @@ type ExchangePairingCredentialParams struct {
 // CreatePairingAttemptParams defines parameters for CreatePairingAttempt.
 type CreatePairingAttemptParams struct {
 	XGalleryCSRF CSRFHeader `json:"X-Gallery-CSRF"`
+}
+
+// GetPublicShareMediaContentParams defines parameters for GetPublicShareMediaContent.
+type GetPublicShareMediaContentParams struct {
+	// Download 为 true 时要求分享含 download 权限，并返回 attachment Content-Disposition。
+	Download    *bool   `form:"download,omitempty" json:"download,omitempty"`
+	Range       *string `json:"Range,omitempty"`
+	IfNoneMatch *string `json:"If-None-Match,omitempty"`
+	IfRange     *string `json:"If-Range,omitempty"`
+}
+
+// HeadPublicShareMediaContentParams defines parameters for HeadPublicShareMediaContent.
+type HeadPublicShareMediaContentParams struct {
+	// Download 为 true 时要求分享含 download 权限，并返回 attachment Content-Disposition。
+	Download    *bool   `form:"download,omitempty" json:"download,omitempty"`
+	Range       *string `json:"Range,omitempty"`
+	IfNoneMatch *string `json:"If-None-Match,omitempty"`
+	IfRange     *string `json:"If-Range,omitempty"`
 }
 
 // CreateRulePackageParams defines parameters for CreateRulePackage.
@@ -3171,6 +3918,16 @@ type RevokeSessionParams struct {
 	XGalleryCSRF CSRFHeader `json:"X-Gallery-CSRF"`
 }
 
+// CreateShareParams defines parameters for CreateShare.
+type CreateShareParams struct {
+	XGalleryCSRF CSRFHeader `json:"X-Gallery-CSRF"`
+}
+
+// RevokeShareParams defines parameters for RevokeShare.
+type RevokeShareParams struct {
+	XGalleryCSRF CSRFHeader `json:"X-Gallery-CSRF"`
+}
+
 // CreateSourceRuleBindingParams defines parameters for CreateSourceRuleBinding.
 type CreateSourceRuleBindingParams struct {
 	XGalleryCSRF CSRFHeader `json:"X-Gallery-CSRF"`
@@ -3244,6 +4001,9 @@ type PutWorkOverlayParams struct {
 	XGalleryCSRF CSRFHeader `json:"X-Gallery-CSRF"`
 }
 
+// ChangeOwnPasswordJSONRequestBody defines body for ChangeOwnPassword for application/json ContentType.
+type ChangeOwnPasswordJSONRequestBody = PasswordChangeRequest
+
 // RequestControlRestoreJSONRequestBody defines body for RequestControlRestore for application/json ContentType.
 type RequestControlRestoreJSONRequestBody = ControlRestoreRequest
 
@@ -3252,6 +4012,21 @@ type VerifyControlRestoreJSONRequestBody = ControlRestoreRequest
 
 // CreateCatalogGCJobJSONRequestBody defines body for CreateCatalogGCJob for application/json ContentType.
 type CreateCatalogGCJobJSONRequestBody = MaintenanceGCRequest
+
+// CreateLocalUserJSONRequestBody defines body for CreateLocalUser for application/json ContentType.
+type CreateLocalUserJSONRequestBody = LocalUserCreateRequest
+
+// CreateAuthorizationGrantJSONRequestBody defines body for CreateAuthorizationGrant for application/json ContentType.
+type CreateAuthorizationGrantJSONRequestBody = AuthorizationGrantInput
+
+// SetLocalUserStatusJSONRequestBody defines body for SetLocalUserStatus for application/json ContentType.
+type SetLocalUserStatusJSONRequestBody = UserStatusRequest
+
+// CreateAPITokenJSONRequestBody defines body for CreateAPIToken for application/json ContentType.
+type CreateAPITokenJSONRequestBody = APITokenCreateRequest
+
+// LoginJSONRequestBody defines body for Login for application/json ContentType.
+type LoginJSONRequestBody = LoginRequest
 
 // UnbindMediaJSONRequestBody defines body for UnbindMedia for application/json ContentType.
 type UnbindMediaJSONRequestBody = BindingUnbindRequest
@@ -3276,6 +4051,9 @@ type ResolveSourceStructureIssueJSONRequestBody = SourceStructureDecisionRequest
 
 // MergeCreatorsJSONRequestBody defines body for MergeCreators for application/json ContentType.
 type MergeCreatorsJSONRequestBody = CreatorMergeRequest
+
+// InitializeLANOwnerJSONRequestBody defines body for InitializeLANOwner for application/json ContentType.
+type InitializeLANOwnerJSONRequestBody = LANOwnerInitializeRequest
 
 // CreateLibraryJSONRequestBody defines body for CreateLibrary for application/json ContentType.
 type CreateLibraryJSONRequestBody = LibraryCreateRequest
@@ -3351,6 +4129,9 @@ type TraceRulePackageJSONRequestBody = RuleDebugRequest
 
 // ValidateRulePackageJSONRequestBody defines body for ValidateRulePackage for application/json ContentType.
 type ValidateRulePackageJSONRequestBody = RuleValidateRequest
+
+// CreateShareJSONRequestBody defines body for CreateShare for application/json ContentType.
+type CreateShareJSONRequestBody = ShareCreateRequest
 
 // CreateSourceRuleBindingJSONRequestBody defines body for CreateSourceRuleBinding for application/json ContentType.
 type CreateSourceRuleBindingJSONRequestBody = SourceRuleBindingCreateRequest
@@ -3443,6 +4224,11 @@ func WithRequestEditorFn(fn RequestEditorFn) ClientOption {
 
 // The interface specification for the client above.
 type ClientInterface interface {
+	// ChangeOwnPasswordWithBody request with any body
+	ChangeOwnPasswordWithBody(ctx context.Context, params *ChangeOwnPasswordParams, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*http.Response, error)
+
+	ChangeOwnPassword(ctx context.Context, params *ChangeOwnPasswordParams, body ChangeOwnPasswordJSONRequestBody, reqEditors ...RequestEditorFn) (*http.Response, error)
+
 	// ListControlBackups request
 	ListControlBackups(ctx context.Context, reqEditors ...RequestEditorFn) (*http.Response, error)
 
@@ -3462,6 +4248,9 @@ type ClientInterface interface {
 
 	VerifyControlRestore(ctx context.Context, params *VerifyControlRestoreParams, body VerifyControlRestoreJSONRequestBody, reqEditors ...RequestEditorFn) (*http.Response, error)
 
+	// RevokeAuthorizationGrant request
+	RevokeAuthorizationGrant(ctx context.Context, grantId GrantId, params *RevokeAuthorizationGrantParams, reqEditors ...RequestEditorFn) (*http.Response, error)
+
 	// CreateCatalogCheckpointJob request
 	CreateCatalogCheckpointJob(ctx context.Context, params *CreateCatalogCheckpointJobParams, reqEditors ...RequestEditorFn) (*http.Response, error)
 
@@ -3472,6 +4261,46 @@ type ClientInterface interface {
 
 	// CreateCatalogVacuumJob request
 	CreateCatalogVacuumJob(ctx context.Context, params *CreateCatalogVacuumJobParams, reqEditors ...RequestEditorFn) (*http.Response, error)
+
+	// ListSecurityAudits request
+	ListSecurityAudits(ctx context.Context, reqEditors ...RequestEditorFn) (*http.Response, error)
+
+	// ListLocalUsers request
+	ListLocalUsers(ctx context.Context, reqEditors ...RequestEditorFn) (*http.Response, error)
+
+	// CreateLocalUserWithBody request with any body
+	CreateLocalUserWithBody(ctx context.Context, params *CreateLocalUserParams, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*http.Response, error)
+
+	CreateLocalUser(ctx context.Context, params *CreateLocalUserParams, body CreateLocalUserJSONRequestBody, reqEditors ...RequestEditorFn) (*http.Response, error)
+
+	// CreateAuthorizationGrantWithBody request with any body
+	CreateAuthorizationGrantWithBody(ctx context.Context, userId UserId, params *CreateAuthorizationGrantParams, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*http.Response, error)
+
+	CreateAuthorizationGrant(ctx context.Context, userId UserId, params *CreateAuthorizationGrantParams, body CreateAuthorizationGrantJSONRequestBody, reqEditors ...RequestEditorFn) (*http.Response, error)
+
+	// SetLocalUserStatusWithBody request with any body
+	SetLocalUserStatusWithBody(ctx context.Context, userId UserId, params *SetLocalUserStatusParams, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*http.Response, error)
+
+	SetLocalUserStatus(ctx context.Context, userId UserId, params *SetLocalUserStatusParams, body SetLocalUserStatusJSONRequestBody, reqEditors ...RequestEditorFn) (*http.Response, error)
+
+	// ListAPITokens request
+	ListAPITokens(ctx context.Context, reqEditors ...RequestEditorFn) (*http.Response, error)
+
+	// CreateAPITokenWithBody request with any body
+	CreateAPITokenWithBody(ctx context.Context, params *CreateAPITokenParams, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*http.Response, error)
+
+	CreateAPIToken(ctx context.Context, params *CreateAPITokenParams, body CreateAPITokenJSONRequestBody, reqEditors ...RequestEditorFn) (*http.Response, error)
+
+	// RevokeAPIToken request
+	RevokeAPIToken(ctx context.Context, tokenId APITokenId, params *RevokeAPITokenParams, reqEditors ...RequestEditorFn) (*http.Response, error)
+
+	// LoginWithBody request with any body
+	LoginWithBody(ctx context.Context, params *LoginParams, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*http.Response, error)
+
+	Login(ctx context.Context, params *LoginParams, body LoginJSONRequestBody, reqEditors ...RequestEditorFn) (*http.Response, error)
+
+	// Logout request
+	Logout(ctx context.Context, params *LogoutParams, reqEditors ...RequestEditorFn) (*http.Response, error)
 
 	// UnbindMediaWithBody request with any body
 	UnbindMediaWithBody(ctx context.Context, params *UnbindMediaParams, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*http.Response, error)
@@ -3555,6 +4384,11 @@ type ClientInterface interface {
 	// RetryJob request
 	RetryJob(ctx context.Context, jobId JobId, params *RetryJobParams, reqEditors ...RequestEditorFn) (*http.Response, error)
 
+	// InitializeLANOwnerWithBody request with any body
+	InitializeLANOwnerWithBody(ctx context.Context, params *InitializeLANOwnerParams, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*http.Response, error)
+
+	InitializeLANOwner(ctx context.Context, params *InitializeLANOwnerParams, body InitializeLANOwnerJSONRequestBody, reqEditors ...RequestEditorFn) (*http.Response, error)
+
 	// CreateLibraryWithBody request with any body
 	CreateLibraryWithBody(ctx context.Context, params *CreateLibraryParams, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*http.Response, error)
 
@@ -3595,6 +4429,15 @@ type ClientInterface interface {
 
 	// CreatePairingAttempt request
 	CreatePairingAttempt(ctx context.Context, params *CreatePairingAttemptParams, reqEditors ...RequestEditorFn) (*http.Response, error)
+
+	// ResolvePublicShare request
+	ResolvePublicShare(ctx context.Context, credential string, reqEditors ...RequestEditorFn) (*http.Response, error)
+
+	// GetPublicShareMediaContent request
+	GetPublicShareMediaContent(ctx context.Context, credential string, mediaId CanonicalMediaId, params *GetPublicShareMediaContentParams, reqEditors ...RequestEditorFn) (*http.Response, error)
+
+	// HeadPublicShareMediaContent request
+	HeadPublicShareMediaContent(ctx context.Context, credential string, mediaId CanonicalMediaId, params *HeadPublicShareMediaContentParams, reqEditors ...RequestEditorFn) (*http.Response, error)
 
 	// GetCurrentQueryPublication request
 	GetCurrentQueryPublication(ctx context.Context, reqEditors ...RequestEditorFn) (*http.Response, error)
@@ -3749,6 +4592,17 @@ type ClientInterface interface {
 	// RevokeSession request
 	RevokeSession(ctx context.Context, sessionId SessionId, params *RevokeSessionParams, reqEditors ...RequestEditorFn) (*http.Response, error)
 
+	// ListShares request
+	ListShares(ctx context.Context, reqEditors ...RequestEditorFn) (*http.Response, error)
+
+	// CreateShareWithBody request with any body
+	CreateShareWithBody(ctx context.Context, params *CreateShareParams, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*http.Response, error)
+
+	CreateShare(ctx context.Context, params *CreateShareParams, body CreateShareJSONRequestBody, reqEditors ...RequestEditorFn) (*http.Response, error)
+
+	// RevokeShare request
+	RevokeShare(ctx context.Context, shareId ShareId, params *RevokeShareParams, reqEditors ...RequestEditorFn) (*http.Response, error)
+
 	// CreateSourceRuleBindingWithBody request with any body
 	CreateSourceRuleBindingWithBody(ctx context.Context, params *CreateSourceRuleBindingParams, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*http.Response, error)
 
@@ -3808,6 +4662,30 @@ type ClientInterface interface {
 	PutWorkOverlayWithBody(ctx context.Context, workId CanonicalWorkId, params *PutWorkOverlayParams, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*http.Response, error)
 
 	PutWorkOverlay(ctx context.Context, workId CanonicalWorkId, params *PutWorkOverlayParams, body PutWorkOverlayJSONRequestBody, reqEditors ...RequestEditorFn) (*http.Response, error)
+}
+
+func (c *Client) ChangeOwnPasswordWithBody(ctx context.Context, params *ChangeOwnPasswordParams, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewChangeOwnPasswordRequestWithBody(c.Server, params, contentType, body)
+	if err != nil {
+		return nil, err
+	}
+	req = req.WithContext(ctx)
+	if err := c.applyEditors(ctx, req, reqEditors); err != nil {
+		return nil, err
+	}
+	return c.Client.Do(req)
+}
+
+func (c *Client) ChangeOwnPassword(ctx context.Context, params *ChangeOwnPasswordParams, body ChangeOwnPasswordJSONRequestBody, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewChangeOwnPasswordRequest(c.Server, params, body)
+	if err != nil {
+		return nil, err
+	}
+	req = req.WithContext(ctx)
+	if err := c.applyEditors(ctx, req, reqEditors); err != nil {
+		return nil, err
+	}
+	return c.Client.Do(req)
 }
 
 func (c *Client) ListControlBackups(ctx context.Context, reqEditors ...RequestEditorFn) (*http.Response, error) {
@@ -3894,6 +4772,18 @@ func (c *Client) VerifyControlRestore(ctx context.Context, params *VerifyControl
 	return c.Client.Do(req)
 }
 
+func (c *Client) RevokeAuthorizationGrant(ctx context.Context, grantId GrantId, params *RevokeAuthorizationGrantParams, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewRevokeAuthorizationGrantRequest(c.Server, grantId, params)
+	if err != nil {
+		return nil, err
+	}
+	req = req.WithContext(ctx)
+	if err := c.applyEditors(ctx, req, reqEditors); err != nil {
+		return nil, err
+	}
+	return c.Client.Do(req)
+}
+
 func (c *Client) CreateCatalogCheckpointJob(ctx context.Context, params *CreateCatalogCheckpointJobParams, reqEditors ...RequestEditorFn) (*http.Response, error) {
 	req, err := NewCreateCatalogCheckpointJobRequest(c.Server, params)
 	if err != nil {
@@ -3932,6 +4822,186 @@ func (c *Client) CreateCatalogGCJob(ctx context.Context, params *CreateCatalogGC
 
 func (c *Client) CreateCatalogVacuumJob(ctx context.Context, params *CreateCatalogVacuumJobParams, reqEditors ...RequestEditorFn) (*http.Response, error) {
 	req, err := NewCreateCatalogVacuumJobRequest(c.Server, params)
+	if err != nil {
+		return nil, err
+	}
+	req = req.WithContext(ctx)
+	if err := c.applyEditors(ctx, req, reqEditors); err != nil {
+		return nil, err
+	}
+	return c.Client.Do(req)
+}
+
+func (c *Client) ListSecurityAudits(ctx context.Context, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewListSecurityAuditsRequest(c.Server)
+	if err != nil {
+		return nil, err
+	}
+	req = req.WithContext(ctx)
+	if err := c.applyEditors(ctx, req, reqEditors); err != nil {
+		return nil, err
+	}
+	return c.Client.Do(req)
+}
+
+func (c *Client) ListLocalUsers(ctx context.Context, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewListLocalUsersRequest(c.Server)
+	if err != nil {
+		return nil, err
+	}
+	req = req.WithContext(ctx)
+	if err := c.applyEditors(ctx, req, reqEditors); err != nil {
+		return nil, err
+	}
+	return c.Client.Do(req)
+}
+
+func (c *Client) CreateLocalUserWithBody(ctx context.Context, params *CreateLocalUserParams, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewCreateLocalUserRequestWithBody(c.Server, params, contentType, body)
+	if err != nil {
+		return nil, err
+	}
+	req = req.WithContext(ctx)
+	if err := c.applyEditors(ctx, req, reqEditors); err != nil {
+		return nil, err
+	}
+	return c.Client.Do(req)
+}
+
+func (c *Client) CreateLocalUser(ctx context.Context, params *CreateLocalUserParams, body CreateLocalUserJSONRequestBody, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewCreateLocalUserRequest(c.Server, params, body)
+	if err != nil {
+		return nil, err
+	}
+	req = req.WithContext(ctx)
+	if err := c.applyEditors(ctx, req, reqEditors); err != nil {
+		return nil, err
+	}
+	return c.Client.Do(req)
+}
+
+func (c *Client) CreateAuthorizationGrantWithBody(ctx context.Context, userId UserId, params *CreateAuthorizationGrantParams, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewCreateAuthorizationGrantRequestWithBody(c.Server, userId, params, contentType, body)
+	if err != nil {
+		return nil, err
+	}
+	req = req.WithContext(ctx)
+	if err := c.applyEditors(ctx, req, reqEditors); err != nil {
+		return nil, err
+	}
+	return c.Client.Do(req)
+}
+
+func (c *Client) CreateAuthorizationGrant(ctx context.Context, userId UserId, params *CreateAuthorizationGrantParams, body CreateAuthorizationGrantJSONRequestBody, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewCreateAuthorizationGrantRequest(c.Server, userId, params, body)
+	if err != nil {
+		return nil, err
+	}
+	req = req.WithContext(ctx)
+	if err := c.applyEditors(ctx, req, reqEditors); err != nil {
+		return nil, err
+	}
+	return c.Client.Do(req)
+}
+
+func (c *Client) SetLocalUserStatusWithBody(ctx context.Context, userId UserId, params *SetLocalUserStatusParams, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewSetLocalUserStatusRequestWithBody(c.Server, userId, params, contentType, body)
+	if err != nil {
+		return nil, err
+	}
+	req = req.WithContext(ctx)
+	if err := c.applyEditors(ctx, req, reqEditors); err != nil {
+		return nil, err
+	}
+	return c.Client.Do(req)
+}
+
+func (c *Client) SetLocalUserStatus(ctx context.Context, userId UserId, params *SetLocalUserStatusParams, body SetLocalUserStatusJSONRequestBody, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewSetLocalUserStatusRequest(c.Server, userId, params, body)
+	if err != nil {
+		return nil, err
+	}
+	req = req.WithContext(ctx)
+	if err := c.applyEditors(ctx, req, reqEditors); err != nil {
+		return nil, err
+	}
+	return c.Client.Do(req)
+}
+
+func (c *Client) ListAPITokens(ctx context.Context, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewListAPITokensRequest(c.Server)
+	if err != nil {
+		return nil, err
+	}
+	req = req.WithContext(ctx)
+	if err := c.applyEditors(ctx, req, reqEditors); err != nil {
+		return nil, err
+	}
+	return c.Client.Do(req)
+}
+
+func (c *Client) CreateAPITokenWithBody(ctx context.Context, params *CreateAPITokenParams, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewCreateAPITokenRequestWithBody(c.Server, params, contentType, body)
+	if err != nil {
+		return nil, err
+	}
+	req = req.WithContext(ctx)
+	if err := c.applyEditors(ctx, req, reqEditors); err != nil {
+		return nil, err
+	}
+	return c.Client.Do(req)
+}
+
+func (c *Client) CreateAPIToken(ctx context.Context, params *CreateAPITokenParams, body CreateAPITokenJSONRequestBody, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewCreateAPITokenRequest(c.Server, params, body)
+	if err != nil {
+		return nil, err
+	}
+	req = req.WithContext(ctx)
+	if err := c.applyEditors(ctx, req, reqEditors); err != nil {
+		return nil, err
+	}
+	return c.Client.Do(req)
+}
+
+func (c *Client) RevokeAPIToken(ctx context.Context, tokenId APITokenId, params *RevokeAPITokenParams, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewRevokeAPITokenRequest(c.Server, tokenId, params)
+	if err != nil {
+		return nil, err
+	}
+	req = req.WithContext(ctx)
+	if err := c.applyEditors(ctx, req, reqEditors); err != nil {
+		return nil, err
+	}
+	return c.Client.Do(req)
+}
+
+func (c *Client) LoginWithBody(ctx context.Context, params *LoginParams, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewLoginRequestWithBody(c.Server, params, contentType, body)
+	if err != nil {
+		return nil, err
+	}
+	req = req.WithContext(ctx)
+	if err := c.applyEditors(ctx, req, reqEditors); err != nil {
+		return nil, err
+	}
+	return c.Client.Do(req)
+}
+
+func (c *Client) Login(ctx context.Context, params *LoginParams, body LoginJSONRequestBody, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewLoginRequest(c.Server, params, body)
+	if err != nil {
+		return nil, err
+	}
+	req = req.WithContext(ctx)
+	if err := c.applyEditors(ctx, req, reqEditors); err != nil {
+		return nil, err
+	}
+	return c.Client.Do(req)
+}
+
+func (c *Client) Logout(ctx context.Context, params *LogoutParams, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewLogoutRequest(c.Server, params)
 	if err != nil {
 		return nil, err
 	}
@@ -4302,6 +5372,30 @@ func (c *Client) RetryJob(ctx context.Context, jobId JobId, params *RetryJobPara
 	return c.Client.Do(req)
 }
 
+func (c *Client) InitializeLANOwnerWithBody(ctx context.Context, params *InitializeLANOwnerParams, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewInitializeLANOwnerRequestWithBody(c.Server, params, contentType, body)
+	if err != nil {
+		return nil, err
+	}
+	req = req.WithContext(ctx)
+	if err := c.applyEditors(ctx, req, reqEditors); err != nil {
+		return nil, err
+	}
+	return c.Client.Do(req)
+}
+
+func (c *Client) InitializeLANOwner(ctx context.Context, params *InitializeLANOwnerParams, body InitializeLANOwnerJSONRequestBody, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewInitializeLANOwnerRequest(c.Server, params, body)
+	if err != nil {
+		return nil, err
+	}
+	req = req.WithContext(ctx)
+	if err := c.applyEditors(ctx, req, reqEditors); err != nil {
+		return nil, err
+	}
+	return c.Client.Do(req)
+}
+
 func (c *Client) CreateLibraryWithBody(ctx context.Context, params *CreateLibraryParams, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*http.Response, error) {
 	req, err := NewCreateLibraryRequestWithBody(c.Server, params, contentType, body)
 	if err != nil {
@@ -4472,6 +5566,42 @@ func (c *Client) ExchangePairingCredential(ctx context.Context, params *Exchange
 
 func (c *Client) CreatePairingAttempt(ctx context.Context, params *CreatePairingAttemptParams, reqEditors ...RequestEditorFn) (*http.Response, error) {
 	req, err := NewCreatePairingAttemptRequest(c.Server, params)
+	if err != nil {
+		return nil, err
+	}
+	req = req.WithContext(ctx)
+	if err := c.applyEditors(ctx, req, reqEditors); err != nil {
+		return nil, err
+	}
+	return c.Client.Do(req)
+}
+
+func (c *Client) ResolvePublicShare(ctx context.Context, credential string, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewResolvePublicShareRequest(c.Server, credential)
+	if err != nil {
+		return nil, err
+	}
+	req = req.WithContext(ctx)
+	if err := c.applyEditors(ctx, req, reqEditors); err != nil {
+		return nil, err
+	}
+	return c.Client.Do(req)
+}
+
+func (c *Client) GetPublicShareMediaContent(ctx context.Context, credential string, mediaId CanonicalMediaId, params *GetPublicShareMediaContentParams, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewGetPublicShareMediaContentRequest(c.Server, credential, mediaId, params)
+	if err != nil {
+		return nil, err
+	}
+	req = req.WithContext(ctx)
+	if err := c.applyEditors(ctx, req, reqEditors); err != nil {
+		return nil, err
+	}
+	return c.Client.Do(req)
+}
+
+func (c *Client) HeadPublicShareMediaContent(ctx context.Context, credential string, mediaId CanonicalMediaId, params *HeadPublicShareMediaContentParams, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewHeadPublicShareMediaContentRequest(c.Server, credential, mediaId, params)
 	if err != nil {
 		return nil, err
 	}
@@ -5178,6 +6308,54 @@ func (c *Client) RevokeSession(ctx context.Context, sessionId SessionId, params 
 	return c.Client.Do(req)
 }
 
+func (c *Client) ListShares(ctx context.Context, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewListSharesRequest(c.Server)
+	if err != nil {
+		return nil, err
+	}
+	req = req.WithContext(ctx)
+	if err := c.applyEditors(ctx, req, reqEditors); err != nil {
+		return nil, err
+	}
+	return c.Client.Do(req)
+}
+
+func (c *Client) CreateShareWithBody(ctx context.Context, params *CreateShareParams, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewCreateShareRequestWithBody(c.Server, params, contentType, body)
+	if err != nil {
+		return nil, err
+	}
+	req = req.WithContext(ctx)
+	if err := c.applyEditors(ctx, req, reqEditors); err != nil {
+		return nil, err
+	}
+	return c.Client.Do(req)
+}
+
+func (c *Client) CreateShare(ctx context.Context, params *CreateShareParams, body CreateShareJSONRequestBody, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewCreateShareRequest(c.Server, params, body)
+	if err != nil {
+		return nil, err
+	}
+	req = req.WithContext(ctx)
+	if err := c.applyEditors(ctx, req, reqEditors); err != nil {
+		return nil, err
+	}
+	return c.Client.Do(req)
+}
+
+func (c *Client) RevokeShare(ctx context.Context, shareId ShareId, params *RevokeShareParams, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewRevokeShareRequest(c.Server, shareId, params)
+	if err != nil {
+		return nil, err
+	}
+	req = req.WithContext(ctx)
+	if err := c.applyEditors(ctx, req, reqEditors); err != nil {
+		return nil, err
+	}
+	return c.Client.Do(req)
+}
+
 func (c *Client) CreateSourceRuleBindingWithBody(ctx context.Context, params *CreateSourceRuleBindingParams, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*http.Response, error) {
 	req, err := NewCreateSourceRuleBindingRequestWithBody(c.Server, params, contentType, body)
 	if err != nil {
@@ -5442,6 +6620,59 @@ func (c *Client) PutWorkOverlay(ctx context.Context, workId CanonicalWorkId, par
 	return c.Client.Do(req)
 }
 
+// NewChangeOwnPasswordRequest calls the generic ChangeOwnPassword builder with application/json body
+func NewChangeOwnPasswordRequest(server string, params *ChangeOwnPasswordParams, body ChangeOwnPasswordJSONRequestBody) (*http.Request, error) {
+	var bodyReader io.Reader
+	buf, err := json.Marshal(body)
+	if err != nil {
+		return nil, err
+	}
+	bodyReader = bytes.NewReader(buf)
+	return NewChangeOwnPasswordRequestWithBody(server, params, "application/json", bodyReader)
+}
+
+// NewChangeOwnPasswordRequestWithBody generates requests for ChangeOwnPassword with any type of body
+func NewChangeOwnPasswordRequestWithBody(server string, params *ChangeOwnPasswordParams, contentType string, body io.Reader) (*http.Request, error) {
+	var err error
+
+	serverURL, err := url.Parse(server)
+	if err != nil {
+		return nil, err
+	}
+
+	operationPath := fmt.Sprintf("/api/v1/account/password")
+	if operationPath[0] == '/' {
+		operationPath = "." + operationPath
+	}
+
+	queryURL, err := serverURL.Parse(operationPath)
+	if err != nil {
+		return nil, err
+	}
+
+	req, err := http.NewRequest(http.MethodPost, queryURL.String(), body)
+	if err != nil {
+		return nil, err
+	}
+
+	req.Header.Add("Content-Type", contentType)
+
+	if params != nil {
+
+		var headerParam0 string
+
+		headerParam0, err = runtime.StyleParamWithOptions("simple", false, "X-Gallery-CSRF", params.XGalleryCSRF, runtime.StyleParamOptions{ParamLocation: runtime.ParamLocationHeader, Type: "string", Format: ""})
+		if err != nil {
+			return nil, err
+		}
+
+		req.Header.Set("X-Gallery-CSRF", headerParam0)
+
+	}
+
+	return req, nil
+}
+
 // NewListControlBackupsRequest generates requests for ListControlBackups
 func NewListControlBackupsRequest(server string) (*http.Request, error) {
 	var err error
@@ -5649,6 +6880,53 @@ func NewVerifyControlRestoreRequestWithBody(server string, params *VerifyControl
 	return req, nil
 }
 
+// NewRevokeAuthorizationGrantRequest generates requests for RevokeAuthorizationGrant
+func NewRevokeAuthorizationGrantRequest(server string, grantId GrantId, params *RevokeAuthorizationGrantParams) (*http.Request, error) {
+	var err error
+
+	var pathParam0 string
+
+	pathParam0, err = runtime.StyleParamWithOptions("simple", false, "grantId", grantId, runtime.StyleParamOptions{ParamLocation: runtime.ParamLocationPath, Type: "string", Format: ""})
+	if err != nil {
+		return nil, err
+	}
+
+	serverURL, err := url.Parse(server)
+	if err != nil {
+		return nil, err
+	}
+
+	operationPath := fmt.Sprintf("/api/v1/admin/grants/%s", pathParam0)
+	if operationPath[0] == '/' {
+		operationPath = "." + operationPath
+	}
+
+	queryURL, err := serverURL.Parse(operationPath)
+	if err != nil {
+		return nil, err
+	}
+
+	req, err := http.NewRequest(http.MethodDelete, queryURL.String(), nil)
+	if err != nil {
+		return nil, err
+	}
+
+	if params != nil {
+
+		var headerParam0 string
+
+		headerParam0, err = runtime.StyleParamWithOptions("simple", false, "X-Gallery-CSRF", params.XGalleryCSRF, runtime.StyleParamOptions{ParamLocation: runtime.ParamLocationHeader, Type: "string", Format: ""})
+		if err != nil {
+			return nil, err
+		}
+
+		req.Header.Set("X-Gallery-CSRF", headerParam0)
+
+	}
+
+	return req, nil
+}
+
 // NewCreateCatalogCheckpointJobRequest generates requests for CreateCatalogCheckpointJob
 func NewCreateCatalogCheckpointJobRequest(server string, params *CreateCatalogCheckpointJobParams) (*http.Request, error) {
 	var err error
@@ -5752,6 +7030,453 @@ func NewCreateCatalogVacuumJobRequest(server string, params *CreateCatalogVacuum
 	}
 
 	operationPath := fmt.Sprintf("/api/v1/admin/maintenance/vacuum")
+	if operationPath[0] == '/' {
+		operationPath = "." + operationPath
+	}
+
+	queryURL, err := serverURL.Parse(operationPath)
+	if err != nil {
+		return nil, err
+	}
+
+	req, err := http.NewRequest(http.MethodPost, queryURL.String(), nil)
+	if err != nil {
+		return nil, err
+	}
+
+	if params != nil {
+
+		var headerParam0 string
+
+		headerParam0, err = runtime.StyleParamWithOptions("simple", false, "X-Gallery-CSRF", params.XGalleryCSRF, runtime.StyleParamOptions{ParamLocation: runtime.ParamLocationHeader, Type: "string", Format: ""})
+		if err != nil {
+			return nil, err
+		}
+
+		req.Header.Set("X-Gallery-CSRF", headerParam0)
+
+	}
+
+	return req, nil
+}
+
+// NewListSecurityAuditsRequest generates requests for ListSecurityAudits
+func NewListSecurityAuditsRequest(server string) (*http.Request, error) {
+	var err error
+
+	serverURL, err := url.Parse(server)
+	if err != nil {
+		return nil, err
+	}
+
+	operationPath := fmt.Sprintf("/api/v1/admin/security-audits")
+	if operationPath[0] == '/' {
+		operationPath = "." + operationPath
+	}
+
+	queryURL, err := serverURL.Parse(operationPath)
+	if err != nil {
+		return nil, err
+	}
+
+	req, err := http.NewRequest(http.MethodGet, queryURL.String(), nil)
+	if err != nil {
+		return nil, err
+	}
+
+	return req, nil
+}
+
+// NewListLocalUsersRequest generates requests for ListLocalUsers
+func NewListLocalUsersRequest(server string) (*http.Request, error) {
+	var err error
+
+	serverURL, err := url.Parse(server)
+	if err != nil {
+		return nil, err
+	}
+
+	operationPath := fmt.Sprintf("/api/v1/admin/users")
+	if operationPath[0] == '/' {
+		operationPath = "." + operationPath
+	}
+
+	queryURL, err := serverURL.Parse(operationPath)
+	if err != nil {
+		return nil, err
+	}
+
+	req, err := http.NewRequest(http.MethodGet, queryURL.String(), nil)
+	if err != nil {
+		return nil, err
+	}
+
+	return req, nil
+}
+
+// NewCreateLocalUserRequest calls the generic CreateLocalUser builder with application/json body
+func NewCreateLocalUserRequest(server string, params *CreateLocalUserParams, body CreateLocalUserJSONRequestBody) (*http.Request, error) {
+	var bodyReader io.Reader
+	buf, err := json.Marshal(body)
+	if err != nil {
+		return nil, err
+	}
+	bodyReader = bytes.NewReader(buf)
+	return NewCreateLocalUserRequestWithBody(server, params, "application/json", bodyReader)
+}
+
+// NewCreateLocalUserRequestWithBody generates requests for CreateLocalUser with any type of body
+func NewCreateLocalUserRequestWithBody(server string, params *CreateLocalUserParams, contentType string, body io.Reader) (*http.Request, error) {
+	var err error
+
+	serverURL, err := url.Parse(server)
+	if err != nil {
+		return nil, err
+	}
+
+	operationPath := fmt.Sprintf("/api/v1/admin/users")
+	if operationPath[0] == '/' {
+		operationPath = "." + operationPath
+	}
+
+	queryURL, err := serverURL.Parse(operationPath)
+	if err != nil {
+		return nil, err
+	}
+
+	req, err := http.NewRequest(http.MethodPost, queryURL.String(), body)
+	if err != nil {
+		return nil, err
+	}
+
+	req.Header.Add("Content-Type", contentType)
+
+	if params != nil {
+
+		var headerParam0 string
+
+		headerParam0, err = runtime.StyleParamWithOptions("simple", false, "X-Gallery-CSRF", params.XGalleryCSRF, runtime.StyleParamOptions{ParamLocation: runtime.ParamLocationHeader, Type: "string", Format: ""})
+		if err != nil {
+			return nil, err
+		}
+
+		req.Header.Set("X-Gallery-CSRF", headerParam0)
+
+	}
+
+	return req, nil
+}
+
+// NewCreateAuthorizationGrantRequest calls the generic CreateAuthorizationGrant builder with application/json body
+func NewCreateAuthorizationGrantRequest(server string, userId UserId, params *CreateAuthorizationGrantParams, body CreateAuthorizationGrantJSONRequestBody) (*http.Request, error) {
+	var bodyReader io.Reader
+	buf, err := json.Marshal(body)
+	if err != nil {
+		return nil, err
+	}
+	bodyReader = bytes.NewReader(buf)
+	return NewCreateAuthorizationGrantRequestWithBody(server, userId, params, "application/json", bodyReader)
+}
+
+// NewCreateAuthorizationGrantRequestWithBody generates requests for CreateAuthorizationGrant with any type of body
+func NewCreateAuthorizationGrantRequestWithBody(server string, userId UserId, params *CreateAuthorizationGrantParams, contentType string, body io.Reader) (*http.Request, error) {
+	var err error
+
+	var pathParam0 string
+
+	pathParam0, err = runtime.StyleParamWithOptions("simple", false, "userId", userId, runtime.StyleParamOptions{ParamLocation: runtime.ParamLocationPath, Type: "string", Format: ""})
+	if err != nil {
+		return nil, err
+	}
+
+	serverURL, err := url.Parse(server)
+	if err != nil {
+		return nil, err
+	}
+
+	operationPath := fmt.Sprintf("/api/v1/admin/users/%s/grants", pathParam0)
+	if operationPath[0] == '/' {
+		operationPath = "." + operationPath
+	}
+
+	queryURL, err := serverURL.Parse(operationPath)
+	if err != nil {
+		return nil, err
+	}
+
+	req, err := http.NewRequest(http.MethodPost, queryURL.String(), body)
+	if err != nil {
+		return nil, err
+	}
+
+	req.Header.Add("Content-Type", contentType)
+
+	if params != nil {
+
+		var headerParam0 string
+
+		headerParam0, err = runtime.StyleParamWithOptions("simple", false, "X-Gallery-CSRF", params.XGalleryCSRF, runtime.StyleParamOptions{ParamLocation: runtime.ParamLocationHeader, Type: "string", Format: ""})
+		if err != nil {
+			return nil, err
+		}
+
+		req.Header.Set("X-Gallery-CSRF", headerParam0)
+
+	}
+
+	return req, nil
+}
+
+// NewSetLocalUserStatusRequest calls the generic SetLocalUserStatus builder with application/json body
+func NewSetLocalUserStatusRequest(server string, userId UserId, params *SetLocalUserStatusParams, body SetLocalUserStatusJSONRequestBody) (*http.Request, error) {
+	var bodyReader io.Reader
+	buf, err := json.Marshal(body)
+	if err != nil {
+		return nil, err
+	}
+	bodyReader = bytes.NewReader(buf)
+	return NewSetLocalUserStatusRequestWithBody(server, userId, params, "application/json", bodyReader)
+}
+
+// NewSetLocalUserStatusRequestWithBody generates requests for SetLocalUserStatus with any type of body
+func NewSetLocalUserStatusRequestWithBody(server string, userId UserId, params *SetLocalUserStatusParams, contentType string, body io.Reader) (*http.Request, error) {
+	var err error
+
+	var pathParam0 string
+
+	pathParam0, err = runtime.StyleParamWithOptions("simple", false, "userId", userId, runtime.StyleParamOptions{ParamLocation: runtime.ParamLocationPath, Type: "string", Format: ""})
+	if err != nil {
+		return nil, err
+	}
+
+	serverURL, err := url.Parse(server)
+	if err != nil {
+		return nil, err
+	}
+
+	operationPath := fmt.Sprintf("/api/v1/admin/users/%s/status", pathParam0)
+	if operationPath[0] == '/' {
+		operationPath = "." + operationPath
+	}
+
+	queryURL, err := serverURL.Parse(operationPath)
+	if err != nil {
+		return nil, err
+	}
+
+	req, err := http.NewRequest(http.MethodPatch, queryURL.String(), body)
+	if err != nil {
+		return nil, err
+	}
+
+	req.Header.Add("Content-Type", contentType)
+
+	if params != nil {
+
+		var headerParam0 string
+
+		headerParam0, err = runtime.StyleParamWithOptions("simple", false, "X-Gallery-CSRF", params.XGalleryCSRF, runtime.StyleParamOptions{ParamLocation: runtime.ParamLocationHeader, Type: "string", Format: ""})
+		if err != nil {
+			return nil, err
+		}
+
+		req.Header.Set("X-Gallery-CSRF", headerParam0)
+
+	}
+
+	return req, nil
+}
+
+// NewListAPITokensRequest generates requests for ListAPITokens
+func NewListAPITokensRequest(server string) (*http.Request, error) {
+	var err error
+
+	serverURL, err := url.Parse(server)
+	if err != nil {
+		return nil, err
+	}
+
+	operationPath := fmt.Sprintf("/api/v1/api-tokens")
+	if operationPath[0] == '/' {
+		operationPath = "." + operationPath
+	}
+
+	queryURL, err := serverURL.Parse(operationPath)
+	if err != nil {
+		return nil, err
+	}
+
+	req, err := http.NewRequest(http.MethodGet, queryURL.String(), nil)
+	if err != nil {
+		return nil, err
+	}
+
+	return req, nil
+}
+
+// NewCreateAPITokenRequest calls the generic CreateAPIToken builder with application/json body
+func NewCreateAPITokenRequest(server string, params *CreateAPITokenParams, body CreateAPITokenJSONRequestBody) (*http.Request, error) {
+	var bodyReader io.Reader
+	buf, err := json.Marshal(body)
+	if err != nil {
+		return nil, err
+	}
+	bodyReader = bytes.NewReader(buf)
+	return NewCreateAPITokenRequestWithBody(server, params, "application/json", bodyReader)
+}
+
+// NewCreateAPITokenRequestWithBody generates requests for CreateAPIToken with any type of body
+func NewCreateAPITokenRequestWithBody(server string, params *CreateAPITokenParams, contentType string, body io.Reader) (*http.Request, error) {
+	var err error
+
+	serverURL, err := url.Parse(server)
+	if err != nil {
+		return nil, err
+	}
+
+	operationPath := fmt.Sprintf("/api/v1/api-tokens")
+	if operationPath[0] == '/' {
+		operationPath = "." + operationPath
+	}
+
+	queryURL, err := serverURL.Parse(operationPath)
+	if err != nil {
+		return nil, err
+	}
+
+	req, err := http.NewRequest(http.MethodPost, queryURL.String(), body)
+	if err != nil {
+		return nil, err
+	}
+
+	req.Header.Add("Content-Type", contentType)
+
+	if params != nil {
+
+		var headerParam0 string
+
+		headerParam0, err = runtime.StyleParamWithOptions("simple", false, "X-Gallery-CSRF", params.XGalleryCSRF, runtime.StyleParamOptions{ParamLocation: runtime.ParamLocationHeader, Type: "string", Format: ""})
+		if err != nil {
+			return nil, err
+		}
+
+		req.Header.Set("X-Gallery-CSRF", headerParam0)
+
+	}
+
+	return req, nil
+}
+
+// NewRevokeAPITokenRequest generates requests for RevokeAPIToken
+func NewRevokeAPITokenRequest(server string, tokenId APITokenId, params *RevokeAPITokenParams) (*http.Request, error) {
+	var err error
+
+	var pathParam0 string
+
+	pathParam0, err = runtime.StyleParamWithOptions("simple", false, "tokenId", tokenId, runtime.StyleParamOptions{ParamLocation: runtime.ParamLocationPath, Type: "string", Format: ""})
+	if err != nil {
+		return nil, err
+	}
+
+	serverURL, err := url.Parse(server)
+	if err != nil {
+		return nil, err
+	}
+
+	operationPath := fmt.Sprintf("/api/v1/api-tokens/%s", pathParam0)
+	if operationPath[0] == '/' {
+		operationPath = "." + operationPath
+	}
+
+	queryURL, err := serverURL.Parse(operationPath)
+	if err != nil {
+		return nil, err
+	}
+
+	req, err := http.NewRequest(http.MethodDelete, queryURL.String(), nil)
+	if err != nil {
+		return nil, err
+	}
+
+	if params != nil {
+
+		var headerParam0 string
+
+		headerParam0, err = runtime.StyleParamWithOptions("simple", false, "X-Gallery-CSRF", params.XGalleryCSRF, runtime.StyleParamOptions{ParamLocation: runtime.ParamLocationHeader, Type: "string", Format: ""})
+		if err != nil {
+			return nil, err
+		}
+
+		req.Header.Set("X-Gallery-CSRF", headerParam0)
+
+	}
+
+	return req, nil
+}
+
+// NewLoginRequest calls the generic Login builder with application/json body
+func NewLoginRequest(server string, params *LoginParams, body LoginJSONRequestBody) (*http.Request, error) {
+	var bodyReader io.Reader
+	buf, err := json.Marshal(body)
+	if err != nil {
+		return nil, err
+	}
+	bodyReader = bytes.NewReader(buf)
+	return NewLoginRequestWithBody(server, params, "application/json", bodyReader)
+}
+
+// NewLoginRequestWithBody generates requests for Login with any type of body
+func NewLoginRequestWithBody(server string, params *LoginParams, contentType string, body io.Reader) (*http.Request, error) {
+	var err error
+
+	serverURL, err := url.Parse(server)
+	if err != nil {
+		return nil, err
+	}
+
+	operationPath := fmt.Sprintf("/api/v1/auth/login")
+	if operationPath[0] == '/' {
+		operationPath = "." + operationPath
+	}
+
+	queryURL, err := serverURL.Parse(operationPath)
+	if err != nil {
+		return nil, err
+	}
+
+	req, err := http.NewRequest(http.MethodPost, queryURL.String(), body)
+	if err != nil {
+		return nil, err
+	}
+
+	req.Header.Add("Content-Type", contentType)
+
+	if params != nil {
+
+		var headerParam0 string
+
+		headerParam0, err = runtime.StyleParamWithOptions("simple", false, "X-Gallery-CSRF", params.XGalleryCSRF, runtime.StyleParamOptions{ParamLocation: runtime.ParamLocationHeader, Type: "string", Format: ""})
+		if err != nil {
+			return nil, err
+		}
+
+		req.Header.Set("X-Gallery-CSRF", headerParam0)
+
+	}
+
+	return req, nil
+}
+
+// NewLogoutRequest generates requests for Logout
+func NewLogoutRequest(server string, params *LogoutParams) (*http.Request, error) {
+	var err error
+
+	serverURL, err := url.Parse(server)
+	if err != nil {
+		return nil, err
+	}
+
+	operationPath := fmt.Sprintf("/api/v1/auth/logout")
 	if operationPath[0] == '/' {
 		operationPath = "." + operationPath
 	}
@@ -6836,6 +8561,59 @@ func NewRetryJobRequest(server string, jobId JobId, params *RetryJobParams) (*ht
 	return req, nil
 }
 
+// NewInitializeLANOwnerRequest calls the generic InitializeLANOwner builder with application/json body
+func NewInitializeLANOwnerRequest(server string, params *InitializeLANOwnerParams, body InitializeLANOwnerJSONRequestBody) (*http.Request, error) {
+	var bodyReader io.Reader
+	buf, err := json.Marshal(body)
+	if err != nil {
+		return nil, err
+	}
+	bodyReader = bytes.NewReader(buf)
+	return NewInitializeLANOwnerRequestWithBody(server, params, "application/json", bodyReader)
+}
+
+// NewInitializeLANOwnerRequestWithBody generates requests for InitializeLANOwner with any type of body
+func NewInitializeLANOwnerRequestWithBody(server string, params *InitializeLANOwnerParams, contentType string, body io.Reader) (*http.Request, error) {
+	var err error
+
+	serverURL, err := url.Parse(server)
+	if err != nil {
+		return nil, err
+	}
+
+	operationPath := fmt.Sprintf("/api/v1/lan/owner")
+	if operationPath[0] == '/' {
+		operationPath = "." + operationPath
+	}
+
+	queryURL, err := serverURL.Parse(operationPath)
+	if err != nil {
+		return nil, err
+	}
+
+	req, err := http.NewRequest(http.MethodPost, queryURL.String(), body)
+	if err != nil {
+		return nil, err
+	}
+
+	req.Header.Add("Content-Type", contentType)
+
+	if params != nil {
+
+		var headerParam0 string
+
+		headerParam0, err = runtime.StyleParamWithOptions("simple", false, "X-Gallery-CSRF", params.XGalleryCSRF, runtime.StyleParamOptions{ParamLocation: runtime.ParamLocationHeader, Type: "string", Format: ""})
+		if err != nil {
+			return nil, err
+		}
+
+		req.Header.Set("X-Gallery-CSRF", headerParam0)
+
+	}
+
+	return req, nil
+}
+
 // NewCreateLibraryRequest calls the generic CreateLibrary builder with application/json body
 func NewCreateLibraryRequest(server string, params *CreateLibraryParams, body CreateLibraryJSONRequestBody) (*http.Request, error) {
 	var bodyReader io.Reader
@@ -7578,6 +9356,250 @@ func NewCreatePairingAttemptRequest(server string, params *CreatePairingAttemptP
 		}
 
 		req.Header.Set("X-Gallery-CSRF", headerParam0)
+
+	}
+
+	return req, nil
+}
+
+// NewResolvePublicShareRequest generates requests for ResolvePublicShare
+func NewResolvePublicShareRequest(server string, credential string) (*http.Request, error) {
+	var err error
+
+	var pathParam0 string
+
+	pathParam0, err = runtime.StyleParamWithOptions("simple", false, "credential", credential, runtime.StyleParamOptions{ParamLocation: runtime.ParamLocationPath, Type: "string", Format: ""})
+	if err != nil {
+		return nil, err
+	}
+
+	serverURL, err := url.Parse(server)
+	if err != nil {
+		return nil, err
+	}
+
+	operationPath := fmt.Sprintf("/api/v1/public/shares/%s", pathParam0)
+	if operationPath[0] == '/' {
+		operationPath = "." + operationPath
+	}
+
+	queryURL, err := serverURL.Parse(operationPath)
+	if err != nil {
+		return nil, err
+	}
+
+	req, err := http.NewRequest(http.MethodGet, queryURL.String(), nil)
+	if err != nil {
+		return nil, err
+	}
+
+	return req, nil
+}
+
+// NewGetPublicShareMediaContentRequest generates requests for GetPublicShareMediaContent
+func NewGetPublicShareMediaContentRequest(server string, credential string, mediaId CanonicalMediaId, params *GetPublicShareMediaContentParams) (*http.Request, error) {
+	var err error
+
+	var pathParam0 string
+
+	pathParam0, err = runtime.StyleParamWithOptions("simple", false, "credential", credential, runtime.StyleParamOptions{ParamLocation: runtime.ParamLocationPath, Type: "string", Format: ""})
+	if err != nil {
+		return nil, err
+	}
+
+	var pathParam1 string
+
+	pathParam1, err = runtime.StyleParamWithOptions("simple", false, "mediaId", mediaId, runtime.StyleParamOptions{ParamLocation: runtime.ParamLocationPath, Type: "string", Format: ""})
+	if err != nil {
+		return nil, err
+	}
+
+	serverURL, err := url.Parse(server)
+	if err != nil {
+		return nil, err
+	}
+
+	operationPath := fmt.Sprintf("/api/v1/public/shares/%s/media/%s/content", pathParam0, pathParam1)
+	if operationPath[0] == '/' {
+		operationPath = "." + operationPath
+	}
+
+	queryURL, err := serverURL.Parse(operationPath)
+	if err != nil {
+		return nil, err
+	}
+
+	if params != nil {
+		// queryValues collects non-styled parameters (passthrough, JSON)
+		// that are safe to round-trip through url.Values.Encode().
+		queryValues := queryURL.Query()
+		// rawQueryFragments collects pre-encoded query fragments from
+		// styled parameters, preserving literal commas as delimiters
+		// per the OpenAPI spec (e.g. "color=blue,black,brown").
+		var rawQueryFragments []string
+
+		if params.Download != nil {
+
+			if queryFrag, err := runtime.StyleParamWithOptions("form", true, "download", *params.Download, runtime.StyleParamOptions{ParamLocation: runtime.ParamLocationQuery, Type: "boolean", Format: ""}); err != nil {
+				return nil, err
+			} else {
+				for _, qp := range strings.Split(queryFrag, "&") {
+					rawQueryFragments = append(rawQueryFragments, qp)
+				}
+			}
+
+		}
+
+		if encoded := queryValues.Encode(); encoded != "" {
+			rawQueryFragments = append(rawQueryFragments, encoded)
+		}
+		queryURL.RawQuery = strings.Join(rawQueryFragments, "&")
+	}
+
+	req, err := http.NewRequest(http.MethodGet, queryURL.String(), nil)
+	if err != nil {
+		return nil, err
+	}
+
+	if params != nil {
+
+		if params.Range != nil {
+			var headerParam0 string
+
+			headerParam0, err = runtime.StyleParamWithOptions("simple", false, "Range", *params.Range, runtime.StyleParamOptions{ParamLocation: runtime.ParamLocationHeader, Type: "string", Format: ""})
+			if err != nil {
+				return nil, err
+			}
+
+			req.Header.Set("Range", headerParam0)
+		}
+
+		if params.IfNoneMatch != nil {
+			var headerParam1 string
+
+			headerParam1, err = runtime.StyleParamWithOptions("simple", false, "If-None-Match", *params.IfNoneMatch, runtime.StyleParamOptions{ParamLocation: runtime.ParamLocationHeader, Type: "string", Format: ""})
+			if err != nil {
+				return nil, err
+			}
+
+			req.Header.Set("If-None-Match", headerParam1)
+		}
+
+		if params.IfRange != nil {
+			var headerParam2 string
+
+			headerParam2, err = runtime.StyleParamWithOptions("simple", false, "If-Range", *params.IfRange, runtime.StyleParamOptions{ParamLocation: runtime.ParamLocationHeader, Type: "string", Format: ""})
+			if err != nil {
+				return nil, err
+			}
+
+			req.Header.Set("If-Range", headerParam2)
+		}
+
+	}
+
+	return req, nil
+}
+
+// NewHeadPublicShareMediaContentRequest generates requests for HeadPublicShareMediaContent
+func NewHeadPublicShareMediaContentRequest(server string, credential string, mediaId CanonicalMediaId, params *HeadPublicShareMediaContentParams) (*http.Request, error) {
+	var err error
+
+	var pathParam0 string
+
+	pathParam0, err = runtime.StyleParamWithOptions("simple", false, "credential", credential, runtime.StyleParamOptions{ParamLocation: runtime.ParamLocationPath, Type: "string", Format: ""})
+	if err != nil {
+		return nil, err
+	}
+
+	var pathParam1 string
+
+	pathParam1, err = runtime.StyleParamWithOptions("simple", false, "mediaId", mediaId, runtime.StyleParamOptions{ParamLocation: runtime.ParamLocationPath, Type: "string", Format: ""})
+	if err != nil {
+		return nil, err
+	}
+
+	serverURL, err := url.Parse(server)
+	if err != nil {
+		return nil, err
+	}
+
+	operationPath := fmt.Sprintf("/api/v1/public/shares/%s/media/%s/content", pathParam0, pathParam1)
+	if operationPath[0] == '/' {
+		operationPath = "." + operationPath
+	}
+
+	queryURL, err := serverURL.Parse(operationPath)
+	if err != nil {
+		return nil, err
+	}
+
+	if params != nil {
+		// queryValues collects non-styled parameters (passthrough, JSON)
+		// that are safe to round-trip through url.Values.Encode().
+		queryValues := queryURL.Query()
+		// rawQueryFragments collects pre-encoded query fragments from
+		// styled parameters, preserving literal commas as delimiters
+		// per the OpenAPI spec (e.g. "color=blue,black,brown").
+		var rawQueryFragments []string
+
+		if params.Download != nil {
+
+			if queryFrag, err := runtime.StyleParamWithOptions("form", true, "download", *params.Download, runtime.StyleParamOptions{ParamLocation: runtime.ParamLocationQuery, Type: "boolean", Format: ""}); err != nil {
+				return nil, err
+			} else {
+				for _, qp := range strings.Split(queryFrag, "&") {
+					rawQueryFragments = append(rawQueryFragments, qp)
+				}
+			}
+
+		}
+
+		if encoded := queryValues.Encode(); encoded != "" {
+			rawQueryFragments = append(rawQueryFragments, encoded)
+		}
+		queryURL.RawQuery = strings.Join(rawQueryFragments, "&")
+	}
+
+	req, err := http.NewRequest(http.MethodHead, queryURL.String(), nil)
+	if err != nil {
+		return nil, err
+	}
+
+	if params != nil {
+
+		if params.Range != nil {
+			var headerParam0 string
+
+			headerParam0, err = runtime.StyleParamWithOptions("simple", false, "Range", *params.Range, runtime.StyleParamOptions{ParamLocation: runtime.ParamLocationHeader, Type: "string", Format: ""})
+			if err != nil {
+				return nil, err
+			}
+
+			req.Header.Set("Range", headerParam0)
+		}
+
+		if params.IfNoneMatch != nil {
+			var headerParam1 string
+
+			headerParam1, err = runtime.StyleParamWithOptions("simple", false, "If-None-Match", *params.IfNoneMatch, runtime.StyleParamOptions{ParamLocation: runtime.ParamLocationHeader, Type: "string", Format: ""})
+			if err != nil {
+				return nil, err
+			}
+
+			req.Header.Set("If-None-Match", headerParam1)
+		}
+
+		if params.IfRange != nil {
+			var headerParam2 string
+
+			headerParam2, err = runtime.StyleParamWithOptions("simple", false, "If-Range", *params.IfRange, runtime.StyleParamOptions{ParamLocation: runtime.ParamLocationHeader, Type: "string", Format: ""})
+			if err != nil {
+				return nil, err
+			}
+
+			req.Header.Set("If-Range", headerParam2)
+		}
 
 	}
 
@@ -9452,6 +11474,133 @@ func NewRevokeSessionRequest(server string, sessionId SessionId, params *RevokeS
 	return req, nil
 }
 
+// NewListSharesRequest generates requests for ListShares
+func NewListSharesRequest(server string) (*http.Request, error) {
+	var err error
+
+	serverURL, err := url.Parse(server)
+	if err != nil {
+		return nil, err
+	}
+
+	operationPath := fmt.Sprintf("/api/v1/shares")
+	if operationPath[0] == '/' {
+		operationPath = "." + operationPath
+	}
+
+	queryURL, err := serverURL.Parse(operationPath)
+	if err != nil {
+		return nil, err
+	}
+
+	req, err := http.NewRequest(http.MethodGet, queryURL.String(), nil)
+	if err != nil {
+		return nil, err
+	}
+
+	return req, nil
+}
+
+// NewCreateShareRequest calls the generic CreateShare builder with application/json body
+func NewCreateShareRequest(server string, params *CreateShareParams, body CreateShareJSONRequestBody) (*http.Request, error) {
+	var bodyReader io.Reader
+	buf, err := json.Marshal(body)
+	if err != nil {
+		return nil, err
+	}
+	bodyReader = bytes.NewReader(buf)
+	return NewCreateShareRequestWithBody(server, params, "application/json", bodyReader)
+}
+
+// NewCreateShareRequestWithBody generates requests for CreateShare with any type of body
+func NewCreateShareRequestWithBody(server string, params *CreateShareParams, contentType string, body io.Reader) (*http.Request, error) {
+	var err error
+
+	serverURL, err := url.Parse(server)
+	if err != nil {
+		return nil, err
+	}
+
+	operationPath := fmt.Sprintf("/api/v1/shares")
+	if operationPath[0] == '/' {
+		operationPath = "." + operationPath
+	}
+
+	queryURL, err := serverURL.Parse(operationPath)
+	if err != nil {
+		return nil, err
+	}
+
+	req, err := http.NewRequest(http.MethodPost, queryURL.String(), body)
+	if err != nil {
+		return nil, err
+	}
+
+	req.Header.Add("Content-Type", contentType)
+
+	if params != nil {
+
+		var headerParam0 string
+
+		headerParam0, err = runtime.StyleParamWithOptions("simple", false, "X-Gallery-CSRF", params.XGalleryCSRF, runtime.StyleParamOptions{ParamLocation: runtime.ParamLocationHeader, Type: "string", Format: ""})
+		if err != nil {
+			return nil, err
+		}
+
+		req.Header.Set("X-Gallery-CSRF", headerParam0)
+
+	}
+
+	return req, nil
+}
+
+// NewRevokeShareRequest generates requests for RevokeShare
+func NewRevokeShareRequest(server string, shareId ShareId, params *RevokeShareParams) (*http.Request, error) {
+	var err error
+
+	var pathParam0 string
+
+	pathParam0, err = runtime.StyleParamWithOptions("simple", false, "shareId", shareId, runtime.StyleParamOptions{ParamLocation: runtime.ParamLocationPath, Type: "string", Format: ""})
+	if err != nil {
+		return nil, err
+	}
+
+	serverURL, err := url.Parse(server)
+	if err != nil {
+		return nil, err
+	}
+
+	operationPath := fmt.Sprintf("/api/v1/shares/%s", pathParam0)
+	if operationPath[0] == '/' {
+		operationPath = "." + operationPath
+	}
+
+	queryURL, err := serverURL.Parse(operationPath)
+	if err != nil {
+		return nil, err
+	}
+
+	req, err := http.NewRequest(http.MethodDelete, queryURL.String(), nil)
+	if err != nil {
+		return nil, err
+	}
+
+	if params != nil {
+
+		var headerParam0 string
+
+		headerParam0, err = runtime.StyleParamWithOptions("simple", false, "X-Gallery-CSRF", params.XGalleryCSRF, runtime.StyleParamOptions{ParamLocation: runtime.ParamLocationHeader, Type: "string", Format: ""})
+		if err != nil {
+			return nil, err
+		}
+
+		req.Header.Set("X-Gallery-CSRF", headerParam0)
+
+	}
+
+	return req, nil
+}
+
 // NewCreateSourceRuleBindingRequest calls the generic CreateSourceRuleBinding builder with application/json body
 func NewCreateSourceRuleBindingRequest(server string, params *CreateSourceRuleBindingParams, body CreateSourceRuleBindingJSONRequestBody) (*http.Request, error) {
 	var bodyReader io.Reader
@@ -10391,6 +12540,11 @@ func WithBaseURL(baseURL string) ClientOption {
 
 // ClientWithResponsesInterface is the interface specification for the client with responses above.
 type ClientWithResponsesInterface interface {
+	// ChangeOwnPasswordWithBodyWithResponse request with any body
+	ChangeOwnPasswordWithBodyWithResponse(ctx context.Context, params *ChangeOwnPasswordParams, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*ChangeOwnPasswordResponse, error)
+
+	ChangeOwnPasswordWithResponse(ctx context.Context, params *ChangeOwnPasswordParams, body ChangeOwnPasswordJSONRequestBody, reqEditors ...RequestEditorFn) (*ChangeOwnPasswordResponse, error)
+
 	// ListControlBackupsWithResponse request
 	ListControlBackupsWithResponse(ctx context.Context, reqEditors ...RequestEditorFn) (*ListControlBackupsResponse, error)
 
@@ -10410,6 +12564,9 @@ type ClientWithResponsesInterface interface {
 
 	VerifyControlRestoreWithResponse(ctx context.Context, params *VerifyControlRestoreParams, body VerifyControlRestoreJSONRequestBody, reqEditors ...RequestEditorFn) (*VerifyControlRestoreResponse, error)
 
+	// RevokeAuthorizationGrantWithResponse request
+	RevokeAuthorizationGrantWithResponse(ctx context.Context, grantId GrantId, params *RevokeAuthorizationGrantParams, reqEditors ...RequestEditorFn) (*RevokeAuthorizationGrantResponse, error)
+
 	// CreateCatalogCheckpointJobWithResponse request
 	CreateCatalogCheckpointJobWithResponse(ctx context.Context, params *CreateCatalogCheckpointJobParams, reqEditors ...RequestEditorFn) (*CreateCatalogCheckpointJobResponse, error)
 
@@ -10420,6 +12577,46 @@ type ClientWithResponsesInterface interface {
 
 	// CreateCatalogVacuumJobWithResponse request
 	CreateCatalogVacuumJobWithResponse(ctx context.Context, params *CreateCatalogVacuumJobParams, reqEditors ...RequestEditorFn) (*CreateCatalogVacuumJobResponse, error)
+
+	// ListSecurityAuditsWithResponse request
+	ListSecurityAuditsWithResponse(ctx context.Context, reqEditors ...RequestEditorFn) (*ListSecurityAuditsResponse, error)
+
+	// ListLocalUsersWithResponse request
+	ListLocalUsersWithResponse(ctx context.Context, reqEditors ...RequestEditorFn) (*ListLocalUsersResponse, error)
+
+	// CreateLocalUserWithBodyWithResponse request with any body
+	CreateLocalUserWithBodyWithResponse(ctx context.Context, params *CreateLocalUserParams, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*CreateLocalUserResponse, error)
+
+	CreateLocalUserWithResponse(ctx context.Context, params *CreateLocalUserParams, body CreateLocalUserJSONRequestBody, reqEditors ...RequestEditorFn) (*CreateLocalUserResponse, error)
+
+	// CreateAuthorizationGrantWithBodyWithResponse request with any body
+	CreateAuthorizationGrantWithBodyWithResponse(ctx context.Context, userId UserId, params *CreateAuthorizationGrantParams, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*CreateAuthorizationGrantResponse, error)
+
+	CreateAuthorizationGrantWithResponse(ctx context.Context, userId UserId, params *CreateAuthorizationGrantParams, body CreateAuthorizationGrantJSONRequestBody, reqEditors ...RequestEditorFn) (*CreateAuthorizationGrantResponse, error)
+
+	// SetLocalUserStatusWithBodyWithResponse request with any body
+	SetLocalUserStatusWithBodyWithResponse(ctx context.Context, userId UserId, params *SetLocalUserStatusParams, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*SetLocalUserStatusResponse, error)
+
+	SetLocalUserStatusWithResponse(ctx context.Context, userId UserId, params *SetLocalUserStatusParams, body SetLocalUserStatusJSONRequestBody, reqEditors ...RequestEditorFn) (*SetLocalUserStatusResponse, error)
+
+	// ListAPITokensWithResponse request
+	ListAPITokensWithResponse(ctx context.Context, reqEditors ...RequestEditorFn) (*ListAPITokensResponse, error)
+
+	// CreateAPITokenWithBodyWithResponse request with any body
+	CreateAPITokenWithBodyWithResponse(ctx context.Context, params *CreateAPITokenParams, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*CreateAPITokenResponse, error)
+
+	CreateAPITokenWithResponse(ctx context.Context, params *CreateAPITokenParams, body CreateAPITokenJSONRequestBody, reqEditors ...RequestEditorFn) (*CreateAPITokenResponse, error)
+
+	// RevokeAPITokenWithResponse request
+	RevokeAPITokenWithResponse(ctx context.Context, tokenId APITokenId, params *RevokeAPITokenParams, reqEditors ...RequestEditorFn) (*RevokeAPITokenResponse, error)
+
+	// LoginWithBodyWithResponse request with any body
+	LoginWithBodyWithResponse(ctx context.Context, params *LoginParams, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*LoginResponse, error)
+
+	LoginWithResponse(ctx context.Context, params *LoginParams, body LoginJSONRequestBody, reqEditors ...RequestEditorFn) (*LoginResponse, error)
+
+	// LogoutWithResponse request
+	LogoutWithResponse(ctx context.Context, params *LogoutParams, reqEditors ...RequestEditorFn) (*LogoutResponse, error)
 
 	// UnbindMediaWithBodyWithResponse request with any body
 	UnbindMediaWithBodyWithResponse(ctx context.Context, params *UnbindMediaParams, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*UnbindMediaResponse, error)
@@ -10503,6 +12700,11 @@ type ClientWithResponsesInterface interface {
 	// RetryJobWithResponse request
 	RetryJobWithResponse(ctx context.Context, jobId JobId, params *RetryJobParams, reqEditors ...RequestEditorFn) (*RetryJobResponse, error)
 
+	// InitializeLANOwnerWithBodyWithResponse request with any body
+	InitializeLANOwnerWithBodyWithResponse(ctx context.Context, params *InitializeLANOwnerParams, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*InitializeLANOwnerResponse, error)
+
+	InitializeLANOwnerWithResponse(ctx context.Context, params *InitializeLANOwnerParams, body InitializeLANOwnerJSONRequestBody, reqEditors ...RequestEditorFn) (*InitializeLANOwnerResponse, error)
+
 	// CreateLibraryWithBodyWithResponse request with any body
 	CreateLibraryWithBodyWithResponse(ctx context.Context, params *CreateLibraryParams, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*CreateLibraryResponse, error)
 
@@ -10543,6 +12745,15 @@ type ClientWithResponsesInterface interface {
 
 	// CreatePairingAttemptWithResponse request
 	CreatePairingAttemptWithResponse(ctx context.Context, params *CreatePairingAttemptParams, reqEditors ...RequestEditorFn) (*CreatePairingAttemptResponse, error)
+
+	// ResolvePublicShareWithResponse request
+	ResolvePublicShareWithResponse(ctx context.Context, credential string, reqEditors ...RequestEditorFn) (*ResolvePublicShareResponse, error)
+
+	// GetPublicShareMediaContentWithResponse request
+	GetPublicShareMediaContentWithResponse(ctx context.Context, credential string, mediaId CanonicalMediaId, params *GetPublicShareMediaContentParams, reqEditors ...RequestEditorFn) (*GetPublicShareMediaContentResponse, error)
+
+	// HeadPublicShareMediaContentWithResponse request
+	HeadPublicShareMediaContentWithResponse(ctx context.Context, credential string, mediaId CanonicalMediaId, params *HeadPublicShareMediaContentParams, reqEditors ...RequestEditorFn) (*HeadPublicShareMediaContentResponse, error)
 
 	// GetCurrentQueryPublicationWithResponse request
 	GetCurrentQueryPublicationWithResponse(ctx context.Context, reqEditors ...RequestEditorFn) (*GetCurrentQueryPublicationResponse, error)
@@ -10697,6 +12908,17 @@ type ClientWithResponsesInterface interface {
 	// RevokeSessionWithResponse request
 	RevokeSessionWithResponse(ctx context.Context, sessionId SessionId, params *RevokeSessionParams, reqEditors ...RequestEditorFn) (*RevokeSessionResponse, error)
 
+	// ListSharesWithResponse request
+	ListSharesWithResponse(ctx context.Context, reqEditors ...RequestEditorFn) (*ListSharesResponse, error)
+
+	// CreateShareWithBodyWithResponse request with any body
+	CreateShareWithBodyWithResponse(ctx context.Context, params *CreateShareParams, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*CreateShareResponse, error)
+
+	CreateShareWithResponse(ctx context.Context, params *CreateShareParams, body CreateShareJSONRequestBody, reqEditors ...RequestEditorFn) (*CreateShareResponse, error)
+
+	// RevokeShareWithResponse request
+	RevokeShareWithResponse(ctx context.Context, shareId ShareId, params *RevokeShareParams, reqEditors ...RequestEditorFn) (*RevokeShareResponse, error)
+
 	// CreateSourceRuleBindingWithBodyWithResponse request with any body
 	CreateSourceRuleBindingWithBodyWithResponse(ctx context.Context, params *CreateSourceRuleBindingParams, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*CreateSourceRuleBindingResponse, error)
 
@@ -10756,6 +12978,37 @@ type ClientWithResponsesInterface interface {
 	PutWorkOverlayWithBodyWithResponse(ctx context.Context, workId CanonicalWorkId, params *PutWorkOverlayParams, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*PutWorkOverlayResponse, error)
 
 	PutWorkOverlayWithResponse(ctx context.Context, workId CanonicalWorkId, params *PutWorkOverlayParams, body PutWorkOverlayJSONRequestBody, reqEditors ...RequestEditorFn) (*PutWorkOverlayResponse, error)
+}
+
+type ChangeOwnPasswordResponse struct {
+	Body         []byte
+	HTTPResponse *http.Response
+	JSON401      *UnauthenticatedError
+	JSON403      *ForbiddenError
+}
+
+// Status returns HTTPResponse.Status
+func (r ChangeOwnPasswordResponse) Status() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Status
+	}
+	return http.StatusText(0)
+}
+
+// StatusCode returns HTTPResponse.StatusCode
+func (r ChangeOwnPasswordResponse) StatusCode() int {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.StatusCode
+	}
+	return 0
+}
+
+// ContentType is a convenience method to retrieve the Content-Type value from the HTTP response headers
+func (r ChangeOwnPasswordResponse) ContentType() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Header.Get("Content-Type")
+	}
+	return ""
 }
 
 type ListControlBackupsResponse struct {
@@ -10926,6 +13179,37 @@ func (r VerifyControlRestoreResponse) ContentType() string {
 	return ""
 }
 
+type RevokeAuthorizationGrantResponse struct {
+	Body         []byte
+	HTTPResponse *http.Response
+	JSON403      *ForbiddenError
+	JSON404      *NotFoundError
+}
+
+// Status returns HTTPResponse.Status
+func (r RevokeAuthorizationGrantResponse) Status() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Status
+	}
+	return http.StatusText(0)
+}
+
+// StatusCode returns HTTPResponse.StatusCode
+func (r RevokeAuthorizationGrantResponse) StatusCode() int {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.StatusCode
+	}
+	return 0
+}
+
+// ContentType is a convenience method to retrieve the Content-Type value from the HTTP response headers
+func (r RevokeAuthorizationGrantResponse) ContentType() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Header.Get("Content-Type")
+	}
+	return ""
+}
+
 type CreateCatalogCheckpointJobResponse struct {
 	Body         []byte
 	HTTPResponse *http.Response
@@ -11019,6 +13303,320 @@ func (r CreateCatalogVacuumJobResponse) StatusCode() int {
 
 // ContentType is a convenience method to retrieve the Content-Type value from the HTTP response headers
 func (r CreateCatalogVacuumJobResponse) ContentType() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Header.Get("Content-Type")
+	}
+	return ""
+}
+
+type ListSecurityAuditsResponse struct {
+	Body         []byte
+	HTTPResponse *http.Response
+	JSON200      *SecurityAuditListResponse
+	JSON403      *ForbiddenError
+}
+
+// Status returns HTTPResponse.Status
+func (r ListSecurityAuditsResponse) Status() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Status
+	}
+	return http.StatusText(0)
+}
+
+// StatusCode returns HTTPResponse.StatusCode
+func (r ListSecurityAuditsResponse) StatusCode() int {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.StatusCode
+	}
+	return 0
+}
+
+// ContentType is a convenience method to retrieve the Content-Type value from the HTTP response headers
+func (r ListSecurityAuditsResponse) ContentType() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Header.Get("Content-Type")
+	}
+	return ""
+}
+
+type ListLocalUsersResponse struct {
+	Body         []byte
+	HTTPResponse *http.Response
+	JSON200      *LocalUserListResponse
+	JSON403      *ForbiddenError
+}
+
+// Status returns HTTPResponse.Status
+func (r ListLocalUsersResponse) Status() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Status
+	}
+	return http.StatusText(0)
+}
+
+// StatusCode returns HTTPResponse.StatusCode
+func (r ListLocalUsersResponse) StatusCode() int {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.StatusCode
+	}
+	return 0
+}
+
+// ContentType is a convenience method to retrieve the Content-Type value from the HTTP response headers
+func (r ListLocalUsersResponse) ContentType() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Header.Get("Content-Type")
+	}
+	return ""
+}
+
+type CreateLocalUserResponse struct {
+	Body         []byte
+	HTTPResponse *http.Response
+	JSON201      *LocalUser
+	JSON403      *ForbiddenError
+	JSON409      *ConflictError
+}
+
+// Status returns HTTPResponse.Status
+func (r CreateLocalUserResponse) Status() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Status
+	}
+	return http.StatusText(0)
+}
+
+// StatusCode returns HTTPResponse.StatusCode
+func (r CreateLocalUserResponse) StatusCode() int {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.StatusCode
+	}
+	return 0
+}
+
+// ContentType is a convenience method to retrieve the Content-Type value from the HTTP response headers
+func (r CreateLocalUserResponse) ContentType() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Header.Get("Content-Type")
+	}
+	return ""
+}
+
+type CreateAuthorizationGrantResponse struct {
+	Body         []byte
+	HTTPResponse *http.Response
+	JSON201      *AuthorizationGrant
+	JSON403      *ForbiddenError
+	JSON404      *NotFoundError
+}
+
+// Status returns HTTPResponse.Status
+func (r CreateAuthorizationGrantResponse) Status() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Status
+	}
+	return http.StatusText(0)
+}
+
+// StatusCode returns HTTPResponse.StatusCode
+func (r CreateAuthorizationGrantResponse) StatusCode() int {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.StatusCode
+	}
+	return 0
+}
+
+// ContentType is a convenience method to retrieve the Content-Type value from the HTTP response headers
+func (r CreateAuthorizationGrantResponse) ContentType() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Header.Get("Content-Type")
+	}
+	return ""
+}
+
+type SetLocalUserStatusResponse struct {
+	Body         []byte
+	HTTPResponse *http.Response
+	JSON403      *ForbiddenError
+	JSON404      *NotFoundError
+}
+
+// Status returns HTTPResponse.Status
+func (r SetLocalUserStatusResponse) Status() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Status
+	}
+	return http.StatusText(0)
+}
+
+// StatusCode returns HTTPResponse.StatusCode
+func (r SetLocalUserStatusResponse) StatusCode() int {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.StatusCode
+	}
+	return 0
+}
+
+// ContentType is a convenience method to retrieve the Content-Type value from the HTTP response headers
+func (r SetLocalUserStatusResponse) ContentType() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Header.Get("Content-Type")
+	}
+	return ""
+}
+
+type ListAPITokensResponse struct {
+	Body         []byte
+	HTTPResponse *http.Response
+	JSON200      *APITokenListResponse
+	JSON403      *ForbiddenError
+}
+
+// Status returns HTTPResponse.Status
+func (r ListAPITokensResponse) Status() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Status
+	}
+	return http.StatusText(0)
+}
+
+// StatusCode returns HTTPResponse.StatusCode
+func (r ListAPITokensResponse) StatusCode() int {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.StatusCode
+	}
+	return 0
+}
+
+// ContentType is a convenience method to retrieve the Content-Type value from the HTTP response headers
+func (r ListAPITokensResponse) ContentType() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Header.Get("Content-Type")
+	}
+	return ""
+}
+
+type CreateAPITokenResponse struct {
+	Body         []byte
+	HTTPResponse *http.Response
+	JSON201      *APITokenCreated
+	JSON403      *ForbiddenError
+}
+
+// Status returns HTTPResponse.Status
+func (r CreateAPITokenResponse) Status() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Status
+	}
+	return http.StatusText(0)
+}
+
+// StatusCode returns HTTPResponse.StatusCode
+func (r CreateAPITokenResponse) StatusCode() int {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.StatusCode
+	}
+	return 0
+}
+
+// ContentType is a convenience method to retrieve the Content-Type value from the HTTP response headers
+func (r CreateAPITokenResponse) ContentType() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Header.Get("Content-Type")
+	}
+	return ""
+}
+
+type RevokeAPITokenResponse struct {
+	Body         []byte
+	HTTPResponse *http.Response
+	JSON403      *ForbiddenError
+	JSON404      *NotFoundError
+}
+
+// Status returns HTTPResponse.Status
+func (r RevokeAPITokenResponse) Status() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Status
+	}
+	return http.StatusText(0)
+}
+
+// StatusCode returns HTTPResponse.StatusCode
+func (r RevokeAPITokenResponse) StatusCode() int {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.StatusCode
+	}
+	return 0
+}
+
+// ContentType is a convenience method to retrieve the Content-Type value from the HTTP response headers
+func (r RevokeAPITokenResponse) ContentType() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Header.Get("Content-Type")
+	}
+	return ""
+}
+
+type LoginResponse struct {
+	Body         []byte
+	HTTPResponse *http.Response
+	JSON201      *SessionEstablishedResponse
+	JSON401      *UnauthenticatedError
+	JSON403      *ForbiddenError
+	JSON429      *RateLimitedError
+}
+
+// Status returns HTTPResponse.Status
+func (r LoginResponse) Status() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Status
+	}
+	return http.StatusText(0)
+}
+
+// StatusCode returns HTTPResponse.StatusCode
+func (r LoginResponse) StatusCode() int {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.StatusCode
+	}
+	return 0
+}
+
+// ContentType is a convenience method to retrieve the Content-Type value from the HTTP response headers
+func (r LoginResponse) ContentType() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Header.Get("Content-Type")
+	}
+	return ""
+}
+
+type LogoutResponse struct {
+	Body         []byte
+	HTTPResponse *http.Response
+	JSON401      *UnauthenticatedError
+	JSON403      *ForbiddenError
+}
+
+// Status returns HTTPResponse.Status
+func (r LogoutResponse) Status() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Status
+	}
+	return http.StatusText(0)
+}
+
+// StatusCode returns HTTPResponse.StatusCode
+func (r LogoutResponse) StatusCode() int {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.StatusCode
+	}
+	return 0
+}
+
+// ContentType is a convenience method to retrieve the Content-Type value from the HTTP response headers
+func (r LogoutResponse) ContentType() string {
 	if r.HTTPResponse != nil {
 		return r.HTTPResponse.Header.Get("Content-Type")
 	}
@@ -11760,6 +14358,38 @@ func (r RetryJobResponse) ContentType() string {
 	return ""
 }
 
+type InitializeLANOwnerResponse struct {
+	Body         []byte
+	HTTPResponse *http.Response
+	JSON201      *LocalUser
+	JSON403      *ForbiddenError
+	JSON409      *ConflictError
+}
+
+// Status returns HTTPResponse.Status
+func (r InitializeLANOwnerResponse) Status() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Status
+	}
+	return http.StatusText(0)
+}
+
+// StatusCode returns HTTPResponse.StatusCode
+func (r InitializeLANOwnerResponse) StatusCode() int {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.StatusCode
+	}
+	return 0
+}
+
+// ContentType is a convenience method to retrieve the Content-Type value from the HTTP response headers
+func (r InitializeLANOwnerResponse) ContentType() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Header.Get("Content-Type")
+	}
+	return ""
+}
+
 type CreateLibraryResponse struct {
 	Body         []byte
 	HTTPResponse *http.Response
@@ -12124,6 +14754,105 @@ func (r CreatePairingAttemptResponse) StatusCode() int {
 
 // ContentType is a convenience method to retrieve the Content-Type value from the HTTP response headers
 func (r CreatePairingAttemptResponse) ContentType() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Header.Get("Content-Type")
+	}
+	return ""
+}
+
+type ResolvePublicShareResponse struct {
+	Body         []byte
+	HTTPResponse *http.Response
+	JSON200      *PublicShareResource
+	JSON404      *NotFoundError
+}
+
+// Status returns HTTPResponse.Status
+func (r ResolvePublicShareResponse) Status() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Status
+	}
+	return http.StatusText(0)
+}
+
+// StatusCode returns HTTPResponse.StatusCode
+func (r ResolvePublicShareResponse) StatusCode() int {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.StatusCode
+	}
+	return 0
+}
+
+// ContentType is a convenience method to retrieve the Content-Type value from the HTTP response headers
+func (r ResolvePublicShareResponse) ContentType() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Header.Get("Content-Type")
+	}
+	return ""
+}
+
+type GetPublicShareMediaContentResponse struct {
+	Body         []byte
+	HTTPResponse *http.Response
+	JSON403      *ForbiddenError
+	JSON404      *NotFoundError
+	JSON409      *ConflictError
+	JSON416      *RangeError
+	JSON503      *MediaOfflineError
+}
+
+// Status returns HTTPResponse.Status
+func (r GetPublicShareMediaContentResponse) Status() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Status
+	}
+	return http.StatusText(0)
+}
+
+// StatusCode returns HTTPResponse.StatusCode
+func (r GetPublicShareMediaContentResponse) StatusCode() int {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.StatusCode
+	}
+	return 0
+}
+
+// ContentType is a convenience method to retrieve the Content-Type value from the HTTP response headers
+func (r GetPublicShareMediaContentResponse) ContentType() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Header.Get("Content-Type")
+	}
+	return ""
+}
+
+type HeadPublicShareMediaContentResponse struct {
+	Body         []byte
+	HTTPResponse *http.Response
+	JSON403      *ForbiddenError
+	JSON404      *NotFoundError
+	JSON409      *ConflictError
+	JSON416      *RangeError
+	JSON503      *MediaOfflineError
+}
+
+// Status returns HTTPResponse.Status
+func (r HeadPublicShareMediaContentResponse) Status() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Status
+	}
+	return http.StatusText(0)
+}
+
+// StatusCode returns HTTPResponse.StatusCode
+func (r HeadPublicShareMediaContentResponse) StatusCode() int {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.StatusCode
+	}
+	return 0
+}
+
+// ContentType is a convenience method to retrieve the Content-Type value from the HTTP response headers
+func (r HeadPublicShareMediaContentResponse) ContentType() string {
 	if r.HTTPResponse != nil {
 		return r.HTTPResponse.Header.Get("Content-Type")
 	}
@@ -13367,6 +16096,99 @@ func (r RevokeSessionResponse) ContentType() string {
 	return ""
 }
 
+type ListSharesResponse struct {
+	Body         []byte
+	HTTPResponse *http.Response
+	JSON200      *ShareListResponse
+	JSON403      *ForbiddenError
+}
+
+// Status returns HTTPResponse.Status
+func (r ListSharesResponse) Status() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Status
+	}
+	return http.StatusText(0)
+}
+
+// StatusCode returns HTTPResponse.StatusCode
+func (r ListSharesResponse) StatusCode() int {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.StatusCode
+	}
+	return 0
+}
+
+// ContentType is a convenience method to retrieve the Content-Type value from the HTTP response headers
+func (r ListSharesResponse) ContentType() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Header.Get("Content-Type")
+	}
+	return ""
+}
+
+type CreateShareResponse struct {
+	Body         []byte
+	HTTPResponse *http.Response
+	JSON201      *ShareCreated
+	JSON403      *ForbiddenError
+}
+
+// Status returns HTTPResponse.Status
+func (r CreateShareResponse) Status() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Status
+	}
+	return http.StatusText(0)
+}
+
+// StatusCode returns HTTPResponse.StatusCode
+func (r CreateShareResponse) StatusCode() int {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.StatusCode
+	}
+	return 0
+}
+
+// ContentType is a convenience method to retrieve the Content-Type value from the HTTP response headers
+func (r CreateShareResponse) ContentType() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Header.Get("Content-Type")
+	}
+	return ""
+}
+
+type RevokeShareResponse struct {
+	Body         []byte
+	HTTPResponse *http.Response
+	JSON403      *ForbiddenError
+	JSON404      *NotFoundError
+}
+
+// Status returns HTTPResponse.Status
+func (r RevokeShareResponse) Status() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Status
+	}
+	return http.StatusText(0)
+}
+
+// StatusCode returns HTTPResponse.StatusCode
+func (r RevokeShareResponse) StatusCode() int {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.StatusCode
+	}
+	return 0
+}
+
+// ContentType is a convenience method to retrieve the Content-Type value from the HTTP response headers
+func (r RevokeShareResponse) ContentType() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Header.Get("Content-Type")
+	}
+	return ""
+}
+
 type CreateSourceRuleBindingResponse struct {
 	Body         []byte
 	HTTPResponse *http.Response
@@ -13907,6 +16729,23 @@ func (r PutWorkOverlayResponse) ContentType() string {
 	return ""
 }
 
+// ChangeOwnPasswordWithBodyWithResponse request with arbitrary body returning *ChangeOwnPasswordResponse
+func (c *ClientWithResponses) ChangeOwnPasswordWithBodyWithResponse(ctx context.Context, params *ChangeOwnPasswordParams, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*ChangeOwnPasswordResponse, error) {
+	rsp, err := c.ChangeOwnPasswordWithBody(ctx, params, contentType, body, reqEditors...)
+	if err != nil {
+		return nil, err
+	}
+	return ParseChangeOwnPasswordResponse(rsp)
+}
+
+func (c *ClientWithResponses) ChangeOwnPasswordWithResponse(ctx context.Context, params *ChangeOwnPasswordParams, body ChangeOwnPasswordJSONRequestBody, reqEditors ...RequestEditorFn) (*ChangeOwnPasswordResponse, error) {
+	rsp, err := c.ChangeOwnPassword(ctx, params, body, reqEditors...)
+	if err != nil {
+		return nil, err
+	}
+	return ParseChangeOwnPasswordResponse(rsp)
+}
+
 // ListControlBackupsWithResponse request returning *ListControlBackupsResponse
 func (c *ClientWithResponses) ListControlBackupsWithResponse(ctx context.Context, reqEditors ...RequestEditorFn) (*ListControlBackupsResponse, error) {
 	rsp, err := c.ListControlBackups(ctx, reqEditors...)
@@ -13968,6 +16807,15 @@ func (c *ClientWithResponses) VerifyControlRestoreWithResponse(ctx context.Conte
 	return ParseVerifyControlRestoreResponse(rsp)
 }
 
+// RevokeAuthorizationGrantWithResponse request returning *RevokeAuthorizationGrantResponse
+func (c *ClientWithResponses) RevokeAuthorizationGrantWithResponse(ctx context.Context, grantId GrantId, params *RevokeAuthorizationGrantParams, reqEditors ...RequestEditorFn) (*RevokeAuthorizationGrantResponse, error) {
+	rsp, err := c.RevokeAuthorizationGrant(ctx, grantId, params, reqEditors...)
+	if err != nil {
+		return nil, err
+	}
+	return ParseRevokeAuthorizationGrantResponse(rsp)
+}
+
 // CreateCatalogCheckpointJobWithResponse request returning *CreateCatalogCheckpointJobResponse
 func (c *ClientWithResponses) CreateCatalogCheckpointJobWithResponse(ctx context.Context, params *CreateCatalogCheckpointJobParams, reqEditors ...RequestEditorFn) (*CreateCatalogCheckpointJobResponse, error) {
 	rsp, err := c.CreateCatalogCheckpointJob(ctx, params, reqEditors...)
@@ -14001,6 +16849,136 @@ func (c *ClientWithResponses) CreateCatalogVacuumJobWithResponse(ctx context.Con
 		return nil, err
 	}
 	return ParseCreateCatalogVacuumJobResponse(rsp)
+}
+
+// ListSecurityAuditsWithResponse request returning *ListSecurityAuditsResponse
+func (c *ClientWithResponses) ListSecurityAuditsWithResponse(ctx context.Context, reqEditors ...RequestEditorFn) (*ListSecurityAuditsResponse, error) {
+	rsp, err := c.ListSecurityAudits(ctx, reqEditors...)
+	if err != nil {
+		return nil, err
+	}
+	return ParseListSecurityAuditsResponse(rsp)
+}
+
+// ListLocalUsersWithResponse request returning *ListLocalUsersResponse
+func (c *ClientWithResponses) ListLocalUsersWithResponse(ctx context.Context, reqEditors ...RequestEditorFn) (*ListLocalUsersResponse, error) {
+	rsp, err := c.ListLocalUsers(ctx, reqEditors...)
+	if err != nil {
+		return nil, err
+	}
+	return ParseListLocalUsersResponse(rsp)
+}
+
+// CreateLocalUserWithBodyWithResponse request with arbitrary body returning *CreateLocalUserResponse
+func (c *ClientWithResponses) CreateLocalUserWithBodyWithResponse(ctx context.Context, params *CreateLocalUserParams, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*CreateLocalUserResponse, error) {
+	rsp, err := c.CreateLocalUserWithBody(ctx, params, contentType, body, reqEditors...)
+	if err != nil {
+		return nil, err
+	}
+	return ParseCreateLocalUserResponse(rsp)
+}
+
+func (c *ClientWithResponses) CreateLocalUserWithResponse(ctx context.Context, params *CreateLocalUserParams, body CreateLocalUserJSONRequestBody, reqEditors ...RequestEditorFn) (*CreateLocalUserResponse, error) {
+	rsp, err := c.CreateLocalUser(ctx, params, body, reqEditors...)
+	if err != nil {
+		return nil, err
+	}
+	return ParseCreateLocalUserResponse(rsp)
+}
+
+// CreateAuthorizationGrantWithBodyWithResponse request with arbitrary body returning *CreateAuthorizationGrantResponse
+func (c *ClientWithResponses) CreateAuthorizationGrantWithBodyWithResponse(ctx context.Context, userId UserId, params *CreateAuthorizationGrantParams, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*CreateAuthorizationGrantResponse, error) {
+	rsp, err := c.CreateAuthorizationGrantWithBody(ctx, userId, params, contentType, body, reqEditors...)
+	if err != nil {
+		return nil, err
+	}
+	return ParseCreateAuthorizationGrantResponse(rsp)
+}
+
+func (c *ClientWithResponses) CreateAuthorizationGrantWithResponse(ctx context.Context, userId UserId, params *CreateAuthorizationGrantParams, body CreateAuthorizationGrantJSONRequestBody, reqEditors ...RequestEditorFn) (*CreateAuthorizationGrantResponse, error) {
+	rsp, err := c.CreateAuthorizationGrant(ctx, userId, params, body, reqEditors...)
+	if err != nil {
+		return nil, err
+	}
+	return ParseCreateAuthorizationGrantResponse(rsp)
+}
+
+// SetLocalUserStatusWithBodyWithResponse request with arbitrary body returning *SetLocalUserStatusResponse
+func (c *ClientWithResponses) SetLocalUserStatusWithBodyWithResponse(ctx context.Context, userId UserId, params *SetLocalUserStatusParams, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*SetLocalUserStatusResponse, error) {
+	rsp, err := c.SetLocalUserStatusWithBody(ctx, userId, params, contentType, body, reqEditors...)
+	if err != nil {
+		return nil, err
+	}
+	return ParseSetLocalUserStatusResponse(rsp)
+}
+
+func (c *ClientWithResponses) SetLocalUserStatusWithResponse(ctx context.Context, userId UserId, params *SetLocalUserStatusParams, body SetLocalUserStatusJSONRequestBody, reqEditors ...RequestEditorFn) (*SetLocalUserStatusResponse, error) {
+	rsp, err := c.SetLocalUserStatus(ctx, userId, params, body, reqEditors...)
+	if err != nil {
+		return nil, err
+	}
+	return ParseSetLocalUserStatusResponse(rsp)
+}
+
+// ListAPITokensWithResponse request returning *ListAPITokensResponse
+func (c *ClientWithResponses) ListAPITokensWithResponse(ctx context.Context, reqEditors ...RequestEditorFn) (*ListAPITokensResponse, error) {
+	rsp, err := c.ListAPITokens(ctx, reqEditors...)
+	if err != nil {
+		return nil, err
+	}
+	return ParseListAPITokensResponse(rsp)
+}
+
+// CreateAPITokenWithBodyWithResponse request with arbitrary body returning *CreateAPITokenResponse
+func (c *ClientWithResponses) CreateAPITokenWithBodyWithResponse(ctx context.Context, params *CreateAPITokenParams, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*CreateAPITokenResponse, error) {
+	rsp, err := c.CreateAPITokenWithBody(ctx, params, contentType, body, reqEditors...)
+	if err != nil {
+		return nil, err
+	}
+	return ParseCreateAPITokenResponse(rsp)
+}
+
+func (c *ClientWithResponses) CreateAPITokenWithResponse(ctx context.Context, params *CreateAPITokenParams, body CreateAPITokenJSONRequestBody, reqEditors ...RequestEditorFn) (*CreateAPITokenResponse, error) {
+	rsp, err := c.CreateAPIToken(ctx, params, body, reqEditors...)
+	if err != nil {
+		return nil, err
+	}
+	return ParseCreateAPITokenResponse(rsp)
+}
+
+// RevokeAPITokenWithResponse request returning *RevokeAPITokenResponse
+func (c *ClientWithResponses) RevokeAPITokenWithResponse(ctx context.Context, tokenId APITokenId, params *RevokeAPITokenParams, reqEditors ...RequestEditorFn) (*RevokeAPITokenResponse, error) {
+	rsp, err := c.RevokeAPIToken(ctx, tokenId, params, reqEditors...)
+	if err != nil {
+		return nil, err
+	}
+	return ParseRevokeAPITokenResponse(rsp)
+}
+
+// LoginWithBodyWithResponse request with arbitrary body returning *LoginResponse
+func (c *ClientWithResponses) LoginWithBodyWithResponse(ctx context.Context, params *LoginParams, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*LoginResponse, error) {
+	rsp, err := c.LoginWithBody(ctx, params, contentType, body, reqEditors...)
+	if err != nil {
+		return nil, err
+	}
+	return ParseLoginResponse(rsp)
+}
+
+func (c *ClientWithResponses) LoginWithResponse(ctx context.Context, params *LoginParams, body LoginJSONRequestBody, reqEditors ...RequestEditorFn) (*LoginResponse, error) {
+	rsp, err := c.Login(ctx, params, body, reqEditors...)
+	if err != nil {
+		return nil, err
+	}
+	return ParseLoginResponse(rsp)
+}
+
+// LogoutWithResponse request returning *LogoutResponse
+func (c *ClientWithResponses) LogoutWithResponse(ctx context.Context, params *LogoutParams, reqEditors ...RequestEditorFn) (*LogoutResponse, error) {
+	rsp, err := c.Logout(ctx, params, reqEditors...)
+	if err != nil {
+		return nil, err
+	}
+	return ParseLogoutResponse(rsp)
 }
 
 // UnbindMediaWithBodyWithResponse request with arbitrary body returning *UnbindMediaResponse
@@ -14265,6 +17243,23 @@ func (c *ClientWithResponses) RetryJobWithResponse(ctx context.Context, jobId Jo
 	return ParseRetryJobResponse(rsp)
 }
 
+// InitializeLANOwnerWithBodyWithResponse request with arbitrary body returning *InitializeLANOwnerResponse
+func (c *ClientWithResponses) InitializeLANOwnerWithBodyWithResponse(ctx context.Context, params *InitializeLANOwnerParams, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*InitializeLANOwnerResponse, error) {
+	rsp, err := c.InitializeLANOwnerWithBody(ctx, params, contentType, body, reqEditors...)
+	if err != nil {
+		return nil, err
+	}
+	return ParseInitializeLANOwnerResponse(rsp)
+}
+
+func (c *ClientWithResponses) InitializeLANOwnerWithResponse(ctx context.Context, params *InitializeLANOwnerParams, body InitializeLANOwnerJSONRequestBody, reqEditors ...RequestEditorFn) (*InitializeLANOwnerResponse, error) {
+	rsp, err := c.InitializeLANOwner(ctx, params, body, reqEditors...)
+	if err != nil {
+		return nil, err
+	}
+	return ParseInitializeLANOwnerResponse(rsp)
+}
+
 // CreateLibraryWithBodyWithResponse request with arbitrary body returning *CreateLibraryResponse
 func (c *ClientWithResponses) CreateLibraryWithBodyWithResponse(ctx context.Context, params *CreateLibraryParams, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*CreateLibraryResponse, error) {
 	rsp, err := c.CreateLibraryWithBody(ctx, params, contentType, body, reqEditors...)
@@ -14394,6 +17389,33 @@ func (c *ClientWithResponses) CreatePairingAttemptWithResponse(ctx context.Conte
 		return nil, err
 	}
 	return ParseCreatePairingAttemptResponse(rsp)
+}
+
+// ResolvePublicShareWithResponse request returning *ResolvePublicShareResponse
+func (c *ClientWithResponses) ResolvePublicShareWithResponse(ctx context.Context, credential string, reqEditors ...RequestEditorFn) (*ResolvePublicShareResponse, error) {
+	rsp, err := c.ResolvePublicShare(ctx, credential, reqEditors...)
+	if err != nil {
+		return nil, err
+	}
+	return ParseResolvePublicShareResponse(rsp)
+}
+
+// GetPublicShareMediaContentWithResponse request returning *GetPublicShareMediaContentResponse
+func (c *ClientWithResponses) GetPublicShareMediaContentWithResponse(ctx context.Context, credential string, mediaId CanonicalMediaId, params *GetPublicShareMediaContentParams, reqEditors ...RequestEditorFn) (*GetPublicShareMediaContentResponse, error) {
+	rsp, err := c.GetPublicShareMediaContent(ctx, credential, mediaId, params, reqEditors...)
+	if err != nil {
+		return nil, err
+	}
+	return ParseGetPublicShareMediaContentResponse(rsp)
+}
+
+// HeadPublicShareMediaContentWithResponse request returning *HeadPublicShareMediaContentResponse
+func (c *ClientWithResponses) HeadPublicShareMediaContentWithResponse(ctx context.Context, credential string, mediaId CanonicalMediaId, params *HeadPublicShareMediaContentParams, reqEditors ...RequestEditorFn) (*HeadPublicShareMediaContentResponse, error) {
+	rsp, err := c.HeadPublicShareMediaContent(ctx, credential, mediaId, params, reqEditors...)
+	if err != nil {
+		return nil, err
+	}
+	return ParseHeadPublicShareMediaContentResponse(rsp)
 }
 
 // GetCurrentQueryPublicationWithResponse request returning *GetCurrentQueryPublicationResponse
@@ -14897,6 +17919,41 @@ func (c *ClientWithResponses) RevokeSessionWithResponse(ctx context.Context, ses
 	return ParseRevokeSessionResponse(rsp)
 }
 
+// ListSharesWithResponse request returning *ListSharesResponse
+func (c *ClientWithResponses) ListSharesWithResponse(ctx context.Context, reqEditors ...RequestEditorFn) (*ListSharesResponse, error) {
+	rsp, err := c.ListShares(ctx, reqEditors...)
+	if err != nil {
+		return nil, err
+	}
+	return ParseListSharesResponse(rsp)
+}
+
+// CreateShareWithBodyWithResponse request with arbitrary body returning *CreateShareResponse
+func (c *ClientWithResponses) CreateShareWithBodyWithResponse(ctx context.Context, params *CreateShareParams, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*CreateShareResponse, error) {
+	rsp, err := c.CreateShareWithBody(ctx, params, contentType, body, reqEditors...)
+	if err != nil {
+		return nil, err
+	}
+	return ParseCreateShareResponse(rsp)
+}
+
+func (c *ClientWithResponses) CreateShareWithResponse(ctx context.Context, params *CreateShareParams, body CreateShareJSONRequestBody, reqEditors ...RequestEditorFn) (*CreateShareResponse, error) {
+	rsp, err := c.CreateShare(ctx, params, body, reqEditors...)
+	if err != nil {
+		return nil, err
+	}
+	return ParseCreateShareResponse(rsp)
+}
+
+// RevokeShareWithResponse request returning *RevokeShareResponse
+func (c *ClientWithResponses) RevokeShareWithResponse(ctx context.Context, shareId ShareId, params *RevokeShareParams, reqEditors ...RequestEditorFn) (*RevokeShareResponse, error) {
+	rsp, err := c.RevokeShare(ctx, shareId, params, reqEditors...)
+	if err != nil {
+		return nil, err
+	}
+	return ParseRevokeShareResponse(rsp)
+}
+
 // CreateSourceRuleBindingWithBodyWithResponse request with arbitrary body returning *CreateSourceRuleBindingResponse
 func (c *ClientWithResponses) CreateSourceRuleBindingWithBodyWithResponse(ctx context.Context, params *CreateSourceRuleBindingParams, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*CreateSourceRuleBindingResponse, error) {
 	rsp, err := c.CreateSourceRuleBindingWithBody(ctx, params, contentType, body, reqEditors...)
@@ -15087,6 +18144,39 @@ func (c *ClientWithResponses) PutWorkOverlayWithResponse(ctx context.Context, wo
 		return nil, err
 	}
 	return ParsePutWorkOverlayResponse(rsp)
+}
+
+// ParseChangeOwnPasswordResponse parses an HTTP response from a ChangeOwnPasswordWithResponse call
+func ParseChangeOwnPasswordResponse(rsp *http.Response) (*ChangeOwnPasswordResponse, error) {
+	bodyBytes, err := io.ReadAll(rsp.Body)
+	defer func() { _ = rsp.Body.Close() }()
+	if err != nil {
+		return nil, err
+	}
+
+	response := &ChangeOwnPasswordResponse{
+		Body:         bodyBytes,
+		HTTPResponse: rsp,
+	}
+
+	switch {
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 401:
+		var dest UnauthenticatedError
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON401 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 403:
+		var dest ForbiddenError
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON403 = &dest
+
+	}
+
+	return response, nil
 }
 
 // ParseListControlBackupsResponse parses an HTTP response from a ListControlBackupsWithResponse call
@@ -15345,6 +18435,39 @@ func ParseVerifyControlRestoreResponse(rsp *http.Response) (*VerifyControlRestor
 	return response, nil
 }
 
+// ParseRevokeAuthorizationGrantResponse parses an HTTP response from a RevokeAuthorizationGrantWithResponse call
+func ParseRevokeAuthorizationGrantResponse(rsp *http.Response) (*RevokeAuthorizationGrantResponse, error) {
+	bodyBytes, err := io.ReadAll(rsp.Body)
+	defer func() { _ = rsp.Body.Close() }()
+	if err != nil {
+		return nil, err
+	}
+
+	response := &RevokeAuthorizationGrantResponse{
+		Body:         bodyBytes,
+		HTTPResponse: rsp,
+	}
+
+	switch {
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 403:
+		var dest ForbiddenError
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON403 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 404:
+		var dest NotFoundError
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON404 = &dest
+
+	}
+
+	return response, nil
+}
+
 // ParseCreateCatalogCheckpointJobResponse parses an HTTP response from a CreateCatalogCheckpointJobWithResponse call
 func ParseCreateCatalogCheckpointJobResponse(rsp *http.Response) (*CreateCatalogCheckpointJobResponse, error) {
 	bodyBytes, err := io.ReadAll(rsp.Body)
@@ -15480,6 +18603,364 @@ func ParseCreateCatalogVacuumJobResponse(rsp *http.Response) (*CreateCatalogVacu
 			return nil, err
 		}
 		response.JSON409 = &dest
+
+	}
+
+	return response, nil
+}
+
+// ParseListSecurityAuditsResponse parses an HTTP response from a ListSecurityAuditsWithResponse call
+func ParseListSecurityAuditsResponse(rsp *http.Response) (*ListSecurityAuditsResponse, error) {
+	bodyBytes, err := io.ReadAll(rsp.Body)
+	defer func() { _ = rsp.Body.Close() }()
+	if err != nil {
+		return nil, err
+	}
+
+	response := &ListSecurityAuditsResponse{
+		Body:         bodyBytes,
+		HTTPResponse: rsp,
+	}
+
+	switch {
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 200:
+		var dest SecurityAuditListResponse
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON200 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 403:
+		var dest ForbiddenError
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON403 = &dest
+
+	}
+
+	return response, nil
+}
+
+// ParseListLocalUsersResponse parses an HTTP response from a ListLocalUsersWithResponse call
+func ParseListLocalUsersResponse(rsp *http.Response) (*ListLocalUsersResponse, error) {
+	bodyBytes, err := io.ReadAll(rsp.Body)
+	defer func() { _ = rsp.Body.Close() }()
+	if err != nil {
+		return nil, err
+	}
+
+	response := &ListLocalUsersResponse{
+		Body:         bodyBytes,
+		HTTPResponse: rsp,
+	}
+
+	switch {
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 200:
+		var dest LocalUserListResponse
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON200 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 403:
+		var dest ForbiddenError
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON403 = &dest
+
+	}
+
+	return response, nil
+}
+
+// ParseCreateLocalUserResponse parses an HTTP response from a CreateLocalUserWithResponse call
+func ParseCreateLocalUserResponse(rsp *http.Response) (*CreateLocalUserResponse, error) {
+	bodyBytes, err := io.ReadAll(rsp.Body)
+	defer func() { _ = rsp.Body.Close() }()
+	if err != nil {
+		return nil, err
+	}
+
+	response := &CreateLocalUserResponse{
+		Body:         bodyBytes,
+		HTTPResponse: rsp,
+	}
+
+	switch {
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 201:
+		var dest LocalUser
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON201 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 403:
+		var dest ForbiddenError
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON403 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 409:
+		var dest ConflictError
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON409 = &dest
+
+	}
+
+	return response, nil
+}
+
+// ParseCreateAuthorizationGrantResponse parses an HTTP response from a CreateAuthorizationGrantWithResponse call
+func ParseCreateAuthorizationGrantResponse(rsp *http.Response) (*CreateAuthorizationGrantResponse, error) {
+	bodyBytes, err := io.ReadAll(rsp.Body)
+	defer func() { _ = rsp.Body.Close() }()
+	if err != nil {
+		return nil, err
+	}
+
+	response := &CreateAuthorizationGrantResponse{
+		Body:         bodyBytes,
+		HTTPResponse: rsp,
+	}
+
+	switch {
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 201:
+		var dest AuthorizationGrant
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON201 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 403:
+		var dest ForbiddenError
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON403 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 404:
+		var dest NotFoundError
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON404 = &dest
+
+	}
+
+	return response, nil
+}
+
+// ParseSetLocalUserStatusResponse parses an HTTP response from a SetLocalUserStatusWithResponse call
+func ParseSetLocalUserStatusResponse(rsp *http.Response) (*SetLocalUserStatusResponse, error) {
+	bodyBytes, err := io.ReadAll(rsp.Body)
+	defer func() { _ = rsp.Body.Close() }()
+	if err != nil {
+		return nil, err
+	}
+
+	response := &SetLocalUserStatusResponse{
+		Body:         bodyBytes,
+		HTTPResponse: rsp,
+	}
+
+	switch {
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 403:
+		var dest ForbiddenError
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON403 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 404:
+		var dest NotFoundError
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON404 = &dest
+
+	}
+
+	return response, nil
+}
+
+// ParseListAPITokensResponse parses an HTTP response from a ListAPITokensWithResponse call
+func ParseListAPITokensResponse(rsp *http.Response) (*ListAPITokensResponse, error) {
+	bodyBytes, err := io.ReadAll(rsp.Body)
+	defer func() { _ = rsp.Body.Close() }()
+	if err != nil {
+		return nil, err
+	}
+
+	response := &ListAPITokensResponse{
+		Body:         bodyBytes,
+		HTTPResponse: rsp,
+	}
+
+	switch {
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 200:
+		var dest APITokenListResponse
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON200 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 403:
+		var dest ForbiddenError
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON403 = &dest
+
+	}
+
+	return response, nil
+}
+
+// ParseCreateAPITokenResponse parses an HTTP response from a CreateAPITokenWithResponse call
+func ParseCreateAPITokenResponse(rsp *http.Response) (*CreateAPITokenResponse, error) {
+	bodyBytes, err := io.ReadAll(rsp.Body)
+	defer func() { _ = rsp.Body.Close() }()
+	if err != nil {
+		return nil, err
+	}
+
+	response := &CreateAPITokenResponse{
+		Body:         bodyBytes,
+		HTTPResponse: rsp,
+	}
+
+	switch {
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 201:
+		var dest APITokenCreated
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON201 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 403:
+		var dest ForbiddenError
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON403 = &dest
+
+	}
+
+	return response, nil
+}
+
+// ParseRevokeAPITokenResponse parses an HTTP response from a RevokeAPITokenWithResponse call
+func ParseRevokeAPITokenResponse(rsp *http.Response) (*RevokeAPITokenResponse, error) {
+	bodyBytes, err := io.ReadAll(rsp.Body)
+	defer func() { _ = rsp.Body.Close() }()
+	if err != nil {
+		return nil, err
+	}
+
+	response := &RevokeAPITokenResponse{
+		Body:         bodyBytes,
+		HTTPResponse: rsp,
+	}
+
+	switch {
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 403:
+		var dest ForbiddenError
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON403 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 404:
+		var dest NotFoundError
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON404 = &dest
+
+	}
+
+	return response, nil
+}
+
+// ParseLoginResponse parses an HTTP response from a LoginWithResponse call
+func ParseLoginResponse(rsp *http.Response) (*LoginResponse, error) {
+	bodyBytes, err := io.ReadAll(rsp.Body)
+	defer func() { _ = rsp.Body.Close() }()
+	if err != nil {
+		return nil, err
+	}
+
+	response := &LoginResponse{
+		Body:         bodyBytes,
+		HTTPResponse: rsp,
+	}
+
+	switch {
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 201:
+		var dest SessionEstablishedResponse
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON201 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 401:
+		var dest UnauthenticatedError
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON401 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 403:
+		var dest ForbiddenError
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON403 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 429:
+		var dest RateLimitedError
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON429 = &dest
+
+	}
+
+	return response, nil
+}
+
+// ParseLogoutResponse parses an HTTP response from a LogoutWithResponse call
+func ParseLogoutResponse(rsp *http.Response) (*LogoutResponse, error) {
+	bodyBytes, err := io.ReadAll(rsp.Body)
+	defer func() { _ = rsp.Body.Close() }()
+	if err != nil {
+		return nil, err
+	}
+
+	response := &LogoutResponse{
+		Body:         bodyBytes,
+		HTTPResponse: rsp,
+	}
+
+	switch {
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 401:
+		var dest UnauthenticatedError
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON401 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 403:
+		var dest ForbiddenError
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON403 = &dest
 
 	}
 
@@ -16583,6 +20064,46 @@ func ParseRetryJobResponse(rsp *http.Response) (*RetryJobResponse, error) {
 	return response, nil
 }
 
+// ParseInitializeLANOwnerResponse parses an HTTP response from a InitializeLANOwnerWithResponse call
+func ParseInitializeLANOwnerResponse(rsp *http.Response) (*InitializeLANOwnerResponse, error) {
+	bodyBytes, err := io.ReadAll(rsp.Body)
+	defer func() { _ = rsp.Body.Close() }()
+	if err != nil {
+		return nil, err
+	}
+
+	response := &InitializeLANOwnerResponse{
+		Body:         bodyBytes,
+		HTTPResponse: rsp,
+	}
+
+	switch {
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 201:
+		var dest LocalUser
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON201 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 403:
+		var dest ForbiddenError
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON403 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 409:
+		var dest ConflictError
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON409 = &dest
+
+	}
+
+	return response, nil
+}
+
 // ParseCreateLibraryResponse parses an HTTP response from a CreateLibraryWithResponse call
 func ParseCreateLibraryResponse(rsp *http.Response) (*CreateLibraryResponse, error) {
 	bodyBytes, err := io.ReadAll(rsp.Body)
@@ -17143,6 +20664,147 @@ func ParseCreatePairingAttemptResponse(rsp *http.Response) (*CreatePairingAttemp
 			return nil, err
 		}
 		response.JSON403 = &dest
+
+	}
+
+	return response, nil
+}
+
+// ParseResolvePublicShareResponse parses an HTTP response from a ResolvePublicShareWithResponse call
+func ParseResolvePublicShareResponse(rsp *http.Response) (*ResolvePublicShareResponse, error) {
+	bodyBytes, err := io.ReadAll(rsp.Body)
+	defer func() { _ = rsp.Body.Close() }()
+	if err != nil {
+		return nil, err
+	}
+
+	response := &ResolvePublicShareResponse{
+		Body:         bodyBytes,
+		HTTPResponse: rsp,
+	}
+
+	switch {
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 200:
+		var dest PublicShareResource
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON200 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 404:
+		var dest NotFoundError
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON404 = &dest
+
+	}
+
+	return response, nil
+}
+
+// ParseGetPublicShareMediaContentResponse parses an HTTP response from a GetPublicShareMediaContentWithResponse call
+func ParseGetPublicShareMediaContentResponse(rsp *http.Response) (*GetPublicShareMediaContentResponse, error) {
+	bodyBytes, err := io.ReadAll(rsp.Body)
+	defer func() { _ = rsp.Body.Close() }()
+	if err != nil {
+		return nil, err
+	}
+
+	response := &GetPublicShareMediaContentResponse{
+		Body:         bodyBytes,
+		HTTPResponse: rsp,
+	}
+
+	switch {
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 403:
+		var dest ForbiddenError
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON403 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 404:
+		var dest NotFoundError
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON404 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 409:
+		var dest ConflictError
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON409 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 416:
+		var dest RangeError
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON416 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 503:
+		var dest MediaOfflineError
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON503 = &dest
+
+	}
+
+	return response, nil
+}
+
+// ParseHeadPublicShareMediaContentResponse parses an HTTP response from a HeadPublicShareMediaContentWithResponse call
+func ParseHeadPublicShareMediaContentResponse(rsp *http.Response) (*HeadPublicShareMediaContentResponse, error) {
+	bodyBytes, err := io.ReadAll(rsp.Body)
+	defer func() { _ = rsp.Body.Close() }()
+	if err != nil {
+		return nil, err
+	}
+
+	response := &HeadPublicShareMediaContentResponse{
+		Body:         bodyBytes,
+		HTTPResponse: rsp,
+	}
+
+	switch {
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 403:
+		var dest ForbiddenError
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON403 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 404:
+		var dest NotFoundError
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON404 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 409:
+		var dest ConflictError
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON409 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 416:
+		var dest RangeError
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON416 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 503:
+		var dest MediaOfflineError
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON503 = &dest
 
 	}
 
@@ -18921,6 +22583,105 @@ func ParseRevokeSessionResponse(rsp *http.Response) (*RevokeSessionResponse, err
 		}
 		response.JSON401 = &dest
 
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 403:
+		var dest ForbiddenError
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON403 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 404:
+		var dest NotFoundError
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON404 = &dest
+
+	}
+
+	return response, nil
+}
+
+// ParseListSharesResponse parses an HTTP response from a ListSharesWithResponse call
+func ParseListSharesResponse(rsp *http.Response) (*ListSharesResponse, error) {
+	bodyBytes, err := io.ReadAll(rsp.Body)
+	defer func() { _ = rsp.Body.Close() }()
+	if err != nil {
+		return nil, err
+	}
+
+	response := &ListSharesResponse{
+		Body:         bodyBytes,
+		HTTPResponse: rsp,
+	}
+
+	switch {
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 200:
+		var dest ShareListResponse
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON200 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 403:
+		var dest ForbiddenError
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON403 = &dest
+
+	}
+
+	return response, nil
+}
+
+// ParseCreateShareResponse parses an HTTP response from a CreateShareWithResponse call
+func ParseCreateShareResponse(rsp *http.Response) (*CreateShareResponse, error) {
+	bodyBytes, err := io.ReadAll(rsp.Body)
+	defer func() { _ = rsp.Body.Close() }()
+	if err != nil {
+		return nil, err
+	}
+
+	response := &CreateShareResponse{
+		Body:         bodyBytes,
+		HTTPResponse: rsp,
+	}
+
+	switch {
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 201:
+		var dest ShareCreated
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON201 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 403:
+		var dest ForbiddenError
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON403 = &dest
+
+	}
+
+	return response, nil
+}
+
+// ParseRevokeShareResponse parses an HTTP response from a RevokeShareWithResponse call
+func ParseRevokeShareResponse(rsp *http.Response) (*RevokeShareResponse, error) {
+	bodyBytes, err := io.ReadAll(rsp.Body)
+	defer func() { _ = rsp.Body.Close() }()
+	if err != nil {
+		return nil, err
+	}
+
+	response := &RevokeShareResponse{
+		Body:         bodyBytes,
+		HTTPResponse: rsp,
+	}
+
+	switch {
 	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 403:
 		var dest ForbiddenError
 		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
