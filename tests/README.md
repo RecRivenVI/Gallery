@@ -8,3 +8,5 @@
 - 需要改名、损坏、链接或强杀的输入必须先复制到临时夹具；Source guard 在操作前后比较。
 - SQLite、WAL、日志、缓存、二进制和测试输出不提交；可复现的小型 JSON 黄金结果可以提交。
 - 大规模 Cleanroom 命令必须先读对应 README，并显式把输出写到验证台内部或系统临时目录。
+- Web 单元与 mock 浏览器测试位于 `web/tests/` 和 `web/e2e/`；生产构建输出到 `internal/webapp/dist`，`Check.ps1` 会验证生成的 OpenAPI TypeScript 客户端与嵌入资产没有漂移。
+- 真实后端浏览器 E2E 必须使用临时 AppDirs、隔离端口和合成数据，不得连接既有生产实例；Chrome/Edge 通过不代表 Firefox、真实移动设备或物理 LAN 多设备 Gate 通过。

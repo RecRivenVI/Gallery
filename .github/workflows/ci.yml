@@ -21,6 +21,11 @@ jobs:
         with:
           go-version: 1.26.5
           cache-dependency-path: go.sum
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 22.23.1
+          cache: npm
+          cache-dependency-path: web/package-lock.json
       - name: 契约生成、静态检查、纯 Go 测试和构建
         shell: pwsh
         run: ./scripts/Check.ps1
@@ -31,3 +36,23 @@ jobs:
       - name: Go vulnerability database
         if: runner.os == 'Linux'
         run: go run golang.org/x/vuln/cmd/govulncheck@v1.6.0 ./...
+
+  web-browser:
+    name: Web 浏览器 smoke
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 22.23.1
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+      - name: 安装与构建 Web
+        working-directory: web
+        run: npm ci && npm run build
+      - name: 安装 Chromium
+        working-directory: web
+        run: npx playwright install --with-deps chromium
+      - name: 执行浏览器 smoke
+        working-directory: web
+        run: npm run test:smoke
