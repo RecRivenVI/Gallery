@@ -1,10 +1,14 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { createContext, useContext, useMemo, type ReactNode } from 'react';
 import { api, csrfHeaders, expectData, expectNoContent, type Bootstrap } from '../api/client';
+import type { Capability } from './capabilities';
 
 type SessionContextValue = {
   bootstrap: Bootstrap;
-  can: (capability: string) => boolean;
+  /** 只接受后端权威词表中的 capability，杜绝前端发明名字。 */
+  can: (capability: Capability) => boolean;
+  /** 任一 capability 满足即可，用于服务端按资源类别派生所需 capability 的场景。 */
+  canAny: (capabilities: readonly Capability[]) => boolean;
   refresh: () => Promise<void>;
   logout: () => Promise<void>;
 };
@@ -39,6 +43,7 @@ export function SessionProvider({ children }: { children: ReactNode }) {
     return {
       bootstrap: bootstrapQuery.data,
       can: (capability) => capabilities.has(capability),
+      canAny: (candidates) => candidates.some((capability) => capabilities.has(capability)),
       refresh: async () => {
         await queryClient.refetchQueries({ queryKey: ['bootstrap'], type: 'active' });
       },

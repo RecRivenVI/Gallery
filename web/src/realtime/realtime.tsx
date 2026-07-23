@@ -2,12 +2,11 @@ import { useQueryClient } from '@tanstack/react-query';
 import { createContext, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { useSession } from '../auth/session';
 import { acceptSequence } from '../state/generation';
+import { classifyEnvelope, type Envelope } from './envelope';
 
 type ConnectionState = 'idle' | 'connecting' | 'ready' | 'reconnecting' | 'unavailable';
 type RealtimeValue = { state: ConnectionState; lastSequence: number };
 const RealtimeContext = createContext<RealtimeValue>({ state: 'idle', lastSequence: 0 });
-
-type Envelope = { protocolVersion: number; type: string; sequence: number; payload?: unknown };
 
 export function RealtimeProvider({ children }: { children: ReactNode }) {
   const { bootstrap, refresh } = useSession();
@@ -61,14 +60,19 @@ export function RealtimeProvider({ children }: { children: ReactNode }) {
         if (decision === 'gap') void recoverSnapshot();
         sequenceRef.current = envelope.sequence;
         setLastSequence(envelope.sequence);
-        if (envelope.type.includes('revoked')) {
-          void refresh();
-          return;
-        }
-        if (envelope.type.startsWith('job.')) void queryClient.invalidateQueries({ queryKey: ['jobs'] });
-        if (envelope.type.includes('publication')) {
-          void queryClient.invalidateQueries({ queryKey: ['publication'] });
-          void queryClient.invalidateQueries({ queryKey: ['works'] });
+        switch (classifyEnvelope(envelope.eventType)) {
+          case 'refresh-session':
+            void refresh();
+            return;
+          case 'invalidate-jobs':
+            void queryClient.invalidateQueries({ queryKey: ['jobs'] });
+            return;
+          case 'invalidate-publication':
+            void queryClient.invalidateQueries({ queryKey: ['publication'] });
+            void queryClient.invalidateQueries({ queryKey: ['works'] });
+            return;
+          case 'none':
+            return;
         }
       });
       socket.addEventListener('close', (event) => {

@@ -99,7 +99,7 @@ export function GovernancePage() {
                   {candidate.label} · {candidate.matchSignal}
                 </p>
               ))}
-              {can('bindings.resolve') && (
+              {can('bindings.write') && (
                 <Button
                   className="button secondary"
                   onPress={() => dismiss.mutate({ id: issue.id, version: issue.version })}
@@ -126,7 +126,7 @@ export function GovernancePage() {
                   ['Canonical', <code>{item.canonicalId}</code>]
                 ]}
               />
-              {can('bindings.resolve') && (
+              {can('bindings.write') && (
                 <div className="button-row">
                   <Button
                     className="button secondary"
@@ -158,7 +158,7 @@ export function GovernancePage() {
                 ['记录', <code>{merge.id}</code>]
               ]}
             />
-            {can('bindings.resolve') && merge.status === 'applied' && (
+            {can('creators.write') && merge.status === 'applied' && (
               <Button className="button danger" onPress={() => undoMerge.mutate(merge.id)}>
                 撤销合并
               </Button>
