@@ -4543,14 +4543,14 @@ type ClientInterface interface {
 
 	CreateRulePackage(ctx context.Context, params *CreateRulePackageParams, body CreateRulePackageJSONRequestBody, reqEditors ...RequestEditorFn) (*http.Response, error)
 
+	// DeleteRulePackage request
+	DeleteRulePackage(ctx context.Context, packageId RulePackageId, params *DeleteRulePackageParams, reqEditors ...RequestEditorFn) (*http.Response, error)
+
 	// GetRulePackage request
 	GetRulePackage(ctx context.Context, packageId RulePackageId, reqEditors ...RequestEditorFn) (*http.Response, error)
 
 	// ListRuleAudits request
 	ListRuleAudits(ctx context.Context, packageId RulePackageId, reqEditors ...RequestEditorFn) (*http.Response, error)
-
-	// DeleteRulePackage request
-	DeleteRulePackage(ctx context.Context, packageId RulePackageId, params *DeleteRulePackageParams, reqEditors ...RequestEditorFn) (*http.Response, error)
 
 	// DeprecateRulePackageWithBody request with any body
 	DeprecateRulePackageWithBody(ctx context.Context, packageId RulePackageId, params *DeprecateRulePackageParams, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*http.Response, error)
@@ -5786,6 +5786,18 @@ func (c *Client) CreateRulePackage(ctx context.Context, params *CreateRulePackag
 	return c.Client.Do(req)
 }
 
+func (c *Client) DeleteRulePackage(ctx context.Context, packageId RulePackageId, params *DeleteRulePackageParams, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewDeleteRulePackageRequest(c.Server, packageId, params)
+	if err != nil {
+		return nil, err
+	}
+	req = req.WithContext(ctx)
+	if err := c.applyEditors(ctx, req, reqEditors); err != nil {
+		return nil, err
+	}
+	return c.Client.Do(req)
+}
+
 func (c *Client) GetRulePackage(ctx context.Context, packageId RulePackageId, reqEditors ...RequestEditorFn) (*http.Response, error) {
 	req, err := NewGetRulePackageRequest(c.Server, packageId)
 	if err != nil {
@@ -5800,18 +5812,6 @@ func (c *Client) GetRulePackage(ctx context.Context, packageId RulePackageId, re
 
 func (c *Client) ListRuleAudits(ctx context.Context, packageId RulePackageId, reqEditors ...RequestEditorFn) (*http.Response, error) {
 	req, err := NewListRuleAuditsRequest(c.Server, packageId)
-	if err != nil {
-		return nil, err
-	}
-	req = req.WithContext(ctx)
-	if err := c.applyEditors(ctx, req, reqEditors); err != nil {
-		return nil, err
-	}
-	return c.Client.Do(req)
-}
-
-func (c *Client) DeleteRulePackage(ctx context.Context, packageId RulePackageId, params *DeleteRulePackageParams, reqEditors ...RequestEditorFn) (*http.Response, error) {
-	req, err := NewDeleteRulePackageRequest(c.Server, packageId, params)
 	if err != nil {
 		return nil, err
 	}
@@ -9936,6 +9936,64 @@ func NewCreateRulePackageRequestWithBody(server string, params *CreateRulePackag
 	return req, nil
 }
 
+// NewDeleteRulePackageRequest generates requests for DeleteRulePackage
+func NewDeleteRulePackageRequest(server string, packageId RulePackageId, params *DeleteRulePackageParams) (*http.Request, error) {
+	var err error
+
+	var pathParam0 string
+
+	pathParam0, err = runtime.StyleParamWithOptions("simple", false, "packageId", packageId, runtime.StyleParamOptions{ParamLocation: runtime.ParamLocationPath, Type: "string", Format: ""})
+	if err != nil {
+		return nil, err
+	}
+
+	serverURL, err := url.Parse(server)
+	if err != nil {
+		return nil, err
+	}
+
+	operationPath := fmt.Sprintf("/api/v1/rule-packages/%s", pathParam0)
+	if operationPath[0] == '/' {
+		operationPath = "." + operationPath
+	}
+
+	queryURL, err := serverURL.Parse(operationPath)
+	if err != nil {
+		return nil, err
+	}
+
+	req, err := http.NewRequest(http.MethodDelete, queryURL.String(), nil)
+	if err != nil {
+		return nil, err
+	}
+
+	if params != nil {
+
+		var headerParam0 string
+
+		headerParam0, err = runtime.StyleParamWithOptions("simple", false, "X-Gallery-CSRF", params.XGalleryCSRF, runtime.StyleParamOptions{ParamLocation: runtime.ParamLocationHeader, Type: "string", Format: ""})
+		if err != nil {
+			return nil, err
+		}
+
+		req.Header.Set("X-Gallery-CSRF", headerParam0)
+
+		if params.IfMatch != nil {
+			var headerParam1 string
+
+			headerParam1, err = runtime.StyleParamWithOptions("simple", false, "If-Match", *params.IfMatch, runtime.StyleParamOptions{ParamLocation: runtime.ParamLocationHeader, Type: "string", Format: ""})
+			if err != nil {
+				return nil, err
+			}
+
+			req.Header.Set("If-Match", headerParam1)
+		}
+
+	}
+
+	return req, nil
+}
+
 // NewGetRulePackageRequest generates requests for GetRulePackage
 func NewGetRulePackageRequest(server string, packageId RulePackageId) (*http.Request, error) {
 	var err error
@@ -9999,64 +10057,6 @@ func NewListRuleAuditsRequest(server string, packageId RulePackageId) (*http.Req
 	req, err := http.NewRequest(http.MethodGet, queryURL.String(), nil)
 	if err != nil {
 		return nil, err
-	}
-
-	return req, nil
-}
-
-// NewDeleteRulePackageRequest generates requests for DeleteRulePackage
-func NewDeleteRulePackageRequest(server string, packageId RulePackageId, params *DeleteRulePackageParams) (*http.Request, error) {
-	var err error
-
-	var pathParam0 string
-
-	pathParam0, err = runtime.StyleParamWithOptions("simple", false, "packageId", packageId, runtime.StyleParamOptions{ParamLocation: runtime.ParamLocationPath, Type: "string", Format: ""})
-	if err != nil {
-		return nil, err
-	}
-
-	serverURL, err := url.Parse(server)
-	if err != nil {
-		return nil, err
-	}
-
-	operationPath := fmt.Sprintf("/api/v1/rule-packages/%s/deprecate", pathParam0)
-	if operationPath[0] == '/' {
-		operationPath = "." + operationPath
-	}
-
-	queryURL, err := serverURL.Parse(operationPath)
-	if err != nil {
-		return nil, err
-	}
-
-	req, err := http.NewRequest(http.MethodDelete, queryURL.String(), nil)
-	if err != nil {
-		return nil, err
-	}
-
-	if params != nil {
-
-		var headerParam0 string
-
-		headerParam0, err = runtime.StyleParamWithOptions("simple", false, "X-Gallery-CSRF", params.XGalleryCSRF, runtime.StyleParamOptions{ParamLocation: runtime.ParamLocationHeader, Type: "string", Format: ""})
-		if err != nil {
-			return nil, err
-		}
-
-		req.Header.Set("X-Gallery-CSRF", headerParam0)
-
-		if params.IfMatch != nil {
-			var headerParam1 string
-
-			headerParam1, err = runtime.StyleParamWithOptions("simple", false, "If-Match", *params.IfMatch, runtime.StyleParamOptions{ParamLocation: runtime.ParamLocationHeader, Type: "string", Format: ""})
-			if err != nil {
-				return nil, err
-			}
-
-			req.Header.Set("If-Match", headerParam1)
-		}
-
 	}
 
 	return req, nil
@@ -13181,14 +13181,14 @@ type ClientWithResponsesInterface interface {
 
 	CreateRulePackageWithResponse(ctx context.Context, params *CreateRulePackageParams, body CreateRulePackageJSONRequestBody, reqEditors ...RequestEditorFn) (*CreateRulePackageResponse, error)
 
+	// DeleteRulePackageWithResponse request
+	DeleteRulePackageWithResponse(ctx context.Context, packageId RulePackageId, params *DeleteRulePackageParams, reqEditors ...RequestEditorFn) (*DeleteRulePackageResponse, error)
+
 	// GetRulePackageWithResponse request
 	GetRulePackageWithResponse(ctx context.Context, packageId RulePackageId, reqEditors ...RequestEditorFn) (*GetRulePackageResponse, error)
 
 	// ListRuleAuditsWithResponse request
 	ListRuleAuditsWithResponse(ctx context.Context, packageId RulePackageId, reqEditors ...RequestEditorFn) (*ListRuleAuditsResponse, error)
-
-	// DeleteRulePackageWithResponse request
-	DeleteRulePackageWithResponse(ctx context.Context, packageId RulePackageId, params *DeleteRulePackageParams, reqEditors ...RequestEditorFn) (*DeleteRulePackageResponse, error)
 
 	// DeprecateRulePackageWithBodyWithResponse request with any body
 	DeprecateRulePackageWithBodyWithResponse(ctx context.Context, packageId RulePackageId, params *DeprecateRulePackageParams, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*DeprecateRulePackageResponse, error)
@@ -15448,6 +15448,40 @@ func (r CreateRulePackageResponse) ContentType() string {
 	return ""
 }
 
+type DeleteRulePackageResponse struct {
+	Body         []byte
+	HTTPResponse *http.Response
+	JSON200      *RulePackage
+	JSON401      *UnauthenticatedError
+	JSON403      *ForbiddenError
+	JSON404      *NotFoundError
+	JSON409      *ConflictError
+}
+
+// Status returns HTTPResponse.Status
+func (r DeleteRulePackageResponse) Status() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Status
+	}
+	return http.StatusText(0)
+}
+
+// StatusCode returns HTTPResponse.StatusCode
+func (r DeleteRulePackageResponse) StatusCode() int {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.StatusCode
+	}
+	return 0
+}
+
+// ContentType is a convenience method to retrieve the Content-Type value from the HTTP response headers
+func (r DeleteRulePackageResponse) ContentType() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Header.Get("Content-Type")
+	}
+	return ""
+}
+
 type GetRulePackageResponse struct {
 	Body         []byte
 	HTTPResponse *http.Response
@@ -15510,40 +15544,6 @@ func (r ListRuleAuditsResponse) StatusCode() int {
 
 // ContentType is a convenience method to retrieve the Content-Type value from the HTTP response headers
 func (r ListRuleAuditsResponse) ContentType() string {
-	if r.HTTPResponse != nil {
-		return r.HTTPResponse.Header.Get("Content-Type")
-	}
-	return ""
-}
-
-type DeleteRulePackageResponse struct {
-	Body         []byte
-	HTTPResponse *http.Response
-	JSON200      *RulePackage
-	JSON401      *UnauthenticatedError
-	JSON403      *ForbiddenError
-	JSON404      *NotFoundError
-	JSON409      *ConflictError
-}
-
-// Status returns HTTPResponse.Status
-func (r DeleteRulePackageResponse) Status() string {
-	if r.HTTPResponse != nil {
-		return r.HTTPResponse.Status
-	}
-	return http.StatusText(0)
-}
-
-// StatusCode returns HTTPResponse.StatusCode
-func (r DeleteRulePackageResponse) StatusCode() int {
-	if r.HTTPResponse != nil {
-		return r.HTTPResponse.StatusCode
-	}
-	return 0
-}
-
-// ContentType is a convenience method to retrieve the Content-Type value from the HTTP response headers
-func (r DeleteRulePackageResponse) ContentType() string {
 	if r.HTTPResponse != nil {
 		return r.HTTPResponse.Header.Get("Content-Type")
 	}
@@ -18058,6 +18058,15 @@ func (c *ClientWithResponses) CreateRulePackageWithResponse(ctx context.Context,
 	return ParseCreateRulePackageResponse(rsp)
 }
 
+// DeleteRulePackageWithResponse request returning *DeleteRulePackageResponse
+func (c *ClientWithResponses) DeleteRulePackageWithResponse(ctx context.Context, packageId RulePackageId, params *DeleteRulePackageParams, reqEditors ...RequestEditorFn) (*DeleteRulePackageResponse, error) {
+	rsp, err := c.DeleteRulePackage(ctx, packageId, params, reqEditors...)
+	if err != nil {
+		return nil, err
+	}
+	return ParseDeleteRulePackageResponse(rsp)
+}
+
 // GetRulePackageWithResponse request returning *GetRulePackageResponse
 func (c *ClientWithResponses) GetRulePackageWithResponse(ctx context.Context, packageId RulePackageId, reqEditors ...RequestEditorFn) (*GetRulePackageResponse, error) {
 	rsp, err := c.GetRulePackage(ctx, packageId, reqEditors...)
@@ -18074,15 +18083,6 @@ func (c *ClientWithResponses) ListRuleAuditsWithResponse(ctx context.Context, pa
 		return nil, err
 	}
 	return ParseListRuleAuditsResponse(rsp)
-}
-
-// DeleteRulePackageWithResponse request returning *DeleteRulePackageResponse
-func (c *ClientWithResponses) DeleteRulePackageWithResponse(ctx context.Context, packageId RulePackageId, params *DeleteRulePackageParams, reqEditors ...RequestEditorFn) (*DeleteRulePackageResponse, error) {
-	rsp, err := c.DeleteRulePackage(ctx, packageId, params, reqEditors...)
-	if err != nil {
-		return nil, err
-	}
-	return ParseDeleteRulePackageResponse(rsp)
 }
 
 // DeprecateRulePackageWithBodyWithResponse request with arbitrary body returning *DeprecateRulePackageResponse
@@ -21666,6 +21666,60 @@ func ParseCreateRulePackageResponse(rsp *http.Response) (*CreateRulePackageRespo
 	return response, nil
 }
 
+// ParseDeleteRulePackageResponse parses an HTTP response from a DeleteRulePackageWithResponse call
+func ParseDeleteRulePackageResponse(rsp *http.Response) (*DeleteRulePackageResponse, error) {
+	bodyBytes, err := io.ReadAll(rsp.Body)
+	defer func() { _ = rsp.Body.Close() }()
+	if err != nil {
+		return nil, err
+	}
+
+	response := &DeleteRulePackageResponse{
+		Body:         bodyBytes,
+		HTTPResponse: rsp,
+	}
+
+	switch {
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 200:
+		var dest RulePackage
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON200 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 401:
+		var dest UnauthenticatedError
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON401 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 403:
+		var dest ForbiddenError
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON403 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 404:
+		var dest NotFoundError
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON404 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 409:
+		var dest ConflictError
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON409 = &dest
+
+	}
+
+	return response, nil
+}
+
 // ParseGetRulePackageResponse parses an HTTP response from a GetRulePackageWithResponse call
 func ParseGetRulePackageResponse(rsp *http.Response) (*GetRulePackageResponse, error) {
 	bodyBytes, err := io.ReadAll(rsp.Body)
@@ -21756,60 +21810,6 @@ func ParseListRuleAuditsResponse(rsp *http.Response) (*ListRuleAuditsResponse, e
 			return nil, err
 		}
 		response.JSON404 = &dest
-
-	}
-
-	return response, nil
-}
-
-// ParseDeleteRulePackageResponse parses an HTTP response from a DeleteRulePackageWithResponse call
-func ParseDeleteRulePackageResponse(rsp *http.Response) (*DeleteRulePackageResponse, error) {
-	bodyBytes, err := io.ReadAll(rsp.Body)
-	defer func() { _ = rsp.Body.Close() }()
-	if err != nil {
-		return nil, err
-	}
-
-	response := &DeleteRulePackageResponse{
-		Body:         bodyBytes,
-		HTTPResponse: rsp,
-	}
-
-	switch {
-	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 200:
-		var dest RulePackage
-		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
-			return nil, err
-		}
-		response.JSON200 = &dest
-
-	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 401:
-		var dest UnauthenticatedError
-		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
-			return nil, err
-		}
-		response.JSON401 = &dest
-
-	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 403:
-		var dest ForbiddenError
-		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
-			return nil, err
-		}
-		response.JSON403 = &dest
-
-	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 404:
-		var dest NotFoundError
-		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
-			return nil, err
-		}
-		response.JSON404 = &dest
-
-	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 409:
-		var dest ConflictError
-		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
-			return nil, err
-		}
-		response.JSON409 = &dest
 
 	}
 
