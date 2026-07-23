@@ -864,6 +864,26 @@ paths:
         "401": {$ref: "#/components/responses/UnauthenticatedError"}
         "403": {$ref: "#/components/responses/ForbiddenError"}
         "404": {$ref: "#/components/responses/NotFoundError"}
+    delete:
+      operationId: deleteRulePackage
+      summary: 软删除没有已发布版本的规则包
+      parameters:
+        - name: packageId
+          in: path
+          required: true
+          schema: {$ref: "#/components/schemas/RulePackageId"}
+        - $ref: "#/components/parameters/CSRFHeader"
+        - $ref: "#/components/parameters/IfMatch"
+      responses:
+        "200":
+          description: 规则包已软删除
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/RulePackage"}
+        "401": {$ref: "#/components/responses/UnauthenticatedError"}
+        "403": {$ref: "#/components/responses/ForbiddenError"}
+        "404": {$ref: "#/components/responses/NotFoundError"}
+        "409": {$ref: "#/components/responses/ConflictError"}
   /api/v1/rule-packages/{packageId}/draft:
     get:
       operationId: getRuleDraft
@@ -983,26 +1003,6 @@ paths:
         "401": {$ref: "#/components/responses/UnauthenticatedError"}
         "403": {$ref: "#/components/responses/ForbiddenError"}
         "404": {$ref: "#/components/responses/NotFoundError"}
-    delete:
-      operationId: deleteRulePackage
-      summary: 软删除没有已发布版本的规则包
-      parameters:
-        - name: packageId
-          in: path
-          required: true
-          schema: {$ref: "#/components/schemas/RulePackageId"}
-        - $ref: "#/components/parameters/CSRFHeader"
-        - $ref: "#/components/parameters/IfMatch"
-      responses:
-        "200":
-          description: 规则包已软删除
-          content:
-            application/json:
-              schema: {$ref: "#/components/schemas/RulePackage"}
-        "401": {$ref: "#/components/responses/UnauthenticatedError"}
-        "403": {$ref: "#/components/responses/ForbiddenError"}
-        "404": {$ref: "#/components/responses/NotFoundError"}
-        "409": {$ref: "#/components/responses/ConflictError"}
   /api/v1/rule-packages/{packageId}/audits:
     get:
       operationId: listRuleAudits
