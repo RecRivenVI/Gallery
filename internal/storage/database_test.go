@@ -30,7 +30,7 @@ func openTestStore(t *testing.T) (*Store, appdirs.Dirs) {
 
 func TestIndependentWALMigrationsAndBackup(t *testing.T) {
 	store, dirs := openTestStore(t)
-	wantVersions := map[Role]int{RoleControl: 19, RoleCatalog: 10}
+	wantVersions := map[Role]int{RoleControl: 20, RoleCatalog: 10}
 	for _, database := range []*Database{store.Control, store.Catalog} {
 		var version int
 		if err := database.db.QueryRow("PRAGMA user_version").Scan(&version); err != nil {
@@ -357,7 +357,7 @@ VALUES ('decision_existing', 'issue_existing', 'src_existing', 'split', 'split_c
 	if err := upgraded.db.QueryRowContext(ctx, "PRAGMA user_version").Scan(&version); err != nil {
 		t.Fatal(err)
 	}
-	if version != 19 {
+	if version != 20 {
 		t.Fatalf("v15 数据升级后的 user_version = %d", version)
 	}
 	var issueFingerprint, decisionFingerprint string
@@ -379,6 +379,77 @@ WHERE freeze_phase='phase1'`).Scan(&freezeCount); err != nil {
 	}
 	if freezeCount != 17 {
 		t.Fatalf("v16 未登记完整阶段 1 冻结项: %d", freezeCount)
+	}
+}
+
+func TestStage5SecurityMigrationUpgradesPopulatedV19Control(t *testing.T) {
+	ctx := context.Background()
+	path := filepath.Join(t.TempDir(), "control.db")
+	db, err := sql.Open("sqlite", "file:"+filepath.ToSlash(path)+"?_pragma=foreign_keys(ON)")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.ExecContext(ctx, `CREATE TABLE gallery_schema_migrations (
+version INTEGER PRIMARY KEY NOT NULL, name TEXT NOT NULL, sha256 TEXT NOT NULL,
+applied_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))) STRICT`); err != nil {
+		t.Fatal(err)
+	}
+	sub, err := fs.Sub(migrationFiles, "migrations/control")
+	if err != nil {
+		t.Fatal(err)
+	}
+	migrations, err := readMigrations(sub)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, item := range migrations[:19] {
+		if err := applyMigration(ctx, db, item); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, err := db.ExecContext(ctx, `
+INSERT INTO libraries (library_id, name, created_at)
+VALUES ('lib_existing', '既有 Library', 1);
+INSERT INTO sessions
+(session_id, secret_hash, principal_id, csrf_token, created_at, expires_at, last_seen_at)
+VALUES ('ses_00000000-0000-7000-8000-000000000001', 'old-secret-hash', 'personal-owner',
+        'legacy-plaintext-csrf', 1, 9999999999, 1);`); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	upgraded, err := openDatabase(ctx, RoleControl, path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer upgraded.Close()
+	var version int
+	if err := upgraded.db.QueryRowContext(ctx, "PRAGMA user_version").Scan(&version); err != nil {
+		t.Fatal(err)
+	}
+	if version != 20 {
+		t.Fatalf("v19 数据升级后的 user_version = %d", version)
+	}
+	var libraryName string
+	if err := upgraded.db.QueryRowContext(ctx, "SELECT name FROM libraries WHERE library_id='lib_existing'").Scan(&libraryName); err != nil || libraryName != "既有 Library" {
+		t.Fatalf("阶段 5 migration 未保留既有产品事实: name=%q err=%v", libraryName, err)
+	}
+	var sessions, ownerRoles int
+	if err := upgraded.db.QueryRowContext(ctx, "SELECT count(*) FROM sessions").Scan(&sessions); err != nil {
+		t.Fatal(err)
+	}
+	if sessions != 0 {
+		t.Fatalf("含明文 CSRF 的旧 Session 未在安全升级时作废: %d", sessions)
+	}
+	if err := upgraded.db.QueryRowContext(ctx, `SELECT count(*) FROM principal_roles
+WHERE principal_id='personal-owner' AND role_id='owner'`).Scan(&ownerRoles); err != nil || ownerRoles != 1 {
+		t.Fatalf("Personal owner 未映射到新 Principal/Role: count=%d err=%v", ownerRoles, err)
+	}
+	var freezeCount int
+	if err := upgraded.db.QueryRowContext(ctx, "SELECT count(*) FROM schema_freeze WHERE freeze_phase='phase5'").Scan(&freezeCount); err != nil || freezeCount != 5 {
+		t.Fatalf("阶段 5 PRE_FREEZE 登记不完整: count=%d err=%v", freezeCount, err)
 	}
 }
 
