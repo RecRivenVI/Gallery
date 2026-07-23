@@ -219,7 +219,7 @@ func New(mode config.Mode, store *storage.Store, clock ports.Clock, personal *au
 	mux.HandleFunc("POST /api/v1/media/{mediaId}/derived-assets", server.createDerivedAsset)
 	mux.HandleFunc("GET /api/v1/derived-assets/{assetKey}/content", server.derivedAssetContent)
 	mux.Handle("/ws/v1", hub.Handler(func(r *http.Request) (realtime.Principal, error) {
-		if err := server.validateOrigin(r); err != nil {
+		if err := server.validateWebSocketOrigin(r); err != nil {
 			return realtime.Principal{}, err
 		}
 		session, err := server.authenticate(r)
@@ -420,6 +420,13 @@ func (s *Server) bootstrap(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) createPairingAttempt(w http.ResponseWriter, r *http.Request) {
+	// 一次性配对只属于 Personal 模式。缺少这道门禁时，LAN 模式下任何能访问
+	// loopback 的本机进程都可以换取 personal-owner 全权 Session，绕过 LAN 账户、
+	// 密码与 Grant 模型；login 与 initializeLANOwner 早已有对称的模式判定。
+	if s.mode != config.ModePersonal {
+		writeFault(w, asFault(fault.New(fault.CodeNotFound, false, nil)), http.StatusNotFound)
+		return
+	}
 	if err := auth.ValidateLoopbackRequest(r); err != nil {
 		writeFault(w, asFault(err), statusForFault(err))
 		return
@@ -437,6 +444,13 @@ func (s *Server) createPairingAttempt(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) exchangePairingCredential(w http.ResponseWriter, r *http.Request) {
+	// 一次性配对只属于 Personal 模式。缺少这道门禁时，LAN 模式下任何能访问
+	// loopback 的本机进程都可以换取 personal-owner 全权 Session，绕过 LAN 账户、
+	// 密码与 Grant 模型；login 与 initializeLANOwner 早已有对称的模式判定。
+	if s.mode != config.ModePersonal {
+		writeFault(w, asFault(fault.New(fault.CodeNotFound, false, nil)), http.StatusNotFound)
+		return
+	}
 	if err := auth.ValidateLoopbackRequest(r); err != nil {
 		writeFault(w, asFault(err), statusForFault(err))
 		return
@@ -2727,6 +2741,10 @@ func (s *Server) writeMediaSnapshot(w http.ResponseWriter, r *http.Request, snap
 	etag := `"gallery-` + algorithm + `-` + digest + `"`
 	w.Header().Set("Accept-Ranges", "bytes")
 	w.Header().Set("ETag", etag)
+	// 媒体正文既可能是认证主体的私密内容，也可能是匿名分享内容：`private` 阻止共享
+	// 缓存存储，`no-cache` 要求每次重新向服务端校验，从而让吊销与过期即时生效，同时
+	// 保留基于强 ETag 的条件请求，不像 `no-store` 那样彻底放弃浏览器缓存。
+	w.Header().Set("Cache-Control", "private, no-cache")
 	w.Header().Set("Content-Type", mimeType)
 	w.Header().Set("X-Content-Type-Options", "nosniff")
 	if download {
@@ -2967,6 +2985,7 @@ func (s *Server) derivedAssetContent(w http.ResponseWriter, r *http.Request) {
 	defer lease.Close()
 	etag := `"gallery-derived-` + lease.Asset.OutputDigest + `"`
 	w.Header().Set("ETag", etag)
+	w.Header().Set("Cache-Control", "private, no-cache")
 	w.Header().Set("Content-Type", lease.Asset.OutputMIME)
 	w.Header().Set("X-Content-Type-Options", "nosniff")
 	if etagMatches(r.Header.Get("If-None-Match"), etag) {
@@ -3533,8 +3552,10 @@ func (s *Server) validateHost(r *http.Request) error {
 	return auth.ValidateHostAllowed(r, s.allowedHosts)
 }
 
-func (s *Server) validateOrigin(r *http.Request) error {
-	return auth.ValidateOriginAllowed(r, s.allowedHosts)
+// validateWebSocketOrigin 用于 /ws/v1 握手：浏览器不会在 WebSocket 握手上发送
+// Fetch Metadata 头，因此这里只能以 Origin 作为跨站防护事实源。
+func (s *Server) validateWebSocketOrigin(r *http.Request) error {
+	return auth.ValidateWebSocketOriginAllowed(r, s.allowedHosts)
 }
 
 func (s *Server) validateMutation(r *http.Request, session auth.Session) error {
@@ -3642,8 +3663,21 @@ func securityHeaders(next http.Handler) http.Handler {
 		w.Header().Set("Referrer-Policy", "no-referrer")
 		w.Header().Set("X-Frame-Options", "DENY")
 		w.Header().Set("Permissions-Policy", "camera=(), microphone=(), geolocation=(), payment=(), usb=()")
+		// API 与匿名分享响应都可能携带私密事实：bootstrap 的 CSRF token、只展示一次的
+		// Token/Share credential、按授权范围过滤的列表、以及媒体正文。此前整个
+		// transport 层没有任何 Cache-Control，这些响应可以进入浏览器磁盘缓存或中间缓存。
+		// Web 静态资源由 internal/webapp 在其自身 handler 中改写为长缓存或 no-cache，
+		// 因此这里的默认值不会削弱静态资产缓存。
+		if isAPIPath(r.URL.Path) {
+			w.Header().Set("Cache-Control", "no-store")
+			w.Header().Set("Vary", "Cookie, Authorization")
+		}
 		next.ServeHTTP(w, r)
 	})
+}
+
+func isAPIPath(requestPath string) bool {
+	return requestPath == "/api/v1" || strings.HasPrefix(requestPath, "/api/v1/")
 }
 
 func redactedRequestPath(path string) string {
