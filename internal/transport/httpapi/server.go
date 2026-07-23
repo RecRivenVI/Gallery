@@ -107,6 +107,12 @@ func New(mode config.Mode, store *storage.Store, clock ports.Clock, personal *au
 	mux.HandleFunc("POST /api/v1/auth/logout", server.logout)
 	mux.HandleFunc("GET /api/v1/sessions", server.listSessions)
 	mux.HandleFunc("DELETE /api/v1/sessions/{sessionId}", server.revokeSession)
+	mux.HandleFunc("GET /api/v1/admin/users", server.listUsers)
+	mux.HandleFunc("POST /api/v1/admin/users", server.createUser)
+	mux.HandleFunc("PATCH /api/v1/admin/users/{userId}/status", server.setUserStatus)
+	mux.HandleFunc("POST /api/v1/account/password", server.changePassword)
+	mux.HandleFunc("POST /api/v1/admin/users/{userId}/grants", server.createGrant)
+	mux.HandleFunc("DELETE /api/v1/admin/grants/{grantId}", server.revokeGrant)
 	mux.HandleFunc("POST /api/v1/libraries", server.createLibrary)
 	mux.HandleFunc("GET /api/v1/libraries/{libraryId}", server.getLibrary)
 	mux.HandleFunc("POST /api/v1/sources", server.createSource)
@@ -521,6 +527,155 @@ func (s *Server) logout(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusNoContent)
 }
 
+func (s *Server) listUsers(w http.ResponseWriter, r *http.Request) {
+	if _, err := s.requireCapability(r, "users.manage"); err != nil {
+		s.writeRequestError(w, err)
+		return
+	}
+	users, err := s.auth.ListUsers(r.Context())
+	if err != nil {
+		s.writeRequestError(w, err)
+		return
+	}
+	items := make([]map[string]any, 0, len(users))
+	for _, user := range users {
+		items = append(items, userDTO(user))
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"users": items})
+}
+
+func (s *Server) createUser(w http.ResponseWriter, r *http.Request) {
+	actor, err := s.requireCapability(r, "users.manage")
+	if err != nil {
+		s.writeRequestError(w, err)
+		return
+	}
+	if err := s.validateMutation(r, actor); err != nil {
+		s.writeRequestError(w, err)
+		return
+	}
+	var request struct {
+		Username    string            `json:"username"`
+		DisplayName string            `json:"displayName"`
+		Password    string            `json:"password"`
+		Roles       []string          `json:"roles"`
+		Grants      []auth.GrantInput `json:"grants"`
+	}
+	if err := decodeJSON(r, &request); err != nil {
+		s.writeRequestError(w, fault.WithField(fault.CodeValidation, "body", err))
+		return
+	}
+	user, err := s.auth.CreateUser(r.Context(), actor.PrincipalID, auth.CreateUserInput{
+		Username: request.Username, DisplayName: request.DisplayName, Password: request.Password,
+		Roles: request.Roles, Grants: request.Grants,
+	})
+	if err != nil {
+		s.writeRequestError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusCreated, userDTO(user))
+}
+
+func (s *Server) setUserStatus(w http.ResponseWriter, r *http.Request) {
+	actor, err := s.requireCapability(r, "users.manage")
+	if err != nil {
+		s.writeRequestError(w, err)
+		return
+	}
+	if err := s.validateMutation(r, actor); err != nil {
+		s.writeRequestError(w, err)
+		return
+	}
+	var request struct {
+		Status string `json:"status"`
+	}
+	if err := decodeJSON(r, &request); err != nil {
+		s.writeRequestError(w, fault.WithField(fault.CodeValidation, "body", err))
+		return
+	}
+	userID := r.PathValue("userId")
+	if err := s.auth.SetUserStatus(r.Context(), actor.PrincipalID, userID, request.Status); err != nil {
+		s.writeRequestError(w, err)
+		return
+	}
+	s.hub.RevokePrincipal(userID)
+	w.WriteHeader(http.StatusNoContent)
+}
+
+func (s *Server) changePassword(w http.ResponseWriter, r *http.Request) {
+	actor, err := s.authenticate(r)
+	if err != nil {
+		s.writeRequestError(w, err)
+		return
+	}
+	if err := s.validateMutation(r, actor); err != nil {
+		s.writeRequestError(w, err)
+		return
+	}
+	var request struct {
+		CurrentPassword string `json:"currentPassword"`
+		NewPassword     string `json:"newPassword"`
+	}
+	if err := decodeJSON(r, &request); err != nil {
+		s.writeRequestError(w, fault.WithField(fault.CodeValidation, "body", err))
+		return
+	}
+	if err := s.auth.ChangePassword(r.Context(), actor, request.CurrentPassword, request.NewPassword); err != nil {
+		s.writeRequestError(w, err)
+		return
+	}
+	s.hub.RevokePrincipal(actor.PrincipalID)
+	w.WriteHeader(http.StatusNoContent)
+}
+
+func (s *Server) createGrant(w http.ResponseWriter, r *http.Request) {
+	actor, err := s.requireCapability(r, "users.manage")
+	if err != nil {
+		s.writeRequestError(w, err)
+		return
+	}
+	if err := s.validateMutation(r, actor); err != nil {
+		s.writeRequestError(w, err)
+		return
+	}
+	var request auth.GrantInput
+	if err := decodeJSON(r, &request); err != nil {
+		s.writeRequestError(w, fault.WithField(fault.CodeValidation, "body", err))
+		return
+	}
+	userID := r.PathValue("userId")
+	grant, err := s.auth.CreateGrant(r.Context(), actor.PrincipalID, userID, request)
+	if err != nil {
+		s.writeRequestError(w, err)
+		return
+	}
+	s.hub.RevokePrincipal(userID)
+	writeJSON(w, http.StatusCreated, grantDTO(grant))
+}
+
+func (s *Server) revokeGrant(w http.ResponseWriter, r *http.Request) {
+	actor, err := s.requireCapability(r, "users.manage")
+	if err != nil {
+		s.writeRequestError(w, err)
+		return
+	}
+	if err := s.validateMutation(r, actor); err != nil {
+		s.writeRequestError(w, err)
+		return
+	}
+	grantID := r.PathValue("grantId")
+	var principalID string
+	_ = s.store.Control.SQL().QueryRowContext(r.Context(), "SELECT principal_id FROM authorization_grants WHERE grant_id=?", grantID).Scan(&principalID)
+	if err := s.auth.RevokeGrant(r.Context(), actor.PrincipalID, grantID); err != nil {
+		s.writeRequestError(w, err)
+		return
+	}
+	if principalID != "" {
+		s.hub.RevokePrincipal(principalID)
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
 func (s *Server) setSessionCookie(w http.ResponseWriter, r *http.Request, session auth.Session, value string) {
 	maxAge := int(session.ExpiresAt.Sub(s.clock.Now().UTC()).Seconds())
 	if maxAge < 0 {
@@ -534,6 +689,11 @@ func userDTO(user auth.User) map[string]any {
 	return map[string]any{"id": user.ID, "username": user.Username, "displayName": user.DisplayName,
 		"status": user.Status, "roles": user.Roles, "securityVersion": user.SecurityVersion,
 		"createdAt": user.CreatedAt, "updatedAt": user.UpdatedAt}
+}
+
+func grantDTO(grant auth.Grant) map[string]any {
+	return map[string]any{"id": grant.ID, "principalId": grant.PrincipalID, "effect": grant.Effect,
+		"capability": grant.Capability, "scope": grant.Scope, "revoked": grant.Revoked}
 }
 
 func (s *Server) listSessions(w http.ResponseWriter, r *http.Request) {

@@ -118,6 +118,87 @@ func TestLANSecurityRejectsCrossOriginHostAndSetsSecureCookieOnTLS(t *testing.T)
 	_ = hostResponse.Body.Close()
 }
 
+func TestAccountAndGrantManagement(t *testing.T) {
+	server, _ := newLANSecurityServer(t, false)
+	client, csrf := establishLANOwner(t, server)
+	libraryID := createLibrary(t, client, server, csrf, "Accounts")
+
+	create := requestJSON(t, client, http.MethodPost, server.URL+"/api/v1/admin/users", server.URL, csrf,
+		map[string]any{"username": "viewer", "displayName": "Viewer", "password": "viewer-password-strong", "roles": []string{"viewer"}, "grants": []any{
+			map[string]any{"effect": "allow", "capability": "library.read", "scope": map[string]any{"kind": "library", "id": libraryID}},
+		}})
+	createBody := readAndClose(t, create)
+	if create.StatusCode != http.StatusCreated {
+		t.Fatalf("创建账户 status=%d body=%s", create.StatusCode, createBody)
+	}
+	if bytes.Contains(createBody, []byte("viewer-password-strong")) || bytes.Contains(createBody, []byte(`"password"`)) {
+		t.Fatalf("账户响应泄露口令: %s", createBody)
+	}
+	var created struct {
+		ID string `json:"id"`
+	}
+	if json.Unmarshal(createBody, &created) != nil || created.ID == "" {
+		t.Fatalf("账户响应缺少 id: %s", createBody)
+	}
+
+	grant := requestJSON(t, client, http.MethodPost, server.URL+"/api/v1/admin/users/"+created.ID+"/grants", server.URL, csrf,
+		map[string]any{"effect": "allow", "capability": "bindings.read", "scope": map[string]any{"kind": "library", "id": libraryID}})
+	grantBody := readAndClose(t, grant)
+	if grant.StatusCode != http.StatusCreated {
+		t.Fatalf("授予 Grant status=%d body=%s", grant.StatusCode, grantBody)
+	}
+	var grantValue struct {
+		ID string `json:"id"`
+	}
+	if json.Unmarshal(grantBody, &grantValue) != nil || grantValue.ID == "" {
+		t.Fatalf("Grant 响应缺少 id: %s", grantBody)
+	}
+	revokeGrant := requestJSON(t, client, http.MethodDelete, server.URL+"/api/v1/admin/grants/"+grantValue.ID, server.URL, csrf, nil)
+	if revokeGrant.StatusCode != http.StatusNoContent {
+		t.Fatalf("撤销 Grant status=%d body=%s", revokeGrant.StatusCode, readAndClose(t, revokeGrant))
+	}
+	_ = revokeGrant.Body.Close()
+
+	disable := requestJSON(t, client, http.MethodPatch, server.URL+"/api/v1/admin/users/"+created.ID+"/status", server.URL, csrf,
+		map[string]any{"status": "disabled"})
+	if disable.StatusCode != http.StatusNoContent {
+		t.Fatalf("禁用账户 status=%d body=%s", disable.StatusCode, readAndClose(t, disable))
+	}
+	_ = disable.Body.Close()
+	viewerJar, _ := cookiejar.New(nil)
+	viewerClient := &http.Client{Jar: viewerJar}
+	viewerCSRF := bootstrapCSRF(t, viewerClient, server.URL)
+	disabledLogin := requestJSON(t, viewerClient, http.MethodPost, server.URL+"/api/v1/auth/login", server.URL, viewerCSRF,
+		map[string]any{"username": "viewer", "password": "viewer-password-strong"})
+	if disabledLogin.StatusCode == http.StatusCreated {
+		t.Fatalf("禁用账户仍可登录: %d", disabledLogin.StatusCode)
+	}
+	_ = disabledLogin.Body.Close()
+
+	// 改密放在最后：修改自身口令会吊销当前会话，因此改密后必须用新凭据重新认证。
+	changePassword := requestJSON(t, client, http.MethodPost, server.URL+"/api/v1/account/password", server.URL, csrf,
+		map[string]any{"currentPassword": "owner-password-strong", "newPassword": "owner-password-rotated"})
+	if changePassword.StatusCode != http.StatusNoContent {
+		t.Fatalf("改密 status=%d body=%s", changePassword.StatusCode, readAndClose(t, changePassword))
+	}
+	_ = changePassword.Body.Close()
+	staleJar, _ := cookiejar.New(nil)
+	staleClient := &http.Client{Jar: staleJar}
+	staleCSRF := bootstrapCSRF(t, staleClient, server.URL)
+	oldLogin := requestJSON(t, staleClient, http.MethodPost, server.URL+"/api/v1/auth/login", server.URL, staleCSRF,
+		map[string]any{"username": "owner", "password": "owner-password-strong"})
+	if oldLogin.StatusCode == http.StatusCreated {
+		t.Fatalf("旧口令改密后仍可登录: %d", oldLogin.StatusCode)
+	}
+	_ = oldLogin.Body.Close()
+	newLogin := requestJSON(t, staleClient, http.MethodPost, server.URL+"/api/v1/auth/login", server.URL, staleCSRF,
+		map[string]any{"username": "owner", "password": "owner-password-rotated"})
+	if newLogin.StatusCode != http.StatusCreated {
+		t.Fatalf("新口令登录失败: status=%d body=%s", newLogin.StatusCode, readAndClose(t, newLogin))
+	}
+	_ = newLogin.Body.Close()
+}
+
 func newLANSecurityServer(t *testing.T, tls bool) (*httptest.Server, *storage.Store) {
 	t.Helper()
 	dirs := appdirs.UnderRoot(filepath.Join(t.TempDir(), "app"))
