@@ -254,7 +254,7 @@ func (s *Server) validateRulePackage(w http.ResponseWriter, r *http.Request) {
 		s.writeRequestError(w, err)
 		return
 	}
-	if err := auth.ValidateMutation(r, session.CSRFToken); err != nil {
+	if err := s.validateMutation(r, session); err != nil {
 		s.writeRequestError(w, err)
 		return
 	}
@@ -279,7 +279,7 @@ func (s *Server) compileRulePackage(w http.ResponseWriter, r *http.Request) {
 		s.writeRequestError(w, err)
 		return
 	}
-	if err := auth.ValidateMutation(r, session.CSRFToken); err != nil {
+	if err := s.validateMutation(r, session); err != nil {
 		s.writeRequestError(w, err)
 		return
 	}
@@ -308,7 +308,7 @@ func (s *Server) dryRunRulePackage(w http.ResponseWriter, r *http.Request) {
 		s.writeRequestError(w, err)
 		return
 	}
-	if err := auth.ValidateMutation(r, session.CSRFToken); err != nil {
+	if err := s.validateMutation(r, session); err != nil {
 		s.writeRequestError(w, err)
 		return
 	}
@@ -335,7 +335,7 @@ func (s *Server) analyzeRuleImpact(w http.ResponseWriter, r *http.Request) {
 		s.writeRequestError(w, err)
 		return
 	}
-	if err := auth.ValidateMutation(r, session.CSRFToken); err != nil {
+	if err := s.validateMutation(r, session); err != nil {
 		s.writeRequestError(w, err)
 		return
 	}
@@ -1088,7 +1088,7 @@ func (s *Server) revokeSession(w http.ResponseWriter, r *http.Request) {
 		writeFault(w, asFault(err), statusForFault(err))
 		return
 	}
-	if err := auth.ValidateMutation(r, session.CSRFToken); err != nil {
+	if err := s.validateMutation(r, session); err != nil {
 		writeFault(w, asFault(err), statusForFault(err))
 		return
 	}
@@ -1106,7 +1106,7 @@ func (s *Server) createLibrary(w http.ResponseWriter, r *http.Request) {
 		s.writeRequestError(w, err)
 		return
 	}
-	if err := auth.ValidateMutation(r, session.CSRFToken); err != nil {
+	if err := s.validateMutation(r, session); err != nil {
 		s.writeRequestError(w, err)
 		return
 	}
@@ -1124,8 +1124,8 @@ func (s *Server) createLibrary(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) getLibrary(w http.ResponseWriter, r *http.Request) {
-	if _, err := s.requireCapability(r, "library.read"); err != nil {
-		s.writeRequestError(w, err)
+	if _, err := s.requireCapabilityForScope(r, "library.read", auth.ResourceScope{Kind: "library", ID: r.PathValue("libraryId")}); err != nil {
+		s.writeRequestError(w, concealForbidden(err))
 		return
 	}
 	result, err := s.data.GetLibrary(r.Context(), r.PathValue("libraryId"))
@@ -1137,18 +1137,22 @@ func (s *Server) getLibrary(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) createSource(w http.ResponseWriter, r *http.Request) {
-	session, err := s.requireCapability(r, "library.write")
+	session, err := s.authenticate(r)
 	if err != nil {
 		s.writeRequestError(w, err)
 		return
 	}
-	if err := auth.ValidateMutation(r, session.CSRFToken); err != nil {
+	if err := s.validateMutation(r, session); err != nil {
 		s.writeRequestError(w, err)
 		return
 	}
 	var request api.SourceCreateRequest
 	if err := decodeJSON(r, &request); err != nil {
 		s.writeRequestError(w, fault.WithField(fault.CodeValidation, "body", err))
+		return
+	}
+	if err := s.authorizeSession(r, session, "library.write", auth.ResourceScope{Kind: "library", ID: request.LibraryId}); err != nil {
+		s.writeRequestError(w, err)
 		return
 	}
 	result, err := s.data.CreateSource(r.Context(), request.LibraryId, request.DisplayName, request.RootPath)
@@ -1160,8 +1164,8 @@ func (s *Server) createSource(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) getSource(w http.ResponseWriter, r *http.Request) {
-	if _, err := s.requireCapability(r, "library.read"); err != nil {
-		s.writeRequestError(w, err)
+	if _, err := s.requireCapabilityForScope(r, "library.read", auth.ResourceScope{Kind: "source", ID: r.PathValue("sourceId")}); err != nil {
+		s.writeRequestError(w, concealForbidden(err))
 		return
 	}
 	result, err := s.data.GetSource(r.Context(), r.PathValue("sourceId"))
@@ -1178,7 +1182,7 @@ func (s *Server) createRuleVersion(w http.ResponseWriter, r *http.Request) {
 		s.writeRequestError(w, err)
 		return
 	}
-	if err := auth.ValidateMutation(r, session.CSRFToken); err != nil {
+	if err := s.validateMutation(r, session); err != nil {
 		s.writeRequestError(w, err)
 		return
 	}
@@ -1211,12 +1215,12 @@ func (s *Server) getRuleVersion(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) createSourceRuleBinding(w http.ResponseWriter, r *http.Request) {
-	session, err := s.requireCapability(r, "rules.write")
+	session, err := s.authenticate(r)
 	if err != nil {
 		s.writeRequestError(w, err)
 		return
 	}
-	if err := auth.ValidateMutation(r, session.CSRFToken); err != nil {
+	if err := s.validateMutation(r, session); err != nil {
 		s.writeRequestError(w, err)
 		return
 	}
@@ -1233,6 +1237,10 @@ func (s *Server) createSourceRuleBinding(w http.ResponseWriter, r *http.Request)
 		s.writeRequestError(w, fault.WithField(fault.CodeValidation, "body", err))
 		return
 	}
+	if err := s.authorizeSession(r, session, "rules.write", auth.ResourceScope{Kind: "source", ID: request.SourceID}); err != nil {
+		s.writeRequestError(w, concealForbidden(err))
+		return
+	}
 	var result application.SourceRuleBinding
 	if request.ParameterID != "" {
 		result, err = s.data.CreateSourceRuleBindingFromParameterSet(r.Context(), request.SourceID, request.ParameterID, request.Priority, request.Override, request.Condition)
@@ -1247,7 +1255,8 @@ func (s *Server) createSourceRuleBinding(w http.ResponseWriter, r *http.Request)
 }
 
 func (s *Server) getSourceRuleBinding(w http.ResponseWriter, r *http.Request) {
-	if _, err := s.requireCapability(r, "rules.read"); err != nil {
+	session, err := s.authenticate(r)
+	if err != nil {
 		s.writeRequestError(w, err)
 		return
 	}
@@ -1256,16 +1265,20 @@ func (s *Server) getSourceRuleBinding(w http.ResponseWriter, r *http.Request) {
 		s.writeRequestError(w, err)
 		return
 	}
+	if err := s.authorizeSession(r, session, "rules.read", auth.ResourceScope{Kind: "source", ID: result.SourceID}); err != nil {
+		s.writeRequestError(w, concealForbidden(err))
+		return
+	}
 	writeJSON(w, http.StatusOK, sourceRuleBindingDTO(result))
 }
 
 func (s *Server) createScanJob(w http.ResponseWriter, r *http.Request) {
-	session, err := s.requireCapability(r, "scan.run")
+	session, err := s.requireCapabilityForScope(r, "scan.run", auth.ResourceScope{Kind: "source", ID: r.PathValue("sourceId")})
 	if err != nil {
 		s.writeRequestError(w, err)
 		return
 	}
-	if err := auth.ValidateMutation(r, session.CSRFToken); err != nil {
+	if err := s.validateMutation(r, session); err != nil {
 		s.writeRequestError(w, err)
 		return
 	}
@@ -1290,7 +1303,8 @@ func (s *Server) createScanJob(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) getJob(w http.ResponseWriter, r *http.Request) {
-	if _, err := s.requireCapability(r, "library.read"); err != nil {
+	session, err := s.authenticate(r)
+	if err != nil {
 		s.writeRequestError(w, err)
 		return
 	}
@@ -1299,11 +1313,16 @@ func (s *Server) getJob(w http.ResponseWriter, r *http.Request) {
 		s.writeRequestError(w, err)
 		return
 	}
+	if err := s.authorizeJob(r, session, job, false); err != nil {
+		s.writeRequestError(w, concealForbidden(err))
+		return
+	}
 	writeJSON(w, http.StatusOK, jobDTO(job))
 }
 
 func (s *Server) listJobs(w http.ResponseWriter, r *http.Request) {
-	if _, err := s.requireCapability(r, "library.read"); err != nil {
+	session, err := s.authenticate(r)
+	if err != nil {
 		s.writeRequestError(w, err)
 		return
 	}
@@ -1326,24 +1345,41 @@ func (s *Server) listJobs(w http.ResponseWriter, r *http.Request) {
 		}
 		limit = parsed
 	}
-	if len(items) > limit {
-		items = items[:limit]
-	}
-	result := api.JobListResponse{Jobs: make([]api.Job, 0, len(items))}
+	result := api.JobListResponse{Jobs: make([]api.Job, 0, min(limit, len(items)))}
 	for _, item := range items {
+		if err := s.authorizeJob(r, session, item, false); err != nil {
+			var structured *fault.Error
+			if errors.As(err, &structured) && structured.Code == fault.CodeForbidden {
+				continue
+			}
+			s.writeRequestError(w, err)
+			return
+		}
 		result.Jobs = append(result.Jobs, jobDTO(item))
+		if len(result.Jobs) == limit {
+			break
+		}
 	}
 	writeJSON(w, http.StatusOK, result)
 }
 
 func (s *Server) cancelJob(w http.ResponseWriter, r *http.Request) {
-	session, err := s.requireCapability(r, "scan.run")
+	session, err := s.authenticate(r)
 	if err != nil {
 		s.writeRequestError(w, err)
 		return
 	}
-	if err := auth.ValidateMutation(r, session.CSRFToken); err != nil {
+	if err := s.validateMutation(r, session); err != nil {
 		s.writeRequestError(w, err)
+		return
+	}
+	current, err := s.jobs.Get(r.Context(), r.PathValue("jobId"))
+	if err != nil {
+		s.writeRequestError(w, err)
+		return
+	}
+	if err := s.authorizeJob(r, session, current, true); err != nil {
+		s.writeRequestError(w, concealForbidden(err))
 		return
 	}
 	job, err := s.jobs.RequestCancel(r.Context(), r.PathValue("jobId"))
@@ -1358,13 +1394,22 @@ func (s *Server) cancelJob(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) retryJob(w http.ResponseWriter, r *http.Request) {
-	session, err := s.requireCapability(r, "scan.run")
+	session, err := s.authenticate(r)
 	if err != nil {
 		s.writeRequestError(w, err)
 		return
 	}
-	if err := auth.ValidateMutation(r, session.CSRFToken); err != nil {
+	if err := s.validateMutation(r, session); err != nil {
 		s.writeRequestError(w, err)
+		return
+	}
+	current, err := s.jobs.Get(r.Context(), r.PathValue("jobId"))
+	if err != nil {
+		s.writeRequestError(w, err)
+		return
+	}
+	if err := s.authorizeJob(r, session, current, true); err != nil {
+		s.writeRequestError(w, concealForbidden(err))
 		return
 	}
 	job, err := s.jobs.Retry(r.Context(), r.PathValue("jobId"), session.PrincipalID)
@@ -1377,12 +1422,18 @@ func (s *Server) retryJob(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) listJobAttempts(w http.ResponseWriter, r *http.Request) {
-	if _, err := s.requireCapability(r, "library.read"); err != nil {
+	session, err := s.authenticate(r)
+	if err != nil {
 		s.writeRequestError(w, err)
 		return
 	}
-	if _, err := s.jobs.Get(r.Context(), r.PathValue("jobId")); err != nil {
+	job, err := s.jobs.Get(r.Context(), r.PathValue("jobId"))
+	if err != nil {
 		s.writeRequestError(w, err)
+		return
+	}
+	if err := s.authorizeJob(r, session, job, false); err != nil {
+		s.writeRequestError(w, concealForbidden(err))
 		return
 	}
 	items, err := s.jobs.ListAttempts(r.Context(), r.PathValue("jobId"))
@@ -1398,8 +1449,8 @@ func (s *Server) listJobAttempts(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) getSourceScanStatus(w http.ResponseWriter, r *http.Request) {
-	if _, err := s.requireCapability(r, "library.read"); err != nil {
-		s.writeRequestError(w, err)
+	if _, err := s.requireCapabilityForScope(r, "library.read", auth.ResourceScope{Kind: "source", ID: r.PathValue("sourceId")}); err != nil {
+		s.writeRequestError(w, concealForbidden(err))
 		return
 	}
 	if s.watcher == nil {
@@ -1425,7 +1476,7 @@ func (s *Server) createCatalogGCJob(w http.ResponseWriter, r *http.Request) {
 		s.writeRequestError(w, err)
 		return
 	}
-	if err := auth.ValidateMutation(r, session.CSRFToken); err != nil {
+	if err := s.validateMutation(r, session); err != nil {
 		s.writeRequestError(w, err)
 		return
 	}
@@ -1470,7 +1521,7 @@ func (s *Server) createMaintenanceJob(w http.ResponseWriter, r *http.Request, jo
 		s.writeRequestError(w, err)
 		return
 	}
-	if err := auth.ValidateMutation(r, session.CSRFToken); err != nil {
+	if err := s.validateMutation(r, session); err != nil {
 		s.writeRequestError(w, err)
 		return
 	}
@@ -1502,7 +1553,8 @@ func (s *Server) startJob(job jobs.Job) {
 }
 
 func (s *Server) listCreators(w http.ResponseWriter, r *http.Request) {
-	if _, err := s.requireCapability(r, "library.read"); err != nil {
+	session, err := s.authenticate(r)
+	if err != nil {
 		s.writeRequestError(w, err)
 		return
 	}
@@ -1517,13 +1569,27 @@ func (s *Server) listCreators(w http.ResponseWriter, r *http.Request) {
 	}
 	items := make([]api.Creator, 0, len(list))
 	for _, creator := range list {
+		_, bindings, getErr := s.creators.Get(r.Context(), creator.ID)
+		if getErr != nil {
+			s.writeRequestError(w, getErr)
+			return
+		}
+		_, visible, authErr := s.creatorBindingsAllowed(r, session, bindings)
+		if authErr != nil {
+			s.writeRequestError(w, authErr)
+			return
+		}
+		if !visible {
+			continue
+		}
 		items = append(items, creatorDTO(creator))
 	}
 	writeJSON(w, http.StatusOK, api.CreatorListResponse{Creators: items})
 }
 
 func (s *Server) getCreator(w http.ResponseWriter, r *http.Request) {
-	if _, err := s.requireCapability(r, "library.read"); err != nil {
+	session, err := s.authenticate(r)
+	if err != nil {
 		s.writeRequestError(w, err)
 		return
 	}
@@ -1536,8 +1602,17 @@ func (s *Server) getCreator(w http.ResponseWriter, r *http.Request) {
 		s.writeRequestError(w, err)
 		return
 	}
-	items := make([]api.CreatorSourceBinding, 0, len(bindings))
-	for _, binding := range bindings {
+	allowed, visible, err := s.creatorBindingsAllowed(r, session, bindings)
+	if err != nil {
+		s.writeRequestError(w, err)
+		return
+	}
+	if !visible {
+		s.writeRequestError(w, fault.New(fault.CodeNotFound, false, nil))
+		return
+	}
+	items := make([]api.CreatorSourceBinding, 0, len(allowed))
+	for _, binding := range allowed {
 		items = append(items, api.CreatorSourceBinding{
 			BindingId: binding.BindingID, SourceId: binding.SourceID, ProviderId: binding.ProviderID,
 			ExternalId: binding.ExternalID, SourceKey: binding.SourceKey,
@@ -1545,6 +1620,27 @@ func (s *Server) getCreator(w http.ResponseWriter, r *http.Request) {
 		})
 	}
 	writeJSON(w, http.StatusOK, api.CreatorDetail{Creator: creatorDTO(creator), SourceBindings: items})
+}
+
+func (s *Server) creatorBindingsAllowed(r *http.Request, session auth.Session, bindings []creators.SourceBinding) ([]creators.SourceBinding, bool, error) {
+	global, err := s.auth.AuthorizeSession(r.Context(), session, "library.read", auth.ResourceScope{Kind: "global"})
+	if err != nil {
+		return nil, false, fault.New(fault.CodeInternal, true, err)
+	}
+	if global {
+		return bindings, true, nil
+	}
+	allowed := make([]creators.SourceBinding, 0, len(bindings))
+	for _, binding := range bindings {
+		ok, err := s.auth.AuthorizeSession(r.Context(), session, "library.read", auth.ResourceScope{Kind: "source", ID: binding.SourceID})
+		if err != nil {
+			return nil, false, fault.New(fault.CodeInternal, true, err)
+		}
+		if ok {
+			allowed = append(allowed, binding)
+		}
+	}
+	return allowed, len(allowed) > 0, nil
 }
 
 func (s *Server) listCreatorMerges(w http.ResponseWriter, r *http.Request) {
@@ -1574,7 +1670,7 @@ func (s *Server) mergeCreators(w http.ResponseWriter, r *http.Request) {
 		s.writeRequestError(w, err)
 		return
 	}
-	if err := auth.ValidateMutation(r, session.CSRFToken); err != nil {
+	if err := s.validateMutation(r, session); err != nil {
 		s.writeRequestError(w, err)
 		return
 	}
@@ -1601,7 +1697,7 @@ func (s *Server) undoCreatorMerge(w http.ResponseWriter, r *http.Request) {
 		s.writeRequestError(w, err)
 		return
 	}
-	if err := auth.ValidateMutation(r, session.CSRFToken); err != nil {
+	if err := s.validateMutation(r, session); err != nil {
 		s.writeRequestError(w, err)
 		return
 	}
@@ -1618,8 +1714,17 @@ func (s *Server) undoCreatorMerge(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) listBindingIssues(w http.ResponseWriter, r *http.Request) {
-	if _, err := s.requireCapability(r, "bindings.read"); err != nil {
+	session, err := s.authenticate(r)
+	if err != nil {
 		s.writeRequestError(w, err)
+		return
+	}
+	scope := auth.ResourceScope{Kind: "global"}
+	if sourceID := r.URL.Query().Get("sourceId"); sourceID != "" {
+		scope = auth.ResourceScope{Kind: "source", ID: sourceID}
+	}
+	if err := s.authorizeSession(r, session, "bindings.read", scope); err != nil {
+		s.writeRequestError(w, concealForbidden(err))
 		return
 	}
 	limit := 0
@@ -1651,7 +1756,8 @@ func (s *Server) listBindingIssues(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) getBindingIssue(w http.ResponseWriter, r *http.Request) {
-	if _, err := s.requireCapability(r, "bindings.read"); err != nil {
+	session, err := s.authenticate(r)
+	if err != nil {
 		s.writeRequestError(w, err)
 		return
 	}
@@ -1660,22 +1766,35 @@ func (s *Server) getBindingIssue(w http.ResponseWriter, r *http.Request) {
 		s.writeRequestError(w, err)
 		return
 	}
+	if err := s.authorizeSession(r, session, "bindings.read", auth.ResourceScope{Kind: "source", ID: issue.SourceID}); err != nil {
+		s.writeRequestError(w, concealForbidden(err))
+		return
+	}
 	writeJSON(w, http.StatusOK, bindingIssueDTO(issue))
 }
 
 func (s *Server) resolveBindingIssue(w http.ResponseWriter, r *http.Request) {
-	session, err := s.requireCapability(r, "bindings.write")
+	session, err := s.authenticate(r)
 	if err != nil {
 		s.writeRequestError(w, err)
 		return
 	}
-	if err := auth.ValidateMutation(r, session.CSRFToken); err != nil {
+	if err := s.validateMutation(r, session); err != nil {
 		s.writeRequestError(w, err)
 		return
 	}
 	var request api.BindingIssueResolveRequest
 	if err := decodeJSON(r, &request); err != nil {
 		s.writeRequestError(w, fault.WithField(fault.CodeValidation, "body", err))
+		return
+	}
+	existing, err := s.data.GetBindingIssue(r.Context(), r.PathValue("issueId"))
+	if err != nil {
+		s.writeRequestError(w, err)
+		return
+	}
+	if err := s.authorizeSession(r, session, "bindings.write", auth.ResourceScope{Kind: "source", ID: existing.SourceID}); err != nil {
+		s.writeRequestError(w, concealForbidden(err))
 		return
 	}
 	target := ""
@@ -1700,18 +1819,27 @@ func (s *Server) reopenBindingIssue(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) transitionBindingIssue(w http.ResponseWriter, r *http.Request, action func(context.Context, string, string, int) (application.BindingIssue, error)) {
-	session, err := s.requireCapability(r, "bindings.write")
+	session, err := s.authenticate(r)
 	if err != nil {
 		s.writeRequestError(w, err)
 		return
 	}
-	if err := auth.ValidateMutation(r, session.CSRFToken); err != nil {
+	if err := s.validateMutation(r, session); err != nil {
 		s.writeRequestError(w, err)
 		return
 	}
 	var request api.BindingIssueVersionRequest
 	if err := decodeJSON(r, &request); err != nil {
 		s.writeRequestError(w, fault.WithField(fault.CodeValidation, "body", err))
+		return
+	}
+	existing, err := s.data.GetBindingIssue(r.Context(), r.PathValue("issueId"))
+	if err != nil {
+		s.writeRequestError(w, err)
+		return
+	}
+	if err := s.authorizeSession(r, session, "bindings.write", auth.ResourceScope{Kind: "source", ID: existing.SourceID}); err != nil {
+		s.writeRequestError(w, concealForbidden(err))
 		return
 	}
 	issue, err := action(r.Context(), r.PathValue("issueId"), session.PrincipalID, request.Version)
@@ -1735,18 +1863,22 @@ func (s *Server) undoManualUnbind(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) bindingAction(w http.ResponseWriter, r *http.Request, kind string, action func(context.Context, string, string) (string, error)) {
-	session, err := s.requireCapability(r, "bindings.write")
+	session, err := s.authenticate(r)
 	if err != nil {
 		s.writeRequestError(w, err)
 		return
 	}
-	if err := auth.ValidateMutation(r, session.CSRFToken); err != nil {
+	if err := s.validateMutation(r, session); err != nil {
 		s.writeRequestError(w, err)
 		return
 	}
 	var request api.BindingUnbindRequest
 	if err := decodeJSON(r, &request); err != nil {
 		s.writeRequestError(w, fault.WithField(fault.CodeValidation, "body", err))
+		return
+	}
+	if err := s.authorizeSession(r, session, "bindings.write", auth.ResourceScope{Kind: "source", ID: request.SourceId}); err != nil {
+		s.writeRequestError(w, concealForbidden(err))
 		return
 	}
 	canonicalID, err := action(r.Context(), request.SourceId, request.SourceKey)
@@ -1758,8 +1890,17 @@ func (s *Server) bindingAction(w http.ResponseWriter, r *http.Request, kind stri
 }
 
 func (s *Server) listOrphanCandidates(w http.ResponseWriter, r *http.Request) {
-	if _, err := s.requireCapability(r, "bindings.read"); err != nil {
+	session, err := s.authenticate(r)
+	if err != nil {
 		s.writeRequestError(w, err)
+		return
+	}
+	scope := auth.ResourceScope{Kind: "global"}
+	if sourceID := r.URL.Query().Get("sourceId"); sourceID != "" {
+		scope = auth.ResourceScope{Kind: "source", ID: sourceID}
+	}
+	if err := s.authorizeSession(r, session, "bindings.read", scope); err != nil {
+		s.writeRequestError(w, concealForbidden(err))
 		return
 	}
 	limit := 0
@@ -1790,18 +1931,27 @@ func (s *Server) listOrphanCandidates(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) decideOrphanCandidate(w http.ResponseWriter, r *http.Request) {
-	session, err := s.requireCapability(r, "bindings.write")
+	session, err := s.authenticate(r)
 	if err != nil {
 		s.writeRequestError(w, err)
 		return
 	}
-	if err := auth.ValidateMutation(r, session.CSRFToken); err != nil {
+	if err := s.validateMutation(r, session); err != nil {
 		s.writeRequestError(w, err)
 		return
 	}
 	var request api.OrphanDecisionRequest
 	if err := decodeJSON(r, &request); err != nil {
 		s.writeRequestError(w, fault.WithField(fault.CodeValidation, "body", err))
+		return
+	}
+	sourceID, err := s.data.OrphanCandidateSource(r.Context(), r.PathValue("bindingId"))
+	if err != nil {
+		s.writeRequestError(w, err)
+		return
+	}
+	if err := s.authorizeSession(r, session, "bindings.write", auth.ResourceScope{Kind: "source", ID: sourceID}); err != nil {
+		s.writeRequestError(w, concealForbidden(err))
 		return
 	}
 	extend := 0
@@ -1821,18 +1971,27 @@ func (s *Server) decideOrphanCandidate(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) resolveSourceStructureIssue(w http.ResponseWriter, r *http.Request) {
-	session, err := s.requireCapability(r, "bindings.write")
+	session, err := s.authenticate(r)
 	if err != nil {
 		s.writeRequestError(w, err)
 		return
 	}
-	if err := auth.ValidateMutation(r, session.CSRFToken); err != nil {
+	if err := s.validateMutation(r, session); err != nil {
 		s.writeRequestError(w, err)
 		return
 	}
 	var request api.SourceStructureDecisionRequest
 	if err := decodeJSON(r, &request); err != nil {
 		s.writeRequestError(w, fault.WithField(fault.CodeValidation, "body", err))
+		return
+	}
+	existing, err := s.data.GetBindingIssue(r.Context(), r.PathValue("issueId"))
+	if err != nil {
+		s.writeRequestError(w, err)
+		return
+	}
+	if err := s.authorizeSession(r, session, "bindings.write", auth.ResourceScope{Kind: "source", ID: existing.SourceID}); err != nil {
+		s.writeRequestError(w, concealForbidden(err))
 		return
 	}
 	targetSourceKey, targetWorkID := "", ""
@@ -1852,8 +2011,17 @@ func (s *Server) resolveSourceStructureIssue(w http.ResponseWriter, r *http.Requ
 }
 
 func (s *Server) listSourceStructureDecisions(w http.ResponseWriter, r *http.Request) {
-	if _, err := s.requireCapability(r, "bindings.read"); err != nil {
+	session, err := s.authenticate(r)
+	if err != nil {
 		s.writeRequestError(w, err)
+		return
+	}
+	scope := auth.ResourceScope{Kind: "global"}
+	if sourceID := r.URL.Query().Get("sourceId"); sourceID != "" {
+		scope = auth.ResourceScope{Kind: "source", ID: sourceID}
+	}
+	if err := s.authorizeSession(r, session, "bindings.read", scope); err != nil {
+		s.writeRequestError(w, concealForbidden(err))
 		return
 	}
 	limit := 0
@@ -1879,7 +2047,8 @@ func (s *Server) listSourceStructureDecisions(w http.ResponseWriter, r *http.Req
 }
 
 func (s *Server) getSourceStructureDecision(w http.ResponseWriter, r *http.Request) {
-	if _, err := s.requireCapability(r, "bindings.read"); err != nil {
+	session, err := s.authenticate(r)
+	if err != nil {
 		s.writeRequestError(w, err)
 		return
 	}
@@ -1888,22 +2057,35 @@ func (s *Server) getSourceStructureDecision(w http.ResponseWriter, r *http.Reque
 		s.writeRequestError(w, err)
 		return
 	}
+	if err := s.authorizeSession(r, session, "bindings.read", auth.ResourceScope{Kind: "source", ID: decision.SourceID}); err != nil {
+		s.writeRequestError(w, concealForbidden(err))
+		return
+	}
 	writeJSON(w, http.StatusOK, structureDecisionDTO(decision))
 }
 
 func (s *Server) undoSourceStructureDecision(w http.ResponseWriter, r *http.Request) {
-	session, err := s.requireCapability(r, "bindings.write")
+	session, err := s.authenticate(r)
 	if err != nil {
 		s.writeRequestError(w, err)
 		return
 	}
-	if err := auth.ValidateMutation(r, session.CSRFToken); err != nil {
+	if err := s.validateMutation(r, session); err != nil {
 		s.writeRequestError(w, err)
 		return
 	}
 	var request api.BindingIssueVersionRequest
 	if err := decodeJSON(r, &request); err != nil {
 		s.writeRequestError(w, fault.WithField(fault.CodeValidation, "body", err))
+		return
+	}
+	existing, err := s.data.GetSourceStructureDecision(r.Context(), r.PathValue("decisionId"))
+	if err != nil {
+		s.writeRequestError(w, err)
+		return
+	}
+	if err := s.authorizeSession(r, session, "bindings.write", auth.ResourceScope{Kind: "source", ID: existing.SourceID}); err != nil {
+		s.writeRequestError(w, concealForbidden(err))
 		return
 	}
 	decision, err := s.data.UndoSourceStructureDecision(r.Context(), r.PathValue("decisionId"), session.PrincipalID, request.Version)
@@ -1945,7 +2127,7 @@ func (s *Server) createControlBackup(w http.ResponseWriter, r *http.Request) {
 		s.writeRequestError(w, err)
 		return
 	}
-	if err := auth.ValidateMutation(r, session.CSRFToken); err != nil {
+	if err := s.validateMutation(r, session); err != nil {
 		s.writeRequestError(w, err)
 		return
 	}
@@ -2034,7 +2216,7 @@ func (s *Server) decodeRestoreRequest(r *http.Request) (string, auth.Session, er
 	if err != nil {
 		return "", auth.Session{}, err
 	}
-	if err := auth.ValidateMutation(r, session.CSRFToken); err != nil {
+	if err := s.validateMutation(r, session); err != nil {
 		return "", auth.Session{}, err
 	}
 	if s.backup == nil {
@@ -2073,6 +2255,7 @@ func backupManifestDTO(value backup.Manifest) api.ControlBackupManifest {
 	result.Security.Sessions = value.Security.Sessions
 	result.Security.PairingCredentials = value.Security.PairingCredentials
 	result.Security.ApiTokens = value.Security.APITokens
+	result.Security.Shares = value.Security.Shares
 	result.Security.CredentialStoreRefs = value.Security.CredentialStoreRefs
 	result.Security.Note = value.Security.Note
 	if value.Notes != "" {
@@ -2095,8 +2278,18 @@ func (s *Server) getCurrentQueryPublication(w http.ResponseWriter, r *http.Reque
 }
 
 func (s *Server) listWorks(w http.ResponseWriter, r *http.Request) {
-	session, err := s.requireCapability(r, "library.read")
+	session, err := s.authenticate(r)
 	if err != nil {
+		s.writeRequestError(w, err)
+		return
+	}
+	scope := auth.ResourceScope{Kind: "global"}
+	if sourceID := r.URL.Query().Get("sourceId"); sourceID != "" {
+		scope = auth.ResourceScope{Kind: "source", ID: sourceID}
+	} else if libraryID := r.URL.Query().Get("libraryId"); libraryID != "" {
+		scope = auth.ResourceScope{Kind: "library", ID: libraryID}
+	}
+	if err := s.authorizeSession(r, session, "library.read", scope); err != nil {
 		s.writeRequestError(w, err)
 		return
 	}
@@ -2122,7 +2315,7 @@ func (s *Server) listWorks(w http.ResponseWriter, r *http.Request) {
 		Filter:        r.URL.Query().Get("filter"),
 		SortDirection: r.URL.Query().Get("sortDirection"), Limit: limit, Cursor: r.URL.Query().Get("cursor"),
 		QueryPublicationID: r.URL.Query().Get("queryPublicationId"), OmitTotal: omitTotal,
-		AuthorizationScope: queryservice.AuthorizationScope(session.PrincipalID, session.Capabilities),
+		AuthorizationScope: queryservice.AuthorizationScope(fmt.Sprintf("%s:%d:%v", session.PrincipalID, session.SecurityVersion, session.TokenScopes), session.Capabilities),
 		Capabilities:       session.Capabilities,
 	})
 	if err != nil {
@@ -2168,7 +2361,8 @@ func (s *Server) listWorks(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) getWork(w http.ResponseWriter, r *http.Request) {
-	if _, err := s.requireCapability(r, "library.read"); err != nil {
+	session, err := s.authenticate(r)
+	if err != nil {
 		s.writeRequestError(w, err)
 		return
 	}
@@ -2177,12 +2371,26 @@ func (s *Server) getWork(w http.ResponseWriter, r *http.Request) {
 		s.writeRequestError(w, err)
 		return
 	}
+	if err := s.authorizeSession(r, session, "library.read", auth.ResourceScope{Kind: "source", ID: work.SourceID}); err != nil {
+		s.writeRequestError(w, concealForbidden(err))
+		return
+	}
 	writeJSON(w, http.StatusOK, workDTO(publication, work))
 }
 
 func (s *Server) getWorkOverlay(w http.ResponseWriter, r *http.Request) {
-	if _, err := s.requireCapability(r, "library.read"); err != nil {
+	session, err := s.authenticate(r)
+	if err != nil {
 		s.writeRequestError(w, err)
+		return
+	}
+	_, work, err := s.catalog.GetWork(r.Context(), r.PathValue("workId"))
+	if err != nil {
+		s.writeRequestError(w, err)
+		return
+	}
+	if err := s.authorizeSession(r, session, "library.read", auth.ResourceScope{Kind: "source", ID: work.SourceID}); err != nil {
+		s.writeRequestError(w, concealForbidden(err))
 		return
 	}
 	if s.overlay == nil {
@@ -2198,12 +2406,21 @@ func (s *Server) getWorkOverlay(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) putWorkOverlay(w http.ResponseWriter, r *http.Request) {
-	session, err := s.requireCapability(r, "overlays.write")
+	session, err := s.authenticate(r)
 	if err != nil {
 		s.writeRequestError(w, err)
 		return
 	}
-	if err := auth.ValidateMutation(r, session.CSRFToken); err != nil {
+	_, work, err := s.catalog.GetWork(r.Context(), r.PathValue("workId"))
+	if err != nil {
+		s.writeRequestError(w, err)
+		return
+	}
+	if err := s.authorizeSession(r, session, "overlays.write", auth.ResourceScope{Kind: "source", ID: work.SourceID}); err != nil {
+		s.writeRequestError(w, concealForbidden(err))
+		return
+	}
+	if err := s.validateMutation(r, session); err != nil {
 		s.writeRequestError(w, err)
 		return
 	}
@@ -2235,7 +2452,7 @@ func (s *Server) putWorkOverlay(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) listWorkMedia(w http.ResponseWriter, r *http.Request) {
-	session, err := s.requireCapability(r, "media.read")
+	session, err := s.authenticate(r)
 	if err != nil {
 		s.writeRequestError(w, err)
 		return
@@ -2247,6 +2464,15 @@ func (s *Server) listWorkMedia(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	defer release()
+	_, work, err := s.catalog.GetWorkAt(r.Context(), requestedPub, r.PathValue("workId"))
+	if err != nil {
+		s.writeRequestError(w, err)
+		return
+	}
+	if err := s.authorizeSession(r, session, "media.read", auth.ResourceScope{Kind: "source", ID: work.SourceID}); err != nil {
+		s.writeRequestError(w, concealForbidden(err))
+		return
+	}
 	publication, items, err := s.catalog.ListMediaForWorkAt(r.Context(), requestedPub, r.PathValue("workId"))
 	if err != nil {
 		s.writeRequestError(w, err)
@@ -2260,7 +2486,7 @@ func (s *Server) listWorkMedia(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) getMedia(w http.ResponseWriter, r *http.Request) {
-	session, err := s.requireCapability(r, "media.read")
+	session, err := s.authenticate(r)
 	if err != nil {
 		s.writeRequestError(w, err)
 		return
@@ -2277,11 +2503,15 @@ func (s *Server) getMedia(w http.ResponseWriter, r *http.Request) {
 		s.writeRequestError(w, err)
 		return
 	}
+	if err := s.authorizeSession(r, session, "media.read", auth.ResourceScope{Kind: "source", ID: item.SourceID}); err != nil {
+		s.writeRequestError(w, concealForbidden(err))
+		return
+	}
 	writeJSON(w, http.StatusOK, mediaDTO(publication, item))
 }
 
 func (s *Server) mediaContent(w http.ResponseWriter, r *http.Request) {
-	session, err := s.requireCapability(r, "media.read")
+	session, err := s.authenticate(r)
 	if err != nil {
 		s.writeRequestError(w, err)
 		return
@@ -2439,12 +2669,12 @@ func (s *Server) writeMediaSnapshot(w http.ResponseWriter, r *http.Request, snap
 // 同一快照时重复请求复用同一 Job；publication 切换后即使媒体 ID 和相对路径相同，也
 // 不会误复用旧 publication 的 Job。
 func (s *Server) createMediaVerificationJob(w http.ResponseWriter, r *http.Request) {
-	session, err := s.requireCapability(r, "scan.run")
+	session, err := s.authenticate(r)
 	if err != nil {
 		s.writeRequestError(w, err)
 		return
 	}
-	if err := auth.ValidateMutation(r, session.CSRFToken); err != nil {
+	if err := s.validateMutation(r, session); err != nil {
 		s.writeRequestError(w, err)
 		return
 	}
@@ -2458,6 +2688,10 @@ func (s *Server) createMediaVerificationJob(w http.ResponseWriter, r *http.Reque
 	resolvedPub, item, err := s.catalog.GetMediaAt(r.Context(), requestedPub, r.PathValue("mediaId"))
 	if err != nil {
 		s.writeRequestError(w, err)
+		return
+	}
+	if err := s.authorizeSession(r, session, "scan.run", auth.ResourceScope{Kind: "source", ID: item.SourceID}); err != nil {
+		s.writeRequestError(w, concealForbidden(err))
 		return
 	}
 	if requestedPub != "" {
@@ -2506,12 +2740,12 @@ func (s *Server) createMediaVerificationJob(w http.ResponseWriter, r *http.Reque
 // ContentBlob 从请求指定（或省略时当前 active）的 queryPublicationId 解析，不重新从
 // active publication 寻找"当前 Blob"代替请求时刻的 Blob。
 func (s *Server) createDerivedAsset(w http.ResponseWriter, r *http.Request) {
-	session, err := s.requireCapability(r, "media.derive")
+	session, err := s.authenticate(r)
 	if err != nil {
 		s.writeRequestError(w, err)
 		return
 	}
-	if err := auth.ValidateMutation(r, session.CSRFToken); err != nil {
+	if err := s.validateMutation(r, session); err != nil {
 		s.writeRequestError(w, err)
 		return
 	}
@@ -2542,6 +2776,10 @@ func (s *Server) createDerivedAsset(w http.ResponseWriter, r *http.Request) {
 		s.writeRequestError(w, err)
 		return
 	}
+	if err := s.authorizeSession(r, session, "media.derive", auth.ResourceScope{Kind: "source", ID: item.SourceID}); err != nil {
+		s.writeRequestError(w, concealForbidden(err))
+		return
+	}
 	if item.ContentVerificationState != catalog.ContentVerificationStateContentVerified {
 		s.writeRequestError(w, fault.New(fault.CodeContentNotVerified, true, nil))
 		return
@@ -2570,11 +2808,43 @@ func (s *Server) createDerivedAsset(w http.ResponseWriter, r *http.Request) {
 // derivedAssetContent 通过内容寻址 assetKey（不是 Catalog 内部 row ID）流式读取一个
 // 已就绪 DerivedAsset 的正文，读取期间持有 derived.Service 的租约以防止与 GC 竞争。
 func (s *Server) derivedAssetContent(w http.ResponseWriter, r *http.Request) {
-	if _, err := s.requireCapability(r, "media.read"); err != nil {
+	session, err := s.authenticate(r)
+	if err != nil {
 		s.writeRequestError(w, err)
 		return
 	}
 	if s.derived == nil {
+		s.writeRequestError(w, fault.New(fault.CodeNotFound, false, nil))
+		return
+	}
+	blob, err := s.derived.InputBlob(r.Context(), r.PathValue("assetKey"))
+	if err != nil {
+		s.writeRequestError(w, err)
+		return
+	}
+	allowed, authErr := s.auth.AuthorizeSession(r.Context(), session, "media.read", auth.ResourceScope{Kind: "global"})
+	if authErr != nil {
+		s.writeRequestError(w, fault.New(fault.CodeInternal, true, authErr))
+		return
+	}
+	if !allowed {
+		locations, locationErr := s.catalog.BlobLocations(r.Context(), blob)
+		if locationErr != nil {
+			s.writeRequestError(w, concealForbidden(locationErr))
+			return
+		}
+		for _, location := range locations {
+			allowed, authErr = s.auth.AuthorizeSession(r.Context(), session, "media.read", auth.ResourceScope{Kind: "source", ID: location.SourceID})
+			if authErr != nil {
+				s.writeRequestError(w, fault.New(fault.CodeInternal, true, authErr))
+				return
+			}
+			if allowed {
+				break
+			}
+		}
+	}
+	if !allowed {
 		s.writeRequestError(w, fault.New(fault.CodeNotFound, false, nil))
 		return
 	}
