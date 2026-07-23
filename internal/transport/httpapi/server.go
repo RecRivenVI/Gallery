@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"mime"
 	"net/http"
 	"strconv"
 	"strings"
@@ -42,26 +43,27 @@ import (
 )
 
 type Server struct {
-	mode        config.Mode
-	store       *storage.Store
-	clock       ports.Clock
-	logger      *slog.Logger
-	auth        *auth.Personal
-	data        *application.Resources
-	jobs        *jobs.Store
-	catalog     *catalog.Store
-	scanner     *scanner.Service
-	hub         *realtime.Hub
-	rules       *rules.Lifecycle
-	query       *queryservice.Service
-	overlay     *overlay.Service
-	creators    *creators.Service
-	backup      *backup.Service
-	maintenance *maintenance.Service
-	watcher     *watcherservice.Service
-	scheduler   JobController
-	derived     *derived.Service
-	derivedJob  *derivedjob.Service
+	mode         config.Mode
+	store        *storage.Store
+	clock        ports.Clock
+	logger       *slog.Logger
+	auth         *auth.Personal
+	data         *application.Resources
+	jobs         *jobs.Store
+	catalog      *catalog.Store
+	scanner      *scanner.Service
+	hub          *realtime.Hub
+	rules        *rules.Lifecycle
+	query        *queryservice.Service
+	overlay      *overlay.Service
+	creators     *creators.Service
+	backup       *backup.Service
+	maintenance  *maintenance.Service
+	watcher      *watcherservice.Service
+	scheduler    JobController
+	derived      *derived.Service
+	derivedJob   *derivedjob.Service
+	allowedHosts []string
 }
 
 type JobController interface {
@@ -70,11 +72,12 @@ type JobController interface {
 }
 
 type Options struct {
-	Maintenance *maintenance.Service
-	Watcher     *watcherservice.Service
-	Scheduler   JobController
-	Derived     *derived.Service
-	DerivedJob  *derivedjob.Service
+	Maintenance  *maintenance.Service
+	Watcher      *watcherservice.Service
+	Scheduler    JobController
+	Derived      *derived.Service
+	DerivedJob   *derivedjob.Service
+	AllowedHosts []string
 }
 
 func New(mode config.Mode, store *storage.Store, clock ports.Clock, personal *auth.Personal, resources *application.Resources, jobStore *jobs.Store, catalogStore *catalog.Store, scannerService *scanner.Service, overlayService *overlay.Service, creatorsService *creators.Service, backupService *backup.Service, hub *realtime.Hub, logger *slog.Logger, options ...Options) http.Handler {
@@ -93,7 +96,7 @@ func New(mode config.Mode, store *storage.Store, clock ports.Clock, personal *au
 	if len(options) > 0 {
 		option = options[0]
 	}
-	server := &Server{mode: mode, store: store, clock: clock, auth: personal, data: resources, jobs: jobStore, catalog: catalogStore, scanner: scannerService, hub: hub, logger: logger, rules: ruleLifecycle, query: queryService, overlay: overlayService, creators: creatorsService, backup: backupService, maintenance: option.Maintenance, watcher: option.Watcher, scheduler: option.Scheduler, derived: option.Derived, derivedJob: option.DerivedJob}
+	server := &Server{mode: mode, store: store, clock: clock, auth: personal, data: resources, jobs: jobStore, catalog: catalogStore, scanner: scannerService, hub: hub, logger: logger, rules: ruleLifecycle, query: queryService, overlay: overlayService, creators: creatorsService, backup: backupService, maintenance: option.Maintenance, watcher: option.Watcher, scheduler: option.Scheduler, derived: option.Derived, derivedJob: option.DerivedJob, allowedHosts: append([]string(nil), option.AllowedHosts...)}
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /api/v1/health", server.health)
 	mux.HandleFunc("GET /api/v1/bootstrap", server.bootstrap)
@@ -190,16 +193,29 @@ func New(mode config.Mode, store *storage.Store, clock ports.Clock, personal *au
 	mux.HandleFunc("POST /api/v1/media/{mediaId}/derived-assets", server.createDerivedAsset)
 	mux.HandleFunc("GET /api/v1/derived-assets/{assetKey}/content", server.derivedAssetContent)
 	mux.Handle("/ws/v1", hub.Handler(func(r *http.Request) (realtime.Principal, error) {
-		if err := auth.ValidateOrigin(r); err != nil {
+		if err := server.validateOrigin(r); err != nil {
 			return realtime.Principal{}, err
 		}
 		session, err := server.authenticate(r)
 		if err != nil {
 			return realtime.Principal{}, err
 		}
-		return realtime.Principal{SessionID: session.ID, Capabilities: append([]string(nil), session.Capabilities...)}, nil
+		return realtime.Principal{
+			SessionID: session.ID, PrincipalID: session.PrincipalID,
+			Capabilities: append([]string(nil), session.Capabilities...),
+			Authorize: func(ctx context.Context, capability string, scope realtime.Scope) bool {
+				resourceScope := auth.ResourceScope{Kind: "global"}
+				if scope.SourceID != "" {
+					resourceScope = auth.ResourceScope{Kind: "source", ID: scope.SourceID}
+				} else if scope.LibraryID != "" {
+					resourceScope = auth.ResourceScope{Kind: "library", ID: scope.LibraryID}
+				}
+				allowed, authorizeErr := server.auth.AuthorizeSession(ctx, session, capability, resourceScope)
+				return authorizeErr == nil && allowed
+			},
+		}, nil
 	}, personal.IsActive))
-	return requestLog(logger, hostGuard(mux))
+	return requestLog(logger, hostGuard(server, mux))
 }
 
 func (s *Server) getRulePackageSchema(w http.ResponseWriter, r *http.Request) {
@@ -2304,14 +2320,75 @@ func (s *Server) authenticate(r *http.Request) (auth.Session, error) {
 }
 
 func (s *Server) requireCapability(r *http.Request, capability string) (auth.Session, error) {
+	return s.requireCapabilityForScope(r, capability, auth.ResourceScope{Kind: "global"})
+}
+
+func (s *Server) requireCapabilityForScope(r *http.Request, capability string, scope auth.ResourceScope) (auth.Session, error) {
 	session, err := s.authenticate(r)
 	if err != nil {
 		return auth.Session{}, err
 	}
-	if !auth.HasCapability(session, capability) {
-		return auth.Session{}, fault.New(fault.CodeForbidden, false, nil)
+	if err := s.authorizeSession(r, session, capability, scope); err != nil {
+		return auth.Session{}, err
 	}
 	return session, nil
+}
+
+func (s *Server) authorizeSession(r *http.Request, session auth.Session, capability string, scope auth.ResourceScope) error {
+	allowed, authErr := s.auth.AuthorizeSession(r.Context(), session, capability, scope)
+	if authErr != nil {
+		return fault.New(fault.CodeInternal, true, authErr)
+	}
+	if !allowed {
+		return fault.New(fault.CodeForbidden, false, nil)
+	}
+	return nil
+}
+
+// authorizeJob 把 Job 的读取/控制权限绑定到它实际拥有的资源。Source Job 继承
+// Library→Source 授权；不绑定 Source 的维护、备份、恢复和 Derived Job 只接受相应的
+// global capability，避免 scan.run 被用来控制管理员维护任务。
+func (s *Server) authorizeJob(r *http.Request, session auth.Session, job jobs.Job, mutate bool) error {
+	capability := "library.read"
+	scope := auth.ResourceScope{Kind: "global"}
+	if job.SourceID != "" {
+		scope = auth.ResourceScope{Kind: "source", ID: job.SourceID}
+		if mutate {
+			capability = "scan.run"
+		}
+		return s.authorizeSession(r, session, capability, scope)
+	}
+	switch job.Type {
+	case "control_backup":
+		capability = "admin.backup"
+	case "control_restore":
+		capability = "admin.restore"
+	case "catalog_gc", "catalog_checkpoint", "catalog_vacuum", "derived_gc":
+		capability = "admin.maintenance"
+	case "derived":
+		if mutate {
+			capability = "media.derive"
+		} else {
+			capability = "media.read"
+		}
+	case "overlay_projection":
+		if mutate {
+			capability = "overlays.write"
+		} else {
+			capability = "library.read"
+		}
+	default:
+		return fault.New(fault.CodeForbidden, false, nil)
+	}
+	return s.authorizeSession(r, session, capability, scope)
+}
+
+func concealForbidden(err error) error {
+	var structured *fault.Error
+	if errors.As(err, &structured) && structured.Code == fault.CodeForbidden {
+		return fault.New(fault.CodeNotFound, false, nil)
+	}
+	return err
 }
 
 func sessionSummary(session auth.Session) api.SessionSummary {
@@ -2322,6 +2399,10 @@ func sessionSummary(session auth.Session) api.SessionSummary {
 }
 
 func decodeJSON(r *http.Request, target any) error {
+	mediaType, _, err := mime.ParseMediaType(r.Header.Get("Content-Type"))
+	if err != nil || mediaType != "application/json" {
+		return errors.New("Content-Type 必须是 application/json")
+	}
 	decoder := json.NewDecoder(io.LimitReader(r.Body, 1<<20))
 	decoder.DisallowUnknownFields()
 	if err := decoder.Decode(target); err != nil {
@@ -2354,14 +2435,29 @@ func writeJSON(w http.ResponseWriter, status int, value any) {
 	_ = json.NewEncoder(w).Encode(value)
 }
 
-func hostGuard(next http.Handler) http.Handler {
+func hostGuard(server *Server, next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if err := auth.ValidateHost(r); err != nil {
+		if err := server.validateHost(r); err != nil {
 			writeFault(w, asFault(err), statusForFault(err))
 			return
 		}
 		next.ServeHTTP(w, r)
 	})
+}
+
+func (s *Server) validateHost(r *http.Request) error {
+	return auth.ValidateHostAllowed(r, s.allowedHosts)
+}
+
+func (s *Server) validateOrigin(r *http.Request) error {
+	return auth.ValidateOriginAllowed(r, s.allowedHosts)
+}
+
+func (s *Server) validateMutation(r *http.Request, session auth.Session) error {
+	if session.TokenID != "" {
+		return nil
+	}
+	return auth.ValidateMutationAllowed(r, session.CSRFToken, s.allowedHosts)
 }
 
 func asFault(err error) *fault.Error {
@@ -2384,8 +2480,11 @@ func statusForFault(err error) int {
 		return http.StatusBadRequest
 	case fault.CodeRuleImportInvalid:
 		return http.StatusBadRequest
-	case fault.CodeUnauthenticated, fault.CodePairingInvalid, fault.CodePairingExpired:
+	case fault.CodeUnauthenticated, fault.CodePairingInvalid, fault.CodePairingExpired,
+		fault.CodeInvalidCredentials, fault.CodeTokenInvalid, fault.CodeTokenExpired:
 		return http.StatusUnauthorized
+	case fault.CodeRateLimited:
+		return http.StatusTooManyRequests
 	case fault.CodeForbidden, fault.CodeHostRejected, fault.CodeOriginRejected, fault.CodeCSRFInvalid:
 		return http.StatusForbidden
 	case fault.CodeNotFound, fault.CodeBackupNotFound:
@@ -2396,6 +2495,10 @@ func statusForFault(err error) int {
 		fault.CodeRuleParameterConflict, fault.CodeRulePublishBlocked, fault.CodeRuleRollbackBlocked,
 		fault.CodeRuleVersionInUse, fault.CodeRuleBindingConflict:
 		return http.StatusConflict
+	case fault.CodeLANAlreadyInitialized:
+		return http.StatusConflict
+	case fault.CodeLANOwnerRequired:
+		return http.StatusPreconditionRequired
 	case fault.CodeJobStateConflict, fault.CodeJobProgressRegression, fault.CodeJobRetryExhausted, fault.CodeJobCancellationRequested,
 		fault.CodeScanAlreadyRunning, fault.CodeCatalogCandidateInvalid, fault.CodeMaintenanceBlocked:
 		return http.StatusConflict
@@ -2428,3 +2531,4 @@ func requestLog(logger *slog.Logger, next http.Handler) http.Handler {
 		next.ServeHTTP(w, r)
 	})
 }
+
