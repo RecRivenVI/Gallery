@@ -1033,8 +1033,10 @@ func dialWebSocket(t *testing.T, serverURL string, jar http.CookieJar) *websocke
 		t.Fatal(err)
 	}
 	header := http.Header{}
+	// 只设置 Origin，刻意不设置任何 Sec-Fetch-* 头：Chrome 与 Edge 的同源 WebSocket
+	// 握手就是这个形状。此前的 helper 手工补上了 Sec-Fetch-Site，使全部 WebSocket
+	// 测试断言的是浏览器不存在的请求形态，`/ws/v1` 在真实浏览器中恒定 403 却无人发现。
 	header.Set("Origin", serverURL)
-	header.Set("Sec-Fetch-Site", "same-origin")
 	request := &http.Request{Header: header}
 	for _, cookie := range jar.Cookies(parsed) {
 		request.AddCookie(cookie)

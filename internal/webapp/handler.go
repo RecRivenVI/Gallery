@@ -109,8 +109,17 @@ func setCachePolicy(header http.Header, name string) {
 	}
 }
 
+// reactAriaTouchActionStyleHash 覆盖 React Aria Components 在运行时注入的唯一一段
+// 内联样式（为 pressable 元素设置 touch-action，避免移动端双击缩放）。此前 CSP 的
+// style-src 只有 'self'，该样式被 style-src-elem 拦截，移动端触控行为因此退化；
+// 加 'unsafe-inline' 会打开样式注入面，所以这里只放行这一段已知内容的哈希。
+//
+// 该哈希与 react-aria-components 的具体版本绑定：升级后若样式内容变化，
+// web/e2e 的 CSP 断言会立刻失败并报出新的哈希，不会静默退化。
+const reactAriaTouchActionStyleHash = "'sha256-38RhXrc7EdReTKsOm23ZPOCUgniTUUcjky8QOOrQx6o='"
+
 func setSecurityHeaders(header http.Header) {
-	header.Set("Content-Security-Policy", "default-src 'self'; base-uri 'none'; object-src 'none'; frame-ancestors 'none'; form-action 'self'; script-src 'self'; style-src 'self'; img-src 'self' blob: data:; media-src 'self' blob:; connect-src 'self' ws: wss:; worker-src 'self'; manifest-src 'self'")
+	header.Set("Content-Security-Policy", "default-src 'self'; base-uri 'none'; object-src 'none'; frame-ancestors 'none'; form-action 'self'; script-src 'self'; style-src 'self' "+reactAriaTouchActionStyleHash+"; img-src 'self' blob: data:; media-src 'self' blob:; connect-src 'self'; worker-src 'self'; manifest-src 'self'")
 	header.Set("X-Content-Type-Options", "nosniff")
 	header.Set("Referrer-Policy", "no-referrer")
 	header.Set("X-Frame-Options", "DENY")

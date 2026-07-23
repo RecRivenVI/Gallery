@@ -59,7 +59,7 @@ func (s *Server) testRuleExample(w http.ResponseWriter, r *http.Request) {
 		s.writeRequestError(w, err)
 		return
 	}
-	if err := auth.ValidateMutation(r, session.CSRFToken); err != nil {
+	if err := s.validateMutation(r, session); err != nil {
 		s.writeRequestError(w, err)
 		return
 	}
@@ -102,7 +102,7 @@ func (s *Server) createRulePackage(w http.ResponseWriter, r *http.Request) {
 		s.writeRequestError(w, err)
 		return
 	}
-	if err := auth.ValidateMutation(r, session.CSRFToken); err != nil {
+	if err := s.validateMutation(r, session); err != nil {
 		s.writeRequestError(w, err)
 		return
 	}
@@ -155,7 +155,7 @@ func (s *Server) saveRuleDraft(w http.ResponseWriter, r *http.Request) {
 		s.writeRequestError(w, err)
 		return
 	}
-	if err := auth.ValidateMutation(r, session.CSRFToken); err != nil {
+	if err := s.validateMutation(r, session); err != nil {
 		s.writeRequestError(w, err)
 		return
 	}
@@ -193,7 +193,7 @@ func (s *Server) validateRuleDraft(w http.ResponseWriter, r *http.Request) {
 		s.writeRequestError(w, err)
 		return
 	}
-	if err := auth.ValidateMutation(r, session.CSRFToken); err != nil {
+	if err := s.validateMutation(r, session); err != nil {
 		s.writeRequestError(w, err)
 		return
 	}
@@ -212,7 +212,7 @@ func (s *Server) publishRuleDraft(w http.ResponseWriter, r *http.Request) {
 		s.writeRequestError(w, err)
 		return
 	}
-	if err := auth.ValidateMutation(r, session.CSRFToken); err != nil {
+	if err := s.validateMutation(r, session); err != nil {
 		s.writeRequestError(w, err)
 		return
 	}
@@ -242,7 +242,7 @@ func (s *Server) deprecateRulePackage(w http.ResponseWriter, r *http.Request) {
 		s.writeRequestError(w, err)
 		return
 	}
-	if err := auth.ValidateMutation(r, session.CSRFToken); err != nil {
+	if err := s.validateMutation(r, session); err != nil {
 		s.writeRequestError(w, err)
 		return
 	}
@@ -267,7 +267,7 @@ func (s *Server) deleteRulePackage(w http.ResponseWriter, r *http.Request) {
 		s.writeRequestError(w, err)
 		return
 	}
-	if err := auth.ValidateMutation(r, session.CSRFToken); err != nil {
+	if err := s.validateMutation(r, session); err != nil {
 		s.writeRequestError(w, err)
 		return
 	}
@@ -319,7 +319,7 @@ func (s *Server) rollbackRulePackage(w http.ResponseWriter, r *http.Request) {
 		s.writeRequestError(w, err)
 		return
 	}
-	if err := auth.ValidateMutation(r, session.CSRFToken); err != nil {
+	if err := s.validateMutation(r, session); err != nil {
 		s.writeRequestError(w, err)
 		return
 	}
@@ -351,7 +351,7 @@ func (s *Server) deprecateRuleVersion(w http.ResponseWriter, r *http.Request) {
 		s.writeRequestError(w, err)
 		return
 	}
-	if err := auth.ValidateMutation(r, session.CSRFToken); err != nil {
+	if err := s.validateMutation(r, session); err != nil {
 		s.writeRequestError(w, err)
 		return
 	}
@@ -418,7 +418,7 @@ func (s *Server) createRuleParameterSet(w http.ResponseWriter, r *http.Request) 
 		s.writeRequestError(w, err)
 		return
 	}
-	if err := auth.ValidateMutation(r, session.CSRFToken); err != nil {
+	if err := s.validateMutation(r, session); err != nil {
 		s.writeRequestError(w, err)
 		return
 	}
@@ -475,7 +475,7 @@ func (s *Server) updateRuleParameterSet(w http.ResponseWriter, r *http.Request) 
 		s.writeRequestError(w, err)
 		return
 	}
-	if err := auth.ValidateMutation(r, session.CSRFToken); err != nil {
+	if err := s.validateMutation(r, session); err != nil {
 		s.writeRequestError(w, err)
 		return
 	}
@@ -506,7 +506,7 @@ func (s *Server) impactRuleParameterSet(w http.ResponseWriter, r *http.Request) 
 		s.writeRequestError(w, err)
 		return
 	}
-	if err := auth.ValidateMutation(r, session.CSRFToken); err != nil {
+	if err := s.validateMutation(r, session); err != nil {
 		s.writeRequestError(w, err)
 		return
 	}
@@ -531,7 +531,7 @@ func (s *Server) copyRuleParameterSet(w http.ResponseWriter, r *http.Request) {
 		s.writeRequestError(w, err)
 		return
 	}
-	if err := auth.ValidateMutation(r, session.CSRFToken); err != nil {
+	if err := s.validateMutation(r, session); err != nil {
 		s.writeRequestError(w, err)
 		return
 	}
@@ -556,7 +556,7 @@ func (s *Server) deprecateRuleParameterSet(w http.ResponseWriter, r *http.Reques
 		s.writeRequestError(w, err)
 		return
 	}
-	if err := auth.ValidateMutation(r, session.CSRFToken); err != nil {
+	if err := s.validateMutation(r, session); err != nil {
 		s.writeRequestError(w, err)
 		return
 	}
@@ -574,7 +574,7 @@ func (s *Server) updateSourceRuleBinding(w http.ResponseWriter, r *http.Request)
 		s.writeRequestError(w, err)
 		return
 	}
-	if err := auth.ValidateMutation(r, session.CSRFToken); err != nil {
+	if err := s.validateMutation(r, session); err != nil {
 		s.writeRequestError(w, err)
 		return
 	}
@@ -621,7 +621,7 @@ func (s *Server) importRulePackage(w http.ResponseWriter, r *http.Request) {
 		s.writeRequestError(w, err)
 		return
 	}
-	if err := auth.ValidateMutation(r, session.CSRFToken); err != nil {
+	if err := s.validateMutation(r, session); err != nil {
 		s.writeRequestError(w, err)
 		return
 	}
@@ -692,7 +692,7 @@ func (s *Server) runRuleExplain(r *http.Request, capability string) (rules.Expla
 	if err != nil {
 		return rules.ExplainResult{}, err
 	}
-	if err := auth.ValidateMutation(r, session.CSRFToken); err != nil {
+	if err := s.validateMutation(r, session); err != nil {
 		return rules.ExplainResult{}, err
 	}
 	var request struct {
@@ -716,7 +716,7 @@ func (s *Server) runRuleTrace(r *http.Request, capability string) (map[string]an
 	if err != nil {
 		return nil, err
 	}
-	if err := auth.ValidateMutation(r, session.CSRFToken); err != nil {
+	if err := s.validateMutation(r, session); err != nil {
 		return nil, err
 	}
 	var request struct {
