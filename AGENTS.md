@@ -15,7 +15,9 @@
 - 代码、仓库、包、命令和服务代号：`gallery`。
 - 建议后端命令：`galleryd`；建议 CLI：`galleryctl`。
 - Gallery 是独立的净室产品，不以任何旧 Gallery 的数据库、配置、API、目录结构或行为作为兼容、迁移或对拍目标。
-- 当前仓库已有正式产品代码（`cmd/`、`internal/`、`pkg/`、`web/`）。阶段 0 契约骨架、Walking Skeleton、Architecture Proof 正确性切片、阶段 1「领域和数据所有权」、阶段 2「规则闭环」、阶段 3「扫描、任务和 Catalog」与阶段 4「查询和媒体」均已完成代码与合成 Correctness 实现；阶段 5「账户、安全和多客户端」已完成代码/合成安全收尾，并取得 Chrome/Edge 同机 Personal/LAN 主路径与当前工作站 Argon2id 补证，但正式 Security Gate 尚未通过（见 [验证记录 EV-37、EV-38](Documents/证据/验证记录.md)）。阶段 6 已实现正式 React/TypeScript Web/PWA 代码基线、OpenAPI 生成客户端、同源嵌入资产、HTTP snapshot/WS 恢复、静态壳 PWA，以及认证、浏览/媒体、Overlay、任务、规则、安全和维护主页面；Chrome/Edge mock 与真实后端主路径通过，但正式 Web Gate 也尚未通过（见 EV-38）。阶段 4 的 EV-35/EV-36 结论保持：500,000 WorkProjection 的 Correctness/Cursor 通过，Reference Performance Gate 未通过，Gank/Pawchive 未完成有界验证。尚未完成：阶段 5 真实物理 LAN 多设备、目标低端设备 Argon2id 和真实恶意资源门禁；阶段 6 Firefox、真实移动设备/屏幕阅读器与完整业务 E2E；以及真实全量 HDD、SMB/NAS、真实 FileID/`dev+inode`、正式 Reference/Degradation Performance Gate、ranking/total/租约等 PRE_FREEZE 数值、AND/OR canonical 化、Progress 排序和平台发行。
+- 当前仓库已有正式产品代码（`cmd/`、`internal/`、`pkg/`、`web/`）。阶段 0 契约骨架、Walking Skeleton、Architecture Proof 正确性切片、阶段 1「领域和数据所有权」、阶段 2「规则闭环」、阶段 3「扫描、任务和 Catalog」与阶段 4「查询和媒体」均已完成代码与合成 Correctness 实现；阶段 5「账户、安全和多客户端」已完成代码/合成安全收尾，并取得 Chrome/Edge 同机 Personal/LAN 主路径与当前工作站 Argon2id 补证，但正式 Security Gate 尚未通过（见 [验证记录 EV-37、EV-38](Documents/证据/验证记录.md)）。阶段 6 已实现 React/TypeScript Web/PWA 页面代码基线、OpenAPI 生成客户端、同源嵌入资产、静态壳 PWA，以及认证、浏览/媒体、Overlay、任务、规则、安全和维护页面骨架；Chrome/Edge 真实后端认证主路径通过，但正式 Web Gate 尚未通过（见 EV-38）。阶段 4 的 EV-35/EV-36 结论保持：500,000 WorkProjection 的 Correctness/Cursor 通过，Reference Performance Gate 未通过，Gank/Pawchive 未完成有界验证。
+- **[EV-39](Documents/证据/验证记录.md)（2026-07-23）的真实浏览器复核下调了阶段 6 的完成度陈述**：`/ws/v1` 在 Chrome/Edge 中 100% 握手失败（服务端对 WebSocket 强制要求浏览器不会发送的 `Sec-Fetch-Site` 头），前端信封字段名与 `internal/contract/realtime` 不符，且 6 个前端 capability 名不在后端权威词表中，导致 Overlay 编辑、任务取消/重试、Library 创建、Source 登记、按需内容确认与全部治理动作对任何主体都不渲染。因此不得再把阶段 6 描述为「已完成业务闭环」；Web 在真实后端下当前接近只读。同轮另记录 `SEC-1`～`SEC-4`、`AUTHZ-1`、`QRY-1`、`MED-1`、`BLD-1`、`TEST-1`、`TEST-2`、`A11Y-1` 等修复前缺陷，详见 EV-39。
+- 尚未完成：阶段 5 真实物理 LAN 多设备、目标低端设备 Argon2id 和真实恶意资源门禁；阶段 6 Firefox、真实移动设备/屏幕阅读器与完整业务 E2E；以及真实全量 HDD、SMB/NAS、真实 FileID/`dev+inode`、正式 Reference/Degradation Performance Gate、ranking/total/租约等 PRE_FREEZE 数值、AND/OR canonical 化、Progress 排序和平台发行。
 - 本文件是需要随真实开发状态持续维护的 Agent 规则；发现与代码、有效 ADR 或规范不一致时应更新本文件，但不得放宽安全、只读 Source、Git、签名或测试要求，也不得把临时实装写成已冻结决策。
 
 ## 权威资料与阅读顺序
@@ -89,7 +91,7 @@
 - `catalog.db` 保存可重建的 Source-derived 事实、内容/位置记录、查询投影和 FTS；删除后必须能从 Source、规则和 control 稳定引用重建。
 - control 中不得永久保存 Catalog revision 内部 row ID。
 - 快速指纹、路径、mtime、FileID 或 inode 只能筛选候选，不能代替完整内容哈希。
-- 新 ContentBlob 首次完整 SHA-256 是相关 publication 的前置条件；超大文件或网络盘只能延迟发布，不能降低身份强度。
+- 建立新 ContentBlob 必须以首次完整 SHA-256 为前置条件，不能降低身份强度；但自阶段 3 起，媒体「已定位」与「内容已确认」解耦为 `located_unverified`/`content_verified` 两态，未确认媒体可以进入 publication 与列表（`blob=null`），正文读取返回专用 `CONTENT_NOT_VERIFIED`。因此超大文件或网络盘不再阻塞整个 Source 的发布，而是保持未确认状态直到 `incremental`/`verify` 档案或按需确认完成哈希。
 - DerivedAsset 使用完整稳定 key 和受校验 manifest；生成使用临时文件与原子发布，GC 不得删除活跃读取。
 - v1 不改名、移动、删除原媒体，也不写回 metadata。
 
@@ -1237,4 +1239,8 @@ feat(查询): 完成过滤、搜索、媒体读取、派生资源和安全授权
 
 ## 当前可开工结论
 
-阶段 0～4 已完成代码与合成 Correctness；阶段 5 安全代码基线及 EV-37 合成证据完整，EV-38 又补充 Chrome/Edge 同机 Personal/LAN 与当前工作站 Argon2id 证据，但正式 Security Gate 未通过。阶段 6 React/TypeScript Web/PWA、同源嵌入资产、静态壳 PWA 和主要业务/管理页面已实现，Chrome/Edge mock 与真实后端主路径通过，但正式 Web Gate 未通过。阶段 4 的 EV-35/EV-36 结论保持：500,000 规模 Correctness/Cursor 通过，Reference Performance Gate 未通过，Gank/Pawchive 真实有界验证未完成。下一步并行关闭阶段 4 性能/API Freeze、阶段 5 真实物理 LAN/目标低端设备/恶意资源门禁和阶段 6 Firefox/真实移动设备/屏幕阅读器/完整业务 E2E；在这些完成前不要进入桌面壳或发行。真实 HDD/SMB/NAS、FileID、ranking/total/租约等 PRE_FREEZE 数值、AND/OR canonical 化、Progress 排序、Wails/Tauri 与跨平台发行仍属后续门禁。
+阶段 0～4 已完成代码与合成 Correctness；阶段 5 安全代码基线及 EV-37 合成证据完整，EV-38 又补充 Chrome/Edge 同机 Personal/LAN 与当前工作站 Argon2id 证据，但正式 Security Gate 未通过。阶段 6 React/TypeScript Web/PWA、同源嵌入资产、静态壳 PWA 和主要页面骨架已实现，Chrome/Edge 真实后端认证主路径通过，但正式 Web Gate 未通过，且 EV-39 证明其「业务闭环」此前被高估。阶段 4 的 EV-35/EV-36 结论保持：500,000 规模 Correctness/Cursor 通过，Reference Performance Gate 未通过，Gank/Pawchive 真实有界验证未完成。
+
+**当前最高优先级是关闭 EV-39 登记的修复前缺陷**：`WS-1`（WebSocket 真实浏览器握手）、`WS-2`（前端信封字段名）、`CAP-1`（6 个前端 capability 名）、`API-1`（`deleteRulePackage` 契约路径漂移）、`SEC-1`（配对端点缺部署模式门禁）、`SEC-2`（规则端点 loopback-only CSRF）优先于任何新阶段能力。每一项都必须先补上会在旧实现下失败的回归测试。`MED-1`（媒体正文每请求整文件复制 + 全量哈希）涉及「正文字节是否始终与已发布 ContentBlob 摘要一致」这一不变量，须先由 ADR 裁决再实施，不得单方面变更。
+
+其后并行关闭阶段 4 性能/API Freeze、阶段 5 真实物理 LAN/目标低端设备/恶意资源门禁和阶段 6 Firefox/真实移动设备/屏幕阅读器/完整业务 E2E；在这些完成前不要进入桌面壳或发行。真实 HDD/SMB/NAS、FileID、ranking/total/租约等 PRE_FREEZE 数值、AND/OR canonical 化、Progress 排序、Wails/Tauri 与跨平台发行仍属后续门禁。
