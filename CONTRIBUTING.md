@@ -4,8 +4,8 @@
 
 ## 项目当前状态
 
-- Gallery 仍处于 **pre-alpha**：后端阶段 0～4 主线已完成代码与合成正确性（Correctness）验证，但尚无图形界面、安装包或正式发行版本。
-- 当前主要开发目标是阶段 4 的正式压力测试与 API 接口冻结，随后进入阶段 5（账户、安全与多客户端）。
+- Gallery 仍处于 **pre-alpha**：阶段 0～4 后端主线、阶段 5 安全代码基线和阶段 6 Web/PWA 代码基线已实现，但尚无安装包或正式发行版本。
+- 当前主要目标是并行关闭阶段 4 性能/API Freeze、阶段 5 外部设备 Security Gate 与阶段 6 完整浏览器/可访问性 Gate；不得提前进入桌面壳或发行。
 - 尚无稳定的数据库表结构或 API 兼容性承诺；接口和 Schema 仍可能在冻结前调整。
 
 详见 [README.md](README.md) 和 [PROJECT_STATUS.md](PROJECT_STATUS.md) 的总体进度表。
@@ -29,6 +29,7 @@
 
 - Go 1.26 系列（与 [go.mod](go.mod) 一致）；本地按你的操作系统正常安装 Go 工具链即可，不需要复用仓库内部 Agent 使用的固定路径配置。
 - PowerShell（跨平台 `pwsh`）用于运行仓库检查脚本。
+- 修改 `web/` 需要 Node.js 22 与 npm 10；Node 只参与开发/构建，不是 `galleryd` 的运行依赖。
 - Git，并了解本仓库的提交信息规范（见下文）。
 - 修改 OpenAPI 定义后必须运行 `go generate ./...` 同步生成的客户端代码。
 
@@ -51,7 +52,8 @@
 
 ## 测试
 
-- 常规检查使用仓库根目录的 `Check.ps1`（Windows/跨平台 `pwsh`），会执行 `go mod tidy -diff`、OpenAPI 生成一致性、`gofmt`、`go vet`、测试与构建。
+- 常规检查使用仓库根目录的 `Check.ps1`（Windows/跨平台 `pwsh`），会执行 Go/OpenAPI 生成一致性、`gofmt`、`go vet`、测试和构建，以及 Web 的 `npm ci`、生成一致性、TypeScript、ESLint、Prettier、Vitest 与生产构建。
+- 浏览器 smoke 运行 `cd web && npm run build && npx playwright install chromium && npm run test:smoke`；真实后端 E2E 只使用合成数据与临时 AppDirs。
 - Race 检测（`-race`）需要在 Linux 环境（原生 Linux 或 WSL2）执行；Windows 原生 Go race runtime 在本项目环境下有已知限制。
 - 新增功能或修复 Bug 必须包含直接测试；migration、OpenAPI 变更需要对应的契约/集成测试覆盖。
 
