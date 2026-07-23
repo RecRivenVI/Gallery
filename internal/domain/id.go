@@ -37,6 +37,11 @@ const (
 	IDRuleTestCase      IDKind = "rtest"
 	IDRuleExample       IDKind = "rexample"
 	IDRuleAudit         IDKind = "raudit"
+	IDUser              IDKind = "usr"
+	IDGrant             IDKind = "grnt"
+	IDAPIToken          IDKind = "tok"
+	IDSecurityAudit     IDKind = "saud"
+	IDShare             IDKind = "shr"
 )
 
 var validIDKinds = map[IDKind]struct{}{
@@ -46,6 +51,7 @@ var validIDKinds = map[IDKind]struct{}{
 	IDCatalogRevision: {}, IDOverlayRevision: {}, IDWorkBinding: {}, IDCreatorBinding: {}, IDMediaBinding: {}, IDBindingIssue: {},
 	IDCreatorMerge: {}, IDControlBackup: {}, IDControlRestore: {}, IDStructureDecision: {},
 	IDRulePackage: {}, IDRuleDraft: {}, IDRuleParameter: {}, IDRuleTestCase: {}, IDRuleExample: {}, IDRuleAudit: {},
+	IDUser: {}, IDGrant: {}, IDAPIToken: {}, IDSecurityAudit: {}, IDShare: {},
 }
 
 // ID 是带类型前缀的 UUIDv7。零值不是合法领域 ID。
