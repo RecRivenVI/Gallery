@@ -10,6 +10,8 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"mime"
+	"net"
 	"net/http"
 	"strconv"
 	"strings"
@@ -42,26 +44,27 @@ import (
 )
 
 type Server struct {
-	mode        config.Mode
-	store       *storage.Store
-	clock       ports.Clock
-	logger      *slog.Logger
-	auth        *auth.Personal
-	data        *application.Resources
-	jobs        *jobs.Store
-	catalog     *catalog.Store
-	scanner     *scanner.Service
-	hub         *realtime.Hub
-	rules       *rules.Lifecycle
-	query       *queryservice.Service
-	overlay     *overlay.Service
-	creators    *creators.Service
-	backup      *backup.Service
-	maintenance *maintenance.Service
-	watcher     *watcherservice.Service
-	scheduler   JobController
-	derived     *derived.Service
-	derivedJob  *derivedjob.Service
+	mode         config.Mode
+	store        *storage.Store
+	clock        ports.Clock
+	logger       *slog.Logger
+	auth         *auth.Personal
+	data         *application.Resources
+	jobs         *jobs.Store
+	catalog      *catalog.Store
+	scanner      *scanner.Service
+	hub          *realtime.Hub
+	rules        *rules.Lifecycle
+	query        *queryservice.Service
+	overlay      *overlay.Service
+	creators     *creators.Service
+	backup       *backup.Service
+	maintenance  *maintenance.Service
+	watcher      *watcherservice.Service
+	scheduler    JobController
+	derived      *derived.Service
+	derivedJob   *derivedjob.Service
+	allowedHosts []string
 }
 
 type JobController interface {
@@ -70,11 +73,12 @@ type JobController interface {
 }
 
 type Options struct {
-	Maintenance *maintenance.Service
-	Watcher     *watcherservice.Service
-	Scheduler   JobController
-	Derived     *derived.Service
-	DerivedJob  *derivedjob.Service
+	Maintenance  *maintenance.Service
+	Watcher      *watcherservice.Service
+	Scheduler    JobController
+	Derived      *derived.Service
+	DerivedJob   *derivedjob.Service
+	AllowedHosts []string
 }
 
 func New(mode config.Mode, store *storage.Store, clock ports.Clock, personal *auth.Personal, resources *application.Resources, jobStore *jobs.Store, catalogStore *catalog.Store, scannerService *scanner.Service, overlayService *overlay.Service, creatorsService *creators.Service, backupService *backup.Service, hub *realtime.Hub, logger *slog.Logger, options ...Options) http.Handler {
@@ -93,14 +97,33 @@ func New(mode config.Mode, store *storage.Store, clock ports.Clock, personal *au
 	if len(options) > 0 {
 		option = options[0]
 	}
-	server := &Server{mode: mode, store: store, clock: clock, auth: personal, data: resources, jobs: jobStore, catalog: catalogStore, scanner: scannerService, hub: hub, logger: logger, rules: ruleLifecycle, query: queryService, overlay: overlayService, creators: creatorsService, backup: backupService, maintenance: option.Maintenance, watcher: option.Watcher, scheduler: option.Scheduler, derived: option.Derived, derivedJob: option.DerivedJob}
+	server := &Server{mode: mode, store: store, clock: clock, auth: personal, data: resources, jobs: jobStore, catalog: catalogStore, scanner: scannerService, hub: hub, logger: logger, rules: ruleLifecycle, query: queryService, overlay: overlayService, creators: creatorsService, backup: backupService, maintenance: option.Maintenance, watcher: option.Watcher, scheduler: option.Scheduler, derived: option.Derived, derivedJob: option.DerivedJob, allowedHosts: append([]string(nil), option.AllowedHosts...)}
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /api/v1/health", server.health)
 	mux.HandleFunc("GET /api/v1/bootstrap", server.bootstrap)
 	mux.HandleFunc("POST /api/v1/personal/pairing-attempts", server.createPairingAttempt)
 	mux.HandleFunc("POST /api/v1/personal/pair", server.exchangePairingCredential)
+	mux.HandleFunc("POST /api/v1/lan/owner", server.initializeLANOwner)
+	mux.HandleFunc("POST /api/v1/auth/login", server.login)
+	mux.HandleFunc("POST /api/v1/auth/logout", server.logout)
 	mux.HandleFunc("GET /api/v1/sessions", server.listSessions)
 	mux.HandleFunc("DELETE /api/v1/sessions/{sessionId}", server.revokeSession)
+	mux.HandleFunc("GET /api/v1/admin/users", server.listUsers)
+	mux.HandleFunc("POST /api/v1/admin/users", server.createUser)
+	mux.HandleFunc("PATCH /api/v1/admin/users/{userId}/status", server.setUserStatus)
+	mux.HandleFunc("POST /api/v1/account/password", server.changePassword)
+	mux.HandleFunc("POST /api/v1/admin/users/{userId}/grants", server.createGrant)
+	mux.HandleFunc("DELETE /api/v1/admin/grants/{grantId}", server.revokeGrant)
+	mux.HandleFunc("GET /api/v1/api-tokens", server.listAPITokens)
+	mux.HandleFunc("POST /api/v1/api-tokens", server.createAPIToken)
+	mux.HandleFunc("DELETE /api/v1/api-tokens/{tokenId}", server.revokeAPIToken)
+	mux.HandleFunc("GET /api/v1/shares", server.listShares)
+	mux.HandleFunc("POST /api/v1/shares", server.createShare)
+	mux.HandleFunc("DELETE /api/v1/shares/{shareId}", server.revokeShare)
+	mux.HandleFunc("GET /api/v1/public/shares/{credential}", server.resolveShare)
+	mux.HandleFunc("GET /api/v1/public/shares/{credential}/media/{mediaId}/content", server.publicShareMediaContent)
+	mux.HandleFunc("HEAD /api/v1/public/shares/{credential}/media/{mediaId}/content", server.publicShareMediaContent)
+	mux.HandleFunc("GET /api/v1/admin/security-audits", server.listSecurityAudits)
 	mux.HandleFunc("POST /api/v1/libraries", server.createLibrary)
 	mux.HandleFunc("GET /api/v1/libraries/{libraryId}", server.getLibrary)
 	mux.HandleFunc("POST /api/v1/sources", server.createSource)
@@ -190,16 +213,29 @@ func New(mode config.Mode, store *storage.Store, clock ports.Clock, personal *au
 	mux.HandleFunc("POST /api/v1/media/{mediaId}/derived-assets", server.createDerivedAsset)
 	mux.HandleFunc("GET /api/v1/derived-assets/{assetKey}/content", server.derivedAssetContent)
 	mux.Handle("/ws/v1", hub.Handler(func(r *http.Request) (realtime.Principal, error) {
-		if err := auth.ValidateOrigin(r); err != nil {
+		if err := server.validateOrigin(r); err != nil {
 			return realtime.Principal{}, err
 		}
 		session, err := server.authenticate(r)
 		if err != nil {
 			return realtime.Principal{}, err
 		}
-		return realtime.Principal{SessionID: session.ID, Capabilities: append([]string(nil), session.Capabilities...)}, nil
+		return realtime.Principal{
+			SessionID: session.ID, PrincipalID: session.PrincipalID,
+			Capabilities: append([]string(nil), session.Capabilities...),
+			Authorize: func(ctx context.Context, capability string, scope realtime.Scope) bool {
+				resourceScope := auth.ResourceScope{Kind: "global"}
+				if scope.SourceID != "" {
+					resourceScope = auth.ResourceScope{Kind: "source", ID: scope.SourceID}
+				} else if scope.LibraryID != "" {
+					resourceScope = auth.ResourceScope{Kind: "library", ID: scope.LibraryID}
+				}
+				allowed, authorizeErr := server.auth.AuthorizeSession(ctx, session, capability, resourceScope)
+				return authorizeErr == nil && allowed
+			},
+		}, nil
 	}, personal.IsActive))
-	return requestLog(logger, hostGuard(mux))
+	return requestLog(logger, hostGuard(server, mux))
 }
 
 func (s *Server) getRulePackageSchema(w http.ResponseWriter, r *http.Request) {
@@ -349,11 +385,19 @@ func (s *Server) bootstrap(w http.ResponseWriter, r *http.Request) {
 	}
 	response := api.BootstrapResponse{
 		Mode: mode, Authenticated: false, AvailableCapabilities: s.auth.AvailableCapabilities(),
-		EffectiveCapabilities: []string{}, CsrfToken: s.auth.BootstrapCSRF(),
+		EffectiveCapabilities: []string{}, CsrfToken: s.auth.BootstrapCSRF(), LanInitialized: s.mode == config.ModePersonal,
 		ApiVersion:               api.BootstrapResponseApiVersionV1,
 		WebsocketProtocolVersion: api.BootstrapResponseWebsocketProtocolVersion(realtime.ProtocolVersion),
 		SortProtocolVersion:      api.BootstrapResponseSortProtocolVersion(contractquery.SortProtocolVersion),
 		RuleSchemaVersion:        api.BootstrapResponseRuleSchemaVersion(rules.RuleSchemaVersion),
+	}
+	if s.mode == config.ModeLAN {
+		initialized, err := s.auth.LANInitialized(r.Context())
+		if err != nil {
+			s.writeRequestError(w, err)
+			return
+		}
+		response.LanInitialized = initialized
 	}
 	if session, err := s.authenticate(r); err == nil {
 		response.Authenticated = true
@@ -400,14 +444,625 @@ func (s *Server) exchangePairingCredential(w http.ResponseWriter, r *http.Reques
 		writeFault(w, asFault(err), statusForFault(err))
 		return
 	}
-	http.SetCookie(w, &http.Cookie{
-		Name: auth.CookieName, Value: cookie, Path: "/", HttpOnly: true,
-		SameSite: http.SameSiteStrictMode, MaxAge: int(time.Until(session.ExpiresAt).Seconds()),
-	})
+	s.setSessionCookie(w, r, session, cookie)
 	writeJSON(w, http.StatusCreated, api.SessionEstablishedResponse{
 		Session: sessionSummary(session), CsrfToken: session.CSRFToken,
 		EffectiveCapabilities: append([]string(nil), session.Capabilities...),
 	})
+}
+
+func (s *Server) initializeLANOwner(w http.ResponseWriter, r *http.Request) {
+	if s.mode != config.ModeLAN {
+		s.writeRequestError(w, fault.New(fault.CodeNotFound, false, nil))
+		return
+	}
+	if err := auth.ValidateLoopbackRequest(r); err != nil {
+		s.writeRequestError(w, err)
+		return
+	}
+	if err := auth.ValidateMutationAllowed(r, s.auth.BootstrapCSRF(), s.allowedHosts); err != nil {
+		s.writeRequestError(w, err)
+		return
+	}
+	var request struct {
+		Username    string `json:"username"`
+		DisplayName string `json:"displayName"`
+		Password    string `json:"password"`
+	}
+	if err := decodeJSON(r, &request); err != nil {
+		s.writeRequestError(w, fault.WithField(fault.CodeValidation, "body", err))
+		return
+	}
+	user, err := s.auth.InitializeLANOwner(r.Context(), auth.CreateUserInput{
+		Username: request.Username, DisplayName: request.DisplayName, Password: request.Password,
+	})
+	if err != nil {
+		s.writeRequestError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusCreated, userDTO(user))
+}
+
+func (s *Server) login(w http.ResponseWriter, r *http.Request) {
+	if s.mode != config.ModeLAN {
+		s.writeRequestError(w, fault.New(fault.CodeNotFound, false, nil))
+		return
+	}
+	if err := auth.ValidateMutationAllowed(r, s.auth.BootstrapCSRF(), s.allowedHosts); err != nil {
+		s.writeRequestError(w, err)
+		return
+	}
+	var request struct {
+		Username    string `json:"username"`
+		Password    string `json:"password"`
+		ClientLabel string `json:"clientLabel"`
+	}
+	if err := decodeJSON(r, &request); err != nil {
+		s.writeRequestError(w, fault.WithField(fault.CodeValidation, "body", err))
+		return
+	}
+	session, cookie, err := s.auth.Login(r.Context(), request.Username, request.Password, request.ClientLabel, loginRateSubject(r))
+	if err != nil {
+		s.writeRequestError(w, err)
+		return
+	}
+	s.setSessionCookie(w, r, session, cookie)
+	writeJSON(w, http.StatusCreated, api.SessionEstablishedResponse{
+		Session: sessionSummary(session), CsrfToken: session.CSRFToken,
+		EffectiveCapabilities: append([]string(nil), session.Capabilities...),
+	})
+}
+
+func (s *Server) logout(w http.ResponseWriter, r *http.Request) {
+	session, err := s.authenticate(r)
+	if err != nil {
+		s.writeRequestError(w, err)
+		return
+	}
+	if err := s.validateMutation(r, session); err != nil {
+		s.writeRequestError(w, err)
+		return
+	}
+	if session.TokenID != "" {
+		err = s.auth.RevokeAPIToken(r.Context(), session.PrincipalID, session.TokenID)
+	} else {
+		err = s.auth.Revoke(r.Context(), session.PrincipalID, session.ID)
+	}
+	if err != nil {
+		s.writeRequestError(w, err)
+		return
+	}
+	s.hub.RevokeSession(session.ID)
+	http.SetCookie(w, &http.Cookie{Name: auth.CookieName, Value: "", Path: "/", HttpOnly: true,
+		SameSite: http.SameSiteStrictMode, Secure: r.TLS != nil, MaxAge: -1})
+	w.WriteHeader(http.StatusNoContent)
+}
+
+func (s *Server) listUsers(w http.ResponseWriter, r *http.Request) {
+	if _, err := s.requireCapability(r, "users.manage"); err != nil {
+		s.writeRequestError(w, err)
+		return
+	}
+	users, err := s.auth.ListUsers(r.Context())
+	if err != nil {
+		s.writeRequestError(w, err)
+		return
+	}
+	items := make([]map[string]any, 0, len(users))
+	for _, user := range users {
+		items = append(items, userDTO(user))
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"users": items})
+}
+
+func (s *Server) createUser(w http.ResponseWriter, r *http.Request) {
+	actor, err := s.requireCapability(r, "users.manage")
+	if err != nil {
+		s.writeRequestError(w, err)
+		return
+	}
+	if err := s.validateMutation(r, actor); err != nil {
+		s.writeRequestError(w, err)
+		return
+	}
+	var request struct {
+		Username    string            `json:"username"`
+		DisplayName string            `json:"displayName"`
+		Password    string            `json:"password"`
+		Roles       []string          `json:"roles"`
+		Grants      []auth.GrantInput `json:"grants"`
+	}
+	if err := decodeJSON(r, &request); err != nil {
+		s.writeRequestError(w, fault.WithField(fault.CodeValidation, "body", err))
+		return
+	}
+	user, err := s.auth.CreateUser(r.Context(), actor.PrincipalID, auth.CreateUserInput{
+		Username: request.Username, DisplayName: request.DisplayName, Password: request.Password,
+		Roles: request.Roles, Grants: request.Grants,
+	})
+	if err != nil {
+		s.writeRequestError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusCreated, userDTO(user))
+}
+
+func (s *Server) setUserStatus(w http.ResponseWriter, r *http.Request) {
+	actor, err := s.requireCapability(r, "users.manage")
+	if err != nil {
+		s.writeRequestError(w, err)
+		return
+	}
+	if err := s.validateMutation(r, actor); err != nil {
+		s.writeRequestError(w, err)
+		return
+	}
+	var request struct {
+		Status string `json:"status"`
+	}
+	if err := decodeJSON(r, &request); err != nil {
+		s.writeRequestError(w, fault.WithField(fault.CodeValidation, "body", err))
+		return
+	}
+	userID := r.PathValue("userId")
+	if err := s.auth.SetUserStatus(r.Context(), actor.PrincipalID, userID, request.Status); err != nil {
+		s.writeRequestError(w, err)
+		return
+	}
+	s.hub.RevokePrincipal(userID)
+	w.WriteHeader(http.StatusNoContent)
+}
+
+func (s *Server) changePassword(w http.ResponseWriter, r *http.Request) {
+	actor, err := s.authenticate(r)
+	if err != nil {
+		s.writeRequestError(w, err)
+		return
+	}
+	if err := s.validateMutation(r, actor); err != nil {
+		s.writeRequestError(w, err)
+		return
+	}
+	var request struct {
+		CurrentPassword string `json:"currentPassword"`
+		NewPassword     string `json:"newPassword"`
+	}
+	if err := decodeJSON(r, &request); err != nil {
+		s.writeRequestError(w, fault.WithField(fault.CodeValidation, "body", err))
+		return
+	}
+	if err := s.auth.ChangePassword(r.Context(), actor, request.CurrentPassword, request.NewPassword); err != nil {
+		s.writeRequestError(w, err)
+		return
+	}
+	s.hub.RevokePrincipal(actor.PrincipalID)
+	w.WriteHeader(http.StatusNoContent)
+}
+
+func (s *Server) createGrant(w http.ResponseWriter, r *http.Request) {
+	actor, err := s.requireCapability(r, "users.manage")
+	if err != nil {
+		s.writeRequestError(w, err)
+		return
+	}
+	if err := s.validateMutation(r, actor); err != nil {
+		s.writeRequestError(w, err)
+		return
+	}
+	var request auth.GrantInput
+	if err := decodeJSON(r, &request); err != nil {
+		s.writeRequestError(w, fault.WithField(fault.CodeValidation, "body", err))
+		return
+	}
+	userID := r.PathValue("userId")
+	grant, err := s.auth.CreateGrant(r.Context(), actor.PrincipalID, userID, request)
+	if err != nil {
+		s.writeRequestError(w, err)
+		return
+	}
+	s.hub.RevokePrincipal(userID)
+	writeJSON(w, http.StatusCreated, grantDTO(grant))
+}
+
+func (s *Server) revokeGrant(w http.ResponseWriter, r *http.Request) {
+	actor, err := s.requireCapability(r, "users.manage")
+	if err != nil {
+		s.writeRequestError(w, err)
+		return
+	}
+	if err := s.validateMutation(r, actor); err != nil {
+		s.writeRequestError(w, err)
+		return
+	}
+	grantID := r.PathValue("grantId")
+	var principalID string
+	_ = s.store.Control.SQL().QueryRowContext(r.Context(), "SELECT principal_id FROM authorization_grants WHERE grant_id=?", grantID).Scan(&principalID)
+	if err := s.auth.RevokeGrant(r.Context(), actor.PrincipalID, grantID); err != nil {
+		s.writeRequestError(w, err)
+		return
+	}
+	if principalID != "" {
+		s.hub.RevokePrincipal(principalID)
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+func (s *Server) listAPITokens(w http.ResponseWriter, r *http.Request) {
+	actor, err := s.requireCapability(r, "tokens.manage")
+	if err != nil {
+		s.writeRequestError(w, err)
+		return
+	}
+	tokens, err := s.auth.ListAPITokens(r.Context(), actor.PrincipalID)
+	if err != nil {
+		s.writeRequestError(w, err)
+		return
+	}
+	items := make([]map[string]any, 0, len(tokens))
+	for _, token := range tokens {
+		items = append(items, tokenDTO(token))
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"tokens": items})
+}
+
+func (s *Server) createAPIToken(w http.ResponseWriter, r *http.Request) {
+	actor, err := s.requireCapability(r, "tokens.manage")
+	if err != nil {
+		s.writeRequestError(w, err)
+		return
+	}
+	if err := s.validateMutation(r, actor); err != nil {
+		s.writeRequestError(w, err)
+		return
+	}
+	var request struct {
+		Name         string               `json:"name"`
+		Capabilities []string             `json:"capabilities"`
+		Scopes       []auth.ResourceScope `json:"scopes"`
+		ExpiresAt    *time.Time           `json:"expiresAt"`
+	}
+	if err := decodeJSON(r, &request); err != nil {
+		s.writeRequestError(w, fault.WithField(fault.CodeValidation, "body", err))
+		return
+	}
+	created, err := s.auth.CreateAPIToken(r.Context(), actor, request.Name, request.Capabilities, request.Scopes, request.ExpiresAt)
+	if err != nil {
+		s.writeRequestError(w, err)
+		return
+	}
+	response := tokenDTO(created.Token)
+	response["secret"] = created.Secret
+	writeJSON(w, http.StatusCreated, response)
+}
+
+func (s *Server) revokeAPIToken(w http.ResponseWriter, r *http.Request) {
+	actor, err := s.requireCapability(r, "tokens.manage")
+	if err != nil {
+		s.writeRequestError(w, err)
+		return
+	}
+	if err := s.validateMutation(r, actor); err != nil {
+		s.writeRequestError(w, err)
+		return
+	}
+	tokenID := r.PathValue("tokenId")
+	if err := s.auth.RevokeAPIToken(r.Context(), actor.PrincipalID, tokenID); err != nil {
+		s.writeRequestError(w, err)
+		return
+	}
+	s.hub.RevokeSession(tokenID)
+	w.WriteHeader(http.StatusNoContent)
+}
+
+func (s *Server) listShares(w http.ResponseWriter, r *http.Request) {
+	actor, err := s.requireCapability(r, "shares.create")
+	if err != nil {
+		s.writeRequestError(w, err)
+		return
+	}
+	shares, err := s.auth.ListShares(r.Context(), actor.PrincipalID)
+	if err != nil {
+		s.writeRequestError(w, err)
+		return
+	}
+	items := make([]map[string]any, 0, len(shares))
+	for _, share := range shares {
+		items = append(items, shareDTO(share))
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"shares": items})
+}
+
+func (s *Server) createShare(w http.ResponseWriter, r *http.Request) {
+	actor, err := s.requireCapability(r, "shares.create")
+	if err != nil {
+		s.writeRequestError(w, err)
+		return
+	}
+	if err := s.validateMutation(r, actor); err != nil {
+		s.writeRequestError(w, err)
+		return
+	}
+	var request struct {
+		ScopeKind          string    `json:"scopeKind"`
+		ScopeID            string    `json:"scopeId"`
+		Permissions        []string  `json:"permissions"`
+		FixedBlobAlgorithm string    `json:"fixedBlobAlgorithm"`
+		FixedBlobDigest    string    `json:"fixedBlobDigest"`
+		ExpiresAt          time.Time `json:"expiresAt"`
+	}
+	if err := decodeJSON(r, &request); err != nil {
+		s.writeRequestError(w, fault.WithField(fault.CodeValidation, "body", err))
+		return
+	}
+	if err := s.validateShareTarget(r, actor, request.ScopeKind, request.ScopeID,
+		request.FixedBlobAlgorithm, request.FixedBlobDigest); err != nil {
+		s.writeRequestError(w, err)
+		return
+	}
+	created, err := s.auth.CreateShare(r.Context(), actor, request.ScopeKind, request.ScopeID, request.Permissions,
+		request.FixedBlobAlgorithm, request.FixedBlobDigest, request.ExpiresAt)
+	if err != nil {
+		s.writeRequestError(w, err)
+		return
+	}
+	response := shareDTO(created.Share)
+	response["secret"] = created.Secret
+	writeJSON(w, http.StatusCreated, response)
+}
+
+func (s *Server) revokeShare(w http.ResponseWriter, r *http.Request) {
+	actor, err := s.requireCapability(r, "shares.create")
+	if err != nil {
+		s.writeRequestError(w, err)
+		return
+	}
+	if err := s.validateMutation(r, actor); err != nil {
+		s.writeRequestError(w, err)
+		return
+	}
+	if err := s.auth.RevokeShare(r.Context(), actor.PrincipalID, r.PathValue("shareId")); err != nil {
+		s.writeRequestError(w, err)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+func (s *Server) resolveShare(w http.ResponseWriter, r *http.Request) {
+	share, err := s.auth.ResolveShare(r.Context(), r.PathValue("credential"))
+	if err != nil {
+		s.writeRequestError(w, err)
+		return
+	}
+	response, err := s.publicShareResource(r, share)
+	if err != nil {
+		s.writeRequestError(w, concealPublicShareError(err))
+		return
+	}
+	writeJSON(w, http.StatusOK, response)
+}
+
+func (s *Server) validateShareTarget(r *http.Request, actor auth.Session, scopeKind, scopeID, fixedAlgorithm, fixedDigest string) error {
+	switch scopeKind {
+	case "library":
+		if _, err := domain.ParseID(domain.IDLibrary, scopeID); err != nil {
+			return fault.WithField(fault.CodeValidation, "scopeId", err)
+		}
+		if fixedAlgorithm != "" || fixedDigest != "" {
+			return fault.WithField(fault.CodeValidation, "fixedBlobAlgorithm", nil)
+		}
+		if _, err := s.data.GetLibrary(r.Context(), scopeID); err != nil {
+			return err
+		}
+		return concealForbidden(s.authorizeSession(r, actor, "library.read", auth.ResourceScope{Kind: "library", ID: scopeID}))
+	case "work":
+		if _, err := domain.ParseID(domain.IDCanonicalWork, scopeID); err != nil {
+			return fault.WithField(fault.CodeValidation, "scopeId", err)
+		}
+		if fixedAlgorithm != "" || fixedDigest != "" {
+			return fault.WithField(fault.CodeValidation, "fixedBlobAlgorithm", nil)
+		}
+		_, work, err := s.catalog.GetWork(r.Context(), scopeID)
+		if err != nil {
+			return err
+		}
+		return concealForbidden(s.authorizeSession(r, actor, "library.read", auth.ResourceScope{Kind: "source", ID: work.SourceID}))
+	case "media":
+		if _, err := domain.ParseID(domain.IDCanonicalMedia, scopeID); err != nil {
+			return fault.WithField(fault.CodeValidation, "scopeId", err)
+		}
+		_, item, err := s.catalog.GetMedia(r.Context(), scopeID)
+		if err != nil {
+			return err
+		}
+		if err := s.authorizeSession(r, actor, "media.read", auth.ResourceScope{Kind: "source", ID: item.SourceID}); err != nil {
+			return concealForbidden(err)
+		}
+		if fixedAlgorithm != "" || fixedDigest != "" {
+			if item.ContentVerificationState != catalog.ContentVerificationStateContentVerified ||
+				fixedAlgorithm != item.Algorithm || fixedDigest != item.Digest {
+				return fault.WithField(fault.CodeValidation, "fixedBlobDigest", nil)
+			}
+		}
+		return nil
+	default:
+		return fault.WithField(fault.CodeValidation, "scopeKind", nil)
+	}
+}
+
+func (s *Server) publicShareResource(r *http.Request, share auth.Share) (map[string]any, error) {
+	response := map[string]any{
+		"scopeKind": share.ScopeKind, "scopeId": share.ScopeID, "permissions": share.Permissions,
+		"expiresAt": share.ExpiresAt, "fixed": share.FixedBlobAlgorithm != "",
+	}
+	switch share.ScopeKind {
+	case "library":
+		library, err := s.data.GetLibrary(r.Context(), share.ScopeID)
+		if err != nil {
+			return nil, err
+		}
+		response["library"] = libraryDTO(library)
+	case "work":
+		publication, work, err := s.catalog.GetWork(r.Context(), share.ScopeID)
+		if err != nil {
+			return nil, err
+		}
+		_, items, err := s.catalog.ListMediaForWorkAt(r.Context(), publication.ID, work.ID)
+		if err != nil {
+			return nil, err
+		}
+		mediaItems := make([]api.PublishedMedia, 0, len(items))
+		for _, item := range items {
+			mediaItems = append(mediaItems, mediaDTO(publication, item))
+		}
+		response["queryPublicationId"], response["work"], response["mediaItems"] = publication.ID, workDTO(publication, work), mediaItems
+	case "media":
+		if share.FixedBlobAlgorithm != "" {
+			locations, err := s.catalog.BlobLocations(r.Context(), domain.ContentBlobRef{Algorithm: share.FixedBlobAlgorithm, Digest: share.FixedBlobDigest})
+			if err != nil {
+				return nil, err
+			}
+			response["fixedBlob"] = map[string]any{"algorithm": share.FixedBlobAlgorithm, "digest": share.FixedBlobDigest,
+				"sizeBytes": locations[0].Size, "mimeType": locations[0].MIME}
+			if publication, item, currentErr := s.catalog.GetMedia(r.Context(), share.ScopeID); currentErr == nil &&
+				item.Algorithm == share.FixedBlobAlgorithm && item.Digest == share.FixedBlobDigest {
+				response["queryPublicationId"], response["media"] = publication.ID, mediaDTO(publication, item)
+			}
+			break
+		}
+		publication, item, err := s.catalog.GetMedia(r.Context(), share.ScopeID)
+		if err != nil {
+			return nil, err
+		}
+		response["queryPublicationId"], response["media"] = publication.ID, mediaDTO(publication, item)
+	default:
+		return nil, fault.New(fault.CodeNotFound, false, nil)
+	}
+	return response, nil
+}
+
+func (s *Server) publicShareMediaContent(w http.ResponseWriter, r *http.Request) {
+	share, err := s.auth.ResolveShare(r.Context(), r.PathValue("credential"))
+	if err != nil {
+		s.writeRequestError(w, err)
+		return
+	}
+	download := r.URL.Query().Get("download") == "true"
+	if (!shareHasPermission(share, "view") && !shareHasPermission(share, "download")) ||
+		(download && !shareHasPermission(share, "download")) {
+		s.writeRequestError(w, fault.New(fault.CodeForbidden, false, nil))
+		return
+	}
+	mediaID := r.PathValue("mediaId")
+	if _, err := domain.ParseID(domain.IDCanonicalMedia, mediaID); err != nil {
+		s.writeRequestError(w, fault.New(fault.CodeNotFound, false, nil))
+		return
+	}
+	if share.FixedBlobAlgorithm != "" {
+		if share.ScopeKind != "media" || mediaID != share.ScopeID {
+			s.writeRequestError(w, fault.New(fault.CodeNotFound, false, nil))
+			return
+		}
+		s.serveFixedShareBlob(w, r, share, download)
+		return
+	}
+	_, item, err := s.catalog.GetMedia(r.Context(), mediaID)
+	if err != nil {
+		s.writeRequestError(w, concealPublicShareError(err))
+		return
+	}
+	switch share.ScopeKind {
+	case "media":
+		if item.ID != share.ScopeID {
+			err = fault.New(fault.CodeNotFound, false, nil)
+		}
+	case "work":
+		if item.WorkID != share.ScopeID {
+			err = fault.New(fault.CodeNotFound, false, nil)
+		}
+	case "library":
+		source, sourceErr := s.data.GetSource(r.Context(), item.SourceID)
+		if sourceErr != nil || source.LibraryID != share.ScopeID {
+			err = fault.New(fault.CodeNotFound, false, nil)
+		}
+	default:
+		err = fault.New(fault.CodeNotFound, false, nil)
+	}
+	if err != nil {
+		s.writeRequestError(w, err)
+		return
+	}
+	s.serveMediaItem(w, r, item, download)
+}
+
+func shareHasPermission(share auth.Share, permission string) bool {
+	for _, value := range share.Permissions {
+		if value == permission {
+			return true
+		}
+	}
+	return false
+}
+
+func concealPublicShareError(err error) error {
+	var structured *fault.Error
+	if errors.As(err, &structured) && structured.Code == fault.CodeInternal {
+		return err
+	}
+	return fault.New(fault.CodeNotFound, false, nil)
+}
+
+func (s *Server) listSecurityAudits(w http.ResponseWriter, r *http.Request) {
+	if _, err := s.requireCapability(r, "audit.read"); err != nil {
+		s.writeRequestError(w, err)
+		return
+	}
+	items, err := s.auth.ListSecurityAudits(r.Context(), 100)
+	if err != nil {
+		s.writeRequestError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"audits": items})
+}
+
+func (s *Server) setSessionCookie(w http.ResponseWriter, r *http.Request, session auth.Session, value string) {
+	maxAge := int(session.ExpiresAt.Sub(s.clock.Now().UTC()).Seconds())
+	if maxAge < 0 {
+		maxAge = 0
+	}
+	http.SetCookie(w, &http.Cookie{Name: auth.CookieName, Value: value, Path: "/", HttpOnly: true,
+		SameSite: http.SameSiteStrictMode, Secure: r.TLS != nil, MaxAge: maxAge})
+}
+
+func userDTO(user auth.User) map[string]any {
+	return map[string]any{"id": user.ID, "username": user.Username, "displayName": user.DisplayName,
+		"status": user.Status, "roles": user.Roles, "securityVersion": user.SecurityVersion,
+		"createdAt": user.CreatedAt, "updatedAt": user.UpdatedAt}
+}
+
+func grantDTO(grant auth.Grant) map[string]any {
+	return map[string]any{"id": grant.ID, "principalId": grant.PrincipalID, "effect": grant.Effect,
+		"capability": grant.Capability, "scope": grant.Scope, "revoked": grant.Revoked}
+}
+
+func tokenDTO(token auth.APIToken) map[string]any {
+	return map[string]any{"id": token.ID, "principalId": token.PrincipalID, "name": token.Name,
+		"secretPrefix": token.SecretPrefix, "capabilities": token.Capabilities, "scopes": token.Scopes,
+		"createdAt": token.CreatedAt, "expiresAt": token.ExpiresAt, "lastUsedAt": token.LastUsedAt,
+		"revoked": token.RevokedAt != nil}
+}
+
+func shareDTO(share auth.Share) map[string]any {
+	return map[string]any{"id": share.ID, "createdBy": share.CreatedBy, "scopeKind": share.ScopeKind,
+		"scopeId": share.ScopeID, "permissions": share.Permissions, "secretPrefix": share.SecretPrefix,
+		"fixedBlobAlgorithm": nullableString(share.FixedBlobAlgorithm), "fixedBlobDigest": nullableString(share.FixedBlobDigest),
+		"createdAt": share.CreatedAt, "expiresAt": share.ExpiresAt, "revoked": share.RevokedAt != nil}
+}
+
+func nullableString(value string) any {
+	if value == "" {
+		return nil
+	}
+	return value
 }
 
 func (s *Server) listSessions(w http.ResponseWriter, r *http.Request) {
@@ -1643,6 +2298,14 @@ func (s *Server) mediaContent(w http.ResponseWriter, r *http.Request) {
 		s.writeRequestError(w, err)
 		return
 	}
+	if err := s.authorizeSession(r, session, "media.read", auth.ResourceScope{Kind: "source", ID: item.SourceID}); err != nil {
+		s.writeRequestError(w, concealForbidden(err))
+		return
+	}
+	s.serveMediaItem(w, r, item, false)
+}
+
+func (s *Server) serveMediaItem(w http.ResponseWriter, r *http.Request, item catalog.Media, download bool) {
 	if item.LocationStatus != "present" {
 		s.writeRequestError(w, fault.New(fault.CodeMediaOffline, true, nil))
 		return
@@ -1675,11 +2338,59 @@ func (s *Server) mediaContent(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	defer snapshot.Close()
-	etag := `"gallery-` + item.Algorithm + `-` + item.Digest + `"`
+	s.writeMediaSnapshot(w, r, snapshot, item.Algorithm, item.Digest, item.MIME, download)
+}
+
+func (s *Server) serveFixedShareBlob(w http.ResponseWriter, r *http.Request, share auth.Share, download bool) {
+	blob := domain.ContentBlobRef{Algorithm: share.FixedBlobAlgorithm, Digest: share.FixedBlobDigest}
+	locations, err := s.catalog.BlobLocations(r.Context(), blob)
+	if err != nil {
+		s.writeRequestError(w, concealPublicShareError(err))
+		return
+	}
+	lease, err := media.AcquireBlobReadLease(r.Context(), s.store.Catalog.SQL(), s.clock, blob, nil)
+	if err != nil {
+		s.writeRequestError(w, err)
+		return
+	}
+	defer lease.Close()
+	var lastErr error
+	for _, location := range locations {
+		source, sourceErr := s.data.GetSource(r.Context(), location.SourceID)
+		if sourceErr != nil {
+			lastErr = sourceErr
+			continue
+		}
+		snapshot, snapshotErr := media.PrepareSnapshot(source.RootPath, location.RelativePath,
+			location.Algorithm, location.Digest, location.Size, s.data.TempRoot())
+		if snapshotErr != nil {
+			lastErr = snapshotErr
+			continue
+		}
+		s.writeMediaSnapshot(w, r, snapshot, location.Algorithm, location.Digest, location.MIME, download)
+		_ = snapshot.Close()
+		return
+	}
+	if lastErr == nil {
+		lastErr = fault.New(fault.CodeMediaOffline, true, nil)
+	}
+	var structured *fault.Error
+	if errors.As(lastErr, &structured) && structured.Code == fault.CodeInternal {
+		s.writeRequestError(w, lastErr)
+		return
+	}
+	s.writeRequestError(w, fault.New(fault.CodeMediaOffline, true, nil))
+}
+
+func (s *Server) writeMediaSnapshot(w http.ResponseWriter, r *http.Request, snapshot *media.Snapshot, algorithm, digest, mimeType string, download bool) {
+	etag := `"gallery-` + algorithm + `-` + digest + `"`
 	w.Header().Set("Accept-Ranges", "bytes")
 	w.Header().Set("ETag", etag)
-	w.Header().Set("Content-Type", item.MIME)
+	w.Header().Set("Content-Type", mimeType)
 	w.Header().Set("X-Content-Type-Options", "nosniff")
+	if download {
+		w.Header().Set("Content-Disposition", `attachment; filename="gallery-media"`)
+	}
 	if etagMatches(r.Header.Get("If-None-Match"), etag) {
 		w.WriteHeader(http.StatusNotModified)
 		return
@@ -2296,6 +3007,13 @@ func mediaDTO(publication catalog.Publication, value catalog.Media) api.Publishe
 }
 
 func (s *Server) authenticate(r *http.Request) (auth.Session, error) {
+	if authorization := r.Header.Get("Authorization"); authorization != "" {
+		scheme, value, ok := strings.Cut(authorization, " ")
+		if !ok || !strings.EqualFold(scheme, "Bearer") || strings.TrimSpace(value) == "" {
+			return auth.Session{}, fault.New(fault.CodeTokenInvalid, false, nil)
+		}
+		return s.auth.AuthenticateAPIToken(r.Context(), strings.TrimSpace(value))
+	}
 	cookie, err := r.Cookie(auth.CookieName)
 	if err != nil {
 		return auth.Session{}, fault.New(fault.CodeUnauthenticated, false, nil)
@@ -2304,24 +3022,90 @@ func (s *Server) authenticate(r *http.Request) (auth.Session, error) {
 }
 
 func (s *Server) requireCapability(r *http.Request, capability string) (auth.Session, error) {
+	return s.requireCapabilityForScope(r, capability, auth.ResourceScope{Kind: "global"})
+}
+
+func (s *Server) requireCapabilityForScope(r *http.Request, capability string, scope auth.ResourceScope) (auth.Session, error) {
 	session, err := s.authenticate(r)
 	if err != nil {
 		return auth.Session{}, err
 	}
-	if !auth.HasCapability(session, capability) {
-		return auth.Session{}, fault.New(fault.CodeForbidden, false, nil)
+	if err := s.authorizeSession(r, session, capability, scope); err != nil {
+		return auth.Session{}, err
 	}
 	return session, nil
+}
+
+func (s *Server) authorizeSession(r *http.Request, session auth.Session, capability string, scope auth.ResourceScope) error {
+	allowed, authErr := s.auth.AuthorizeSession(r.Context(), session, capability, scope)
+	if authErr != nil {
+		return fault.New(fault.CodeInternal, true, authErr)
+	}
+	if !allowed {
+		return fault.New(fault.CodeForbidden, false, nil)
+	}
+	return nil
+}
+
+// authorizeJob 把 Job 的读取/控制权限绑定到它实际拥有的资源。Source Job 继承
+// Library→Source 授权；不绑定 Source 的维护、备份、恢复和 Derived Job 只接受相应的
+// global capability，避免 scan.run 被用来控制管理员维护任务。
+func (s *Server) authorizeJob(r *http.Request, session auth.Session, job jobs.Job, mutate bool) error {
+	capability := "library.read"
+	scope := auth.ResourceScope{Kind: "global"}
+	if job.SourceID != "" {
+		scope = auth.ResourceScope{Kind: "source", ID: job.SourceID}
+		if mutate {
+			capability = "scan.run"
+		}
+		return s.authorizeSession(r, session, capability, scope)
+	}
+	switch job.Type {
+	case "control_backup":
+		capability = "admin.backup"
+	case "control_restore":
+		capability = "admin.restore"
+	case "catalog_gc", "catalog_checkpoint", "catalog_vacuum", "derived_gc":
+		capability = "admin.maintenance"
+	case "derived":
+		if mutate {
+			capability = "media.derive"
+		} else {
+			capability = "media.read"
+		}
+	case "overlay_projection":
+		if mutate {
+			capability = "overlays.write"
+		} else {
+			capability = "library.read"
+		}
+	default:
+		return fault.New(fault.CodeForbidden, false, nil)
+	}
+	return s.authorizeSession(r, session, capability, scope)
+}
+
+func concealForbidden(err error) error {
+	var structured *fault.Error
+	if errors.As(err, &structured) && structured.Code == fault.CodeForbidden {
+		return fault.New(fault.CodeNotFound, false, nil)
+	}
+	return err
 }
 
 func sessionSummary(session auth.Session) api.SessionSummary {
 	return api.SessionSummary{
 		Id: session.ID, PrincipalId: session.PrincipalID, CreatedAt: session.CreatedAt,
+		AuthMethod: api.SessionSummaryAuthMethod(session.AuthMethod), ClientLabel: session.ClientLabel,
 		ExpiresAt: session.ExpiresAt, LastSeenAt: session.LastSeenAt, Revoked: session.RevokedAt != nil,
 	}
 }
 
 func decodeJSON(r *http.Request, target any) error {
+	mediaType, _, err := mime.ParseMediaType(r.Header.Get("Content-Type"))
+	if err != nil || mediaType != "application/json" {
+		return errors.New("Content-Type 必须是 application/json")
+	}
 	decoder := json.NewDecoder(io.LimitReader(r.Body, 1<<20))
 	decoder.DisallowUnknownFields()
 	if err := decoder.Decode(target); err != nil {
@@ -2354,14 +3138,42 @@ func writeJSON(w http.ResponseWriter, status int, value any) {
 	_ = json.NewEncoder(w).Encode(value)
 }
 
-func hostGuard(next http.Handler) http.Handler {
+func hostGuard(server *Server, next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if err := auth.ValidateHost(r); err != nil {
+		if err := server.validateHost(r); err != nil {
 			writeFault(w, asFault(err), statusForFault(err))
 			return
 		}
 		next.ServeHTTP(w, r)
 	})
+}
+
+func (s *Server) validateHost(r *http.Request) error {
+	return auth.ValidateHostAllowed(r, s.allowedHosts)
+}
+
+func (s *Server) validateOrigin(r *http.Request) error {
+	return auth.ValidateOriginAllowed(r, s.allowedHosts)
+}
+
+func (s *Server) validateMutation(r *http.Request, session auth.Session) error {
+	if session.TokenID != "" {
+		return nil
+	}
+	return auth.ValidateMutationAllowed(r, session.CSRFToken, s.allowedHosts)
+}
+
+// loginRateSubject 使用直连对端 IP 作为登录限流主体。RemoteAddr 的端口通常每个连接都会变化，
+// 不能进入限流键；服务当前不支持反向代理部署，因此也不能信任 X-Forwarded-For 等可伪造请求头。
+func loginRateSubject(r *http.Request) string {
+	host, _, err := net.SplitHostPort(r.RemoteAddr)
+	if err != nil {
+		return strings.TrimSpace(r.RemoteAddr)
+	}
+	if ip := net.ParseIP(strings.Trim(host, "[]")); ip != nil {
+		return ip.String()
+	}
+	return strings.ToLower(host)
 }
 
 func asFault(err error) *fault.Error {
@@ -2384,8 +3196,11 @@ func statusForFault(err error) int {
 		return http.StatusBadRequest
 	case fault.CodeRuleImportInvalid:
 		return http.StatusBadRequest
-	case fault.CodeUnauthenticated, fault.CodePairingInvalid, fault.CodePairingExpired:
+	case fault.CodeUnauthenticated, fault.CodePairingInvalid, fault.CodePairingExpired,
+		fault.CodeInvalidCredentials, fault.CodeTokenInvalid, fault.CodeTokenExpired:
 		return http.StatusUnauthorized
+	case fault.CodeRateLimited:
+		return http.StatusTooManyRequests
 	case fault.CodeForbidden, fault.CodeHostRejected, fault.CodeOriginRejected, fault.CodeCSRFInvalid:
 		return http.StatusForbidden
 	case fault.CodeNotFound, fault.CodeBackupNotFound:
@@ -2396,6 +3211,10 @@ func statusForFault(err error) int {
 		fault.CodeRuleParameterConflict, fault.CodeRulePublishBlocked, fault.CodeRuleRollbackBlocked,
 		fault.CodeRuleVersionInUse, fault.CodeRuleBindingConflict:
 		return http.StatusConflict
+	case fault.CodeLANAlreadyInitialized:
+		return http.StatusConflict
+	case fault.CodeLANOwnerRequired:
+		return http.StatusPreconditionRequired
 	case fault.CodeJobStateConflict, fault.CodeJobProgressRegression, fault.CodeJobRetryExhausted, fault.CodeJobCancellationRequested,
 		fault.CodeScanAlreadyRunning, fault.CodeCatalogCandidateInvalid, fault.CodeMaintenanceBlocked:
 		return http.StatusConflict
@@ -2424,7 +3243,26 @@ func statusForFault(err error) int {
 
 func requestLog(logger *slog.Logger, next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		logger.InfoContext(r.Context(), "http_request", "method", r.Method, "route", r.URL.Path)
 		next.ServeHTTP(w, r)
+		route := r.Pattern
+		if _, path, ok := strings.Cut(route, " "); ok {
+			route = path
+		}
+		if route == "" {
+			route = redactedRequestPath(r.URL.Path)
+		}
+		logger.InfoContext(r.Context(), "http_request", "method", r.Method, "route", route)
 	})
+}
+
+func redactedRequestPath(path string) string {
+	const prefix = "/api/v1/public/shares/"
+	if !strings.HasPrefix(path, prefix) {
+		return path
+	}
+	remainder := strings.TrimPrefix(path, prefix)
+	if slash := strings.IndexByte(remainder, '/'); slash >= 0 {
+		return prefix + "{credential}" + remainder[slash:]
+	}
+	return prefix + "{credential}"
 }
