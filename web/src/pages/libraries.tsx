@@ -77,7 +77,7 @@ export function LibrariesPage() {
         title="资料库与 Source"
         description="媒体根永久只读；浏览器只登记根目录，不会直接访问本机文件系统。"
       />
-      {can('library.manage') && (
+      {can('library.write') && (
         <div className="detail-layout">
           <Form
             className="panel form-stack"
