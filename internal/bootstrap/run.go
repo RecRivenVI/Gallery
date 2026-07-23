@@ -299,7 +299,7 @@ func run(ctx context.Context, cfg config.Config, logger *slog.Logger, ready chan
 		return err
 	}
 	handler := httpapi.New(cfg.Mode, store, systemClock, personal, resources, jobStore, catalogStore, scannerService, overlayService, creatorsService, backupService, hub, logger,
-		httpapi.Options{Maintenance: maintenanceService, Watcher: watcherService, Scheduler: scheduler, Derived: derivedService, DerivedJob: derivedJobService})
+		httpapi.Options{Maintenance: maintenanceService, Watcher: watcherService, Scheduler: scheduler, Derived: derivedService, DerivedJob: derivedJobService, AllowedHosts: []string{listener.Addr().String()}})
 	server := &http.Server{
 		Handler: handler, ReadHeaderTimeout: 10 * time.Second, IdleTimeout: 60 * time.Second,
 	}
