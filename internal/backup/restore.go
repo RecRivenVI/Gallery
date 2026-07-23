@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/RecRivenVI/gallery/internal/contract/fault"
+	"github.com/RecRivenVI/gallery/internal/domain"
 	"github.com/RecRivenVI/gallery/internal/platform/appdirs"
 	"github.com/RecRivenVI/gallery/internal/storage"
 )
@@ -93,6 +94,9 @@ func (s *Service) RequestRestore(ctx context.Context, requestedBy, backupID stri
 // verifyBackupFiles 是不依赖运行中 Service 的纯验证：它可在启动期（无打开数据库）复用。
 func verifyBackupFiles(ctx context.Context, backupRoot, tempRoot string, manifest Manifest) (RestoreReport, error) {
 	report := RestoreReport{}
+	if _, err := domain.ParseID(domain.IDControlBackup, manifest.BackupID); err != nil {
+		return report, fault.New(fault.CodeBackupCorrupt, false, fmt.Errorf("备份 ID 无效"))
+	}
 	if manifest.Role != string(storage.RoleControl) {
 		return report, fault.New(fault.CodeBackupIncompatible, false, fmt.Errorf("备份 role 非 control"))
 	}
@@ -186,7 +190,9 @@ func ApplyPendingRestore(ctx context.Context, dirs appdirs.Dirs) (RestoreOutcome
 		return RestoreOutcome{}, err
 	}
 	var request restoreRequest
-	if err := json.Unmarshal(data, &request); err != nil || request.BackupID == "" {
+	unmarshalErr := json.Unmarshal(data, &request)
+	_, idErr := domain.ParseID(domain.IDControlBackup, request.BackupID)
+	if unmarshalErr != nil || idErr != nil {
 		recordRestoreOutcome(dirs, request.BackupID, false, "恢复请求标记损坏")
 		_ = os.Remove(markerPath)
 		return RestoreOutcome{}, nil
@@ -207,6 +213,9 @@ func applyRestore(ctx context.Context, dirs appdirs.Dirs, backupID string) (Rest
 	manifest, err := readManifest(filepath.Join(backupRoot, backupID, manifestFileName))
 	if err != nil {
 		return RestoreOutcome{}, fmt.Errorf("读取备份 manifest: %w", err)
+	}
+	if manifest.BackupID != backupID {
+		return RestoreOutcome{}, fault.New(fault.CodeBackupCorrupt, false, fmt.Errorf("备份 manifest 身份与目录不一致"))
 	}
 	if _, err := verifyBackupFiles(ctx, backupRoot, dirs.Temp, manifest); err != nil {
 		return RestoreOutcome{}, err
@@ -277,6 +286,18 @@ func FinalizeRestore(ctx context.Context, control *storage.Database, now time.Ti
 		return fault.New(fault.CodeRestoreFailed, false, err)
 	}
 	if _, err := tx.ExecContext(ctx, "DELETE FROM pairing_attempts"); err != nil {
+		return fault.New(fault.CodeRestoreFailed, false, err)
+	}
+	if _, err := tx.ExecContext(ctx, "UPDATE api_tokens SET revoked_at=COALESCE(revoked_at, ?)", now.UTC().Unix()); err != nil {
+		return fault.New(fault.CodeRestoreFailed, false, err)
+	}
+	if _, err := tx.ExecContext(ctx, "UPDATE shares SET revoked_at=COALESCE(revoked_at, ?)", now.UTC().Unix()); err != nil {
+		return fault.New(fault.CodeRestoreFailed, false, err)
+	}
+	if _, err := tx.ExecContext(ctx, `INSERT INTO security_audits
+(audit_id, actor_principal_id, action, target_kind, target_id, outcome, detail_json, created_at)
+VALUES (?, NULL, 'restore.finalize', 'control', 'control.db', 'success',
+        '{"credentialsInvalidated":true}', ?)`, fmt.Sprintf("saud_restore_%d", now.UTC().UnixNano()), now.UTC().Unix()); err != nil {
 		return fault.New(fault.CodeRestoreFailed, false, err)
 	}
 	if _, err := tx.ExecContext(ctx, `UPDATE jobs SET status='failed', stage='restore_invalidated',
