@@ -313,6 +313,26 @@ type Lease struct {
 	closed sync.Once
 }
 
+// InputBlob 返回已就绪 DerivedAsset 的稳定输入 Blob，供传输层在建立文件读取租约前完成
+// 资源授权。它不打开缓存文件、不刷新状态，也不创建 lease。
+func (s *Service) InputBlob(ctx context.Context, assetKey string) (domain.ContentBlobRef, error) {
+	if !isSHA256(assetKey) {
+		return domain.ContentBlobRef{}, fault.New(fault.CodeDerivedAssetInvalid, false, nil)
+	}
+	var blob domain.ContentBlobRef
+	var status string
+	err := s.db.QueryRowContext(ctx,
+		"SELECT blob_algorithm, blob_digest, status FROM derived_assets WHERE asset_key=?", assetKey).
+		Scan(&blob.Algorithm, &blob.Digest, &status)
+	if errors.Is(err, sql.ErrNoRows) || status != "ready" {
+		return domain.ContentBlobRef{}, fault.New(fault.CodeNotFound, false, nil)
+	}
+	if err != nil {
+		return domain.ContentBlobRef{}, fault.New(fault.CodeInternal, true, err)
+	}
+	return blob, nil
+}
+
 func (s *Service) Open(ctx context.Context, assetKey string) (*Lease, error) {
 	if !isSHA256(assetKey) {
 		return nil, fault.New(fault.CodeDerivedAssetInvalid, false, nil)

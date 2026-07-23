@@ -107,6 +107,8 @@ type Publication struct {
 
 type Work struct {
 	ID         string
+	SourceID   string
+	LibraryID  string
 	Title      string
 	Creator    string
 	Tags       []string
@@ -133,6 +135,17 @@ type Media struct {
 	VerifiedAt   time.Time
 	Ordinal      int
 	RelativePath string
+}
+
+// BlobLocation 是一个已发布 ContentBlob 的只读 occurrence。它只携带服务端打开媒体所需的
+// Source/相对路径与公开媒体类型，不暴露 Catalog 内部 row ID。
+type BlobLocation struct {
+	SourceID     string
+	RelativePath string
+	MIME         string
+	Size         int64
+	Algorithm    string
+	Digest       string
 }
 
 type GCResult struct {
@@ -795,16 +808,21 @@ func (s *Store) resolvePublication(ctx context.Context, publicationID string) (P
 }
 
 func (s *Store) GetWork(ctx context.Context, id string) (Publication, Work, error) {
-	publication, err := s.Current(ctx)
+	return s.GetWorkAt(ctx, "", id)
+}
+
+// GetWorkAt 与 GetMediaAt 使用相同 publication 解析语义。
+func (s *Store) GetWorkAt(ctx context.Context, publicationID, id string) (Publication, Work, error) {
+	publication, err := s.resolvePublication(ctx, publicationID)
 	if err != nil {
 		return Publication{}, Work{}, err
 	}
 	var work Work
 	var tags string
-	err = s.db.QueryRowContext(ctx, `SELECT w.work_id, w.title, w.creator, w.tags_json, count(m.media_id)
+	err = s.db.QueryRowContext(ctx, `SELECT w.work_id, w.source_id, w.library_id, w.title, w.creator, w.tags_json, count(m.media_id)
 FROM work_projections w LEFT JOIN media_projections m
  ON m.catalog_revision_id = w.catalog_revision_id AND m.overlay_revision_id = w.overlay_revision_id AND m.work_id = w.work_id
-WHERE w.catalog_revision_id = ? AND w.overlay_revision_id = ? AND w.work_id = ? GROUP BY w.work_id, w.title, w.creator, w.tags_json`, publication.CatalogRevisionID, publication.OverlayRevisionID, id).Scan(&work.ID, &work.Title, &work.Creator, &tags, &work.MediaCount)
+WHERE w.catalog_revision_id = ? AND w.overlay_revision_id = ? AND w.work_id = ? GROUP BY w.work_id, w.source_id, w.library_id, w.title, w.creator, w.tags_json`, publication.CatalogRevisionID, publication.OverlayRevisionID, id).Scan(&work.ID, &work.SourceID, &work.LibraryID, &work.Title, &work.Creator, &tags, &work.MediaCount)
 	if errors.Is(err, sql.ErrNoRows) {
 		return Publication{}, Work{}, fault.New(fault.CodeNotFound, false, nil)
 	}
@@ -813,6 +831,51 @@ WHERE w.catalog_revision_id = ? AND w.overlay_revision_id = ? AND w.work_id = ? 
 	}
 	_ = json.Unmarshal([]byte(tags), &work.Tags)
 	return publication, work, nil
+}
+
+// BlobLocations 返回仍被已发布 revision 引用的 present occurrence，供固定 Blob 分享在
+// active publication 已切换后继续解析稳定内容身份。调用方仍须通过 media.PrepareSnapshot
+// 校验真实字节摘要；Catalog 中的 present 状态不能替代读取时校验。
+func (s *Store) BlobLocations(ctx context.Context, blob domain.ContentBlobRef) ([]BlobLocation, error) {
+	if _, err := domain.ParseContentBlobRef(blob.Algorithm, blob.Digest); err != nil {
+		return nil, fault.New(fault.CodeValidation, false, err)
+	}
+	rows, err := s.db.QueryContext(ctx, `SELECT f.source_id, f.relative_path,
+COALESCE(sm.mime_type, 'application/octet-stream'), b.size_bytes
+FROM query_publications q
+JOIN content_blobs b ON b.catalog_revision_id=q.catalog_revision_id
+JOIN file_locations f ON f.catalog_revision_id=b.catalog_revision_id
+ AND f.algorithm=b.algorithm AND f.digest=b.digest AND f.status='present'
+LEFT JOIN source_media sm ON sm.catalog_revision_id=f.catalog_revision_id
+ AND sm.source_id=f.source_id AND sm.source_key=f.source_key
+WHERE b.algorithm=? AND b.digest=?
+ORDER BY q.created_at DESC, f.source_id, f.location_key`, blob.Algorithm, blob.Digest)
+	if err != nil {
+		return nil, fault.New(fault.CodeInternal, true, err)
+	}
+	defer rows.Close()
+	seen := map[string]struct{}{}
+	var result []BlobLocation
+	for rows.Next() {
+		var item BlobLocation
+		if err := rows.Scan(&item.SourceID, &item.RelativePath, &item.MIME, &item.Size); err != nil {
+			return nil, fault.New(fault.CodeInternal, true, err)
+		}
+		key := item.SourceID + "\x00" + item.RelativePath
+		if _, duplicate := seen[key]; duplicate {
+			continue
+		}
+		seen[key] = struct{}{}
+		item.Algorithm, item.Digest = blob.Algorithm, blob.Digest
+		result = append(result, item)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fault.New(fault.CodeInternal, true, err)
+	}
+	if len(result) == 0 {
+		return nil, fault.New(fault.CodeNotFound, false, nil)
+	}
+	return result, nil
 }
 
 // GetMedia 解析当前 active publication 中的媒体，等价于 GetMediaAt(ctx, "", id)。
