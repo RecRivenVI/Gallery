@@ -40,7 +40,7 @@ func Parse(args []string) (Config, error) {
 	}
 	flags := flag.NewFlagSet("galleryd", flag.ContinueOnError)
 	flags.SetOutput(os.Stderr)
-	mode := flags.String("mode", string(ModePersonal), "部署模式：personal；LAN 将在账户闭环完成后启用")
+	mode := flags.String("mode", string(ModePersonal), "部署模式：personal 或 lan")
 	listen := flags.String("listen", "127.0.0.1:0", "HTTP 监听地址")
 	appRoot := flags.String("app-root", "", "开发/测试用 AppDirs 统一父目录")
 	var sourceRoots stringList
@@ -65,17 +65,30 @@ func (c Config) Validate() error {
 	if c.Mode != ModePersonal && c.Mode != ModeLAN {
 		return fault.New(fault.CodeConfigInvalid, false, fmt.Errorf("未知部署模式"))
 	}
-	if c.Mode == ModeLAN {
-		return fault.New(fault.CodeConfigInvalid, false, fmt.Errorf("LAN 模式需等待 Owner/Session 门禁完成"))
-	}
 	host, _, err := net.SplitHostPort(c.Listen)
 	if err != nil {
 		return fault.New(fault.CodeConfigInvalid, false, fmt.Errorf("listen 地址无效: %w", err))
 	}
-	if !isLoopbackHost(host) {
+	if c.Mode == ModePersonal && !isLoopbackHost(host) {
 		return fault.New(fault.CodeConfigInvalid, false, fmt.Errorf("Personal 模式只允许 loopback"))
 	}
+	if c.Mode == ModeLAN && !isTrustedLANHost(host) {
+		return fault.New(fault.CodeConfigInvalid, false, fmt.Errorf("LAN 模式只允许 loopback 或私有地址"))
+	}
 	return nil
+}
+
+func IsLoopbackListen(listen string) bool {
+	host, _, err := net.SplitHostPort(listen)
+	return err == nil && isLoopbackHost(host)
+}
+
+func isTrustedLANHost(host string) bool {
+	if isLoopbackHost(host) {
+		return true
+	}
+	ip := net.ParseIP(strings.Trim(host, "[]"))
+	return ip != nil && ip.IsPrivate() && !ip.IsUnspecified()
 }
 
 func isLoopbackHost(host string) bool {

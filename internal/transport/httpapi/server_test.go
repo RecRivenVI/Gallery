@@ -346,6 +346,123 @@ func TestPersonalPairingIsSingleUseAndRevocationInvalidatesREST(t *testing.T) {
 	if err != nil || ifRangeStale.StatusCode() != http.StatusOK || !bytes.Equal(ifRangeStale.Body, mediaContent) {
 		t.Fatalf("If-Range 不匹配应退回完整 200: %v status=%d body=%q", err, ifRangeStale.StatusCode(), ifRangeStale.Body)
 	}
+	if mediaResponse.JSON200.Media[0].Blob == nil {
+		t.Fatal("已确认媒体缺少 Blob，无法验证固定分享")
+	}
+	createShare := func(body map[string]any) map[string]any {
+		response := requestJSON(t, httpClient, http.MethodPost, server.URL+"/api/v1/shares", server.URL, exchange.JSON201.CsrfToken, body)
+		encoded := readAndClose(t, response)
+		if response.StatusCode != http.StatusCreated {
+			t.Fatalf("创建 Share status=%d body=%s", response.StatusCode, encoded)
+		}
+		var value map[string]any
+		if err := json.Unmarshal(encoded, &value); err != nil {
+			t.Fatal(err)
+		}
+		return value
+	}
+	workShare := createShare(map[string]any{
+		"scopeKind": "work", "scopeId": worksResponse.JSON200.Works[0].Id,
+		"permissions": []string{"view"}, "expiresAt": time.Now().UTC().Add(time.Hour),
+	})
+	workCredential, _ := workShare["secret"].(string)
+	publicWork, err := http.Get(server.URL + "/api/v1/public/shares/" + workCredential)
+	if err != nil {
+		t.Fatal(err)
+	}
+	publicWorkBody := readAndClose(t, publicWork)
+	if publicWork.StatusCode != http.StatusOK || !bytes.Contains(publicWorkBody, []byte(`"work"`)) ||
+		!bytes.Contains(publicWorkBody, []byte(`"mediaItems"`)) || bytes.Contains(publicWorkBody, []byte(`"createdBy"`)) ||
+		bytes.Contains(publicWorkBody, []byte(`"secretPrefix"`)) {
+		t.Fatalf("公开 Work Share 资源或脱敏错误: status=%d body=%s", publicWork.StatusCode, publicWorkBody)
+	}
+	sharedRangeRequest, _ := http.NewRequest(http.MethodGet,
+		server.URL+"/api/v1/public/shares/"+workCredential+"/media/"+string(mediaID)+"/content", nil)
+	sharedRangeRequest.Header.Set("Range", rangeHeader)
+	sharedRange, err := http.DefaultClient.Do(sharedRangeRequest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if body := readAndClose(t, sharedRange); sharedRange.StatusCode != http.StatusPartialContent || string(body) != "gallery" {
+		t.Fatalf("Work Share Range 内容错误: status=%d body=%q", sharedRange.StatusCode, body)
+	}
+	downloadDenied, err := http.Get(server.URL + "/api/v1/public/shares/" + workCredential + "/media/" + string(mediaID) + "/content?download=true")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if downloadDenied.StatusCode != http.StatusForbidden {
+		t.Fatalf("view-only Share 未拒绝 download: %d", downloadDenied.StatusCode)
+	}
+	_ = downloadDenied.Body.Close()
+
+	fixedShare := createShare(map[string]any{
+		"scopeKind": "media", "scopeId": mediaID, "permissions": []string{"view", "download"},
+		"fixedBlobAlgorithm": mediaResponse.JSON200.Media[0].Blob.Algorithm,
+		"fixedBlobDigest":    mediaResponse.JSON200.Media[0].Blob.Digest,
+		"expiresAt":          time.Now().UTC().Add(time.Hour),
+	})
+	fixedCredential, _ := fixedShare["secret"].(string)
+	fixedShareID, _ := fixedShare["id"].(string)
+	fixedDownload, err := http.Get(server.URL + "/api/v1/public/shares/" + fixedCredential + "/media/" + string(mediaID) + "/content?download=true")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if body := readAndClose(t, fixedDownload); fixedDownload.StatusCode != http.StatusOK || !bytes.Equal(body, mediaContent) ||
+		!strings.HasPrefix(fixedDownload.Header.Get("Content-Disposition"), "attachment;") {
+		t.Fatalf("固定 Media Share 下载错误: status=%d body=%q headers=%v", fixedDownload.StatusCode, body, fixedDownload.Header)
+	}
+	fixedHead, err := http.Head(server.URL + "/api/v1/public/shares/" + fixedCredential + "/media/" + string(mediaID) + "/content")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if fixedHead.StatusCode != http.StatusOK || fixedHead.Header.Get("Content-Length") != fmt.Sprint(len(mediaContent)) {
+		t.Fatalf("固定 Media Share HEAD 错误: status=%d headers=%v", fixedHead.StatusCode, fixedHead.Header)
+	}
+	_ = fixedHead.Body.Close()
+	wrongMediaID, err := identity.NewGenerator(clock.Fixed{Time: time.Now().UTC().Add(time.Second)}).New(domain.IDCanonicalMedia)
+	if err != nil {
+		t.Fatal(err)
+	}
+	wrongSharedMedia, err := http.Get(server.URL + "/api/v1/public/shares/" + workCredential + "/media/" + wrongMediaID.String() + "/content")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if wrongSharedMedia.StatusCode != http.StatusNotFound {
+		t.Fatalf("Work Share 越界 Media 未隐藏为 404: %d body=%s", wrongSharedMedia.StatusCode, readAndClose(t, wrongSharedMedia))
+	}
+	_ = wrongSharedMedia.Body.Close()
+	invalidFixedDigest := requestJSON(t, httpClient, http.MethodPost, server.URL+"/api/v1/shares", server.URL, exchange.JSON201.CsrfToken, map[string]any{
+		"scopeKind": "media", "scopeId": mediaID, "permissions": []string{"view"},
+		"fixedBlobAlgorithm": "sha256-v1", "fixedBlobDigest": strings.Repeat("0", 64),
+		"expiresAt": time.Now().UTC().Add(time.Hour),
+	})
+	if invalidFixedDigest.StatusCode != http.StatusBadRequest {
+		t.Fatalf("Media Share 非当前固定 Blob 未拒绝: %d body=%s", invalidFixedDigest.StatusCode, readAndClose(t, invalidFixedDigest))
+	}
+	_ = invalidFixedDigest.Body.Close()
+	invalidFixedWork := requestJSON(t, httpClient, http.MethodPost, server.URL+"/api/v1/shares", server.URL, exchange.JSON201.CsrfToken, map[string]any{
+		"scopeKind": "work", "scopeId": worksResponse.JSON200.Works[0].Id, "permissions": []string{"view"},
+		"fixedBlobAlgorithm": mediaResponse.JSON200.Media[0].Blob.Algorithm,
+		"fixedBlobDigest":    mediaResponse.JSON200.Media[0].Blob.Digest,
+		"expiresAt":          time.Now().UTC().Add(time.Hour),
+	})
+	if invalidFixedWork.StatusCode != http.StatusBadRequest {
+		t.Fatalf("Work Share 非法固定 Blob 未拒绝: %d body=%s", invalidFixedWork.StatusCode, readAndClose(t, invalidFixedWork))
+	}
+	_ = invalidFixedWork.Body.Close()
+	revokedFixedShare := requestJSON(t, httpClient, http.MethodDelete, server.URL+"/api/v1/shares/"+fixedShareID, server.URL, exchange.JSON201.CsrfToken, nil)
+	if revokedFixedShare.StatusCode != http.StatusNoContent {
+		t.Fatalf("吊销固定 Share 失败: %d body=%s", revokedFixedShare.StatusCode, readAndClose(t, revokedFixedShare))
+	}
+	_ = revokedFixedShare.Body.Close()
+	revokedFixedContent, err := http.Get(server.URL + "/api/v1/public/shares/" + fixedCredential + "/media/" + string(mediaID) + "/content")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if revokedFixedContent.StatusCode != http.StatusNotFound {
+		t.Fatalf("已吊销 Share 仍可读取内容: %d body=%s", revokedFixedContent.StatusCode, readAndClose(t, revokedFixedContent))
+	}
+	_ = revokedFixedContent.Body.Close()
 	invalidRange := "bytes=0-1,3-4"
 	invalid, err := client.GetMediaContentWithResponse(context.Background(), mediaID, &api.GetMediaContentParams{Range: &invalidRange})
 	if err != nil || invalid.JSON416 == nil || invalid.JSON416.Error.Code != api.RANGEINVALID {

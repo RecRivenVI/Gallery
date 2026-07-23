@@ -76,7 +76,14 @@
             "RESTORE_FAILED",
             "BACKUP_NOT_FOUND",
             "BACKUP_CORRUPT",
-            "BACKUP_INCOMPATIBLE"
+            "BACKUP_INCOMPATIBLE",
+            "INVALID_CREDENTIALS",
+            "RATE_LIMITED",
+            "LAN_OWNER_REQUIRED",
+            "LAN_ALREADY_INITIALIZED",
+            "USER_DISABLED",
+            "TOKEN_INVALID",
+            "TOKEN_EXPIRED"
           ]
         },
         "retryable": {"type": "boolean"},

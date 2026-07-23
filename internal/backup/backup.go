@@ -31,7 +31,7 @@ import (
 
 const (
 	// ManifestVersion 是备份 manifest 的结构版本；恢复端据此判断能否解释。
-	ManifestVersion = 1
+	ManifestVersion = 2
 	// JobTypeBackup 是维护类备份 Job 的类型标识。
 	JobTypeBackup = "control_backup"
 
@@ -73,6 +73,7 @@ type SecurityScope struct {
 	PairingCredentials  string `json:"pairingCredentials"`
 	APITokens           string `json:"apiTokens"`
 	CredentialStoreRefs string `json:"credentialStoreRefs"`
+	Shares              string `json:"shares"`
 	Note                string `json:"note"`
 }
 
@@ -97,9 +98,10 @@ func DefaultSecurityScope() SecurityScope {
 	return SecurityScope{
 		Sessions:            "included-hashed",
 		PairingCredentials:  "included-hashed",
-		APITokens:           "not-present",
+		APITokens:           "included-hashed-invalidated-on-restore",
 		CredentialStoreRefs: "not-present",
-		Note:                "control.db 完整逻辑副本；session/pairing 仅含 SHA-256 摘要并在恢复时作废；阶段 1 无 API Token 与 CredentialStore 引用",
+		Shares:              "included-hashed-invalidated-on-restore",
+		Note:                "control.db 完整逻辑副本；Session、pairing、API Token 与分享只含验证摘要并在恢复时作废；用户、Role、Grant 与安全审计保留",
 	}
 }
 
@@ -269,7 +271,10 @@ func (s *Service) List(ctx context.Context) ([]Manifest, error) {
 			continue
 		}
 		manifest, err := readManifest(filepath.Join(s.backupRoot(), entry.Name(), manifestFileName))
-		if err != nil {
+		if err != nil || manifest.BackupID != entry.Name() {
+			continue // 目录身份与 manifest 不一致同样视为损坏，绝不跟随 manifest 拼接其它路径。
+		}
+		if _, err := domain.ParseID(domain.IDControlBackup, manifest.BackupID); err != nil {
 			continue // 损坏或半成品目录不进入列表，但不影响其余备份。
 		}
 		result = append(result, manifest)
@@ -290,6 +295,9 @@ func (s *Service) Get(ctx context.Context, backupID string) (Manifest, error) {
 			return Manifest{}, fault.New(fault.CodeBackupNotFound, false, nil)
 		}
 		return Manifest{}, fault.New(fault.CodeBackupCorrupt, false, err)
+	}
+	if manifest.BackupID != backupID {
+		return Manifest{}, fault.New(fault.CodeBackupCorrupt, false, fmt.Errorf("备份 manifest 身份与目录不一致"))
 	}
 	return manifest, nil
 }
@@ -380,6 +388,9 @@ func readManifest(path string) (Manifest, error) {
 	}
 	if manifest.ManifestVersion == 0 || manifest.BackupID == "" || manifest.Role == "" {
 		return Manifest{}, fmt.Errorf("manifest 字段缺失")
+	}
+	if manifest.ManifestVersion > ManifestVersion {
+		return Manifest{}, fmt.Errorf("不支持的未来 manifestVersion %d", manifest.ManifestVersion)
 	}
 	return manifest, nil
 }

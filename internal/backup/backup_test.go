@@ -59,8 +59,11 @@ func seedControl(t *testing.T, store *storage.Store) {
 		t.Fatal(err)
 	}
 	if _, err := store.Control.SQL().Exec(`INSERT INTO sessions
-(session_id, secret_hash, principal_id, csrf_token, created_at, expires_at, last_seen_at)
-VALUES ('ses_seed', 'hash', 'personal-owner', 'csrf', 1, 9999999999, 1)`); err != nil {
+(session_id, secret_hash, principal_id, csrf_hash, auth_method, client_label,
+ principal_security_version, created_at, absolute_expires_at, idle_expires_at, last_seen_at)
+VALUES ('ses_seed', 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
+ 'personal-owner', 'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb',
+ 'personal_pairing', '', 1, 1, 9999999999, 9999999999, 1)`); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := store.Control.SQL().Exec(`INSERT INTO rule_packages
@@ -104,13 +107,14 @@ func TestBackupProducesConsistentRestorableCopy(t *testing.T) {
 	if manifest.Role != string(storage.RoleControl) || manifest.ManifestVersion != backup.ManifestVersion {
 		t.Fatalf("manifest 基本字段错误: %+v", manifest)
 	}
-	if manifest.SchemaVersion != 19 {
+	if manifest.SchemaVersion != 20 {
 		t.Fatalf("manifest schemaVersion = %d，应等于 control 最高 migration", manifest.SchemaVersion)
 	}
 	if manifest.Database.ChecksumAlgorithm != "sha256" || manifest.Database.FileName != "control.db" {
 		t.Fatalf("manifest 文件条目错误: %+v", manifest.Database)
 	}
-	if manifest.Security.Sessions != "included-hashed" || manifest.Security.APITokens != "not-present" {
+	if manifest.Security.Sessions != "included-hashed" || manifest.Security.APITokens != "included-hashed-invalidated-on-restore" ||
+		manifest.Security.Shares != "included-hashed-invalidated-on-restore" {
 		t.Fatalf("安全范围声明错误: %+v", manifest.Security)
 	}
 

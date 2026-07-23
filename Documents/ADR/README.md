@@ -19,7 +19,7 @@
 | [ADR-003 Catalog 发布与恢复](ADR-003-Catalog发布与恢复.md) | 接受 | staging snapshot + `query_publication_id` 短发布；publication 为扫描成功事实源 |
 | [ADR-004 规则系统](ADR-004-规则系统.md) | 接受 | 规范 JSON + JSON Schema + 有限原语 + 受限 CEL + Rule IR；阶段 2 生命周期与解释/影响契约已落地 |
 | [ADR-005 查询协议](ADR-005-查询协议.md) | 接受（限定 v1 能力） | FTS5 bigram/trigram、排序协议 v1、`query_publication_id` 快照分页 |
-| [ADR-006 API 与安全](ADR-006-API与安全.md) | 接受 | REST/OpenAPI、版本化 WebSocket、capability、Personal 配对和 LAN 账户 |
+| [ADR-006 API 与安全](ADR-006-API与安全.md) | 接受 | REST/OpenAPI、版本化 WebSocket、Principal/Role/Grant capability、Personal 配对、LAN 账户与摘要凭据 |
 | [ADR-007 跨平台适配层](ADR-007-跨平台适配层.md) | 接受 | 核心与 OS/文件系统/系统能力通过端口隔离 |
 | [ADR-008 可替换桌面壳](ADR-008-可替换桌面壳.md) | 有条件接受 | Wails 是当前 Windows 优先候选，壳不是后端依赖 |
 

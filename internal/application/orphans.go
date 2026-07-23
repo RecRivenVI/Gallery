@@ -256,6 +256,25 @@ func (r *Resources) DecideOrphanCandidate(ctx context.Context, bindingID, decisi
 		Decision: decision, NewStatus: newStatus, CanonicalID: canonicalID}, nil
 }
 
+// OrphanCandidateSource 解析孤立候选实际所属的 Source，供 API 在执行任何状态变更前
+// 做资源级授权。它不返回 Canonical 标签或来源键，避免授权前读取多余资源事实。
+func (r *Resources) OrphanCandidateSource(ctx context.Context, bindingID string) (string, error) {
+	entity, err := orphanEntityForBinding(bindingID)
+	if err != nil {
+		return "", err
+	}
+	var sourceID string
+	err = r.control.QueryRowContext(ctx,
+		"SELECT source_id FROM "+entity.table+" WHERE binding_id=?", bindingID).Scan(&sourceID)
+	if errors.Is(err, sql.ErrNoRows) {
+		return "", fault.New(fault.CodeNotFound, false, nil)
+	}
+	if err != nil {
+		return "", fault.New(fault.CodeInternal, true, err)
+	}
+	return sourceID, nil
+}
+
 func encodeOrphanCursor(bindingID string) string {
 	return base64.RawURLEncoding.EncodeToString([]byte(bindingID))
 }
