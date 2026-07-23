@@ -1,8 +1,8 @@
 openapi: 3.0.3
 info:
   title: Gallery API
-  version: 0.5.0-pre-alpha
-  description: Gallery pre-alpha 契约（阶段 3 扫描、任务和 Catalog 正确性切片）；资源面随阶段演进为兼容基线，物理 Schema 与完整 v1 语义尚未冻结。
+  version: 0.6.0-pre-alpha
+  description: Gallery pre-alpha 契约（阶段 5 账户、安全和多客户端正确性切片）；资源面随阶段演进为兼容基线，物理 Schema 与完整 v1 语义尚未冻结。
 servers:
   - url: http://127.0.0.1:{port}
     variables:
@@ -81,6 +81,318 @@ paths:
           $ref: "#/components/responses/UnauthenticatedError"
         "403":
           $ref: "#/components/responses/ForbiddenError"
+  /api/v1/lan/owner:
+    post:
+      operationId: initializeLANOwner
+      summary: 首次、原子初始化 LAN Owner；仅允许本机请求
+      security: []
+      parameters:
+        - $ref: "#/components/parameters/CSRFHeader"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/LANOwnerInitializeRequest"
+      responses:
+        "201":
+          description: LAN Owner 已初始化
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/LocalUser"
+        "403":
+          $ref: "#/components/responses/ForbiddenError"
+        "409":
+          $ref: "#/components/responses/ConflictError"
+  /api/v1/auth/login:
+    post:
+      operationId: login
+      summary: 使用 LAN 本地账户建立 HttpOnly Session
+      security: []
+      parameters:
+        - $ref: "#/components/parameters/CSRFHeader"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/LoginRequest"
+      responses:
+        "201":
+          description: Session 已建立
+          headers:
+            Set-Cookie:
+              schema: {type: string}
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SessionEstablishedResponse"
+        "401":
+          $ref: "#/components/responses/UnauthenticatedError"
+        "403":
+          $ref: "#/components/responses/ForbiddenError"
+        "429":
+          $ref: "#/components/responses/RateLimitedError"
+  /api/v1/auth/logout:
+    post:
+      operationId: logout
+      summary: 吊销当前 Session 或 API Token
+      parameters:
+        - $ref: "#/components/parameters/CSRFHeader"
+      responses:
+        "204": {description: 当前凭据已吊销}
+        "401":
+          $ref: "#/components/responses/UnauthenticatedError"
+        "403":
+          $ref: "#/components/responses/ForbiddenError"
+  /api/v1/admin/users:
+    get:
+      operationId: listLocalUsers
+      summary: 列出本地账户
+      responses:
+        "200":
+          description: 本地账户列表
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/LocalUserListResponse"
+        "403": {$ref: "#/components/responses/ForbiddenError"}
+    post:
+      operationId: createLocalUser
+      summary: 创建本地账户及初始角色和授权
+      parameters:
+        - $ref: "#/components/parameters/CSRFHeader"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: "#/components/schemas/LocalUserCreateRequest"}
+      responses:
+        "201":
+          description: 本地账户已创建
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/LocalUser"}
+        "403": {$ref: "#/components/responses/ForbiddenError"}
+        "409": {$ref: "#/components/responses/ConflictError"}
+  /api/v1/admin/users/{userId}/status:
+    patch:
+      operationId: setLocalUserStatus
+      summary: 启用、停用或软删除本地账户并失效其凭据
+      parameters:
+        - {name: userId, in: path, required: true, schema: {$ref: "#/components/schemas/UserId"}}
+        - $ref: "#/components/parameters/CSRFHeader"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: "#/components/schemas/UserStatusRequest"}
+      responses:
+        "204": {description: 状态已更新}
+        "403": {$ref: "#/components/responses/ForbiddenError"}
+        "404": {$ref: "#/components/responses/NotFoundError"}
+  /api/v1/account/password:
+    post:
+      operationId: changeOwnPassword
+      summary: 修改当前本地账户密码并失效其全部凭据
+      parameters:
+        - $ref: "#/components/parameters/CSRFHeader"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: "#/components/schemas/PasswordChangeRequest"}
+      responses:
+        "204": {description: 密码已修改}
+        "401": {$ref: "#/components/responses/UnauthenticatedError"}
+        "403": {$ref: "#/components/responses/ForbiddenError"}
+  /api/v1/admin/users/{userId}/grants:
+    post:
+      operationId: createAuthorizationGrant
+      summary: 为账户创建显式 allow 或 deny 授权
+      parameters:
+        - {name: userId, in: path, required: true, schema: {$ref: "#/components/schemas/UserId"}}
+        - $ref: "#/components/parameters/CSRFHeader"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: "#/components/schemas/AuthorizationGrantInput"}
+      responses:
+        "201":
+          description: 授权已创建
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/AuthorizationGrant"}
+        "403": {$ref: "#/components/responses/ForbiddenError"}
+        "404": {$ref: "#/components/responses/NotFoundError"}
+  /api/v1/admin/grants/{grantId}:
+    delete:
+      operationId: revokeAuthorizationGrant
+      summary: 吊销授权并立即失效目标账户凭据
+      parameters:
+        - {name: grantId, in: path, required: true, schema: {$ref: "#/components/schemas/GrantId"}}
+        - $ref: "#/components/parameters/CSRFHeader"
+      responses:
+        "204": {description: 授权已吊销}
+        "403": {$ref: "#/components/responses/ForbiddenError"}
+        "404": {$ref: "#/components/responses/NotFoundError"}
+  /api/v1/api-tokens:
+    get:
+      operationId: listAPITokens
+      summary: 列出当前主体的 API Token 摘要；永不返回 secret
+      responses:
+        "200":
+          description: API Token 列表
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/APITokenListResponse"}
+        "403": {$ref: "#/components/responses/ForbiddenError"}
+    post:
+      operationId: createAPIToken
+      summary: 创建 API Token；secret 仅在本响应返回一次
+      parameters:
+        - $ref: "#/components/parameters/CSRFHeader"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: "#/components/schemas/APITokenCreateRequest"}
+      responses:
+        "201":
+          description: API Token 已创建
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/APITokenCreated"}
+        "403": {$ref: "#/components/responses/ForbiddenError"}
+  /api/v1/api-tokens/{tokenId}:
+    delete:
+      operationId: revokeAPIToken
+      summary: 吊销当前主体的 API Token
+      parameters:
+        - {name: tokenId, in: path, required: true, schema: {$ref: "#/components/schemas/APITokenId"}}
+        - $ref: "#/components/parameters/CSRFHeader"
+      responses:
+        "204": {description: API Token 已吊销}
+        "403": {$ref: "#/components/responses/ForbiddenError"}
+        "404": {$ref: "#/components/responses/NotFoundError"}
+  /api/v1/shares:
+    get:
+      operationId: listShares
+      summary: 列出当前主体创建的分享摘要
+      responses:
+        "200":
+          description: 分享列表
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/ShareListResponse"}
+        "403": {$ref: "#/components/responses/ForbiddenError"}
+    post:
+      operationId: createShare
+      summary: 创建有界分享；credential 仅在本响应返回一次
+      parameters:
+        - $ref: "#/components/parameters/CSRFHeader"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: "#/components/schemas/ShareCreateRequest"}
+      responses:
+        "201":
+          description: 分享已创建
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/ShareCreated"}
+        "403": {$ref: "#/components/responses/ForbiddenError"}
+  /api/v1/shares/{shareId}:
+    delete:
+      operationId: revokeShare
+      summary: 吊销分享
+      parameters:
+        - {name: shareId, in: path, required: true, schema: {$ref: "#/components/schemas/ShareId"}}
+        - $ref: "#/components/parameters/CSRFHeader"
+      responses:
+        "204": {description: 分享已吊销}
+        "403": {$ref: "#/components/responses/ForbiddenError"}
+        "404": {$ref: "#/components/responses/NotFoundError"}
+  /api/v1/public/shares/{credential}:
+    get:
+      operationId: resolvePublicShare
+      summary: 解析未过期且未吊销的分享 credential
+      security: []
+      parameters:
+        - {name: credential, in: path, required: true, schema: {type: string, minLength: 32, maxLength: 256}}
+      responses:
+        "200":
+          description: 分享边界与当前可消费资源；不返回创建者、secret 前缀或内部路径
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/PublicShareResource"}
+        "404": {$ref: "#/components/responses/NotFoundError"}
+  /api/v1/public/shares/{credential}/media/{mediaId}/content:
+    parameters:
+      - {name: credential, in: path, required: true, schema: {type: string, minLength: 32, maxLength: 256}}
+      - {name: mediaId, in: path, required: true, schema: {$ref: "#/components/schemas/CanonicalMediaId"}}
+      - name: download
+        in: query
+        required: false
+        description: 为 true 时要求分享含 download 权限，并返回 attachment Content-Disposition。
+        schema: {type: boolean, default: false}
+      - {name: Range, in: header, required: false, schema: {type: string}}
+      - {name: If-None-Match, in: header, required: false, schema: {type: string}}
+      - name: If-Range
+        in: header
+        required: false
+        schema: {type: string}
+    head:
+      operationId: headPublicShareMediaContent
+      summary: 读取分享范围内媒体正文的 HTTP metadata
+      security: []
+      responses:
+        "200": {description: 完整内容 metadata}
+        "206": {description: 单区间 metadata}
+        "304": {description: ETag 未变化}
+        "403": {$ref: "#/components/responses/ForbiddenError"}
+        "404": {$ref: "#/components/responses/NotFoundError"}
+        "409": {$ref: "#/components/responses/ConflictError"}
+        "416": {$ref: "#/components/responses/RangeError"}
+        "503": {$ref: "#/components/responses/MediaOfflineError"}
+    get:
+      operationId: getPublicShareMediaContent
+      summary: 读取分享范围内的媒体正文；Work/Library 分享只允许其后代媒体
+      description: >-
+        view 或 download 权限允许内联内容读取；download=true 额外要求 download 权限。
+        固定 Media 分享按 sha256-v1 ContentBlob 解析，跟随型分享按当前 publication 解析。
+      security: []
+      responses:
+        "200":
+          description: 完整内容
+          content:
+            application/octet-stream:
+              schema: {type: string, format: binary}
+        "206":
+          description: 单区间内容
+          content:
+            application/octet-stream:
+              schema: {type: string, format: binary}
+        "304": {description: ETag 未变化}
+        "403": {$ref: "#/components/responses/ForbiddenError"}
+        "404": {$ref: "#/components/responses/NotFoundError"}
+        "409": {$ref: "#/components/responses/ConflictError"}
+        "416": {$ref: "#/components/responses/RangeError"}
+        "503": {$ref: "#/components/responses/MediaOfflineError"}
+  /api/v1/admin/security-audits:
+    get:
+      operationId: listSecurityAudits
+      summary: 读取脱敏安全审计
+      responses:
+        "200":
+          description: 安全审计列表
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/SecurityAuditListResponse"}
+        "403": {$ref: "#/components/responses/ForbiddenError"}
   /api/v1/sessions:
     get:
       operationId: listSessions
@@ -1813,7 +2125,7 @@ paths:
     get:
       operationId: getDerivedAssetContent
       summary: 读取已就绪 DerivedAsset 正文
-      description: assetKey 是内容寻址 key（完整 SHA-256），不是 Catalog 内部 row ID。
+      description: assetKey 是内容寻址 key（完整 SHA-256），不是 Catalog 内部 row ID；服务端先从注册事实解析输入 Blob，再按当前 publication occurrence 校验 media.read Source scope，授权后才建立文件读取租约。
       parameters:
         - name: assetKey
           in: path
@@ -2413,6 +2725,12 @@ components:
         application/json:
           schema:
             $ref: "#/components/schemas/ErrorEnvelope"
+    RateLimitedError:
+      description: 登录尝试超过有界速率限制
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorEnvelope"
     NotFoundError:
       description: 资源不存在或当前主体不可见
       content:
@@ -2471,6 +2789,7 @@ components:
       additionalProperties: false
       required:
         - mode
+        - lanInitialized
         - authenticated
         - availableCapabilities
         - effectiveCapabilities
@@ -2484,6 +2803,8 @@ components:
           type: string
           enum: [personal, lan]
         authenticated:
+          type: boolean
+        lanInitialized:
           type: boolean
         availableCapabilities:
           type: array
@@ -2613,6 +2934,13 @@ components:
         - BACKUP_INCOMPATIBLE
         - SOURCE_WORK_SPLIT_REVIEW_REQUIRED
         - SOURCE_WORK_MERGE_REVIEW_REQUIRED
+        - INVALID_CREDENTIALS
+        - RATE_LIMITED
+        - LAN_OWNER_REQUIRED
+        - LAN_ALREADY_INITIALIZED
+        - USER_DISABLED
+        - TOKEN_INVALID
+        - TOKEN_EXPIRED
     Job:
       type: object
       additionalProperties: false
@@ -2865,13 +3193,15 @@ components:
         security:
           type: object
           additionalProperties: false
-          required: [sessions, pairingCredentials, apiTokens, credentialStoreRefs, note]
+          required: [sessions, pairingCredentials, apiTokens, shares, credentialStoreRefs, note]
           properties:
             sessions:
               type: string
             pairingCredentials:
               type: string
             apiTokens:
+              type: string
+            shares:
               type: string
             credentialStoreRefs:
               type: string
@@ -4083,13 +4413,19 @@ components:
     SessionSummary:
       type: object
       additionalProperties: false
-      required: [id, principalId, createdAt, expiresAt, lastSeenAt, revoked]
+      required: [id, principalId, authMethod, clientLabel, createdAt, expiresAt, lastSeenAt, revoked]
       properties:
         id:
           $ref: "#/components/schemas/SessionId"
         principalId:
           type: string
           minLength: 1
+          maxLength: 128
+        authMethod:
+          type: string
+          enum: [personal_pairing, password]
+        clientLabel:
+          type: string
           maxLength: 128
         createdAt:
           type: string
@@ -4105,6 +4441,276 @@ components:
     SessionId:
       type: string
       pattern: "^ses_[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+    UserId:
+      type: string
+      pattern: "^usr_[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+    GrantId:
+      type: string
+      pattern: "^grnt_[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+    APITokenId:
+      type: string
+      pattern: "^tok_[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+    ShareId:
+      type: string
+      pattern: "^shr_[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+    ResourceScope:
+      type: object
+      additionalProperties: false
+      required: [kind]
+      properties:
+        kind: {type: string, enum: [global, library, source]}
+        id: {type: string, maxLength: 128}
+    AuthorizationGrantInput:
+      type: object
+      additionalProperties: false
+      required: [effect, capability, scope]
+      properties:
+        effect: {type: string, enum: [allow, deny]}
+        capability: {type: string, minLength: 1, maxLength: 128}
+        scope: {$ref: "#/components/schemas/ResourceScope"}
+    AuthorizationGrant:
+      allOf:
+        - $ref: "#/components/schemas/AuthorizationGrantInput"
+        - type: object
+          additionalProperties: false
+          required: [id, principalId, revoked]
+          properties:
+            id: {$ref: "#/components/schemas/GrantId"}
+            principalId: {type: string, minLength: 1, maxLength: 128}
+            revoked: {type: boolean}
+    LANOwnerInitializeRequest:
+      type: object
+      additionalProperties: false
+      required: [username, displayName, password]
+      properties:
+        username: {type: string, minLength: 1, maxLength: 128}
+        displayName: {type: string, minLength: 1, maxLength: 128}
+        password: {type: string, minLength: 10, maxLength: 1024}
+    LoginRequest:
+      type: object
+      additionalProperties: false
+      required: [username, password]
+      properties:
+        username: {type: string, minLength: 1, maxLength: 128}
+        password: {type: string, minLength: 1, maxLength: 1024}
+        clientLabel: {type: string, maxLength: 128}
+    LocalUserCreateRequest:
+      allOf:
+        - $ref: "#/components/schemas/LANOwnerInitializeRequest"
+        - type: object
+          additionalProperties: false
+          required: [roles, grants]
+          properties:
+            roles:
+              type: array
+              minItems: 1
+              uniqueItems: true
+              items: {type: string, enum: [owner, operator, viewer]}
+            grants:
+              type: array
+              items: {$ref: "#/components/schemas/AuthorizationGrantInput"}
+    LocalUser:
+      type: object
+      additionalProperties: false
+      required: [id, username, displayName, status, roles, securityVersion, createdAt, updatedAt]
+      properties:
+        id: {$ref: "#/components/schemas/UserId"}
+        username: {type: string}
+        displayName: {type: string}
+        status: {type: string, enum: [active, disabled, deleted]}
+        roles:
+          type: array
+          items: {type: string, enum: [owner, operator, viewer]}
+        securityVersion: {type: integer, format: int64, minimum: 1}
+        createdAt: {type: string, format: date-time}
+        updatedAt: {type: string, format: date-time}
+    LocalUserListResponse:
+      type: object
+      additionalProperties: false
+      required: [users]
+      properties:
+        users:
+          type: array
+          items: {$ref: "#/components/schemas/LocalUser"}
+    UserStatusRequest:
+      type: object
+      additionalProperties: false
+      required: [status]
+      properties:
+        status: {type: string, enum: [active, disabled, deleted]}
+    PasswordChangeRequest:
+      type: object
+      additionalProperties: false
+      required: [currentPassword, newPassword]
+      properties:
+        currentPassword: {type: string, minLength: 1, maxLength: 1024}
+        newPassword: {type: string, minLength: 10, maxLength: 1024}
+    APIToken:
+      type: object
+      additionalProperties: false
+      required: [id, principalId, name, secretPrefix, capabilities, scopes, createdAt, revoked]
+      properties:
+        id: {$ref: "#/components/schemas/APITokenId"}
+        principalId: {type: string}
+        name: {type: string, minLength: 1, maxLength: 128}
+        secretPrefix: {type: string, minLength: 1, maxLength: 16}
+        capabilities:
+          type: array
+          items: {type: string}
+        scopes:
+          type: array
+          items: {$ref: "#/components/schemas/ResourceScope"}
+        createdAt: {type: string, format: date-time}
+        expiresAt: {type: string, format: date-time, nullable: true}
+        lastUsedAt: {type: string, format: date-time, nullable: true}
+        revoked: {type: boolean}
+    APITokenCreateRequest:
+      type: object
+      additionalProperties: false
+      required: [name, capabilities, scopes]
+      properties:
+        name: {type: string, minLength: 1, maxLength: 128}
+        capabilities:
+          type: array
+          minItems: 1
+          uniqueItems: true
+          items: {type: string}
+        scopes:
+          type: array
+          minItems: 1
+          items: {$ref: "#/components/schemas/ResourceScope"}
+        expiresAt: {type: string, format: date-time}
+    APITokenCreated:
+      allOf:
+        - $ref: "#/components/schemas/APIToken"
+        - type: object
+          additionalProperties: false
+          required: [secret]
+          properties:
+            secret: {type: string, minLength: 32, maxLength: 256}
+    APITokenListResponse:
+      type: object
+      additionalProperties: false
+      required: [tokens]
+      properties:
+        tokens:
+          type: array
+          items: {$ref: "#/components/schemas/APIToken"}
+    Share:
+      type: object
+      additionalProperties: false
+      required: [id, createdBy, scopeKind, scopeId, permissions, secretPrefix, createdAt, expiresAt, revoked]
+      properties:
+        id: {$ref: "#/components/schemas/ShareId"}
+        createdBy: {type: string}
+        scopeKind: {type: string, enum: [library, work, media]}
+        scopeId: {type: string, minLength: 1, maxLength: 128}
+        permissions:
+          type: array
+          minItems: 1
+          items: {type: string, enum: [view, download]}
+        secretPrefix: {type: string, minLength: 1, maxLength: 16}
+        fixedBlobAlgorithm: {type: string, enum: [sha256-v1], nullable: true}
+        fixedBlobDigest: {type: string, pattern: "^[0-9a-f]{64}$", nullable: true}
+        createdAt: {type: string, format: date-time}
+        expiresAt: {type: string, format: date-time}
+        revoked: {type: boolean}
+    ShareCreateRequest:
+      type: object
+      additionalProperties: false
+      required: [scopeKind, scopeId, permissions, expiresAt]
+      properties:
+        scopeKind: {type: string, enum: [library, work, media]}
+        scopeId: {type: string, minLength: 1, maxLength: 128}
+        permissions:
+          type: array
+          minItems: 1
+          uniqueItems: true
+          items: {type: string, enum: [view, download]}
+        fixedBlobAlgorithm:
+          type: string
+          enum: [sha256-v1]
+          description: 仅 media scope 可用，且必须与创建时当前 publication 的已确认媒体 Blob 一致。
+        fixedBlobDigest: {type: string, pattern: "^[0-9a-f]{64}$"}
+        expiresAt: {type: string, format: date-time}
+    ShareCreated:
+      allOf:
+        - $ref: "#/components/schemas/Share"
+        - type: object
+          additionalProperties: false
+          required: [secret]
+          properties:
+            secret: {type: string, minLength: 32, maxLength: 256}
+    ShareListResponse:
+      type: object
+      additionalProperties: false
+      required: [shares]
+      properties:
+        shares:
+          type: array
+          items: {$ref: "#/components/schemas/Share"}
+    PublicShareResource:
+      type: object
+      additionalProperties: false
+      required: [scopeKind, scopeId, permissions, expiresAt, fixed]
+      properties:
+        scopeKind: {type: string, enum: [library, work, media]}
+        scopeId: {type: string, minLength: 1, maxLength: 128}
+        permissions:
+          type: array
+          minItems: 1
+          uniqueItems: true
+          items: {type: string, enum: [view, download]}
+        expiresAt: {type: string, format: date-time}
+        fixed: {type: boolean}
+        queryPublicationId:
+          allOf: [{$ref: "#/components/schemas/QueryPublicationId"}]
+          nullable: true
+        library:
+          allOf: [{$ref: "#/components/schemas/Library"}]
+          nullable: true
+        work:
+          allOf: [{$ref: "#/components/schemas/PublishedWork"}]
+          nullable: true
+        media:
+          allOf: [{$ref: "#/components/schemas/PublishedMedia"}]
+          nullable: true
+        mediaItems:
+          type: array
+          items: {$ref: "#/components/schemas/PublishedMedia"}
+        fixedBlob:
+          allOf: [{$ref: "#/components/schemas/PublicSharedBlob"}]
+          nullable: true
+    PublicSharedBlob:
+      type: object
+      additionalProperties: false
+      required: [algorithm, digest, sizeBytes, mimeType]
+      properties:
+        algorithm: {type: string, enum: [sha256-v1]}
+        digest: {type: string, pattern: "^[0-9a-f]{64}$"}
+        sizeBytes: {type: integer, format: int64, minimum: 0}
+        mimeType: {type: string, minLength: 1, maxLength: 255}
+    SecurityAudit:
+      type: object
+      additionalProperties: false
+      required: [id, action, actorId, targetKind, targetId, outcome, detail, createdAt]
+      properties:
+        id: {type: string}
+        action: {type: string}
+        actorId: {type: string}
+        targetKind: {type: string}
+        targetId: {type: string}
+        outcome: {type: string}
+        detail: {type: object, additionalProperties: true}
+        createdAt: {type: string, format: date-time}
+    SecurityAuditListResponse:
+      type: object
+      additionalProperties: false
+      required: [audits]
+      properties:
+        audits:
+          type: array
+          items: {$ref: "#/components/schemas/SecurityAudit"}
     LibraryId:
       type: string
       pattern: "^lib_[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
