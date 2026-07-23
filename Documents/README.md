@@ -31,6 +31,7 @@
 | 指南 | [01 v1 实施计划](指南/01-v1实施计划.md) | Walking Skeleton、Architecture Proof、阶段顺序与交付范围 |
 | 指南 | [02 测试与发布门禁](指南/02-测试与发布门禁.md) | Correctness、Reference Performance、Degradation 与发布验收 |
 | 证据 | [验证记录](证据/验证记录.md) | 仍影响当前决策的原型、样本、结果和局限 |
+| 证据 | [历史重写记录](证据/历史重写记录.md) | 已发生的 Git 历史重写事实、备份位置与恢复方式 |
 | 决策 | [ADR 索引](ADR/README.md) | 所有当前 ADR 的唯一状态入口 |
 
 ## 单一权威来源
