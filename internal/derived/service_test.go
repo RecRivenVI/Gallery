@@ -112,6 +112,10 @@ func TestDerivedKeySingleflightVersionOverlayTakeoverAndLeaseGC(t *testing.T) {
 	if err != nil || !recovered.TakenOver || recovered.Key != assets[0].Key || generated.Load() != beforeTakeover {
 		t.Fatalf("Catalog 丢失后 manifest takeover 失败: %+v %v generated=%d", recovered, err, generated.Load())
 	}
+	inputBlob, err := recoveredService.InputBlob(ctx, recovered.Key)
+	if err != nil || inputBlob != request.Blob {
+		t.Fatalf("建立读取租约前无法解析 DerivedAsset 输入 Blob: %+v %v", inputBlob, err)
+	}
 	lease, err := recoveredService.Open(ctx, recovered.Key)
 	if err != nil {
 		t.Fatal(err)
