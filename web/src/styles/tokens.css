@@ -1,0 +1,77 @@
+:root {
+  color-scheme: light dark;
+  --color-bg: #f4f5f3;
+  --color-surface: #ffffff;
+  --color-surface-raised: #ffffff;
+  --color-surface-muted: #e8ebe7;
+  --color-text: #1b2221;
+  --color-text-muted: #5f6b68;
+  --color-border: #cbd2cf;
+  --color-accent: #087f68;
+  --color-accent-strong: #056653;
+  --color-accent-soft: #d9f3eb;
+  --color-danger: #b3261e;
+  --color-danger-soft: #fde8e7;
+  --color-warning: #8a5b00;
+  --color-warning-soft: #fff0c2;
+  --color-success: #1e704d;
+  --color-info: #285d96;
+  --shadow-1: 0 1px 2px rgb(0 0 0 / 0.08);
+  --shadow-2: 0 12px 36px rgb(0 0 0 / 0.16);
+  --radius-sm: 0.4rem;
+  --radius-md: 0.75rem;
+  --radius-lg: 1.15rem;
+  --space-1: 0.25rem;
+  --space-2: 0.5rem;
+  --space-3: 0.75rem;
+  --space-4: 1rem;
+  --space-5: 1.5rem;
+  --space-6: 2rem;
+  --font-sans: Inter, ui-sans-serif, system-ui, -apple-system, 'Segoe UI', sans-serif;
+  --font-mono: 'Cascadia Code', 'SFMono-Regular', Consolas, monospace;
+  --duration-fast: 120ms;
+  --duration-normal: 220ms;
+  --focus-ring: 0 0 0 3px rgb(8 127 104 / 0.35);
+  --touch-target: 2.75rem;
+  --sidebar-width: 15rem;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme='light']) {
+    --color-bg: #101316;
+    --color-surface: #171c1f;
+    --color-surface-raised: #1e2528;
+    --color-surface-muted: #263033;
+    --color-text: #f2f5f4;
+    --color-text-muted: #aebbb7;
+    --color-border: #3a4644;
+    --color-accent: #72d8ba;
+    --color-accent-strong: #9be8d0;
+    --color-accent-soft: #153d35;
+    --color-danger: #ffb4ab;
+    --color-danger-soft: #4a1c1a;
+    --color-warning: #f4c95d;
+    --color-warning-soft: #443710;
+    --color-success: #84d7aa;
+    --color-info: #9ecbff;
+  }
+}
+
+:root[data-theme='dark'] {
+  --color-bg: #101316;
+  --color-surface: #171c1f;
+  --color-surface-raised: #1e2528;
+  --color-surface-muted: #263033;
+  --color-text: #f2f5f4;
+  --color-text-muted: #aebbb7;
+  --color-border: #3a4644;
+  --color-accent: #72d8ba;
+  --color-accent-strong: #9be8d0;
+  --color-accent-soft: #153d35;
+  --color-danger: #ffb4ab;
+  --color-danger-soft: #4a1c1a;
+  --color-warning: #f4c95d;
+  --color-warning-soft: #443710;
+  --color-success: #84d7aa;
+  --color-info: #9ecbff;
+}
