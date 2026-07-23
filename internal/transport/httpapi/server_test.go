@@ -205,6 +205,10 @@ func TestPersonalPairingIsSingleUseAndRevocationInvalidatesREST(t *testing.T) {
 	if err != nil || libraryResponse.JSON201 == nil {
 		t.Fatalf("通过公开 API 创建 Library 失败: %v status=%d", err, libraryResponse.StatusCode())
 	}
+	librariesResponse, err := client.ListLibrariesWithResponse(context.Background())
+	if err != nil || librariesResponse.JSON200 == nil || len(librariesResponse.JSON200.Libraries) != 1 || librariesResponse.JSON200.Libraries[0].Id != libraryResponse.JSON201.Id {
+		t.Fatalf("Library 集合端点未返回授权对象: %v status=%d", err, librariesResponse.StatusCode())
+	}
 	sourceRoot := filepath.Join(filepath.Dir(dirs.Data), "synthetic-source")
 	if err := os.MkdirAll(filepath.Join(sourceRoot, "work-one"), 0o700); err != nil {
 		t.Fatal(err)
@@ -229,6 +233,13 @@ func TestPersonalPairingIsSingleUseAndRevocationInvalidatesREST(t *testing.T) {
 	if bytes.Contains(sourceResponse.Body, []byte(sourceRoot)) || bytes.Contains(sourceResponse.Body, []byte(`rootPath`)) {
 		t.Fatal("Source 响应泄露绝对路径")
 	}
+	sourcesResponse, err := client.ListSourcesWithResponse(context.Background(), &api.ListSourcesParams{LibraryId: &libraryResponse.JSON201.Id})
+	if err != nil || sourcesResponse.JSON200 == nil || len(sourcesResponse.JSON200.Sources) != 1 || sourcesResponse.JSON200.Sources[0].Id != sourceResponse.JSON201.Id {
+		t.Fatalf("Source 集合端点未返回授权对象: %v status=%d", err, sourcesResponse.StatusCode())
+	}
+	if bytes.Contains(sourcesResponse.Body, []byte(sourceRoot)) || bytes.Contains(sourcesResponse.Body, []byte(`rootPath`)) {
+		t.Fatal("Source 集合响应泄露绝对路径")
+	}
 	ruleJSON, err := os.ReadFile(filepath.Join("..", "..", "rules", "testdata", "minimal-rule-package.json"))
 	if err != nil {
 		t.Fatal(err)
@@ -251,6 +262,14 @@ func TestPersonalPairingIsSingleUseAndRevocationInvalidatesREST(t *testing.T) {
 	}, mutation)
 	if err != nil || bindingResponse.JSON201 == nil {
 		t.Fatalf("通过公开 API 创建 SourceRuleBinding 失败: %v status=%d body=%s", err, bindingResponse.StatusCode(), bindingResponse.Body)
+	}
+	bindingsResponse, err := client.ListSourceRuleBindingsWithResponse(context.Background(), &api.ListSourceRuleBindingsParams{SourceId: &sourceResponse.JSON201.Id})
+	if err != nil || bindingsResponse.JSON200 == nil || len(bindingsResponse.JSON200.Bindings) != 1 || bindingsResponse.JSON200.Bindings[0].Id != bindingResponse.JSON201.Id {
+		t.Fatalf("SourceRuleBinding 集合端点未返回授权对象: %v status=%d", err, bindingsResponse.StatusCode())
+	}
+	parametersResponse, err := client.ListRuleParameterSetsWithResponse(context.Background(), &api.ListRuleParameterSetsParams{})
+	if err != nil || parametersResponse.JSON200 == nil || len(parametersResponse.JSON200.ParameterSets) != 0 {
+		t.Fatalf("空 RuleParameterSet 集合响应无效: %v status=%d", err, parametersResponse.StatusCode())
 	}
 	websocketConnection := dialWebSocket(t, server.URL, jar)
 	defer websocketConnection.CloseNow()

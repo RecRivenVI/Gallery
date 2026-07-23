@@ -208,6 +208,19 @@ paths:
         "401": {$ref: "#/components/responses/UnauthenticatedError"}
         "403": {$ref: "#/components/responses/ForbiddenError"}
   /api/v1/admin/users/{userId}/grants:
+    get:
+      operationId: listAuthorizationGrants
+      summary: 列出账户的显式 allow/deny Grant，包含已吊销记录
+      parameters:
+        - {name: userId, in: path, required: true, schema: {$ref: "#/components/schemas/UserId"}}
+      responses:
+        "200":
+          description: Grant 列表
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/AuthorizationGrantListResponse"}
+        "403": {$ref: "#/components/responses/ForbiddenError"}
+        "404": {$ref: "#/components/responses/NotFoundError"}
     post:
       operationId: createAuthorizationGrant
       summary: 为账户创建显式 allow 或 deny 授权
@@ -436,6 +449,17 @@ paths:
         "404":
           $ref: "#/components/responses/NotFoundError"
   /api/v1/libraries:
+    get:
+      operationId: listLibraries
+      summary: 按 effective library.read scope 列出可见 Library
+      responses:
+        "200":
+          description: 可见 Library 列表
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/LibraryListResponse"}
+        "401": {$ref: "#/components/responses/UnauthenticatedError"}
+        "403": {$ref: "#/components/responses/ForbiddenError"}
     post:
       operationId: createLibrary
       summary: 创建 Library
@@ -484,6 +508,20 @@ paths:
         "404":
           $ref: "#/components/responses/NotFoundError"
   /api/v1/sources:
+    get:
+      operationId: listSources
+      summary: 按 effective library.read scope 列出不含绝对路径的可见 Source
+      parameters:
+        - {name: libraryId, in: query, required: false, schema: {$ref: "#/components/schemas/LibraryId"}}
+      responses:
+        "200":
+          description: 可见 Source 列表
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/SourceListResponse"}
+        "400": {$ref: "#/components/responses/ValidationError"}
+        "401": {$ref: "#/components/responses/UnauthenticatedError"}
+        "403": {$ref: "#/components/responses/ForbiddenError"}
     post:
       operationId: createSource
       summary: 注册严格只读 Source
@@ -1173,6 +1211,21 @@ paths:
         "404": {$ref: "#/components/responses/NotFoundError"}
         "409": {$ref: "#/components/responses/ConflictError"}
   /api/v1/rule-parameters:
+    get:
+      operationId: listRuleParameterSets
+      summary: 列出 RuleVersion 参数集
+      parameters:
+        - {name: semanticHash, in: query, required: false, schema: {$ref: "#/components/schemas/SHA256Digest"}}
+        - {name: status, in: query, required: false, schema: {type: string, enum: [active, deprecated]}}
+      responses:
+        "200":
+          description: 参数集列表
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/RuleParameterSetListResponse"}
+        "400": {$ref: "#/components/responses/ValidationError"}
+        "401": {$ref: "#/components/responses/UnauthenticatedError"}
+        "403": {$ref: "#/components/responses/ForbiddenError"}
     post:
       operationId: createRuleParameterSet
       summary: 为 RuleVersion 创建参数集
@@ -1320,6 +1373,21 @@ paths:
         "403": {$ref: "#/components/responses/ForbiddenError"}
         "404": {$ref: "#/components/responses/NotFoundError"}
   /api/v1/source-rule-bindings:
+    get:
+      operationId: listSourceRuleBindings
+      summary: 按 Source scope 列出 SourceRuleBinding
+      parameters:
+        - {name: sourceId, in: query, required: false, schema: {$ref: "#/components/schemas/SourceId"}}
+        - {name: status, in: query, required: false, schema: {type: string, enum: [active, paused, invalid]}}
+      responses:
+        "200":
+          description: SourceRuleBinding 列表
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/SourceRuleBindingListResponse"}
+        "400": {$ref: "#/components/responses/ValidationError"}
+        "401": {$ref: "#/components/responses/UnauthenticatedError"}
+        "403": {$ref: "#/components/responses/ForbiddenError"}
     post:
       operationId: createSourceRuleBinding
       summary: 绑定并冻结 Source 的 RuleVersion、参数和 Rule IR
@@ -3916,6 +3984,14 @@ components:
         createdAt:
           type: string
           format: date-time
+    LibraryListResponse:
+      type: object
+      additionalProperties: false
+      required: [libraries]
+      properties:
+        libraries:
+          type: array
+          items: {$ref: "#/components/schemas/Library"}
     SourceCreateRequest:
       type: object
       additionalProperties: false
@@ -3949,6 +4025,14 @@ components:
         createdAt:
           type: string
           format: date-time
+    SourceListResponse:
+      type: object
+      additionalProperties: false
+      required: [sources]
+      properties:
+        sources:
+          type: array
+          items: {$ref: "#/components/schemas/Source"}
     RuleValidateRequest:
       type: object
       additionalProperties: false
@@ -4183,6 +4267,14 @@ components:
         condition:
           type: object
           additionalProperties: true
+    SourceRuleBindingListResponse:
+      type: object
+      additionalProperties: false
+      required: [bindings]
+      properties:
+        bindings:
+          type: array
+          items: {$ref: "#/components/schemas/SourceRuleBinding"}
     RuleImportRequest:
       type: object
       additionalProperties: false
@@ -4362,6 +4454,14 @@ components:
         createdBy: {type: string}
         createdAt: {type: string, format: date-time}
         updatedAt: {type: string, format: date-time}
+    RuleParameterSetListResponse:
+      type: object
+      additionalProperties: false
+      required: [parameterSets]
+      properties:
+        parameterSets:
+          type: array
+          items: {$ref: "#/components/schemas/RuleParameterSet"}
     RulePackageId:
       type: string
       pattern: "^rpack_[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
@@ -4478,6 +4578,14 @@ components:
             id: {$ref: "#/components/schemas/GrantId"}
             principalId: {type: string, minLength: 1, maxLength: 128}
             revoked: {type: boolean}
+    AuthorizationGrantListResponse:
+      type: object
+      additionalProperties: false
+      required: [grants]
+      properties:
+        grants:
+          type: array
+          items: {$ref: "#/components/schemas/AuthorizationGrant"}
     LANOwnerInitializeRequest:
       type: object
       additionalProperties: false

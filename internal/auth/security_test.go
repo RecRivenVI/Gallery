@@ -143,6 +143,10 @@ func TestLANOwnerUserGrantTokenAndRevocationLifecycle(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	grants, err := manager.ListGrants(ctx, owner.ID, viewer.ID)
+	if err != nil || len(grants) != 2 {
+		t.Fatalf("Viewer Grant 集合无效: count=%d err=%v", len(grants), err)
+	}
 	viewerSession, viewerCookie, err := manager.Login(ctx, "VIEWER", "viewer-password-strong", "browser", "loopback")
 	if err != nil {
 		t.Fatal(err)
