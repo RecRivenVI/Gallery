@@ -15,7 +15,7 @@
 - 代码、仓库、包、命令和服务代号：`gallery`。
 - 建议后端命令：`galleryd`；建议 CLI：`galleryctl`。
 - Gallery 是独立的净室产品，不以任何旧 Gallery 的数据库、配置、API、目录结构或行为作为兼容、迁移或对拍目标。
-- 当前仓库已有正式产品代码（`cmd/`、`internal/`、`pkg/`）。阶段 0 契约骨架、Walking Skeleton、Architecture Proof 正确性切片、阶段 1「领域和数据所有权」、阶段 2「规则闭环」、阶段 3「扫描、任务和 Catalog」与阶段 4「查询和媒体」均已完成代码与合成 Correctness 实现；阶段 5「账户、安全和多客户端」已完成两轮账户/凭据/授权、匿名分享与合成攻击输入代码收尾，但正式 Security Gate 尚未通过（见 [验证记录 EV-37](Documents/证据/验证记录.md)）。阶段 5 已落地 control v20 forward-only migration、Personal owner Principal 兼容映射、LAN Owner 原子初始化、Argon2id 本地账户、绝对/空闲双过期 Session、Role/capability/allow-deny Grant、Library/Source scope、一次展示且摘要存储的 API Token、Host/Origin/Fetch Metadata/CSRF/Cookie、Session/Grant/Token WS 吊销与连接/入站消息限制、Work/Media/媒体正文匿名 Share（含固定 Blob GC 保护）、全 API 资源授权矩阵、安全审计、恶意路径/metadata/媒体正文/恢复输入合成门禁和恢复后凭据失效，OpenAPI 已升至 `0.6.0-pre-alpha`。阶段 4 的扫描/查询/媒体与 EV-35/EV-36 压力测试结论保持不变：500,000 WorkProjection 的 Correctness/Cursor 通过，但 Reference Performance Gate 仍未通过，10 个真实来源中 Gank/Pawchive 未完成有界验证。尚未完成：阶段 5 真实 LAN 多设备/浏览器和目标设备 Argon2id 延迟/并发门禁；以及真实全量 HDD、SMB/NAS、真实 FileID/`dev+inode`、正式 Reference/Degradation Performance Gate、ranking/total/租约等 PRE_FREEZE 数值、AND/OR canonical 化、Progress 排序、Web 与平台发行。
+- 当前仓库已有正式产品代码（`cmd/`、`internal/`、`pkg/`、`web/`）。阶段 0 契约骨架、Walking Skeleton、Architecture Proof 正确性切片、阶段 1「领域和数据所有权」、阶段 2「规则闭环」、阶段 3「扫描、任务和 Catalog」与阶段 4「查询和媒体」均已完成代码与合成 Correctness 实现；阶段 5「账户、安全和多客户端」已完成代码/合成安全收尾，并取得 Chrome/Edge 同机 Personal/LAN 主路径与当前工作站 Argon2id 补证，但正式 Security Gate 尚未通过（见 [验证记录 EV-37、EV-38](Documents/证据/验证记录.md)）。阶段 6 已实现正式 React/TypeScript Web/PWA 代码基线、OpenAPI 生成客户端、同源嵌入资产、HTTP snapshot/WS 恢复、静态壳 PWA，以及认证、浏览/媒体、Overlay、任务、规则、安全和维护主页面；Chrome/Edge mock 与真实后端主路径通过，但正式 Web Gate 也尚未通过（见 EV-38）。阶段 4 的 EV-35/EV-36 结论保持：500,000 WorkProjection 的 Correctness/Cursor 通过，Reference Performance Gate 未通过，Gank/Pawchive 未完成有界验证。尚未完成：阶段 5 真实物理 LAN 多设备、目标低端设备 Argon2id 和真实恶意资源门禁；阶段 6 Firefox、真实移动设备/屏幕阅读器与完整业务 E2E；以及真实全量 HDD、SMB/NAS、真实 FileID/`dev+inode`、正式 Reference/Degradation Performance Gate、ranking/total/租约等 PRE_FREEZE 数值、AND/OR canonical 化、Progress 排序和平台发行。
 - 本文件是需要随真实开发状态持续维护的 Agent 规则；发现与代码、有效 ADR 或规范不一致时应更新本文件，但不得放宽安全、只读 Source、Git、签名或测试要求，也不得把临时实装写成已冻结决策。
 
 ## 权威资料与阅读顺序
@@ -56,7 +56,7 @@
 - 桌面壳是可替换适配器；Wails 仅为当前 Windows 优先候选，仍须与 Tauri 对照。
 - 微服务、外部队列、Redis、PostgreSQL、独立搜索服务、任意配置脚本和壳直连数据库均不是 v1 默认方案。
 
-前端框架、CSS 组件库、SQLite 驱动、最终细粒度路由和物理表结构尚未冻结，不要仅凭原型依赖替未来实现做决定。
+阶段 6 当前 Web 技术组合已按 ADR-009 接受为 React 19、TypeScript strict、Vite、OpenAPI 生成类型、TanStack Query、React Aria 与 RJSF/AJV；视觉组件样式、最终细粒度路由、SQLite 驱动和物理表结构仍未冻结。改变已接受的 Web 交付架构须同步 ADR，不要仅凭原型依赖替正式实现做决定。
 
 ### 平台适配边界（开发约束）
 
@@ -110,9 +110,9 @@
 1. 阶段 0：正式领域 ID、两库迁移/备份骨架、OpenAPI、错误 code、WebSocket 信封、规则 Schema 和 AppDirs 写入守卫。**（已完成）**
 2. Walking Skeleton：用一个作品和一个媒体的合成只读 Source 打通 Personal 配对、Library/Source、规则绑定、完整哈希、最小 publication、REST、媒体 Range 和 WebSocket Job。**（已完成）**
 3. Architecture Proof：补齐快照分页、Overlay、FTS、Catalog 重建、强杀恢复和多客户端边界后，再冻结数据库与 API。**（正确性切片已完成；物理 Schema 与完整 API 仍未冻结）**
-4. 按领域/规则/扫描/查询与媒体/安全/Web/PWA/平台发行的顺序扩展。**（阶段 1～4 已完成代码与合成 Correctness；阶段 5 两轮代码/合成安全收尾已实现但正式 Gate 未通过；下一步完成真实 LAN 多设备与目标设备 Argon2id 门禁，并并行处理阶段 4 性能/API Freeze 审计）**
+4. 按领域/规则/扫描/查询与媒体/安全/Web/PWA/平台发行的顺序扩展。**（阶段 1～4 已完成代码与合成 Correctness；阶段 5 代码基线完成但 Security Gate 未通过；阶段 6 Web/PWA 正式代码基线已实现但 Web Gate 未通过。下一步并行完成阶段 4 性能/API Freeze、阶段 5 外部设备安全门禁和阶段 6 完整浏览器/可访问性门禁，不进入桌面壳或发行）**
 
-阶段 1 已完成。阶段 1 Schema Freeze Gate 冻结的是**核心领域身份与唯一约束**（不是最终物理数据库唯一约束）：`(source_id, source_key) WHERE status='active'`、`(work_id, ordinal)`、CanonicalWork 持久 ID 身份、Work/Creator/Media Binding 的 active/inactive/manual_unbound/orphan_candidate/orphaned 生命周期、同 Blob 多 occurrence、SourceWork 拆分/合并检测与结构决策 fingerprint 唯一、多 Source 隔离、Binding issue 指纹去重，登记于 control 迁移 `00016_schema_freeze_phase1` 的 `schema_freeze` 表（FROZEN）。SourceWork 决策的撤回仅适用于尚未被扫描消费的 pre-seed Binding；消费后返回结构化 `CONFLICT`，不执行已生效结构变化的完整反向操作。阶段 2 的 RulePackage canonical JSON 所有权、已发布版本不可变、草稿 revision CAS 和 Job 规则执行快照登记于 `00017_rules_lifecycle` 的 `schema_freeze` 表；Rule extension 注册表、单生效 Binding、参数最终命名空间、Impact 调度联动和完整表单 UI 保持 compatibility baseline。阶段 3 已增加并修正持久 Hash Job、同一 Job 多 Attempt、周期租约回收和退避重试、六类独立非阻塞资源池、动态 Watcher 与低频周期收敛、staging/publication、所有权 Temp GC、GC/VACUUM 服务端空间预检和外部执行边界，但真实 HDD、SMB/NAS、网络挂载与正式 Reference/Degradation Performance Gate 仍待下一轮实测。阶段 5 安全结构方向登记于 control v20 的 `schema_freeze` 表；Argon2id、Session 与限流数值仍 PRE_FREEZE。仍保持 pre-freeze/compatibility-baseline/deferred 的其它旧项不因此重开已完成阶段。修改标记 FROZEN 的约束前须新增或修订 ADR；阶段 5 正式 Gate 未通过前不要提前展开阶段 6 Web/PWA、桌面壳或发行。
+阶段 1 已完成。阶段 1 Schema Freeze Gate 冻结的是**核心领域身份与唯一约束**（不是最终物理数据库唯一约束）：`(source_id, source_key) WHERE status='active'`、`(work_id, ordinal)`、CanonicalWork 持久 ID 身份、Work/Creator/Media Binding 的 active/inactive/manual_unbound/orphan_candidate/orphaned 生命周期、同 Blob 多 occurrence、SourceWork 拆分/合并检测与结构决策 fingerprint 唯一、多 Source 隔离、Binding issue 指纹去重，登记于 control 迁移 `00016_schema_freeze_phase1` 的 `schema_freeze` 表（FROZEN）。SourceWork 决策的撤回仅适用于尚未被扫描消费的 pre-seed Binding；消费后返回结构化 `CONFLICT`，不执行已生效结构变化的完整反向操作。阶段 2 的 RulePackage canonical JSON 所有权、已发布版本不可变、草稿 revision CAS 和 Job 规则执行快照登记于 `00017_rules_lifecycle` 的 `schema_freeze` 表；Rule extension 注册表、单生效 Binding、参数最终命名空间、Impact 调度联动和完整表单 UI 保持 compatibility baseline。阶段 3 已增加并修正持久 Hash Job、同一 Job 多 Attempt、周期租约回收和退避重试、六类独立非阻塞资源池、动态 Watcher 与低频周期收敛、staging/publication、所有权 Temp GC、GC/VACUUM 服务端空间预检和外部执行边界，但真实 HDD、SMB/NAS、网络挂载与正式 Reference/Degradation Performance Gate 仍待下一轮实测。阶段 5 安全结构方向登记于 control v20 的 `schema_freeze` 表；Argon2id、Session 与限流数值仍 PRE_FREEZE。阶段 6 的 Web 交付架构由 ADR-009 接受，但浏览器/可访问性 Gate 未冻结为发布支持。仍保持 pre-freeze/compatibility-baseline/deferred 的其它旧项不因此重开已完成阶段。修改标记 FROZEN 的约束前须新增或修订 ADR；不得因阶段 6 代码基线存在而跳过阶段 5 未完成门禁或提前进入桌面壳/发行。
 
 Walking Skeleton 功能可以少，但基础模型不能是临时替代品：
 
@@ -152,7 +152,7 @@ Walking Skeleton 功能可以少，但基础模型不能是临时替代品：
 
 ## 构建、依赖和发行
 
-- 仓库已有正式构建与检查入口：根级 `Check.ps1`（委托 `scripts/Check.ps1`）执行 `go mod tidy -diff`、OpenAPI 生成一致性（`go generate ./...`）、gofmt、`go vet ./...`、`CGO_ENABLED=0 go test ./...` 与 `go build ./cmd/...`，`Check.ps1 -Race` 追加 `go test -race ./...`；也可直接运行 `go test ./...`、`go vet ./...`、`go build ./cmd/...`（`galleryd`/`galleryctl`）与 `govulncheck ./...`。Windows 本机 race 有 `WaitOnAddress` 限制，race 门禁在 Linux/WSL 执行。`go` 不在 PATH 时用 `GALLERY_GO` 指定工具链。不要另建重复脚本；Web/PWA 与可选壳的独立命令待相应阶段补充。
+- 仓库已有正式构建与检查入口：根级 `Check.ps1`（委托 `scripts/Check.ps1`）执行 `go mod tidy -diff`、OpenAPI Go 生成一致性（`go generate ./...`）、Web 的 `npm ci`、OpenAPI TypeScript/图标生成一致性、TypeScript、ESLint、Prettier、Vitest 和生产构建，再执行 gofmt、`go vet ./...`、`CGO_ENABLED=0 go test ./...` 与 `go build ./cmd/...`；`Check.ps1 -Race` 追加 `go test -race ./...`。Web 独立浏览器 smoke 使用 `cd web && npm run build && npm run test:smoke`，真实后端 E2E 只允许临时 AppDirs/隔离端口。也可直接运行 Go 门禁与 `govulncheck ./...`。Windows 本机 race 有 `WaitOnAddress` 限制，race 门禁在 Linux/WSL 执行。`go` 不在 PATH 时用 `GALLERY_GO` 指定固定工具链。不要另建重复脚本。
 - ffmpeg/ffprobe 等外部工具必须经 ToolDiscovery、版本允许列表、参数数组、超时和资源限制调用，不能拼接 shell 命令。
 - 程序资源与用户 AppDirs 分离；覆盖升级不得删除用户数据。数据升级前优先备份 control，Catalog 不兼容时可重建。
 - 发行前完成 OpenAPI/WS/规则/数据版本、许可证、SBOM、依赖安全、签名和升级/降级说明。
@@ -1237,4 +1237,4 @@ feat(查询): 完成过滤、搜索、媒体读取、派生资源和安全授权
 
 ## 当前可开工结论
 
-阶段 0～4 已完成代码与合成 Correctness；阶段 5 两轮账户/凭据/授权、匿名 Share、全资源 capability 矩阵、恶意输入合成门禁及 WS 防滥用边界已实现并有 EV-37 合成证据，但正式 Security Gate 未通过。阶段 4 的 EV-35/EV-36 结论保持：500,000 规模 Correctness/Cursor 通过，Reference Performance Gate 未通过，Gank/Pawchive 真实有界验证未完成。阶段 5 下一条正式验证是实际 LAN 多设备/浏览器与目标设备 Argon2id 延迟/并发；在这些完成前不要进入阶段 6 Web/PWA。真实 HDD/SMB/NAS、FileID、ranking/total/租约等 PRE_FREEZE 数值、AND/OR canonical 化、Progress 排序、Wails/Tauri 与跨平台发行仍属后续门禁。
+阶段 0～4 已完成代码与合成 Correctness；阶段 5 安全代码基线及 EV-37 合成证据完整，EV-38 又补充 Chrome/Edge 同机 Personal/LAN 与当前工作站 Argon2id 证据，但正式 Security Gate 未通过。阶段 6 React/TypeScript Web/PWA、同源嵌入资产、静态壳 PWA 和主要业务/管理页面已实现，Chrome/Edge mock 与真实后端主路径通过，但正式 Web Gate 未通过。阶段 4 的 EV-35/EV-36 结论保持：500,000 规模 Correctness/Cursor 通过，Reference Performance Gate 未通过，Gank/Pawchive 真实有界验证未完成。下一步并行关闭阶段 4 性能/API Freeze、阶段 5 真实物理 LAN/目标低端设备/恶意资源门禁和阶段 6 Firefox/真实移动设备/屏幕阅读器/完整业务 E2E；在这些完成前不要进入桌面壳或发行。真实 HDD/SMB/NAS、FileID、ranking/total/租约等 PRE_FREEZE 数值、AND/OR canonical 化、Progress 排序、Wails/Tauri 与跨平台发行仍属后续门禁。
