@@ -120,6 +120,7 @@ func New(mode config.Mode, store *storage.Store, clock ports.Clock, personal *au
 	mux.HandleFunc("GET /api/v1/public/shares/{credential}", server.resolveShare)
 	mux.HandleFunc("GET /api/v1/public/shares/{credential}/media/{mediaId}/content", server.publicShareMediaContent)
 	mux.HandleFunc("HEAD /api/v1/public/shares/{credential}/media/{mediaId}/content", server.publicShareMediaContent)
+	mux.HandleFunc("GET /api/v1/admin/security-audits", server.listSecurityAudits)
 	mux.HandleFunc("POST /api/v1/libraries", server.createLibrary)
 	mux.HandleFunc("GET /api/v1/libraries/{libraryId}", server.getLibrary)
 	mux.HandleFunc("POST /api/v1/sources", server.createSource)
@@ -938,6 +939,19 @@ func concealPublicShareError(err error) error {
 		return err
 	}
 	return fault.New(fault.CodeNotFound, false, nil)
+}
+
+func (s *Server) listSecurityAudits(w http.ResponseWriter, r *http.Request) {
+	if _, err := s.requireCapability(r, "audit.read"); err != nil {
+		s.writeRequestError(w, err)
+		return
+	}
+	items, err := s.auth.ListSecurityAudits(r.Context(), 100)
+	if err != nil {
+		s.writeRequestError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"audits": items})
 }
 
 func (s *Server) setSessionCookie(w http.ResponseWriter, r *http.Request, session auth.Session, value string) {
