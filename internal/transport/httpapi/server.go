@@ -437,7 +437,7 @@ func (s *Server) revokeSession(w http.ResponseWriter, r *http.Request) {
 		writeFault(w, asFault(err), statusForFault(err))
 		return
 	}
-	if err := s.auth.Revoke(r.Context(), r.PathValue("sessionId")); err != nil {
+	if err := s.auth.Revoke(r.Context(), session.PrincipalID, r.PathValue("sessionId")); err != nil {
 		writeFault(w, asFault(err), statusForFault(err))
 		return
 	}
