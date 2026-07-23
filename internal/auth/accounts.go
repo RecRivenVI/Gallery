@@ -435,6 +435,43 @@ func (p *Personal) RevokeGrant(ctx context.Context, actor, grantID string) error
 	return tx.Commit()
 }
 
+func (p *Personal) ListGrants(ctx context.Context, actor, principalID string) ([]Grant, error) {
+	if err := p.requirePrincipalCapability(ctx, actor, "users.manage"); err != nil {
+		return nil, err
+	}
+	if _, err := domain.ParseID(domain.IDUser, principalID); err != nil {
+		return nil, fault.New(fault.CodeNotFound, false, nil)
+	}
+	var exists int
+	if err := p.db.QueryRowContext(ctx, "SELECT COUNT(*) FROM security_principals WHERE principal_id=?", principalID).Scan(&exists); err != nil {
+		return nil, fault.New(fault.CodeInternal, true, err)
+	}
+	if exists == 0 {
+		return nil, fault.New(fault.CodeNotFound, false, nil)
+	}
+	rows, err := p.db.QueryContext(ctx, `SELECT grant_id, principal_id, effect, capability,
+scope_kind, scope_id, created_by, revoked_at IS NOT NULL
+FROM authorization_grants WHERE principal_id=?
+ORDER BY revoked_at IS NOT NULL, capability, scope_kind, scope_id, grant_id`, principalID)
+	if err != nil {
+		return nil, fault.New(fault.CodeInternal, true, err)
+	}
+	defer rows.Close()
+	result := make([]Grant, 0)
+	for rows.Next() {
+		var item Grant
+		if err := rows.Scan(&item.ID, &item.PrincipalID, &item.Effect, &item.Capability,
+			&item.Scope.Kind, &item.Scope.ID, &item.CreatedBy, &item.Revoked); err != nil {
+			return nil, fault.New(fault.CodeInternal, true, err)
+		}
+		result = append(result, item)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fault.New(fault.CodeInternal, true, err)
+	}
+	return result, nil
+}
+
 func invalidatePrincipalCredentialsTx(ctx context.Context, tx *sql.Tx, principalID string, now time.Time) error {
 	if _, err := tx.ExecContext(ctx, `UPDATE security_principals
 SET security_version=security_version+1, updated_at=? WHERE principal_id=?`, now.Unix(), principalID); err != nil {
