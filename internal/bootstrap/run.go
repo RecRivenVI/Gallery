@@ -15,6 +15,7 @@ import (
 	"github.com/RecRivenVI/gallery/internal/backup"
 	"github.com/RecRivenVI/gallery/internal/catalog"
 	"github.com/RecRivenVI/gallery/internal/config"
+	contractapi "github.com/RecRivenVI/gallery/internal/contract/api"
 	"github.com/RecRivenVI/gallery/internal/contract/fault"
 	"github.com/RecRivenVI/gallery/internal/contract/realtime"
 	"github.com/RecRivenVI/gallery/internal/creators"
@@ -39,6 +40,7 @@ import (
 	"github.com/RecRivenVI/gallery/internal/toolrunner"
 	"github.com/RecRivenVI/gallery/internal/transport/httpapi"
 	watcherservice "github.com/RecRivenVI/gallery/internal/watcher"
+	"github.com/RecRivenVI/gallery/internal/webapp"
 	version "github.com/RecRivenVI/gallery/pkg/galleryversion"
 )
 
@@ -307,8 +309,9 @@ func run(ctx context.Context, cfg config.Config, logger *slog.Logger, ready chan
 	if err != nil {
 		return err
 	}
+	webHandler := webapp.New(contractapi.ContractVersion, version.APIVersion)
 	handler := httpapi.New(cfg.Mode, store, systemClock, personal, resources, jobStore, catalogStore, scannerService, overlayService, creatorsService, backupService, hub, logger,
-		httpapi.Options{Maintenance: maintenanceService, Watcher: watcherService, Scheduler: scheduler, Derived: derivedService, DerivedJob: derivedJobService, AllowedHosts: []string{listener.Addr().String()}})
+		httpapi.Options{Maintenance: maintenanceService, Watcher: watcherService, Scheduler: scheduler, Derived: derivedService, DerivedJob: derivedJobService, AllowedHosts: []string{listener.Addr().String()}, Web: webHandler})
 	server := &http.Server{
 		Handler: handler, ReadHeaderTimeout: 10 * time.Second, IdleTimeout: 60 * time.Second,
 	}
