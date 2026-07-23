@@ -665,7 +665,8 @@ export interface paths {
         get: operations["getRulePackage"];
         put?: never;
         post?: never;
-        delete?: never;
+        /** 软删除没有已发布版本的规则包 */
+        delete: operations["deleteRulePackage"];
         options?: never;
         head?: never;
         patch?: never;
@@ -734,8 +735,7 @@ export interface paths {
         put?: never;
         /** 弃用规则包 */
         post: operations["deprecateRulePackage"];
-        /** 软删除没有已发布版本的规则包 */
-        delete: operations["deleteRulePackage"];
+        delete?: never;
         options?: never;
         head?: never;
         patch?: never;
@@ -4225,6 +4225,35 @@ export interface operations {
             404: components["responses"]["NotFoundError"];
         };
     };
+    deleteRulePackage: {
+        parameters: {
+            query?: never;
+            header: {
+                "X-Gallery-CSRF": components["parameters"]["CSRFHeader"];
+                "If-Match"?: components["parameters"]["IfMatch"];
+            };
+            path: {
+                packageId: components["schemas"]["RulePackageId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description 规则包已软删除 */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RulePackage"];
+                };
+            };
+            401: components["responses"]["UnauthenticatedError"];
+            403: components["responses"]["ForbiddenError"];
+            404: components["responses"]["NotFoundError"];
+            409: components["responses"]["ConflictError"];
+        };
+    };
     getRuleDraft: {
         parameters: {
             query?: never;
@@ -4377,35 +4406,6 @@ export interface operations {
             401: components["responses"]["UnauthenticatedError"];
             403: components["responses"]["ForbiddenError"];
             404: components["responses"]["NotFoundError"];
-        };
-    };
-    deleteRulePackage: {
-        parameters: {
-            query?: never;
-            header: {
-                "X-Gallery-CSRF": components["parameters"]["CSRFHeader"];
-                "If-Match"?: components["parameters"]["IfMatch"];
-            };
-            path: {
-                packageId: components["schemas"]["RulePackageId"];
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description 规则包已软删除 */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["RulePackage"];
-                };
-            };
-            401: components["responses"]["UnauthenticatedError"];
-            403: components["responses"]["ForbiddenError"];
-            404: components["responses"]["NotFoundError"];
-            409: components["responses"]["ConflictError"];
         };
     };
     listRuleAudits: {
