@@ -27,6 +27,51 @@ if ($LASTEXITCODE -ne 0) { throw 'go generate 失败' }
 $generatedAfter = (Get-FileHash -LiteralPath $generatedPath -Algorithm SHA256).Hash
 if ($generatedBefore -ne $generatedAfter) { throw 'OpenAPI 生成文件不是最新状态' }
 
+if (-not $Race) {
+    $webPath = Join-Path $PSScriptRoot '..\web'
+    $node = Get-Command node -ErrorAction Stop
+    $npm = Get-Command npm -ErrorAction Stop
+    Write-Host "Node: $(& $node.Source --version); npm: $(& $npm.Source --version)"
+
+    function Get-WebArtifactState {
+        $artifactRoots = @(
+            (Join-Path $webPath 'src\api\schema.gen.ts'),
+            (Join-Path $PSScriptRoot '..\internal\webapp\dist')
+        )
+        $files = foreach ($artifactRoot in $artifactRoots) {
+            if (Test-Path -LiteralPath $artifactRoot -PathType Leaf) {
+                Get-Item -LiteralPath $artifactRoot
+            } elseif (Test-Path -LiteralPath $artifactRoot -PathType Container) {
+                Get-ChildItem -LiteralPath $artifactRoot -File -Recurse
+            }
+        }
+        return ($files | Sort-Object FullName | ForEach-Object {
+            "$($_.FullName)=$((Get-FileHash -LiteralPath $_.FullName -Algorithm SHA256).Hash)"
+        }) -join "`n"
+    }
+
+    $webGeneratedBefore = Get-WebArtifactState
+    Push-Location $webPath
+    try {
+        & $npm.Source ci
+        if ($LASTEXITCODE -ne 0) { throw 'npm ci 失败' }
+        & $npm.Source run typecheck
+        if ($LASTEXITCODE -ne 0) { throw 'Web TypeScript 检查失败' }
+        & $npm.Source run lint
+        if ($LASTEXITCODE -ne 0) { throw 'Web ESLint 检查失败' }
+        & $npm.Source run format:check
+        if ($LASTEXITCODE -ne 0) { throw 'Web Prettier 检查失败' }
+        & $npm.Source test
+        if ($LASTEXITCODE -ne 0) { throw 'Web 单元测试失败' }
+        & $npm.Source run build
+        if ($LASTEXITCODE -ne 0) { throw 'Web 生产构建失败' }
+    } finally {
+        Pop-Location
+    }
+    $webGeneratedAfter = Get-WebArtifactState
+    if ($webGeneratedBefore -ne $webGeneratedAfter) { throw 'Web OpenAPI 或生产资产不是最新状态' }
+}
+
 $unformatted = & $gofmt -l cmd internal pkg
 if ($LASTEXITCODE -ne 0) { throw 'gofmt 检查失败' }
 if ($unformatted) { throw "以下文件尚未 gofmt：$($unformatted -join ', ')" }
