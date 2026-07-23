@@ -172,6 +172,9 @@ p {
   overflow: hidden;
   padding: 0;
   border: 0;
+  /* 只用 transform 移出视口不会把链接移出键盘 Tab 序：折叠后键盘用户仍会依次聚焦到
+     屏幕外看不见的导航项。visibility 让它真正退出可聚焦树，过渡结束后才生效。 */
+  visibility: hidden;
 }
 .page-header {
   display: flex;
@@ -614,6 +617,7 @@ textarea {
     transform: translateX(-110%);
     width: var(--sidebar-width);
     padding: var(--space-4);
+    visibility: hidden;
   }
   .topbar-status .status-badge,
   .topbar-status .select-button {
