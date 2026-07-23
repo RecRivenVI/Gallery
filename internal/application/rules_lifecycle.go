@@ -667,6 +667,48 @@ WHERE s.parameter_id=?`, parameterID).Scan(&result.ID, &result.Name, &result.Sem
 	return result, nil
 }
 
+func (r *Resources) ListRuleParameterSets(ctx context.Context, semanticHash, status string) ([]RuleParameterSet, error) {
+	query := "SELECT parameter_id FROM rule_parameter_sets WHERE 1=1"
+	args := []any{}
+	if semanticHash != "" {
+		query += " AND semantic_hash=?"
+		args = append(args, semanticHash)
+	}
+	if status != "" {
+		if status != RuleParameterActive && status != RuleParameterDeprecated {
+			return nil, fault.WithField(fault.CodeValidation, "status", nil)
+		}
+		query += " AND status=?"
+		args = append(args, status)
+	}
+	query += " ORDER BY updated_at DESC, parameter_id"
+	rows, err := r.control.QueryContext(ctx, query, args...)
+	if err != nil {
+		return nil, fault.New(fault.CodeInternal, true, err)
+	}
+	defer rows.Close()
+	ids := make([]string, 0)
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			return nil, fault.New(fault.CodeInternal, true, err)
+		}
+		ids = append(ids, id)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fault.New(fault.CodeInternal, true, err)
+	}
+	result := make([]RuleParameterSet, 0, len(ids))
+	for _, id := range ids {
+		item, err := r.GetRuleParameterSet(ctx, id)
+		if err != nil {
+			return nil, err
+		}
+		result = append(result, item)
+	}
+	return result, nil
+}
+
 func (r *Resources) UpdateRuleParameterSet(ctx context.Context, parameterID string, parameters []byte, expectedRevision int, actor string) (RuleParameterSet, error) {
 	set, err := r.GetRuleParameterSet(ctx, parameterID)
 	if err != nil {
