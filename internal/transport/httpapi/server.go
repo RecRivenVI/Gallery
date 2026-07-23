@@ -11,10 +11,10 @@ import (
 	"io"
 	"log/slog"
 	"mime"
+	"net"
 	"net/http"
 	"strconv"
 	"strings"
-	"time"
 
 	"github.com/RecRivenVI/gallery/internal/application"
 	"github.com/RecRivenVI/gallery/internal/auth"
@@ -102,6 +102,9 @@ func New(mode config.Mode, store *storage.Store, clock ports.Clock, personal *au
 	mux.HandleFunc("GET /api/v1/bootstrap", server.bootstrap)
 	mux.HandleFunc("POST /api/v1/personal/pairing-attempts", server.createPairingAttempt)
 	mux.HandleFunc("POST /api/v1/personal/pair", server.exchangePairingCredential)
+	mux.HandleFunc("POST /api/v1/lan/owner", server.initializeLANOwner)
+	mux.HandleFunc("POST /api/v1/auth/login", server.login)
+	mux.HandleFunc("POST /api/v1/auth/logout", server.logout)
 	mux.HandleFunc("GET /api/v1/sessions", server.listSessions)
 	mux.HandleFunc("DELETE /api/v1/sessions/{sessionId}", server.revokeSession)
 	mux.HandleFunc("POST /api/v1/libraries", server.createLibrary)
@@ -365,11 +368,19 @@ func (s *Server) bootstrap(w http.ResponseWriter, r *http.Request) {
 	}
 	response := api.BootstrapResponse{
 		Mode: mode, Authenticated: false, AvailableCapabilities: s.auth.AvailableCapabilities(),
-		EffectiveCapabilities: []string{}, CsrfToken: s.auth.BootstrapCSRF(),
+		EffectiveCapabilities: []string{}, CsrfToken: s.auth.BootstrapCSRF(), LanInitialized: s.mode == config.ModePersonal,
 		ApiVersion:               api.BootstrapResponseApiVersionV1,
 		WebsocketProtocolVersion: api.BootstrapResponseWebsocketProtocolVersion(realtime.ProtocolVersion),
 		SortProtocolVersion:      api.BootstrapResponseSortProtocolVersion(contractquery.SortProtocolVersion),
 		RuleSchemaVersion:        api.BootstrapResponseRuleSchemaVersion(rules.RuleSchemaVersion),
+	}
+	if s.mode == config.ModeLAN {
+		initialized, err := s.auth.LANInitialized(r.Context())
+		if err != nil {
+			s.writeRequestError(w, err)
+			return
+		}
+		response.LanInitialized = initialized
 	}
 	if session, err := s.authenticate(r); err == nil {
 		response.Authenticated = true
@@ -416,14 +427,113 @@ func (s *Server) exchangePairingCredential(w http.ResponseWriter, r *http.Reques
 		writeFault(w, asFault(err), statusForFault(err))
 		return
 	}
-	http.SetCookie(w, &http.Cookie{
-		Name: auth.CookieName, Value: cookie, Path: "/", HttpOnly: true,
-		SameSite: http.SameSiteStrictMode, MaxAge: int(time.Until(session.ExpiresAt).Seconds()),
-	})
+	s.setSessionCookie(w, r, session, cookie)
 	writeJSON(w, http.StatusCreated, api.SessionEstablishedResponse{
 		Session: sessionSummary(session), CsrfToken: session.CSRFToken,
 		EffectiveCapabilities: append([]string(nil), session.Capabilities...),
 	})
+}
+
+func (s *Server) initializeLANOwner(w http.ResponseWriter, r *http.Request) {
+	if s.mode != config.ModeLAN {
+		s.writeRequestError(w, fault.New(fault.CodeNotFound, false, nil))
+		return
+	}
+	if err := auth.ValidateLoopbackRequest(r); err != nil {
+		s.writeRequestError(w, err)
+		return
+	}
+	if err := auth.ValidateMutationAllowed(r, s.auth.BootstrapCSRF(), s.allowedHosts); err != nil {
+		s.writeRequestError(w, err)
+		return
+	}
+	var request struct {
+		Username    string `json:"username"`
+		DisplayName string `json:"displayName"`
+		Password    string `json:"password"`
+	}
+	if err := decodeJSON(r, &request); err != nil {
+		s.writeRequestError(w, fault.WithField(fault.CodeValidation, "body", err))
+		return
+	}
+	user, err := s.auth.InitializeLANOwner(r.Context(), auth.CreateUserInput{
+		Username: request.Username, DisplayName: request.DisplayName, Password: request.Password,
+	})
+	if err != nil {
+		s.writeRequestError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusCreated, userDTO(user))
+}
+
+func (s *Server) login(w http.ResponseWriter, r *http.Request) {
+	if s.mode != config.ModeLAN {
+		s.writeRequestError(w, fault.New(fault.CodeNotFound, false, nil))
+		return
+	}
+	if err := auth.ValidateMutationAllowed(r, s.auth.BootstrapCSRF(), s.allowedHosts); err != nil {
+		s.writeRequestError(w, err)
+		return
+	}
+	var request struct {
+		Username    string `json:"username"`
+		Password    string `json:"password"`
+		ClientLabel string `json:"clientLabel"`
+	}
+	if err := decodeJSON(r, &request); err != nil {
+		s.writeRequestError(w, fault.WithField(fault.CodeValidation, "body", err))
+		return
+	}
+	session, cookie, err := s.auth.Login(r.Context(), request.Username, request.Password, request.ClientLabel, loginRateSubject(r))
+	if err != nil {
+		s.writeRequestError(w, err)
+		return
+	}
+	s.setSessionCookie(w, r, session, cookie)
+	writeJSON(w, http.StatusCreated, api.SessionEstablishedResponse{
+		Session: sessionSummary(session), CsrfToken: session.CSRFToken,
+		EffectiveCapabilities: append([]string(nil), session.Capabilities...),
+	})
+}
+
+func (s *Server) logout(w http.ResponseWriter, r *http.Request) {
+	session, err := s.authenticate(r)
+	if err != nil {
+		s.writeRequestError(w, err)
+		return
+	}
+	if err := s.validateMutation(r, session); err != nil {
+		s.writeRequestError(w, err)
+		return
+	}
+	if session.TokenID != "" {
+		err = s.auth.RevokeAPIToken(r.Context(), session.PrincipalID, session.TokenID)
+	} else {
+		err = s.auth.Revoke(r.Context(), session.PrincipalID, session.ID)
+	}
+	if err != nil {
+		s.writeRequestError(w, err)
+		return
+	}
+	s.hub.RevokeSession(session.ID)
+	http.SetCookie(w, &http.Cookie{Name: auth.CookieName, Value: "", Path: "/", HttpOnly: true,
+		SameSite: http.SameSiteStrictMode, Secure: r.TLS != nil, MaxAge: -1})
+	w.WriteHeader(http.StatusNoContent)
+}
+
+func (s *Server) setSessionCookie(w http.ResponseWriter, r *http.Request, session auth.Session, value string) {
+	maxAge := int(session.ExpiresAt.Sub(s.clock.Now().UTC()).Seconds())
+	if maxAge < 0 {
+		maxAge = 0
+	}
+	http.SetCookie(w, &http.Cookie{Name: auth.CookieName, Value: value, Path: "/", HttpOnly: true,
+		SameSite: http.SameSiteStrictMode, Secure: r.TLS != nil, MaxAge: maxAge})
+}
+
+func userDTO(user auth.User) map[string]any {
+	return map[string]any{"id": user.ID, "username": user.Username, "displayName": user.DisplayName,
+		"status": user.Status, "roles": user.Roles, "securityVersion": user.SecurityVersion,
+		"createdAt": user.CreatedAt, "updatedAt": user.UpdatedAt}
 }
 
 func (s *Server) listSessions(w http.ResponseWriter, r *http.Request) {
@@ -2394,6 +2504,7 @@ func concealForbidden(err error) error {
 func sessionSummary(session auth.Session) api.SessionSummary {
 	return api.SessionSummary{
 		Id: session.ID, PrincipalId: session.PrincipalID, CreatedAt: session.CreatedAt,
+		AuthMethod: api.SessionSummaryAuthMethod(session.AuthMethod), ClientLabel: session.ClientLabel,
 		ExpiresAt: session.ExpiresAt, LastSeenAt: session.LastSeenAt, Revoked: session.RevokedAt != nil,
 	}
 }
@@ -2458,6 +2569,19 @@ func (s *Server) validateMutation(r *http.Request, session auth.Session) error {
 		return nil
 	}
 	return auth.ValidateMutationAllowed(r, session.CSRFToken, s.allowedHosts)
+}
+
+// loginRateSubject 使用直连对端 IP 作为登录限流主体。RemoteAddr 的端口通常每个连接都会变化，
+// 不能进入限流键；服务当前不支持反向代理部署，因此也不能信任 X-Forwarded-For 等可伪造请求头。
+func loginRateSubject(r *http.Request) string {
+	host, _, err := net.SplitHostPort(r.RemoteAddr)
+	if err != nil {
+		return strings.TrimSpace(r.RemoteAddr)
+	}
+	if ip := net.ParseIP(strings.Trim(host, "[]")); ip != nil {
+		return ip.String()
+	}
+	return strings.ToLower(host)
 }
 
 func asFault(err error) *fault.Error {
