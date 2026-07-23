@@ -199,6 +199,52 @@ func TestAccountAndGrantManagement(t *testing.T) {
 	_ = newLogin.Body.Close()
 }
 
+func TestShareManagementLifecycle(t *testing.T) {
+	server, _ := newLANSecurityServer(t, false)
+	client, csrf := establishLANOwner(t, server)
+	libraryID := createLibrary(t, client, server, csrf, "Shareable")
+
+	create := requestJSON(t, client, http.MethodPost, server.URL+"/api/v1/shares", server.URL, csrf,
+		map[string]any{"scopeKind": "library", "scopeId": libraryID, "permissions": []string{"view"}, "expiresAt": time.Now().UTC().Add(time.Hour)})
+	createBody := readAndClose(t, create)
+	if create.StatusCode != http.StatusCreated {
+		t.Fatalf("创建 Share status=%d body=%s", create.StatusCode, createBody)
+	}
+	var share struct {
+		ID, Secret, SecretPrefix string
+	}
+	if err := json.Unmarshal(createBody, &share); err != nil || share.ID == "" || share.Secret == "" || share.SecretPrefix == "" {
+		t.Fatalf("Share 创建响应缺少一次性 secret 或前缀: %v body=%s", err, createBody)
+	}
+
+	list := requestJSON(t, client, http.MethodGet, server.URL+"/api/v1/shares", "", "", nil)
+	listBody := readAndClose(t, list)
+	if list.StatusCode != http.StatusOK || !bytes.Contains(listBody, []byte(share.ID)) ||
+		bytes.Contains(listBody, []byte(share.Secret)) || bytes.Contains(listBody, []byte(`"secret"`)) {
+		t.Fatalf("Share 列表缺失或泄露 secret: status=%d body=%s", list.StatusCode, listBody)
+	}
+
+	badKind := requestJSON(t, client, http.MethodPost, server.URL+"/api/v1/shares", server.URL, csrf,
+		map[string]any{"scopeKind": "bogus", "scopeId": libraryID, "permissions": []string{"view"}, "expiresAt": time.Now().UTC().Add(time.Hour)})
+	if badKind.StatusCode != http.StatusBadRequest {
+		t.Fatalf("非法 scopeKind 未拒绝: %d body=%s", badKind.StatusCode, readAndClose(t, badKind))
+	}
+	_ = badKind.Body.Close()
+	badFixed := requestJSON(t, client, http.MethodPost, server.URL+"/api/v1/shares", server.URL, csrf,
+		map[string]any{"scopeKind": "library", "scopeId": libraryID, "permissions": []string{"view"},
+			"fixedBlobAlgorithm": "sha256-v1", "fixedBlobDigest": strings.Repeat("0", 64), "expiresAt": time.Now().UTC().Add(time.Hour)})
+	if badFixed.StatusCode != http.StatusBadRequest {
+		t.Fatalf("Library 范围固定 Blob 未拒绝: %d body=%s", badFixed.StatusCode, readAndClose(t, badFixed))
+	}
+	_ = badFixed.Body.Close()
+
+	revoke := requestJSON(t, client, http.MethodDelete, server.URL+"/api/v1/shares/"+share.ID, server.URL, csrf, nil)
+	if revoke.StatusCode != http.StatusNoContent {
+		t.Fatalf("撤销 Share status=%d body=%s", revoke.StatusCode, readAndClose(t, revoke))
+	}
+	_ = revoke.Body.Close()
+}
+
 func newLANSecurityServer(t *testing.T, tls bool) (*httptest.Server, *storage.Store) {
 	t.Helper()
 	dirs := appdirs.UnderRoot(filepath.Join(t.TempDir(), "app"))
