@@ -35,7 +35,7 @@ jobs:
         run: ./scripts/Check.ps1 -Race
       - name: Go vulnerability database
         if: runner.os == 'Linux'
-        run: go run golang.org/x/vuln/cmd/govulncheck@v1.6.0 ./...
+        run: go run golang.org/x/vuln/cmd/govulncheck@v1.6.0 ./cmd/... ./internal/... ./pkg/... ./tools/...
 
   web-browser:
     name: Web 浏览器 smoke
