@@ -17,6 +17,10 @@ $env:PATH = "$goBin;$env:PATH"
 $gofmtName = if ($IsWindows) { 'gofmt.exe' } else { 'gofmt' }
 $gofmt = Join-Path $goBin $gofmtName
 
+# 显式列出仓库自身的包集合：`npm ci` 之后 web/node_modules 中的第三方 Go 源码会进入
+# `./...`，使 vet/test/build 的实际范围取决于 node_modules 是否存在（EV-39 的 BLD-1）。
+$goPackages = @('./cmd/...', './internal/...', './pkg/...', './tools/...')
+
 & $go mod tidy -diff
 if ($LASTEXITCODE -ne 0) { throw 'go.mod/go.sum 不是 tidy 状态' }
 
@@ -72,17 +76,17 @@ if (-not $Race) {
     if ($webGeneratedBefore -ne $webGeneratedAfter) { throw 'Web OpenAPI 或生产资产不是最新状态' }
 }
 
-$unformatted = & $gofmt -l cmd internal pkg
+$unformatted = & $gofmt -l cmd internal pkg tools
 if ($LASTEXITCODE -ne 0) { throw 'gofmt 检查失败' }
 if ($unformatted) { throw "以下文件尚未 gofmt：$($unformatted -join ', ')" }
 
-& $go vet ./...
+& $go vet @goPackages
 if ($LASTEXITCODE -ne 0) { throw 'go vet 失败' }
 
 $previousCGO = $env:CGO_ENABLED
 try {
     $env:CGO_ENABLED = '0'
-    & $go test ./...
+    & $go test @goPackages
     if ($LASTEXITCODE -ne 0) { throw 'CGO_ENABLED=0 go test 失败' }
     & $go build ./cmd/...
     if ($LASTEXITCODE -ne 0) { throw 'CGO_ENABLED=0 go build 失败' }
@@ -91,6 +95,6 @@ try {
 }
 
 if ($Race) {
-    & $go test -race ./...
+    & $go test -race @goPackages
     if ($LASTEXITCODE -ne 0) { throw 'go test -race 失败' }
 }
