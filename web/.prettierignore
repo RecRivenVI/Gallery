@@ -1,0 +1,5 @@
+node_modules
+src/api/schema.gen.ts
+../internal/webapp/dist
+playwright-report
+test-results
