@@ -3,6 +3,7 @@ import { Button, Select, SelectValue, ListBox, ListBoxItem, Popover } from 'reac
 import { Link, useParams, useSearchParams } from 'react-router-dom';
 import { api, csrfHeaders, errorMessage, expectData } from '../api/client';
 import { useSession } from '../auth/session';
+import { JOB_MUTATION_CAPABILITIES } from '../auth/capabilities';
 import {
   ConfirmAction,
   DefinitionList,
@@ -104,7 +105,10 @@ export function JobsPage() {
 
 export function JobPage() {
   const { jobId = '' } = useParams();
-  const { bootstrap, can } = useSession();
+  const { bootstrap, canAny } = useSession();
+  // 服务端按 Job 类别派生取消/重试所需的 capability，没有单一的 jobs.cancel/jobs.retry；
+  // 前端只判断"是否可能有权变更某类 Job"，最终裁决与结构化错误仍由服务端给出。
+  const canMutateJob = canAny(JOB_MUTATION_CAPABILITIES);
   const client = useQueryClient();
   const job = useQuery({
     queryKey: ['jobs', jobId],
@@ -170,7 +174,7 @@ export function JobPage() {
           ]}
         />
         <div className="button-row">
-          {can('jobs.cancel') && ['queued', 'running'].includes(job.data.status) && (
+          {canMutateJob && ['queued', 'running'].includes(job.data.status) && (
             <ConfirmAction
               label="取消任务"
               title="取消持久任务？"
@@ -181,7 +185,7 @@ export function JobPage() {
               }}
             />
           )}
-          {can('jobs.retry') && ['failed', 'cancelled'].includes(job.data.status) && (
+          {canMutateJob && ['failed', 'cancelled'].includes(job.data.status) && (
             <Button className="button primary" onPress={() => retry.mutate()}>
               创建新 Attempt
             </Button>

@@ -1,5 +1,8 @@
 import AxeBuilder from '@axe-core/playwright';
 import { expect, test, type Page, type Route } from '@playwright/test';
+// 合成 bootstrap 必须直接引用后端权威词表的前端副本：自行书写 capability 名会让 mock
+// 套件自证通过，EV-39 的 CAP-1 正是这样被掩盖的。
+import { CAPABILITIES } from '../src/auth/capabilities';
 
 test.skip(
   Boolean(process.env.GALLERY_REAL_BASE_URL ?? process.env.GALLERY_REAL_LAN_BASE_URL),
@@ -11,27 +14,9 @@ const bootstrap = {
   mode: 'personal',
   authenticated: true,
   lanInitialized: false,
-  availableCapabilities: [
-    'library.read',
-    'overlay.write',
-    'media.read',
-    'jobs.cancel',
-    'rules.read',
-    'clients.manage',
-    'shares.create',
-    'users.manage'
-  ],
+  availableCapabilities: [...CAPABILITIES],
   principalId: 'principal_test',
-  effectiveCapabilities: [
-    'library.read',
-    'overlay.write',
-    'media.read',
-    'jobs.cancel',
-    'rules.read',
-    'clients.manage',
-    'shares.create',
-    'users.manage'
-  ],
+  effectiveCapabilities: [...CAPABILITIES],
   csrfToken: 'csrf-browser-only',
   apiVersion: 'v1',
   websocketProtocolVersion: 1,

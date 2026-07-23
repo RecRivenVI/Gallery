@@ -68,7 +68,7 @@ export function WorkPage() {
             ]}
           />
         </section>
-        {can('overlay.write') && (
+        {can('overlays.write') && (
           <OverlayEditor
             initial={overlay.data}
             csrf={bootstrap.csrfToken}
