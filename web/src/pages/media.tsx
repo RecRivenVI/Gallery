@@ -93,7 +93,7 @@ export function MediaPage() {
             ]}
           />
           <div className="button-row">
-            {can('media.verify') && item.contentVerificationState === 'located_unverified' && (
+            {can('scan.run') && item.contentVerificationState === 'located_unverified' && (
               <Button className="button primary" onPress={() => verify.mutate()}>
                 创建确认任务
               </Button>

@@ -1,11 +1,12 @@
 import { Button, Select, SelectValue, ListBox, ListBoxItem, Popover } from 'react-aria-components';
 import { NavLink, Outlet } from 'react-router-dom';
 import { useSession } from '../auth/session';
+import type { Capability } from '../auth/capabilities';
 import { useRealtime } from '../realtime/realtime';
 import { usePreferences, type Theme } from '../state/preferences';
 import { StatusBadge } from './ui';
 
-const nav = [
+const nav: { to: string; label: string; capability: Capability | Capability[] }[] = [
   { to: '/browse', label: '浏览', capability: 'library.read' },
   { to: '/creators', label: '创作者', capability: 'library.read' },
   { to: '/jobs', label: '任务', capability: 'library.read' },
