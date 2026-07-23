@@ -182,6 +182,28 @@ func (r *Resources) GetLibrary(ctx context.Context, id string) (Library, error) 
 	return result, nil
 }
 
+func (r *Resources) ListLibraries(ctx context.Context) ([]Library, error) {
+	rows, err := r.control.QueryContext(ctx, "SELECT library_id, name, created_at FROM libraries ORDER BY name, library_id")
+	if err != nil {
+		return nil, fault.New(fault.CodeInternal, true, err)
+	}
+	defer rows.Close()
+	result := make([]Library, 0)
+	for rows.Next() {
+		var item Library
+		var createdAt int64
+		if err := rows.Scan(&item.ID, &item.Name, &createdAt); err != nil {
+			return nil, fault.New(fault.CodeInternal, true, err)
+		}
+		item.CreatedAt = time.Unix(createdAt, 0).UTC()
+		result = append(result, item)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fault.New(fault.CodeInternal, true, err)
+	}
+	return result, nil
+}
+
 func (r *Resources) CreateSource(ctx context.Context, libraryID, displayName, root string) (Source, error) {
 	if _, err := r.GetLibrary(ctx, libraryID); err != nil {
 		return Source{}, err
@@ -233,6 +255,38 @@ SELECT source_id, library_id, display_name, root_path, created_at FROM sources W
 		return Source{}, fault.New(fault.CodeInternal, true, err)
 	}
 	result.CreatedAt = time.Unix(createdAt, 0).UTC()
+	return result, nil
+}
+
+func (r *Resources) ListSources(ctx context.Context, libraryID string) ([]Source, error) {
+	query := "SELECT source_id, library_id, display_name, root_path, created_at FROM sources"
+	args := []any{}
+	if libraryID != "" {
+		if _, err := domain.ParseID(domain.IDLibrary, libraryID); err != nil {
+			return nil, fault.WithField(fault.CodeValidation, "libraryId", nil)
+		}
+		query += " WHERE library_id = ?"
+		args = append(args, libraryID)
+	}
+	query += " ORDER BY display_name, source_id"
+	rows, err := r.control.QueryContext(ctx, query, args...)
+	if err != nil {
+		return nil, fault.New(fault.CodeInternal, true, err)
+	}
+	defer rows.Close()
+	result := make([]Source, 0)
+	for rows.Next() {
+		var item Source
+		var createdAt int64
+		if err := rows.Scan(&item.ID, &item.LibraryID, &item.DisplayName, &item.RootPath, &createdAt); err != nil {
+			return nil, fault.New(fault.CodeInternal, true, err)
+		}
+		item.CreatedAt = time.Unix(createdAt, 0).UTC()
+		result = append(result, item)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fault.New(fault.CodeInternal, true, err)
+	}
 	return result, nil
 }
 
@@ -404,6 +458,55 @@ FROM source_rule_bindings WHERE binding_id = ?`, id).Scan(
 		result.UpdatedAt = time.Unix(updatedAt.Int64, 0).UTC()
 	} else {
 		result.UpdatedAt = result.CreatedAt
+	}
+	return result, nil
+}
+
+// ListSourceRuleBindingsFiltered supports the API collection view without
+// changing the source-scoped lifecycle method used by the rules service.
+func (r *Resources) ListSourceRuleBindingsFiltered(ctx context.Context, sourceID, status string) ([]SourceRuleBinding, error) {
+	query := "SELECT binding_id FROM source_rule_bindings WHERE 1=1"
+	args := []any{}
+	if sourceID != "" {
+		if _, err := domain.ParseID(domain.IDSource, sourceID); err != nil {
+			return nil, fault.WithField(fault.CodeValidation, "sourceId", nil)
+		}
+		query += " AND source_id=?"
+		args = append(args, sourceID)
+	}
+	if status != "" {
+		switch status {
+		case RuleBindingActive, RuleBindingPaused, RuleBindingInvalid:
+		default:
+			return nil, fault.WithField(fault.CodeValidation, "status", nil)
+		}
+		query += " AND status=?"
+		args = append(args, status)
+	}
+	query += " ORDER BY source_id, priority DESC, binding_id"
+	rows, err := r.control.QueryContext(ctx, query, args...)
+	if err != nil {
+		return nil, fault.New(fault.CodeInternal, true, err)
+	}
+	defer rows.Close()
+	ids := make([]string, 0)
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			return nil, fault.New(fault.CodeInternal, true, err)
+		}
+		ids = append(ids, id)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fault.New(fault.CodeInternal, true, err)
+	}
+	result := make([]SourceRuleBinding, 0, len(ids))
+	for _, id := range ids {
+		item, err := r.GetSourceRuleBinding(ctx, id)
+		if err != nil {
+			return nil, err
+		}
+		result = append(result, item)
 	}
 	return result, nil
 }

@@ -79,6 +79,7 @@ type Options struct {
 	Derived      *derived.Service
 	DerivedJob   *derivedjob.Service
 	AllowedHosts []string
+	Web          http.Handler
 }
 
 func New(mode config.Mode, store *storage.Store, clock ports.Clock, personal *auth.Personal, resources *application.Resources, jobStore *jobs.Store, catalogStore *catalog.Store, scannerService *scanner.Service, overlayService *overlay.Service, creatorsService *creators.Service, backupService *backup.Service, hub *realtime.Hub, logger *slog.Logger, options ...Options) http.Handler {
@@ -112,6 +113,7 @@ func New(mode config.Mode, store *storage.Store, clock ports.Clock, personal *au
 	mux.HandleFunc("POST /api/v1/admin/users", server.createUser)
 	mux.HandleFunc("PATCH /api/v1/admin/users/{userId}/status", server.setUserStatus)
 	mux.HandleFunc("POST /api/v1/account/password", server.changePassword)
+	mux.HandleFunc("GET /api/v1/admin/users/{userId}/grants", server.listGrants)
 	mux.HandleFunc("POST /api/v1/admin/users/{userId}/grants", server.createGrant)
 	mux.HandleFunc("DELETE /api/v1/admin/grants/{grantId}", server.revokeGrant)
 	mux.HandleFunc("GET /api/v1/api-tokens", server.listAPITokens)
@@ -124,8 +126,10 @@ func New(mode config.Mode, store *storage.Store, clock ports.Clock, personal *au
 	mux.HandleFunc("GET /api/v1/public/shares/{credential}/media/{mediaId}/content", server.publicShareMediaContent)
 	mux.HandleFunc("HEAD /api/v1/public/shares/{credential}/media/{mediaId}/content", server.publicShareMediaContent)
 	mux.HandleFunc("GET /api/v1/admin/security-audits", server.listSecurityAudits)
+	mux.HandleFunc("GET /api/v1/libraries", server.listLibraries)
 	mux.HandleFunc("POST /api/v1/libraries", server.createLibrary)
 	mux.HandleFunc("GET /api/v1/libraries/{libraryId}", server.getLibrary)
+	mux.HandleFunc("GET /api/v1/sources", server.listSources)
 	mux.HandleFunc("POST /api/v1/sources", server.createSource)
 	mux.HandleFunc("GET /api/v1/sources/{sourceId}", server.getSource)
 	mux.HandleFunc("POST /api/v1/rules/validate", server.validateRulePackage)
@@ -156,12 +160,14 @@ func New(mode config.Mode, store *storage.Store, clock ports.Clock, personal *au
 	mux.HandleFunc("POST /api/v1/rule-versions/diff", server.diffRuleVersions)
 	mux.HandleFunc("GET /api/v1/rule-versions/{semanticHash}/export", server.exportRuleVersion)
 	mux.HandleFunc("POST /api/v1/rule-versions/{semanticHash}/deprecate", server.deprecateRuleVersion)
+	mux.HandleFunc("GET /api/v1/rule-parameters", server.listRuleParameterSets)
 	mux.HandleFunc("POST /api/v1/rule-parameters", server.createRuleParameterSet)
 	mux.HandleFunc("GET /api/v1/rule-parameters/{parameterId}", server.getRuleParameterSet)
 	mux.HandleFunc("PUT /api/v1/rule-parameters/{parameterId}", server.updateRuleParameterSet)
 	mux.HandleFunc("POST /api/v1/rule-parameters/{parameterId}/copy", server.copyRuleParameterSet)
 	mux.HandleFunc("POST /api/v1/rule-parameters/{parameterId}/deprecate", server.deprecateRuleParameterSet)
 	mux.HandleFunc("POST /api/v1/rule-parameters/{parameterId}/impact", server.impactRuleParameterSet)
+	mux.HandleFunc("GET /api/v1/source-rule-bindings", server.listSourceRuleBindings)
 	mux.HandleFunc("POST /api/v1/source-rule-bindings", server.createSourceRuleBinding)
 	mux.HandleFunc("GET /api/v1/source-rule-bindings/{bindingId}", server.getSourceRuleBinding)
 	mux.HandleFunc("PATCH /api/v1/source-rule-bindings/{bindingId}", server.updateSourceRuleBinding)
@@ -235,7 +241,12 @@ func New(mode config.Mode, store *storage.Store, clock ports.Clock, personal *au
 			},
 		}, nil
 	}, personal.IsActive))
-	return requestLog(logger, hostGuard(server, mux))
+	if option.Web != nil {
+		// Go 1.22+ 的 ServeMux 不允许 method-specific 根模式与无 method 的
+		// /ws/v1 并存。Web handler 自身只接受 GET/HEAD，并显式拒绝保留前缀。
+		mux.Handle("/", option.Web)
+	}
+	return requestLog(logger, securityHeaders(hostGuard(server, mux)))
 }
 
 func (s *Server) getRulePackageSchema(w http.ResponseWriter, r *http.Request) {
@@ -662,6 +673,24 @@ func (s *Server) createGrant(w http.ResponseWriter, r *http.Request) {
 	}
 	s.hub.RevokePrincipal(userID)
 	writeJSON(w, http.StatusCreated, grantDTO(grant))
+}
+
+func (s *Server) listGrants(w http.ResponseWriter, r *http.Request) {
+	session, err := s.requireCapability(r, "users.manage")
+	if err != nil {
+		s.writeRequestError(w, err)
+		return
+	}
+	items, err := s.auth.ListGrants(r.Context(), session.PrincipalID, r.PathValue("userId"))
+	if err != nil {
+		s.writeRequestError(w, err)
+		return
+	}
+	result := make([]map[string]any, 0, len(items))
+	for _, item := range items {
+		result = append(result, grantDTO(item))
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"grants": result})
 }
 
 func (s *Server) revokeGrant(w http.ResponseWriter, r *http.Request) {
@@ -1123,6 +1152,31 @@ func (s *Server) createLibrary(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusCreated, libraryDTO(result))
 }
 
+func (s *Server) listLibraries(w http.ResponseWriter, r *http.Request) {
+	session, err := s.authenticate(r)
+	if err != nil {
+		s.writeRequestError(w, err)
+		return
+	}
+	items, err := s.data.ListLibraries(r.Context())
+	if err != nil {
+		s.writeRequestError(w, err)
+		return
+	}
+	result := make([]api.Library, 0, len(items))
+	for _, item := range items {
+		allowed, authorizeErr := s.auth.AuthorizeSession(r.Context(), session, "library.read", auth.ResourceScope{Kind: "library", ID: item.ID})
+		if authorizeErr != nil {
+			s.writeRequestError(w, fault.New(fault.CodeInternal, true, authorizeErr))
+			return
+		}
+		if allowed {
+			result = append(result, libraryDTO(item))
+		}
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"libraries": result})
+}
+
 func (s *Server) getLibrary(w http.ResponseWriter, r *http.Request) {
 	if _, err := s.requireCapabilityForScope(r, "library.read", auth.ResourceScope{Kind: "library", ID: r.PathValue("libraryId")}); err != nil {
 		s.writeRequestError(w, concealForbidden(err))
@@ -1161,6 +1215,31 @@ func (s *Server) createSource(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusCreated, sourceDTO(result, s.data.SourceAvailable(result)))
+}
+
+func (s *Server) listSources(w http.ResponseWriter, r *http.Request) {
+	session, err := s.authenticate(r)
+	if err != nil {
+		s.writeRequestError(w, err)
+		return
+	}
+	items, err := s.data.ListSources(r.Context(), r.URL.Query().Get("libraryId"))
+	if err != nil {
+		s.writeRequestError(w, err)
+		return
+	}
+	result := make([]api.Source, 0, len(items))
+	for _, item := range items {
+		allowed, authorizeErr := s.auth.AuthorizeSession(r.Context(), session, "library.read", auth.ResourceScope{Kind: "source", ID: item.ID})
+		if authorizeErr != nil {
+			s.writeRequestError(w, fault.New(fault.CodeInternal, true, authorizeErr))
+			return
+		}
+		if allowed {
+			result = append(result, sourceDTO(item, s.data.SourceAvailable(item)))
+		}
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"sources": result})
 }
 
 func (s *Server) getSource(w http.ResponseWriter, r *http.Request) {
@@ -1252,6 +1331,38 @@ func (s *Server) createSourceRuleBinding(w http.ResponseWriter, r *http.Request)
 		return
 	}
 	writeJSON(w, http.StatusCreated, sourceRuleBindingDTO(result))
+}
+
+func (s *Server) listSourceRuleBindings(w http.ResponseWriter, r *http.Request) {
+	session, err := s.authenticate(r)
+	if err != nil {
+		s.writeRequestError(w, err)
+		return
+	}
+	sourceID := r.URL.Query().Get("sourceId")
+	if sourceID != "" {
+		if err := s.authorizeSession(r, session, "rules.read", auth.ResourceScope{Kind: "source", ID: sourceID}); err != nil {
+			s.writeRequestError(w, concealForbidden(err))
+			return
+		}
+	}
+	items, err := s.data.ListSourceRuleBindingsFiltered(r.Context(), sourceID, r.URL.Query().Get("status"))
+	if err != nil {
+		s.writeRequestError(w, err)
+		return
+	}
+	result := make([]api.SourceRuleBinding, 0, len(items))
+	for _, item := range items {
+		allowed, authorizeErr := s.auth.AuthorizeSession(r.Context(), session, "rules.read", auth.ResourceScope{Kind: "source", ID: item.SourceID})
+		if authorizeErr != nil {
+			s.writeRequestError(w, fault.New(fault.CodeInternal, true, authorizeErr))
+			return
+		}
+		if allowed {
+			result = append(result, sourceRuleBindingDTO(item))
+		}
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"bindings": result})
 }
 
 func (s *Server) getSourceRuleBinding(w http.ResponseWriter, r *http.Request) {
@@ -3522,6 +3633,16 @@ func requestLog(logger *slog.Logger, next http.Handler) http.Handler {
 			route = redactedRequestPath(r.URL.Path)
 		}
 		logger.InfoContext(r.Context(), "http_request", "method", r.Method, "route", route)
+	})
+}
+
+func securityHeaders(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("X-Content-Type-Options", "nosniff")
+		w.Header().Set("Referrer-Policy", "no-referrer")
+		w.Header().Set("X-Frame-Options", "DENY")
+		w.Header().Set("Permissions-Policy", "camera=(), microphone=(), geolocation=(), payment=(), usb=()")
+		next.ServeHTTP(w, r)
 	})
 }
 
