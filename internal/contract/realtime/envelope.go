@@ -17,7 +17,12 @@ import (
 	"github.com/coder/websocket/wsjson"
 )
 
-const ProtocolVersion = 1
+const (
+	ProtocolVersion            = 1
+	MaxConnectionsPerPrincipal = 8
+	MaxInboundMessageBytes     = 16 * 1024
+	MaxInboundFramesPerMinute  = 60
+)
 
 type EventType string
 
@@ -78,7 +83,9 @@ type Authorize func(*http.Request) bool
 
 type Principal struct {
 	SessionID    string
+	PrincipalID  string
 	Capabilities []string
+	Authorize    func(context.Context, string, Scope) bool
 }
 
 type Authenticate func(*http.Request) (Principal, error)
@@ -101,10 +108,11 @@ type Hub struct {
 	clock       ports.Clock
 	mu          sync.Mutex
 	subscribers map[string]map[*subscriber]struct{}
+	connections map[string]int
 }
 
 func NewHub(clock ports.Clock) *Hub {
-	return &Hub{clock: clock, subscribers: make(map[string]map[*subscriber]struct{})}
+	return &Hub{clock: clock, subscribers: make(map[string]map[*subscriber]struct{}), connections: make(map[string]int)}
 }
 
 // NewHandler 保留阶段 0 探针兼容入口；正式服务使用 Hub.Handler。
@@ -114,7 +122,7 @@ func NewHandler(clock ports.Clock, authorize Authorize) http.Handler {
 		if authorize == nil || !authorize(r) {
 			return Principal{}, fault.New(fault.CodeUnauthenticated, false, nil)
 		}
-		return Principal{SessionID: "probe", Capabilities: []string{"library.read"}}, nil
+		return Principal{SessionID: "probe", Capabilities: []string{"library.read"}, Authorize: func(context.Context, string, Scope) bool { return true }}, nil
 	}, nil)
 }
 
@@ -135,11 +143,21 @@ func (h *Hub) Handler(authenticate Authenticate, active Active) http.Handler {
 			writeHandshakeFault(w, code, status)
 			return
 		}
+		connectionKey := principal.PrincipalID
+		if connectionKey == "" {
+			connectionKey = principal.SessionID
+		}
+		if !h.reserveConnection(connectionKey) {
+			writeHandshakeFault(w, fault.CodeRateLimited, http.StatusTooManyRequests)
+			return
+		}
+		defer h.releaseConnection(connectionKey)
 		conn, err := websocket.Accept(w, r, nil)
 		if err != nil {
 			return
 		}
 		defer conn.CloseNow()
+		conn.SetReadLimit(MaxInboundMessageBytes)
 		subscription := &subscriber{principal: principal, messages: make(chan outbound, 64), conn: conn}
 		h.add(subscription)
 		defer h.remove(subscription)
@@ -155,8 +173,19 @@ func (h *Hub) Handler(authenticate Authenticate, active Active) http.Handler {
 		readDone := make(chan struct{})
 		go func() {
 			defer close(readDone)
+			windowStart := time.Now()
+			frames := 0
 			for {
 				if _, _, err := conn.Read(readContext); err != nil {
+					return
+				}
+				now := time.Now()
+				if now.Sub(windowStart) >= time.Minute {
+					windowStart, frames = now, 0
+				}
+				frames++
+				if frames > MaxInboundFramesPerMinute {
+					_ = conn.Close(websocket.StatusPolicyViolation, "inbound frame rate exceeded")
 					return
 				}
 			}
@@ -182,6 +211,25 @@ func (h *Hub) Handler(authenticate Authenticate, active Active) http.Handler {
 			}
 		}
 	})
+}
+
+func (h *Hub) reserveConnection(principalID string) bool {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	if h.connections[principalID] >= MaxConnectionsPerPrincipal {
+		return false
+	}
+	h.connections[principalID]++
+	return true
+}
+
+func (h *Hub) releaseConnection(principalID string) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	h.connections[principalID]--
+	if h.connections[principalID] <= 0 {
+		delete(h.connections, principalID)
+	}
 }
 
 func (h *Hub) JobChanged(job jobs.Job) {
@@ -227,6 +275,27 @@ func (h *Hub) RevokeSession(sessionID string) {
 	}
 }
 
+func (h *Hub) RevokePrincipal(principalID string) {
+	payload, _ := json.Marshal(map[string]any{"principalId": principalID})
+	h.mu.Lock()
+	var items []*subscriber
+	for _, subscriptions := range h.subscribers {
+		for item := range subscriptions {
+			if item.principal.PrincipalID == principalID {
+				items = append(items, item)
+			}
+		}
+	}
+	h.mu.Unlock()
+	for _, item := range items {
+		select {
+		case item.messages <- outbound{eventType: EventGrantRevoked, payload: payload, closeAfter: websocket.StatusCode(4403)}:
+		default:
+			item.conn.CloseNow()
+		}
+	}
+}
+
 func (h *Hub) broadcast(message outbound, capability string) {
 	h.mu.Lock()
 	var items []*subscriber
@@ -239,6 +308,9 @@ func (h *Hub) broadcast(message outbound, capability string) {
 	}
 	h.mu.Unlock()
 	for _, item := range items {
+		if item.principal.Authorize == nil || !item.principal.Authorize(context.Background(), capability, message.scope) {
+			continue
+		}
 		select {
 		case item.messages <- message:
 		default:
