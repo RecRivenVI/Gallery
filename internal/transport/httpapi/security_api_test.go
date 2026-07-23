@@ -245,6 +245,63 @@ func TestShareManagementLifecycle(t *testing.T) {
 	_ = revoke.Body.Close()
 }
 
+func TestAnonymousShareConsumption(t *testing.T) {
+	server, _ := newLANSecurityServer(t, false)
+	client, csrf := establishLANOwner(t, server)
+	libraryID := createLibrary(t, client, server, csrf, "Anonymous")
+
+	create := requestJSON(t, client, http.MethodPost, server.URL+"/api/v1/shares", server.URL, csrf,
+		map[string]any{"scopeKind": "library", "scopeId": libraryID, "permissions": []string{"view"}, "expiresAt": time.Now().UTC().Add(time.Hour)})
+	var share struct {
+		ID, Secret string
+	}
+	if body := readAndClose(t, create); json.Unmarshal(body, &share) != nil || create.StatusCode != http.StatusCreated {
+		t.Fatalf("创建 Share 失败: status=%d body=%s", create.StatusCode, body)
+	}
+
+	resolve, err := http.Get(server.URL + "/api/v1/public/shares/" + share.Secret)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resolveBody := readAndClose(t, resolve)
+	if resolve.StatusCode != http.StatusOK || !bytes.Contains(resolveBody, []byte(`"library"`)) ||
+		bytes.Contains(resolveBody, []byte(`"createdBy"`)) || bytes.Contains(resolveBody, []byte(`"secretPrefix"`)) {
+		t.Fatalf("匿名解析资源或脱敏错误: status=%d body=%s", resolve.StatusCode, resolveBody)
+	}
+
+	missing, err := http.Get(server.URL + "/api/v1/public/shares/shr_00000000-0000-7000-8000-000000000001.absent-secret")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if missing.StatusCode != http.StatusNotFound {
+		t.Fatalf("无效凭据未隐藏为 404: %d", missing.StatusCode)
+	}
+	_ = missing.Body.Close()
+
+	downloadDenied, err := http.Get(server.URL + "/api/v1/public/shares/" + share.Secret + "/media/med_00000000-0000-7000-8000-000000000002/content?download=true")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if downloadDenied.StatusCode != http.StatusForbidden {
+		t.Fatalf("view 权限 Share 未拒绝 download: %d", downloadDenied.StatusCode)
+	}
+	_ = downloadDenied.Body.Close()
+
+	revoke := requestJSON(t, client, http.MethodDelete, server.URL+"/api/v1/shares/"+share.ID, server.URL, csrf, nil)
+	if revoke.StatusCode != http.StatusNoContent {
+		t.Fatalf("撤销 Share status=%d", revoke.StatusCode)
+	}
+	_ = revoke.Body.Close()
+	afterRevoke, err := http.Get(server.URL + "/api/v1/public/shares/" + share.Secret)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if afterRevoke.StatusCode != http.StatusNotFound {
+		t.Fatalf("已吊销 Share 仍可解析: %d", afterRevoke.StatusCode)
+	}
+	_ = afterRevoke.Body.Close()
+}
+
 func newLANSecurityServer(t *testing.T, tls bool) (*httptest.Server, *storage.Store) {
 	t.Helper()
 	dirs := appdirs.UnderRoot(filepath.Join(t.TempDir(), "app"))
