@@ -625,3 +625,63 @@ func readAndClose(t *testing.T, response *http.Response) []byte {
 	}
 	return body
 }
+
+// TestLANModeRejectsPersonalPairing 锁定「一次性配对只属于 Personal 模式」这条边界。
+// createPairingAttempt/exchangePairingCredential 此前没有与 login、initializeLANOwner
+// 对称的模式判定，因此 LAN 模式下任何能访问 loopback 的本机进程都可以换取 principal 为
+// personal-owner、拥有全部 capability 的 Session，完全绕过 LAN 账户、密码与 Grant 模型。
+func TestLANModeRejectsPersonalPairing(t *testing.T) {
+	server, _ := newLANSecurityServer(t, false)
+	client := &http.Client{}
+	csrf := bootstrapCSRF(t, client, server.URL)
+
+	attempt := requestJSON(t, client, http.MethodPost, server.URL+"/api/v1/personal/pairing-attempts", server.URL, csrf, nil)
+	defer attempt.Body.Close()
+	if attempt.StatusCode != http.StatusNotFound {
+		t.Fatalf("LAN 模式下创建配对凭据的 status = %d，应为 404", attempt.StatusCode)
+	}
+
+	exchange := requestJSON(t, client, http.MethodPost, server.URL+"/api/v1/personal/pair", server.URL, csrf,
+		map[string]string{"credential": "0123456789abcdef0123456789abcdef0123456789abcdef"})
+	defer exchange.Body.Close()
+	if exchange.StatusCode != http.StatusNotFound {
+		t.Fatalf("LAN 模式下兑换配对凭据的 status = %d，应为 404", exchange.StatusCode)
+	}
+	if cookies := exchange.Cookies(); len(cookies) != 0 {
+		t.Fatalf("LAN 模式下兑换配对凭据签发了 %d 个 Cookie", len(cookies))
+	}
+}
+
+// TestRuleLifecycleMutationHonoursAllowedHostsAndBearerTokens 锁定规则生命周期端点必须
+// 与其余变更端点使用同一套请求校验。这 18 个端点此前直接调用 loopback-only 的
+// auth.ValidateMutation，导致真实 LAN 部署下全部返回 HOST_REJECTED，且 Bearer API Token
+// 因为没有 Cookie CSRF 而永远得到 CSRF_INVALID。
+func TestRuleLifecycleMutationHonoursAllowedHostsAndBearerTokens(t *testing.T) {
+	source, err := os.ReadFile("rules_lifecycle_api.go")
+	if err != nil {
+		t.Fatalf("读取规则生命周期路由源失败: %v", err)
+	}
+	if count := bytes.Count(source, []byte("auth.ValidateMutation(")); count != 0 {
+		t.Fatalf("规则生命周期仍有 %d 处直接调用 loopback-only 的 auth.ValidateMutation", count)
+	}
+	if !bytes.Contains(source, []byte("s.validateMutation(r, session)")) {
+		t.Fatal("规则生命周期未改用读取 allowedHosts 且对 Bearer 豁免 CSRF 的 s.validateMutation")
+	}
+}
+
+// TestAPIResponsesForbidCaching 锁定 /api/v1 响应不得进入任何 HTTP 缓存。
+// 这些响应包含 bootstrap 的 CSRF token、只展示一次的凭据和按授权范围过滤的列表。
+func TestAPIResponsesForbidCaching(t *testing.T) {
+	server, _ := newLANSecurityServer(t, false)
+	response, err := http.Get(server.URL + "/api/v1/bootstrap")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer response.Body.Close()
+	if got := response.Header.Get("Cache-Control"); got != "no-store" {
+		t.Fatalf("/api/v1 响应的 Cache-Control = %q，应为 no-store", got)
+	}
+	if got := response.Header.Get("Vary"); got != "Cookie, Authorization" {
+		t.Fatalf("/api/v1 响应的 Vary = %q", got)
+	}
+}
