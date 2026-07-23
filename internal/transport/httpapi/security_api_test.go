@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"net/http/cookiejar"
 	"net/http/httptest"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -378,6 +379,126 @@ func TestAPITokenLifecycleAndBearerAuthentication(t *testing.T) {
 	}
 	if !bytes.Contains(readAndClose(t, bearerResponse), []byte(`"authenticated":false`)) {
 		t.Fatal("已吊销 Token 仍被 bootstrap 视为已认证")
+	}
+}
+
+func TestExistingEndpointsEnforceResourceScopes(t *testing.T) {
+	server, store := newLANSecurityServer(t, false)
+	client, csrf := establishLANOwner(t, server)
+
+	libraryOneID := createLibrary(t, client, server, csrf, "One")
+	libraryTwoID := createLibrary(t, client, server, csrf, "Two")
+	createSource := func(libraryID, name string) string {
+		root := filepath.Join(t.TempDir(), name)
+		if err := os.MkdirAll(root, 0o700); err != nil {
+			t.Fatal(err)
+		}
+		response := requestJSON(t, client, http.MethodPost, server.URL+"/api/v1/sources", server.URL, csrf,
+			map[string]any{"libraryId": libraryID, "displayName": name, "rootPath": root})
+		var source struct {
+			ID string `json:"id"`
+		}
+		if body := readAndClose(t, response); json.Unmarshal(body, &source) != nil || response.StatusCode != http.StatusCreated {
+			t.Fatalf("创建 Source %s 失败: status=%d body=%s", name, response.StatusCode, body)
+		}
+		return source.ID
+	}
+	sourceOneID := createSource(libraryOneID, "source-one")
+	sourceTwoID := createSource(libraryTwoID, "source-two")
+	createViewer := requestJSON(t, client, http.MethodPost, server.URL+"/api/v1/admin/users", server.URL, csrf,
+		map[string]any{"username": "viewer", "displayName": "Viewer", "password": "viewer-password-strong", "roles": []string{"viewer"}, "grants": []any{
+			map[string]any{"effect": "allow", "capability": "library.read", "scope": map[string]any{"kind": "library", "id": libraryOneID}},
+			map[string]any{"effect": "allow", "capability": "bindings.read", "scope": map[string]any{"kind": "library", "id": libraryOneID}},
+			map[string]any{"effect": "allow", "capability": "tokens.manage", "scope": map[string]any{"kind": "global"}},
+		}})
+	if createViewer.StatusCode != http.StatusCreated {
+		t.Fatalf("创建 Viewer status=%d body=%s", createViewer.StatusCode, readAndClose(t, createViewer))
+	}
+	_ = createViewer.Body.Close()
+	viewerJar, _ := cookiejar.New(nil)
+	viewerClient := &http.Client{Jar: viewerJar}
+	viewerCSRF := bootstrapCSRF(t, viewerClient, server.URL)
+	viewerLogin := requestJSON(t, viewerClient, http.MethodPost, server.URL+"/api/v1/auth/login", server.URL, viewerCSRF,
+		map[string]any{"username": "viewer", "password": "viewer-password-strong"})
+	var viewerEstablished struct {
+		CsrfToken string `json:"csrfToken"`
+	}
+	if body := readAndClose(t, viewerLogin); json.Unmarshal(body, &viewerEstablished) != nil || viewerLogin.StatusCode != http.StatusCreated {
+		t.Fatalf("Viewer 登录失败: status=%d body=%s", viewerLogin.StatusCode, body)
+	}
+	visible := requestJSON(t, viewerClient, http.MethodGet, server.URL+"/api/v1/libraries/"+libraryOneID, "", "", nil)
+	if visible.StatusCode != http.StatusOK {
+		t.Fatalf("Viewer 无法读取授权 Library: %d", visible.StatusCode)
+	}
+	_ = visible.Body.Close()
+	hidden := requestJSON(t, viewerClient, http.MethodGet, server.URL+"/api/v1/libraries/"+libraryTwoID, "", "", nil)
+	if hidden.StatusCode != http.StatusNotFound {
+		t.Fatalf("越权 Library 未按 NOT_FOUND 隐藏: %d", hidden.StatusCode)
+	}
+	_ = hidden.Body.Close()
+	for _, check := range []struct {
+		path string
+		want int
+	}{
+		{"/api/v1/sources/" + sourceOneID, http.StatusOK},
+		{"/api/v1/sources/" + sourceTwoID, http.StatusNotFound},
+		{"/api/v1/sources/" + sourceOneID + "/scan-status", http.StatusOK},
+		{"/api/v1/sources/" + sourceTwoID + "/scan-status", http.StatusNotFound},
+		{"/api/v1/binding-issues?sourceId=" + sourceOneID, http.StatusOK},
+		{"/api/v1/binding-issues?sourceId=" + sourceTwoID, http.StatusNotFound},
+		{"/api/v1/binding-issues", http.StatusNotFound},
+	} {
+		got := requestJSON(t, viewerClient, http.MethodGet, server.URL+check.path, "", "", nil)
+		if got.StatusCode != check.want {
+			t.Fatalf("资源矩阵 %s status=%d want=%d body=%s", check.path, got.StatusCode, check.want, readAndClose(t, got))
+		}
+		_ = got.Body.Close()
+	}
+	fixed := clock.Fixed{Time: time.Date(2026, 7, 23, 12, 0, 0, 0, time.UTC)}
+	jobStore, err := jobs.NewStore(store.Control.SQL(), fixed, identity.NewGenerator(fixed))
+	if err != nil {
+		t.Fatal(err)
+	}
+	visibleJob, err := jobStore.CreateScan(context.Background(), sourceOneID, "personal-owner", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	hiddenJob, err := jobStore.CreateScan(context.Background(), sourceTwoID, "personal-owner", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	jobsResponse := requestJSON(t, viewerClient, http.MethodGet, server.URL+"/api/v1/jobs", "", "", nil)
+	jobsBody := readAndClose(t, jobsResponse)
+	if jobsResponse.StatusCode != http.StatusOK || !bytes.Contains(jobsBody, []byte(visibleJob.ID)) || bytes.Contains(jobsBody, []byte(hiddenJob.ID)) {
+		t.Fatalf("Job 列表未按 Source 授权过滤: status=%d body=%s", jobsResponse.StatusCode, jobsBody)
+	}
+	hiddenJobResponse := requestJSON(t, viewerClient, http.MethodGet, server.URL+"/api/v1/jobs/"+hiddenJob.ID, "", "", nil)
+	if hiddenJobResponse.StatusCode != http.StatusNotFound {
+		t.Fatalf("越权 Job 未隐藏为 404: %d body=%s", hiddenJobResponse.StatusCode, readAndClose(t, hiddenJobResponse))
+	}
+	_ = hiddenJobResponse.Body.Close()
+	viewerToken := requestJSON(t, viewerClient, http.MethodPost, server.URL+"/api/v1/api-tokens", server.URL, viewerEstablished.CsrfToken,
+		map[string]any{"name": "scoped", "capabilities": []string{"library.read"}, "scopes": []map[string]string{{"kind": "library", "id": libraryOneID}}})
+	var viewerTokenValue struct {
+		Secret string `json:"secret"`
+	}
+	if body := readAndClose(t, viewerToken); json.Unmarshal(body, &viewerTokenValue) != nil || viewerToken.StatusCode != http.StatusCreated {
+		t.Fatalf("Viewer Token 创建失败: status=%d body=%s", viewerToken.StatusCode, body)
+	}
+	for _, item := range []struct {
+		id   string
+		want int
+	}{{libraryOneID, http.StatusOK}, {libraryTwoID, http.StatusNotFound}} {
+		request, _ := http.NewRequest(http.MethodGet, server.URL+"/api/v1/libraries/"+item.id, nil)
+		request.Header.Set("Authorization", "Bearer "+viewerTokenValue.Secret)
+		got, err := http.DefaultClient.Do(request)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got.StatusCode != item.want {
+			t.Fatalf("scoped Token Library %s status=%d want=%d", item.id, got.StatusCode, item.want)
+		}
+		_ = got.Body.Close()
 	}
 }
 

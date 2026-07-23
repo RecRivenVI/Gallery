@@ -552,7 +552,7 @@ func (s *Server) deprecateRuleParameterSet(w http.ResponseWriter, r *http.Reques
 }
 
 func (s *Server) updateSourceRuleBinding(w http.ResponseWriter, r *http.Request) {
-	session, err := s.requireCapability(r, "rules.write")
+	session, err := s.authenticate(r)
 	if err != nil {
 		s.writeRequestError(w, err)
 		return
@@ -568,6 +568,15 @@ func (s *Server) updateSourceRuleBinding(w http.ResponseWriter, r *http.Request)
 		s.writeRequestError(w, fault.WithField(fault.CodeValidation, "body", err))
 		return
 	}
+	existing, err := s.data.GetSourceRuleBinding(r.Context(), r.PathValue("bindingId"))
+	if err != nil {
+		s.writeRequestError(w, err)
+		return
+	}
+	if err := s.authorizeSession(r, session, "rules.write", auth.ResourceScope{Kind: "source", ID: existing.SourceID}); err != nil {
+		s.writeRequestError(w, concealForbidden(err))
+		return
+	}
 	item, err := s.data.SetSourceRuleBindingStatus(r.Context(), r.PathValue("bindingId"), request.Status)
 	if err != nil {
 		s.writeRequestError(w, err)
@@ -577,8 +586,8 @@ func (s *Server) updateSourceRuleBinding(w http.ResponseWriter, r *http.Request)
 }
 
 func (s *Server) getEffectiveRuleBinding(w http.ResponseWriter, r *http.Request) {
-	if _, err := s.requireCapability(r, "rules.read"); err != nil {
-		s.writeRequestError(w, err)
+	if _, err := s.requireCapabilityForScope(r, "rules.read", auth.ResourceScope{Kind: "source", ID: r.PathValue("sourceId")}); err != nil {
+		s.writeRequestError(w, concealForbidden(err))
 		return
 	}
 	item, err := s.data.BindingForSource(r.Context(), r.PathValue("sourceId"))
