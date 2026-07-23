@@ -12,7 +12,7 @@ body:
     attributes:
       label: Commit SHA / 分支
       description: 复现问题时所在的 commit SHA 或分支名
-      placeholder: 例如 63d50ae 或 main
+      placeholder: 例如 1234567 或 main
     validations:
       required: true
 
