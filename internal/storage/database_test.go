@@ -4,10 +4,13 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"fmt"
 	"io/fs"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
+	"time"
 
 	"github.com/RecRivenVI/gallery/internal/contract/fault"
 	"github.com/RecRivenVI/gallery/internal/platform/appdirs"
@@ -30,7 +33,7 @@ func openTestStore(t *testing.T) (*Store, appdirs.Dirs) {
 
 func TestIndependentWALMigrationsAndBackup(t *testing.T) {
 	store, dirs := openTestStore(t)
-	wantVersions := map[Role]int{RoleControl: 20, RoleCatalog: 10}
+	wantVersions := map[Role]int{RoleControl: 20, RoleCatalog: 11}
 	for _, database := range []*Database{store.Control, store.Catalog} {
 		var version int
 		if err := database.db.QueryRow("PRAGMA user_version").Scan(&version); err != nil {
@@ -235,6 +238,268 @@ FROM media_projections WHERE media_id='med_verified'`).Scan(&verifiedLocation, &
 	if !verifiedAt.Valid || verifiedAt.Int64 != 1700000000 {
 		t.Fatalf("verified_at 未从 source_media.last_confirmed_at 回填: %+v", verifiedAt)
 	}
+}
+
+func TestRuleCoverProjectionMigrationUpgradesPopulatedV10Catalog(t *testing.T) {
+	ctx := context.Background()
+	path := filepath.Join(t.TempDir(), "catalog.db")
+	db, err := sql.Open("sqlite", "file:"+filepath.ToSlash(path)+"?_pragma=foreign_keys(ON)")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.ExecContext(ctx, `CREATE TABLE gallery_schema_migrations (
+version INTEGER PRIMARY KEY NOT NULL, name TEXT NOT NULL, sha256 TEXT NOT NULL,
+applied_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))) STRICT`); err != nil {
+		t.Fatal(err)
+	}
+	sub, err := fs.Sub(migrationFiles, "migrations/catalog")
+	if err != nil {
+		t.Fatal(err)
+	}
+	migrations, err := readMigrations(sub)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, item := range migrations[:10] {
+		if err := applyMigration(ctx, db, item); err != nil {
+			t.Fatal(err)
+		}
+	}
+	_, err = db.ExecContext(ctx, `
+INSERT INTO catalog_revisions VALUES ('cat_old', 'job_old', 'src_old', 'published', 1, 2);
+INSERT INTO overlay_projection_revisions
+(overlay_revision_id, catalog_revision_id, control_watermark, status, created_at, published_at)
+VALUES ('ovr_old', 'cat_old', 0, 'published', 1, 2);
+INSERT INTO query_publications VALUES ('qpub_old', 'cat_old', 'ovr_old', 'job_old', 0, 2);
+INSERT INTO active_query_publication VALUES (1, 'qpub_old');
+INSERT INTO source_works
+(catalog_revision_id, source_id, source_key, title, creator, tags_json, filenames_text)
+VALUES ('cat_old', 'src_old', 'work-key', '旧标题', '', '[]', '["01.jpg","02.jpg"]');
+INSERT INTO work_projections
+(catalog_revision_id, overlay_revision_id, work_id, source_id, source_key, library_id, title, creator,
+ tags_json, filenames_text, normalized_original_text, cjk_bigram_token_text, latin_trigram_token_text,
+ sort_title_key, hidden, favorite, progress, search_title_norm, search_creator_norm, search_tags_norm,
+ search_filenames_norm)
+VALUES ('cat_old', 'ovr_old', 'work-old', 'src_old', 'work-key', 'lib-old', '旧标题', '',
+ '[]', '["01.jpg","02.jpg"]', '旧标题', '', '', '旧标题', 0, 0, 0, '旧标题', '', '', '');
+INSERT INTO media_projections
+(catalog_revision_id, overlay_revision_id, media_id, work_id, source_id, source_key, relative_path,
+ media_kind, mime_type, size_bytes, algorithm, digest, location_status, ordinal, hidden, base_ordinal)
+VALUES
+('cat_old', 'ovr_old', 'media-first', 'work-old', 'src_old', 'work-key/01.jpg', 'work-key/01.jpg',
+ 'image', 'image/jpeg', 1, 'sha256-v1', 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa', 'present', 0, 0, 0),
+('cat_old', 'ovr_old', 'media-custom', 'work-old', 'src_old', 'work-key/02.jpg', 'work-key/02.jpg',
+ 'image', 'image/jpeg', 1, 'sha256-v1', 'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb', 'present', -1, 0, 1);`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	upgraded, err := openDatabase(ctx, RoleCatalog, path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer upgraded.Close()
+	var sourceKey, ruleCover, effectiveCover string
+	if err := upgraded.db.QueryRowContext(ctx, `SELECT sw.rule_cover_media_source_key,
+w.rule_cover_media_id, w.cover_media_id
+FROM source_works sw JOIN work_projections w
+ ON w.catalog_revision_id=sw.catalog_revision_id AND w.source_id=sw.source_id AND w.source_key=sw.source_key
+WHERE w.work_id='work-old'`).Scan(&sourceKey, &ruleCover, &effectiveCover); err != nil {
+		t.Fatal(err)
+	}
+	if sourceKey != "work-key/01.jpg" || ruleCover != "media-first" || effectiveCover != "media-custom" {
+		t.Fatalf("旧封面语义迁移错误: source=%q rule=%q effective=%q", sourceKey, ruleCover, effectiveCover)
+	}
+	var negative int
+	if err := upgraded.db.QueryRowContext(ctx, `SELECT count(*) FROM media_projections
+WHERE ordinal<0 OR base_ordinal<0`).Scan(&negative); err != nil {
+		t.Fatal(err)
+	}
+	if negative != 0 {
+		t.Fatalf("迁移后仍有负 ordinal: %d", negative)
+	}
+	var restoredOrdinal int
+	if err := upgraded.db.QueryRowContext(ctx, `SELECT ordinal FROM media_projections
+WHERE media_id='media-custom'`).Scan(&restoredOrdinal); err != nil {
+		t.Fatal(err)
+	}
+	if restoredOrdinal != 1 {
+		t.Fatalf("旧自定义封面媒体未恢复 base ordinal: %d", restoredOrdinal)
+	}
+}
+
+func TestRuleCoverProjectionMigrationHasBoundedPlanAtSyntheticScale(t *testing.T) {
+	const (
+		workCount    = 1200
+		mediaPerWork = 3
+	)
+	ctx := context.Background()
+	path := filepath.Join(t.TempDir(), "catalog-scale.db")
+	db, err := sql.Open("sqlite", "file:"+filepath.ToSlash(path)+"?_pragma=foreign_keys(ON)")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	// TEMP 映射与 EXPLAIN 必须在同一 SQLite connection 上；正式 migration 本身也在
+	// 单事务的同一 connection 内执行。
+	db.SetMaxOpenConns(1)
+	if _, err := db.ExecContext(ctx, `CREATE TABLE gallery_schema_migrations (
+version INTEGER PRIMARY KEY NOT NULL, name TEXT NOT NULL, sha256 TEXT NOT NULL,
+applied_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))) STRICT`); err != nil {
+		t.Fatal(err)
+	}
+	sub, err := fs.Sub(migrationFiles, "migrations/catalog")
+	if err != nil {
+		t.Fatal(err)
+	}
+	migrations, err := readMigrations(sub)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, item := range migrations[:10] {
+		if err := applyMigration(ctx, db, item); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, err := db.ExecContext(ctx, `
+INSERT INTO catalog_revisions VALUES ('cat_scale', 'job_scale', 'src_scale', 'published', 1, 2);
+INSERT INTO overlay_projection_revisions
+(overlay_revision_id, catalog_revision_id, control_watermark, status, created_at, published_at)
+VALUES ('ovr_scale', 'cat_scale', 0, 'published', 1, 2);`); err != nil {
+		t.Fatal(err)
+	}
+
+	tx, err := db.BeginTx(ctx, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sourceStatement, err := tx.PrepareContext(ctx, `INSERT INTO source_works
+(catalog_revision_id, source_id, source_key, title) VALUES ('cat_scale', 'src_scale', ?, ?)`)
+	if err != nil {
+		_ = tx.Rollback()
+		t.Fatal(err)
+	}
+	workStatement, err := tx.PrepareContext(ctx, `INSERT INTO work_projections
+(catalog_revision_id, overlay_revision_id, work_id, source_id, source_key, title)
+VALUES ('cat_scale', 'ovr_scale', ?, 'src_scale', ?, ?)`)
+	if err != nil {
+		_ = sourceStatement.Close()
+		_ = tx.Rollback()
+		t.Fatal(err)
+	}
+	mediaStatement, err := tx.PrepareContext(ctx, `INSERT INTO media_projections
+(catalog_revision_id, overlay_revision_id, media_id, work_id, source_id, source_key, relative_path,
+ media_kind, mime_type, size_bytes, algorithm, digest, location_status, ordinal, base_ordinal)
+VALUES ('cat_scale', 'ovr_scale', ?, ?, 'src_scale', ?, ?,
+ 'image', 'image/jpeg', 1, 'sha256-v1', ?, 'present', ?, ?)`)
+	if err != nil {
+		_ = workStatement.Close()
+		_ = sourceStatement.Close()
+		_ = tx.Rollback()
+		t.Fatal(err)
+	}
+	for workIndex := 0; workIndex < workCount; workIndex++ {
+		workID := fmt.Sprintf("work-%06d", workIndex)
+		workSourceKey := fmt.Sprintf("source-work-%06d", workIndex)
+		if _, err := sourceStatement.ExecContext(ctx, workSourceKey, workID); err != nil {
+			_ = tx.Rollback()
+			t.Fatal(err)
+		}
+		if _, err := workStatement.ExecContext(ctx, workID, workSourceKey, workID); err != nil {
+			_ = tx.Rollback()
+			t.Fatal(err)
+		}
+		for mediaIndex := 0; mediaIndex < mediaPerWork; mediaIndex++ {
+			mediaID := fmt.Sprintf("media-%06d-%02d", workIndex, mediaIndex)
+			mediaSourceKey := fmt.Sprintf("%s/%02d.jpg", workSourceKey, mediaIndex)
+			digest := fmt.Sprintf("%064x", workIndex*mediaPerWork+mediaIndex+1)
+			ordinal := mediaIndex
+			if workIndex%10 == 0 && mediaIndex == 1 {
+				ordinal = -1
+			}
+			if _, err := mediaStatement.ExecContext(ctx, mediaID, workID, mediaSourceKey, mediaSourceKey,
+				digest, ordinal, mediaIndex); err != nil {
+				_ = tx.Rollback()
+				t.Fatal(err)
+			}
+		}
+	}
+	_ = mediaStatement.Close()
+	_ = workStatement.Close()
+	_ = sourceStatement.Close()
+	if err := tx.Commit(); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := db.ExecContext(ctx, `CREATE TEMP TABLE _gallery_rule_cover_source_map (
+catalog_revision_id TEXT NOT NULL, source_id TEXT NOT NULL, work_source_key TEXT NOT NULL,
+rule_cover_media_source_key TEXT NOT NULL,
+PRIMARY KEY (catalog_revision_id, source_id, work_source_key)) WITHOUT ROWID`); err != nil {
+		t.Fatal(err)
+	}
+	const planBegin = "-- explain:rule-cover-source-map-begin"
+	const planEnd = "-- explain:rule-cover-source-map-end"
+	begin := strings.Index(migrations[10].sql, planBegin)
+	end := strings.Index(migrations[10].sql, planEnd)
+	if begin < 0 || end <= begin {
+		t.Fatal("00011 缺少可审计的规则封面映射 EXPLAIN 标记")
+	}
+	statement := strings.TrimSpace(migrations[10].sql[begin+len(planBegin) : end])
+	statement = strings.TrimSuffix(statement, ";")
+	rows, err := db.QueryContext(ctx, "EXPLAIN QUERY PLAN "+statement)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var planLines []string
+	for rows.Next() {
+		var id, parent, unused int
+		var detail string
+		if err := rows.Scan(&id, &parent, &unused, &detail); err != nil {
+			rows.Close()
+			t.Fatal(err)
+		}
+		planLines = append(planLines, detail)
+	}
+	if err := rows.Close(); err != nil {
+		t.Fatal(err)
+	}
+	plan := strings.Join(planLines, "\n")
+	upperPlan := strings.ToUpper(plan)
+	indexedMediaByWork := strings.Contains(plan, "media_projections_work_idx")
+	singleMediaScanWithWorkLookup := strings.Contains(plan, "SCAN m USING INDEX") && strings.Contains(plan, "SEARCH w USING INDEX")
+	if strings.Contains(upperPlan, "CORRELATED") || (!indexedMediaByWork && !singleMediaScanWithWorkLookup) {
+		t.Fatalf("00011 规则封面映射必须是单侧一次扫描加另一侧索引查找，不得退回相关子查询:\n%s", plan)
+	}
+	if _, err := db.ExecContext(ctx, "DROP TABLE _gallery_rule_cover_source_map"); err != nil {
+		t.Fatal(err)
+	}
+
+	started := time.Now()
+	if err := applyMigration(ctx, db, migrations[10]); err != nil {
+		t.Fatal(err)
+	}
+	duration := time.Since(started)
+	if duration > 5*time.Second {
+		t.Fatalf("%d Work/%d Media 的 00011 合成迁移超过有界普通测试预算: %s", workCount, workCount*mediaPerWork, duration)
+	}
+	var sourceCovers, ruleCovers, customCovers, negativeOrdinals int
+	if err := db.QueryRowContext(ctx, `SELECT
+(SELECT count(*) FROM source_works WHERE rule_cover_media_source_key<>''),
+(SELECT count(*) FROM work_projections WHERE rule_cover_media_id<>''),
+(SELECT count(*) FROM work_projections WHERE cover_media_id<>rule_cover_media_id),
+(SELECT count(*) FROM media_projections WHERE ordinal<0 OR base_ordinal<0)`).Scan(
+		&sourceCovers, &ruleCovers, &customCovers, &negativeOrdinals); err != nil {
+		t.Fatal(err)
+	}
+	if sourceCovers != workCount || ruleCovers != workCount || customCovers != workCount/10 || negativeOrdinals != 0 {
+		t.Fatalf("规模迁移结果错误: source=%d rule=%d custom=%d negative=%d",
+			sourceCovers, ruleCovers, customCovers, negativeOrdinals)
+	}
+	t.Logf("00011 bounded plan migrated %d Work/%d Media in %s:\n%s",
+		workCount, workCount*mediaPerWork, duration, plan)
 }
 
 func TestOverlayMigrationUpgradesPopulatedV6Control(t *testing.T) {

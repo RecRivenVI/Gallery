@@ -21,13 +21,16 @@ import (
 )
 
 const (
-	testCatalogID = "cat_018f47d2-5c16-7a44-a8a0-000000000001"
-	testOverlayID = "ovr_018f47d2-5c16-7a44-a8a0-000000000001"
-	testScanJobID = "job_018f47d2-5c16-7a44-a8a0-000000000001"
-	testPubID     = "qpub_018f47d2-5c16-7a44-a8a0-000000000001"
-	testWorkID    = "wrk_018f47d2-5c16-7a44-a8a0-000000000001"
-	testMedia1ID  = "med_018f47d2-5c16-7a44-a8a0-000000000001"
-	testMedia2ID  = "med_018f47d2-5c16-7a44-a8a0-000000000002"
+	testCatalogID    = "cat_018f47d2-5c16-7a44-a8a0-000000000001"
+	testOverlayID    = "ovr_018f47d2-5c16-7a44-a8a0-000000000001"
+	testScanJobID    = "job_018f47d2-5c16-7a44-a8a0-000000000001"
+	testPubID        = "qpub_018f47d2-5c16-7a44-a8a0-000000000001"
+	testWorkID       = "wrk_018f47d2-5c16-7a44-a8a0-000000000001"
+	testMedia1ID     = "med_018f47d2-5c16-7a44-a8a0-000000000001"
+	testMedia2ID     = "med_018f47d2-5c16-7a44-a8a0-000000000002"
+	testOtherWork    = "wrk_018f47d2-5c16-7a44-a8a0-000000000002"
+	testOtherMedia   = "med_018f47d2-5c16-7a44-a8a0-000000000003"
+	testMissingMedia = "med_018f47d2-5c16-7a44-a8a0-000000000004"
 )
 
 func TestOverlayFactProjectionAndLiveState(t *testing.T) {
@@ -57,8 +60,16 @@ func TestOverlayFactProjectionAndLiveState(t *testing.T) {
 		t.Fatalf("旧 publication 不再可读: %+v %v", old, err)
 	}
 	_, media, err := catalogStore.ListMediaForWork(ctx, testWorkID)
-	if err != nil || len(media) != 2 || media[0].ID != testMedia2ID || media[0].Ordinal != -1 {
-		t.Fatalf("自定义封面未影响投影顺序: %+v %v", media, err)
+	if err != nil || len(media) != 2 || media[0].ID != testMedia1ID || media[0].Ordinal != 0 || media[1].Ordinal != 1 {
+		t.Fatalf("自定义封面不应改写媒体顺序: %+v %v", media, err)
+	}
+	_, covered, err := catalogStore.GetWork(ctx, testWorkID)
+	if err != nil || covered.CoverMediaID != testMedia2ID {
+		t.Fatalf("自定义封面未写入显式有效封面投影: %+v %v", covered, err)
+	}
+	_, historical, err := catalogStore.GetWorkAt(ctx, testPubID, testWorkID)
+	if err != nil || historical.CoverMediaID != testMedia1ID {
+		t.Fatalf("旧 publication 的规则封面被后续 Overlay 污染: %+v %v", historical, err)
 	}
 
 	// Favorite/Progress 现在参与查询过滤/排序（见 06-查询-搜索与排序.md「Overlay 查询
@@ -118,6 +129,10 @@ WHERE catalog_revision_id=? AND overlay_revision_id=? AND work_id=?`,
 	if media[0].ID != testMedia1ID || media[0].Ordinal != 0 {
 		t.Fatalf("清除封面未恢复 base ordinal: %+v", media)
 	}
+	_, restoredWork, err := catalogStore.GetWork(ctx, testWorkID)
+	if err != nil || restoredWork.CoverMediaID != testMedia1ID {
+		t.Fatalf("清除自定义封面未回退规则封面: %+v %v", restoredWork, err)
+	}
 
 	var pending int
 	if err := store.Catalog.SQL().QueryRowContext(ctx, "SELECT count(*) FROM overlay_projection_revisions WHERE status='staging'").Scan(&pending); err != nil || pending != 0 {
@@ -135,6 +150,48 @@ func TestPutRejectsManualTagContainingFieldSeparator(t *testing.T) {
 	var structured *fault.Error
 	if !errors.As(err, &structured) || structured.Code != fault.CodeOverlayFactInvalid {
 		t.Fatalf("包含 FieldSeparator 的 ManualTag 应被拒绝为结构化 OVERLAY_FACT_INVALID: %v", err)
+	}
+}
+
+func TestPutRejectsCustomCoverFromAnotherWork(t *testing.T) {
+	ctx, store, service, _, _ := newFixture(t)
+	if _, err := store.Control.SQL().ExecContext(ctx,
+		`INSERT INTO canonical_works (work_id, title, created_at) VALUES (?, '另一作品', 1)`, testOtherWork); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.Control.SQL().ExecContext(ctx,
+		`INSERT INTO canonical_media (media_id, work_id, role, ordinal, created_at) VALUES (?, ?, 'content', 0, 1)`,
+		testOtherMedia, testOtherWork); err != nil {
+		t.Fatal(err)
+	}
+	_, err := service.Put(ctx, testWorkID, "owner", Input{CustomCoverMediaID: testOtherMedia})
+	var structured *fault.Error
+	if !errors.As(err, &structured) || structured.Code != fault.CodeOverlayFactInvalid || structured.Field != "customCoverMediaId" {
+		t.Fatalf("跨 Work CustomCover 未返回稳定字段错误: %v", err)
+	}
+}
+
+func TestMissingCatalogCustomCoverPreservesControlFactAndProjectsRuleFallback(t *testing.T) {
+	ctx, store, service, catalogStore, _ := newFixture(t)
+	if _, err := store.Control.SQL().ExecContext(ctx,
+		`INSERT INTO canonical_media (media_id, work_id, role, ordinal, created_at) VALUES (?, ?, 'content', 2, 1)`,
+		testMissingMedia, testWorkID); err != nil {
+		t.Fatal(err)
+	}
+	queued, err := service.Put(ctx, testWorkID, "owner", Input{CustomCoverMediaID: testMissingMedia})
+	if err != nil || !queued.StartJob {
+		t.Fatalf("同 Work 但暂不在 Catalog 的 CustomCover 应保留并排队投影: %+v %v", queued, err)
+	}
+	if err := service.Execute(ctx, queued.ProjectionJobID); err != nil {
+		t.Fatal(err)
+	}
+	live, err := service.Get(ctx, testWorkID)
+	if err != nil || live.CustomCoverMediaID != testMissingMedia || live.ProjectionStatus != "published" {
+		t.Fatalf("Catalog 缺失不应清除 control.db 的 CustomCover 事实: %+v %v", live, err)
+	}
+	_, projected, err := catalogStore.GetWork(ctx, testWorkID)
+	if err != nil || projected.CoverMediaID != testMedia1ID {
+		t.Fatalf("Catalog 缺失 CustomCover 时未回退规则封面: %+v %v", projected, err)
 	}
 }
 
@@ -311,14 +368,19 @@ VALUES (?, ?, 0, 'published', 1, 2)`, []any{testOverlayID, testCatalogID}},
 		{`INSERT INTO query_publications VALUES (?, ?, ?, ?, 0, 2)`, []any{testPubID, testCatalogID, testOverlayID, testScanJobID}},
 		{`INSERT INTO active_query_publication VALUES (1, ?)`, []any{testPubID}},
 		{`INSERT INTO source_works
-(catalog_revision_id, source_id, source_key, title, creator, tags_json, filenames_text)
-VALUES (?, 'src_test', 'work-key', '源标题', '作者', ?, ?)`, []any{testCatalogID, string(tags), string(files)}},
+(catalog_revision_id, source_id, source_key, title, creator, tags_json, filenames_text, rule_cover_media_source_key)
+VALUES (?, 'src_test', 'work-key', '源标题', '作者', ?, ?, 'media-1')`, []any{testCatalogID, string(tags), string(files)}},
+		{`INSERT INTO source_media
+(catalog_revision_id, source_id, source_key, work_source_key, relative_path, media_kind, mime_type, size_bytes, rule_key)
+VALUES (?, 'src_test', 'media-1', 'work-key', 'work/01.jpg', 'image', 'image/jpeg', 1, '01.jpg'),
+       (?, 'src_test', 'media-2', 'work-key', 'work/02.jpg', 'image', 'image/jpeg', 1, '02.jpg')`, []any{testCatalogID, testCatalogID}},
 		{`INSERT INTO work_projections
 (catalog_revision_id, overlay_revision_id, work_id, source_id, source_key, library_id, title, creator,
- tags_json, filenames_text, normalized_original_text, cjk_bigram_token_text, latin_trigram_token_text, sort_title_key, hidden)
-VALUES (?, ?, ?, 'src_test', 'work-key', 'lib_test', '源标题', '作者', ?, ?, ?, ?, ?, ?, 0)`, []any{
+ tags_json, filenames_text, normalized_original_text, cjk_bigram_token_text, latin_trigram_token_text, sort_title_key, hidden,
+ rule_cover_media_id, cover_media_id)
+VALUES (?, ?, ?, 'src_test', 'work-key', 'lib_test', '源标题', '作者', ?, ?, ?, ?, ?, ?, 0, ?, ?)`, []any{
 			testCatalogID, testOverlayID, testWorkID, string(tags), string(files), document.NormalizedOriginal,
-			document.CJKTokens, document.LatinTokens, document.SortTitleKey,
+			document.CJKTokens, document.LatinTokens, document.SortTitleKey, testMedia1ID, testMedia1ID,
 		}},
 		{`INSERT INTO work_search VALUES (?, ?, ?, ?, ?, ?)`, []any{testCatalogID, testOverlayID, testWorkID, document.NormalizedOriginal, document.CJKTokens, document.LatinTokens}},
 		{`INSERT INTO media_projections

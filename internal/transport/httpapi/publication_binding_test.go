@@ -251,6 +251,9 @@ func TestMediaVerificationJobRejectsExplicitHistoricalPublication(t *testing.T) 
 		t.Fatalf("index 扫描后媒体应是 located_unverified: %+v", mediaResponse.JSON200.Media[0])
 	}
 	target := mediaResponse.JSON200.Media[0]
+	if worksResponse.JSON200.Works[0].CoverMediaId == nil || *worksResponse.JSON200.Works[0].CoverMediaId != target.Id {
+		t.Fatalf("Work 列表未返回规则解析出的显式封面: work=%+v media=%+v", worksResponse.JSON200.Works[0], target)
+	}
 	publicationP1 := mediaResponse.JSON200.QueryPublicationId
 
 	// 第二次扫描：Source 已发布，默认选择 incremental；目标媒体此前是 located_unverified
@@ -271,9 +274,35 @@ func TestMediaVerificationJobRejectsExplicitHistoricalPublication(t *testing.T) 
 	if afterSecondScan.JSON200.Media[0].ContentVerificationState != api.ContentVerified {
 		t.Fatalf("第二次扫描后媒体应已 content_verified: %+v", afterSecondScan.JSON200.Media[0])
 	}
+	if afterSecondScan.JSON200.Media[0].Ordinal < 0 {
+		t.Fatalf("PublishedMedia.ordinal 契约要求非负: %+v", afterSecondScan.JSON200.Media[0])
+	}
 	publicationP2 := afterSecondScan.JSON200.QueryPublicationId
 	if publicationP2 == publicationP1 {
 		t.Fatal("第二次扫描应发布与 P1 不同的新 queryPublicationId")
+	}
+
+	// 单 Work 读取与列表/媒体读取使用同一 publication 绑定语义：显式 P1 必须保留
+	// P1，而省略参数的 current 模式必须解析到当前 active 的 P2。
+	historicalWork, err := client.GetWorkWithResponse(ctx, worksResponse.JSON200.Works[0].Id, &api.GetWorkParams{QueryPublicationId: &publicationP1})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if historicalWork.JSON200 == nil {
+		t.Fatalf("历史 publication 的 Work 读取失败: status=%d body=%s", historicalWork.StatusCode(), historicalWork.Body)
+	}
+	if historicalWork.JSON200.QueryPublicationId != publicationP1 {
+		t.Fatalf("历史 Work 读取不得回退到 active publication: got=%s want=%s", historicalWork.JSON200.QueryPublicationId, publicationP1)
+	}
+	if historicalWork.JSON200.CoverMediaId == nil || *historicalWork.JSON200.CoverMediaId != target.Id {
+		t.Fatalf("历史 Work 详情未返回 P1 冻结封面: %+v", historicalWork.JSON200)
+	}
+	currentWork, err := client.GetWorkWithResponse(ctx, worksResponse.JSON200.Works[0].Id, &api.GetWorkParams{})
+	if err != nil || currentWork.JSON200 == nil || currentWork.JSON200.QueryPublicationId != publicationP2 {
+		t.Fatalf("current Work 读取应绑定 active P2: %v %+v", err, currentWork.JSON200)
+	}
+	if currentWork.JSON200.CoverMediaId == nil || *currentWork.JSON200.CoverMediaId != target.Id {
+		t.Fatalf("current Work 详情未返回 P2 冻结封面: %+v", currentWork.JSON200)
 	}
 
 	jobsBefore, err := client.ListJobsWithResponse(ctx, nil)

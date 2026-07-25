@@ -40,9 +40,12 @@ OpenAPI v1 至少覆盖：
 ```text
 query_publication_id
 sort_protocol_version
+works[].coverMediaId   # required，nullable
 ```
 
 服务端可以同时返回 `catalog_revision` 和 `overlay_projection_revision` 作为诊断元数据，但公共查询参数不得接受它们的任意组合。首次查询使用当前 active publication；后续页只从签名游标取得 `query_publication_id`。
+
+`PublishedWork.coverMediaId` 必须出现在列表与作品详情 DTO 中；没有可用封面时显式为 `null`，不得省略。非空值只引用该响应 `queryPublicationId` 内同一 Work 的 CanonicalMedia，有效 CustomCover 优先、失效时回退规则封面。
 
 OpenAPI 必须按**本次查询用途**声明一致性，不能给 Overlay 字段永久贴 snapshot/live 标签：
 
@@ -127,16 +130,18 @@ API Token 在上表判定之外还要同时通过 Token 创建时冻结的 capab
 
 HEAD/GET、下载 disposition、内容确认和派生生成不得全部隐含落在同一个过宽 capability 上：读取媒体 metadata/正文（含已生成的 DerivedAsset 正文）使用 `media.read`；建立按需内容确认 Job 使用 `scan.run`（它本质是一个受限扫描 Job）；**创建**新的 DerivedAsset 生成工作使用独立的 `media.derive`，与只读的 `media.read` 分离——只读媒体账户可以读取已生成资源，但不能触发新的 CPU/磁盘生成工作。Personal owner 默认拥有三者；LAN Viewer 不含 `media.derive`，Operator/Owner 才含。仅以 `assetKey` 定位的 DerivedAsset 正文端点先从 DerivedAsset 注册事实取得稳定输入 Blob，再反查当前 publication 的 Source occurrence；资源限定主体至少对其中一个 Source 拥有 `media.read` 才能在授权后建立文件读取租约，猜中 `assetKey` 不能绕过授权。若 Blob 已无任何当前 occurrence，则只有 global `media.read` 可读该缓存资产。
 
-## 媒体与 DerivedAsset 的查询快照绑定
+## Work、媒体与 DerivedAsset 的查询快照绑定
 
-媒体读取（列出作品媒体、媒体详情、媒体正文 HEAD/GET、按需内容确认 Job、DerivedAsset 创建）都支持通过可选 `queryPublicationId` 查询参数绑定到具体快照：
+作品详情 `GET /api/v1/works/{workId}` 与媒体读取（列出作品媒体、媒体详情、媒体正文 HEAD/GET、按需内容确认 Job、DerivedAsset 创建）都支持通过可选 `queryPublicationId` 查询参数绑定到具体快照：
 
 - 省略该参数是 **current 模式**：读当前 active publication，响应的 `queryPublicationId` 字段返回实际使用的快照 ID，不得与 snapshot 模式混淆；
 - 显式提供是 **snapshot 模式**：只从该 publication 的 `(catalog_revision, overlay_projection_revision)` 组合解析，媒体必须属于该快照中对应的作品；该 publication 不存在或已被 GC 一律返回稳定 `CURSOR_EXPIRED`，不静默回退到 active；
 - 服务端为显式快照读取的请求处理期间建立短期 publication 读取租约（复用既有 `query_publication_leases` 表与 GC 保护判据），防止解析、读取正文期间被 GC 回收；current 模式因为 active publication 永不被 GC 而不需要额外租约；
 - DerivedAsset 创建的输入 ContentBlob 从请求指定（或省略时当前 active）的快照解析并在创建时冻结，异步生成过程中不得重新从"之后可能变化的 active publication"寻找输入，保证同一 Job 的重试和幂等语义引用的是同一个输入 Blob。
 
-这解决了"客户端通过旧 cursor 拿到的 Work 引用了某个媒体，后台新 publication 发布后该媒体内容或存在性已变化"的快照一致性问题：媒体读取与 `/works` 列表查询遵循同一条"服务端签发/校验 `query_publication_id`，不允许客户端自行选择两类 revision 任意组合"的规则（见「查询响应与实时附加状态」）。
+作品详情返回的 `queryPublicationId` 是其 `coverMediaId`、Favorite/Progress snapshot 与后续媒体列表的共同快照句柄。Web/客户端从列表进入详情时必须把列表 publication 传给作品详情，再把详情实际返回的同一 ID 用于封面正文和媒体列表；不得先读旧 Work、再从当前 active publication 解析封面。显式 publication 不存在或已被 GC 时返回 `CURSOR_EXPIRED`，不静默回退。
+
+这解决了"客户端通过旧 cursor 拿到的 Work 引用了某个媒体，后台新 publication 发布后该媒体内容或存在性已变化"的快照一致性问题：作品详情、媒体读取与 `/works` 列表查询遵循同一条"服务端签发/校验 `query_publication_id`，不允许客户端自行选择两类 revision 任意组合"的规则（见「查询响应与实时附加状态」）。
 
 ## Personal 模式
 

@@ -129,11 +129,12 @@ type Result struct {
 }
 
 type Work struct {
-	ID         string   `json:"id"`
-	Title      string   `json:"title"`
-	Creator    string   `json:"creator,omitempty"`
-	Tags       []string `json:"tags"`
-	MediaCount int      `json:"mediaCount"`
+	ID           string   `json:"id"`
+	Title        string   `json:"title"`
+	Creator      string   `json:"creator,omitempty"`
+	Tags         []string `json:"tags"`
+	MediaCount   int      `json:"mediaCount"`
+	CoverMediaID string   `json:"coverMediaId,omitempty"`
 	// Favorite/Progress 是本次查询所在 publication 冻结的 snapshot 值（用于解释本次
 	// 结果的过滤/排序判据），不是 control.db 当前 live 值；真正的 live 值通过
 	// GET /works/{workId}/overlay 读取，见 LiveUserStateFields。
@@ -381,7 +382,7 @@ func (s *Service) query(ctx context.Context, pub publication, request Request, p
 		tagTierSQL := multiFieldTierSQL("w.search_tags_norm")
 		filenameTierSQL := multiFieldTierSQL("w.search_filenames_norm")
 		cte = fmt.Sprintf(`WITH tiers AS (
-SELECT w.work_id, w.title, w.creator, w.tags_json, w.filenames_text, w.sort_title_key, w.favorite, w.progress,
+SELECT w.work_id, w.title, w.creator, w.tags_json, w.filenames_text, w.sort_title_key, w.favorite, w.progress, w.cover_media_id,
 %s AS media_count,
 (%s) AS title_tier, (%s) AS creator_tier, (%s) AS tag_tier, (%s) AS filename_tier
 FROM work_projections w%s WHERE %s
@@ -399,7 +400,7 @@ SELECT *, max(%s, %s, %s, %s) AS rank_tier FROM tiers
 		}
 	} else {
 		cte = fmt.Sprintf(`WITH scored AS (
-SELECT w.work_id, w.title, w.creator, w.tags_json, w.filenames_text, w.sort_title_key, w.favorite, w.progress,
+SELECT w.work_id, w.title, w.creator, w.tags_json, w.filenames_text, w.sort_title_key, w.favorite, w.progress, w.cover_media_id,
 %s AS media_count, 0 AS rank_tier
 FROM work_projections w%s WHERE %s
 )`, mediaCountExpr, join, strings.Join(where, " AND "))
@@ -420,7 +421,7 @@ FROM work_projections w%s WHERE %s
 	}
 
 	statement := cte + `
-SELECT work_id, title, creator, tags_json, filenames_text, sort_title_key, favorite, progress, media_count, rank_tier FROM scored`
+SELECT work_id, title, creator, tags_json, filenames_text, sort_title_key, favorite, progress, cover_media_id, media_count, rank_tier FROM scored`
 
 	args := append(append([]any{}, selectArgs...), fromArgs...)
 	if len(outerWhere) > 0 {
@@ -441,7 +442,7 @@ SELECT work_id, title, creator, tags_json, filenames_text, sort_title_key, favor
 		var tags, filenames string
 		var favorite int
 		if err := rows.Scan(&work.ID, &work.Title, &work.Creator, &tags, &filenames, &work.SortKey,
-			&favorite, &work.Progress, &work.MediaCount, &work.RankTier); err != nil {
+			&favorite, &work.Progress, &work.CoverMediaID, &work.MediaCount, &work.RankTier); err != nil {
 			return nil, false, fault.New(fault.CodeInternal, true, err)
 		}
 		work.Favorite = favorite != 0
@@ -648,7 +649,7 @@ func hasCapability(capabilities []string, capability string) bool {
 // overlay.progress 既作为过滤条件、"progress" 又作为搜索字段——当前搜索字段固定为
 // title/creator/tag/filename，不含 progress，因此暂不会重复，但结构上允许）。
 func buildDependencySet(request Request, plan querytext.SearchPlan, filterNode *FilterNode) []DependencyField {
-	var fields []DependencyField
+	fields := []DependencyField{{Field: "overlay.customCoverMediaId", Role: DependencyRoleResource}}
 	if filterReferencesField(filterNode, "overlay.hidden") {
 		fields = append(fields, DependencyField{Field: "overlay.hidden", Role: DependencyRolePredicate})
 	} else {

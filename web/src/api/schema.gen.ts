@@ -1297,7 +1297,7 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        /** 读取当前 publication 中的作品 */
+        /** 读取指定或当前 publication 中的作品 */
         get: operations["getWork"];
         put?: never;
         post?: never;
@@ -2073,6 +2073,8 @@ export interface components {
             creator: string;
             tags: string[];
             mediaCount: number;
+            /** @description publication 冻结的有效封面媒体；没有可用封面时为 null。 */
+            coverMediaId: components["schemas"]["CanonicalMediaId"] | null;
             /** @description 本次查询所在 publication 冻结的 snapshot 值，用于解释本次结果的过滤/排序 判据；不是 control.db 当前 live 值。真正的 live 值见 GET /works/{workId}/overlay（也见响应 liveUserStateFields）。 */
             favorite: boolean;
             /** @description 语义同 favorite：本字段是 snapshot 值，不是 live 值。 */
@@ -5470,7 +5472,10 @@ export interface operations {
     };
     getWork: {
         parameters: {
-            query?: never;
+            query?: {
+                /** @description 省略时读取当前 active publication；显式提供时只读取该历史快照，不静默回退。 */
+                queryPublicationId?: components["schemas"]["QueryPublicationId"];
+            };
             header?: never;
             path: {
                 workId: components["schemas"]["CanonicalWorkId"];
@@ -5491,6 +5496,7 @@ export interface operations {
             401: components["responses"]["UnauthenticatedError"];
             403: components["responses"]["ForbiddenError"];
             404: components["responses"]["NotFoundError"];
+            409: components["responses"]["ConflictError"];
         };
     };
     getWorkOverlay: {

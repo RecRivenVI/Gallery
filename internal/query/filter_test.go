@@ -67,6 +67,11 @@ VALUES (?, ?, 1, 'published', 1, 1)`, ov, cat)
 	}
 	for index, spec := range specs {
 		document := querytext.BuildDocument(spec.title, "", nil, nil)
+		mediaID := fmt.Sprintf("med_018f47d2-5c16-7a44-a8a0-%012d", index+1)
+		coverMediaID := ""
+		if index == 0 {
+			coverMediaID = mediaID
+		}
 		exec(`INSERT INTO source_works
 (catalog_revision_id, source_id, source_key, title, creator, tags_json, filenames_text, provider_id, external_id)
 VALUES (?, ?, ?, ?, '', '[]', '', ?, '')`, cat, spec.sourceID, spec.sourceKey, spec.title, spec.providerID)
@@ -80,17 +85,16 @@ VALUES (?, ?, ?, ?, '', '[]', '', ?, '')`, cat, spec.sourceID, spec.sourceKey, s
 		exec(`INSERT INTO work_projections
 (catalog_revision_id, overlay_revision_id, work_id, source_id, source_key, library_id, title, creator, tags_json, filenames_text,
  normalized_original_text, cjk_bigram_token_text, latin_trigram_token_text, sort_title_key, hidden, favorite, progress,
- search_title_norm, search_creator_norm, search_tags_norm, search_filenames_norm)
-VALUES (?, ?, ?, ?, ?, 'lib_test', ?, '', '[]', '', ?, ?, ?, ?, ?, ?, ?, ?, '', '', '')`,
+ search_title_norm, search_creator_norm, search_tags_norm, search_filenames_norm, cover_media_id)
+VALUES (?, ?, ?, ?, ?, 'lib_test', ?, '', '[]', '', ?, ?, ?, ?, ?, ?, ?, ?, '', '', '', ?)`,
 			cat, ov, spec.id, spec.sourceID, spec.sourceKey, spec.title,
 			document.NormalizedOriginal, document.CJKTokens, document.LatinTokens, document.SortTitleKey,
-			hidden, favorite, spec.progress, document.TitleNorm)
+			hidden, favorite, spec.progress, document.TitleNorm, coverMediaID)
 		exec("INSERT INTO work_search VALUES (?, ?, ?, ?, ?, ?)", cat, ov, spec.id, document.NormalizedOriginal, document.CJKTokens, document.LatinTokens)
 		exec(`INSERT OR IGNORE INTO creator_projections (catalog_revision_id, overlay_revision_id, creator_id, name, sort_name_key)
 VALUES (?, ?, ?, 'creator', 'creator')`, cat, ov, spec.creatorID)
 		exec(`INSERT INTO work_creator_relations (catalog_revision_id, overlay_revision_id, work_id, creator_id, role, ordinal)
 VALUES (?, ?, ?, ?, ?, 0)`, cat, ov, spec.id, spec.creatorID, spec.creatorRole)
-		mediaID := fmt.Sprintf("med_018f47d2-5c16-7a44-a8a0-%012d", index+1)
 		exec(`INSERT INTO media_projections
 (catalog_revision_id, overlay_revision_id, media_id, work_id, source_id, source_key, relative_path, media_kind, mime_type,
  size_bytes, algorithm, digest, location_status, ordinal, hidden, base_ordinal, content_verification_state, verified_at)
@@ -360,6 +364,18 @@ func TestDependencySetReflectsActualRequest(t *testing.T) {
 	if !hasDependencyRole(plain.DependencySet, "overlay.hidden", galleryquery.DependencyRoleMembership) {
 		t.Fatalf("默认隐式隐藏应作为 membership 依赖出现: %+v", plain.DependencySet)
 	}
+	if !hasDependencyRole(plain.DependencySet, "overlay.customCoverMediaId", galleryquery.DependencyRoleResource) {
+		t.Fatalf("列表始终返回封面资源，应把 overlay.customCoverMediaId 记为 resource 依赖: %+v", plain.DependencySet)
+	}
+	foundCover := false
+	for _, work := range plain.Items {
+		if work.ID == "wrk_018f47d2-5c16-7a44-a8a0-000000000901" {
+			foundCover = work.CoverMediaID == "med_018f47d2-5c16-7a44-a8a0-000000000001"
+		}
+	}
+	if !foundCover {
+		t.Fatalf("查询结果应读取 publication 冻结的 cover_media_id: %+v", plain.Items)
+	}
 
 	filtered, err := service.Search(context.Background(), galleryquery.Request{Limit: 20, AuthorizationScope: scope,
 		Filter: `{"field":"overlay.favorite","op":"eq","value":true}`})
@@ -378,6 +394,9 @@ func TestDependencySetReflectsActualRequest(t *testing.T) {
 		if !hasDependencyRole(searched.DependencySet, field, galleryquery.DependencyRoleSearch) {
 			t.Fatalf("带搜索词的查询应把 %s 记为 search 依赖: %+v", field, searched.DependencySet)
 		}
+	}
+	if len(searched.Items) != 1 || searched.Items[0].CoverMediaID != "med_018f47d2-5c16-7a44-a8a0-000000000001" {
+		t.Fatalf("搜索 CTE 也应读取 publication 冻结的 cover_media_id: %+v", searched.Items)
 	}
 	if len(plain.LiveUserStateFields) == 0 || !contains(plain.LiveUserStateFields, "favorite") || !contains(plain.LiveUserStateFields, "progress") {
 		t.Fatalf("响应应声明 favorite/progress 具备 live 展示: %+v", plain.LiveUserStateFields)

@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/RecRivenVI/gallery/internal/rules"
@@ -87,10 +88,46 @@ func TestRuleIRDiscoversDifferentDirectoryAndMetadataShapes(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			if len(works) != 1 || works[0].SourceKey != test.wantWorkKey || works[0].Title != test.wantTitle || len(works[0].Media) == 0 || works[0].Media[0].SourceKey != test.wantMedia {
+			if len(works) != 1 || works[0].SourceKey != test.wantWorkKey || works[0].Title != test.wantTitle || len(works[0].Media) == 0 || works[0].Media[0].SourceKey != test.wantMedia || works[0].RuleCoverMediaSourceKey != test.wantMedia {
 				t.Fatalf("规则驱动发现错误: %+v", works)
 			}
 		})
+	}
+}
+
+func TestDiscoveryMapsRuleCoverPathToDiscoveredStableSourceKey(t *testing.T) {
+	root := t.TempDir()
+	workRoot := filepath.Join(root, "work")
+	if err := os.MkdirAll(workRoot, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range []string{"aaa.bin", "cover.bin"} {
+		if err := os.WriteFile(filepath.Join(workRoot, name), []byte(name), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	packageJSON := ruleForDiscovery("*", "", "*.bin", "", "", "")
+	packageJSON = strings.Replace(packageJSON,
+		`{"id":"media","kind":"media_classify","config":{"glob":"*.bin","kind":"image","mime":"application/octet-stream"}}`,
+		`{"id":"media","kind":"media_classify","config":{"glob":"*.bin","kind":"image","mime":"application/octet-stream"}},
+    {"id":"cover","kind":"cover_candidate","config":{"glob":"cover.*","score":100}}`, 1)
+	compiled, err := rules.CompilePackage([]byte(packageJSON))
+	if err != nil {
+		t.Fatal(err)
+	}
+	ir, _, parameters, err := rules.CompileBinding(compiled, []byte(`{}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	works, err := discover(context.Background(), root, ir, parameters)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(works) != 1 || len(works[0].Media) != 2 {
+		t.Fatalf("发现结果不完整: %+v", works)
+	}
+	if works[0].Media[0].SourceKey != "work/aaa.bin" || works[0].RuleCoverMediaSourceKey != "work/cover.bin" {
+		t.Fatalf("封面没有映射到实际发现媒体的稳定 SourceKey: %+v", works[0])
 	}
 }
 

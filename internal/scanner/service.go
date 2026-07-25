@@ -581,6 +581,10 @@ func (s *Service) Execute(ctx context.Context, jobID string) error {
 	mediaFacts := make([]catalog.MediaFact, 0, total)
 	for _, work := range discovered {
 		canonicalWork := canonical[work.SourceKey]
+		coverMedia, coverFound := canonicalWork.Media[work.RuleCoverMediaSourceKey]
+		if work.RuleCoverMediaSourceKey == "" || !coverFound || coverMedia.ID == "" {
+			return s.fail(ctx, job.ID, fault.New(fault.CodeRuleEval, false, nil))
+		}
 		filenames := make([]string, 0, len(work.Media))
 		for _, item := range work.Media {
 			filenames = append(filenames, path.Base(item.RelativePath))
@@ -589,7 +593,8 @@ func (s *Service) Execute(ctx context.Context, jobID string) error {
 			SourceKey: work.SourceKey, ProviderID: work.ProviderID, ExternalID: work.ExternalID,
 			SourceTitle: canonicalWork.Title, SourceTags: work.Tags,
 			Title: canonicalWork.Title, Creator: work.Creator, Tags: work.Tags,
-			Filenames: filenames, WorkID: canonicalWork.ID}
+			Filenames: filenames, RuleCoverMediaSourceKey: work.RuleCoverMediaSourceKey,
+			RuleCoverMediaID: coverMedia.ID, WorkID: canonicalWork.ID}
 		if len(canonicalWork.Creators) > 0 {
 			creator := creatorReference(work)
 			workFact.Creator = canonicalWork.Creators[0].Name
@@ -834,6 +839,7 @@ func (s *Service) recoverAlreadyPublished(ctx context.Context, jobID string) err
 type discoveredWork struct {
 	SourceKey, ProviderID, ExternalID, Title, Creator string
 	CreatorStableKey                                  string
+	RuleCoverMediaSourceKey                           string
 	Tags                                              []string
 	Media                                             []discoveredMedia
 }
@@ -948,11 +954,18 @@ func discover(ctx context.Context, root string, ir rules.RuleIR, parameters []by
 			if infoErr != nil {
 				return infoErr
 			}
-			work.Media = append(work.Media, discoveredMedia{SourceKey: path.Join(work.SourceKey, item.StableKey),
+			mediaSourceKey := path.Join(work.SourceKey, item.StableKey)
+			work.Media = append(work.Media, discoveredMedia{SourceKey: mediaSourceKey,
 				RuleKey: item.StableKey, RelativePath: mediaRelative, Kind: item.Kind, MIME: item.MIME})
+			if item.Path == evaluated.Work.CoverPath {
+				work.RuleCoverMediaSourceKey = mediaSourceKey
+			}
 			work.Media[len(work.Media)-1].ExpectedSize = info.Size()
 			work.Media[len(work.Media)-1].ExpectedModTimeNanos = info.ModTime().UnixNano()
 			work.Media[len(work.Media)-1].HasExpectedIdentity = true
+		}
+		if len(work.Media) > 0 && work.RuleCoverMediaSourceKey == "" {
+			return fmt.Errorf("规则封面未命中已发现媒体")
 		}
 		if len(work.Media) > 0 {
 			result = append(result, work)

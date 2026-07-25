@@ -15,6 +15,8 @@ import { useState } from 'react';
 import { Link, useSearchParams } from 'react-router-dom';
 import { api, expectData } from '../api/client';
 import { EmptyState, ErrorState, LoadingState, PageHeader, StatusBadge } from '../components/ui';
+import { WorkCover } from '../components/work-cover';
+import { useSession } from '../auth/session';
 
 export function BrowsePage() {
   const [params, setParams] = useSearchParams();
@@ -24,6 +26,7 @@ export function BrowsePage() {
   const cursor = params.get('cursor') ?? undefined;
   const publication = params.get('publication') ?? undefined;
   const [draft, setDraft] = useState(q);
+  const { can } = useSession();
   const works = useQuery({
     queryKey: ['works', q, tag, sortDirection, cursor, publication],
     queryFn: async ({ signal }) =>
@@ -135,9 +138,12 @@ export function BrowsePage() {
           <div className="work-grid">
             {works.data.works.map((work) => (
               <article className="work-card" key={work.id}>
-                <div className="work-cover" aria-hidden="true">
-                  {work.title.slice(0, 1).toUpperCase()}
-                </div>
+                <WorkCover
+                  title={work.title}
+                  coverMediaId={work.coverMediaId}
+                  queryPublicationId={work.queryPublicationId}
+                  canReadMedia={can('media.read')}
+                />
                 <div>
                   <h2>
                     <Link

@@ -2454,6 +2454,10 @@ func (s *Server) listWorks(w http.ResponseWriter, r *http.Request) {
 			MediaCount: work.MediaCount, Favorite: work.Favorite, Progress: float32(work.Progress),
 			QueryPublicationId: result.QueryPublicationID,
 		}
+		if work.CoverMediaID != "" {
+			coverMediaID := api.CanonicalMediaId(work.CoverMediaID)
+			dto.CoverMediaId = &coverMediaID
+		}
 		if len(work.Matches) > 0 {
 			matches := make([]api.FieldMatch, 0, len(work.Matches))
 			for _, match := range work.Matches {
@@ -2491,7 +2495,14 @@ func (s *Server) getWork(w http.ResponseWriter, r *http.Request) {
 		s.writeRequestError(w, err)
 		return
 	}
-	publication, work, err := s.catalog.GetWork(r.Context(), r.PathValue("workId"))
+	requestedPub := r.URL.Query().Get("queryPublicationId")
+	release, err := s.acquirePublicationLeaseIfExplicit(r, session, requestedPub)
+	if err != nil {
+		s.writeRequestError(w, err)
+		return
+	}
+	defer release()
+	publication, work, err := s.catalog.GetWorkAt(r.Context(), requestedPub, r.PathValue("workId"))
 	if err != nil {
 		s.writeRequestError(w, err)
 		return
@@ -3380,10 +3391,16 @@ func publicationDTO(value catalog.Publication) api.QueryPublication {
 }
 
 func workDTO(publication catalog.Publication, value catalog.Work) api.PublishedWork {
-	return api.PublishedWork{
+	result := api.PublishedWork{
 		Id: value.ID, Title: value.Title, Creator: value.Creator, Tags: value.Tags,
-		MediaCount: value.MediaCount, QueryPublicationId: publication.ID,
+		MediaCount: value.MediaCount, Favorite: value.Favorite, Progress: float32(value.Progress),
+		QueryPublicationId: publication.ID,
 	}
+	if value.CoverMediaID != "" {
+		coverMediaID := api.CanonicalMediaId(value.CoverMediaID)
+		result.CoverMediaId = &coverMediaID
+	}
+	return result
 }
 
 // mediaDTO 把位置可用性（Available/LocationStatus）与内容确认状态

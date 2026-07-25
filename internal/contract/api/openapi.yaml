@@ -1868,13 +1868,19 @@ paths:
   /api/v1/works/{workId}:
     get:
       operationId: getWork
-      summary: 读取当前 publication 中的作品
+      summary: 读取指定或当前 publication 中的作品
       parameters:
         - name: workId
           in: path
           required: true
           schema:
             $ref: "#/components/schemas/CanonicalWorkId"
+        - name: queryPublicationId
+          in: query
+          required: false
+          description: 省略时读取当前 active publication；显式提供时只读取该历史快照，不静默回退。
+          schema:
+            $ref: "#/components/schemas/QueryPublicationId"
       responses:
         "200":
           description: WorkProjection
@@ -1888,6 +1894,8 @@ paths:
           $ref: "#/components/responses/ForbiddenError"
         "404":
           $ref: "#/components/responses/NotFoundError"
+        "409":
+          $ref: "#/components/responses/ConflictError"
   /api/v1/works/{workId}/overlay:
     get:
       operationId: getWorkOverlay
@@ -3476,7 +3484,7 @@ components:
     PublishedWork:
       type: object
       additionalProperties: false
-      required: [id, title, creator, tags, mediaCount, favorite, progress, queryPublicationId]
+      required: [id, title, creator, tags, mediaCount, coverMediaId, favorite, progress, queryPublicationId]
       properties:
         id:
           $ref: "#/components/schemas/CanonicalWorkId"
@@ -3490,6 +3498,11 @@ components:
         mediaCount:
           type: integer
           minimum: 0
+        coverMediaId:
+          description: publication 冻结的有效封面媒体；没有可用封面时为 null。
+          allOf:
+            - $ref: "#/components/schemas/CanonicalMediaId"
+          nullable: true
         favorite:
           type: boolean
           description: >-

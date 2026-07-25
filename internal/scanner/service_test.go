@@ -54,6 +54,9 @@ func TestWalkingSkeletonScanPublishesAndFailurePreservesOldPublication(t *testin
 	if err != nil || len(mediaItems) != 1 {
 		t.Fatalf("MediaProjection 错误: %+v %v", mediaItems, err)
 	}
+	if works[0].CoverMediaID != mediaItems[0].ID || mediaItems[0].Ordinal < 0 {
+		t.Fatalf("规则封面未解析为显式 CanonicalMedia，或仍借用负 ordinal: work=%+v media=%+v", works[0], mediaItems[0])
+	}
 	expected := sha256.Sum256(fixture)
 	if mediaItems[0].Digest != domain.NewSHA256BlobRef(expected).Digest || mediaItems[0].RelativePath != "work-one/media.bin" {
 		t.Fatalf("Blob/FileLocation 错误: %+v", mediaItems[0])

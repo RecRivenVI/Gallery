@@ -69,12 +69,94 @@ async function respond(route: Route) {
           title: '合成作品',
           creator: '测试创作者',
           tags: ['合成', '只读'],
-          mediaCount: 1,
+          mediaCount: 2,
+          coverMediaId: 'media_01FIRST',
           favorite: false,
           progress: 0.25,
           queryPublicationId: publication
         }
       ]
+    });
+  if (url.pathname === '/api/v1/works/work_01SYNTHETIC')
+    return json({
+      id: 'work_01SYNTHETIC',
+      title: '合成作品',
+      creator: '测试创作者',
+      tags: ['合成', '只读'],
+      mediaCount: 2,
+      coverMediaId: 'media_01FIRST',
+      favorite: false,
+      progress: 0.25,
+      queryPublicationId: publication
+    });
+  if (url.pathname === '/api/v1/works/work_01SYNTHETIC/overlay') {
+    if (route.request().method() === 'PUT') {
+      const body = route.request().postDataJSON() as { customCoverMediaId?: string };
+      return json({
+        workId: 'work_01SYNTHETIC',
+        titleOverride: '',
+        manualTags: [],
+        hidden: false,
+        favorite: false,
+        progress: 0.25,
+        factWatermark: 2,
+        queryWatermark: 1,
+        projectedWatermark: 1,
+        projectionStatus: 'pending',
+        ...(body.customCoverMediaId ? { customCoverMediaId: body.customCoverMediaId } : {})
+      });
+    }
+    return json({
+      workId: 'work_01SYNTHETIC',
+      titleOverride: '',
+      manualTags: [],
+      hidden: false,
+      favorite: false,
+      progress: 0.25,
+      factWatermark: 1,
+      queryWatermark: 1,
+      projectedWatermark: 1,
+      projectionStatus: 'published',
+      publishedQueryPublicationId: publication
+    });
+  }
+  if (url.pathname === '/api/v1/works/work_01SYNTHETIC/media')
+    return json({
+      queryPublicationId: publication,
+      media: [
+        {
+          id: 'media_01FIRST',
+          workId: 'work_01SYNTHETIC',
+          kind: 'image',
+          mimeType: 'image/svg+xml',
+          sizeBytes: 128,
+          blob: { algorithm: 'sha256-v1', digest: 'a'.repeat(64) },
+          available: true,
+          ordinal: 1,
+          queryPublicationId: publication,
+          contentVerificationState: 'content_verified',
+          verifiedAt: new Date().toISOString()
+        },
+        {
+          id: 'media_01SECOND',
+          workId: 'work_01SYNTHETIC',
+          kind: 'image',
+          mimeType: 'image/svg+xml',
+          sizeBytes: 128,
+          blob: { algorithm: 'sha256-v1', digest: 'b'.repeat(64) },
+          available: true,
+          ordinal: 2,
+          queryPublicationId: publication,
+          contentVerificationState: 'content_verified',
+          verifiedAt: new Date().toISOString()
+        }
+      ]
+    });
+  if (url.pathname.startsWith('/api/v1/media/') && url.pathname.endsWith('/content'))
+    return route.fulfill({
+      status: 200,
+      contentType: 'image/svg+xml',
+      body: '<svg xmlns="http://www.w3.org/2000/svg" width="8" height="6"><rect width="8" height="6" fill="#087f68"/></svg>'
     });
   if (url.pathname === '/api/v1/libraries') return json({ libraries: [] });
   if (url.pathname === '/api/v1/sources') return json({ sources: [] });
@@ -128,10 +210,59 @@ test('浏览、主题和响应式导航可用 @smoke', async ({ page }) => {
   await page.goto('/browse');
   await expect(page.getByRole('heading', { name: '浏览作品' })).toBeVisible();
   await expect(page.getByRole('link', { name: '合成作品' })).toBeVisible();
+  await expect(page.locator('.work-card img')).toHaveAttribute(
+    'src',
+    '/api/v1/media/media_01FIRST/content?queryPublicationId=qpub_01SYNTHETIC'
+  );
   await page.getByRole('button', { name: '切换导航' }).click();
   await expect(page.locator('.app-shell')).toHaveClass(/sidebar-collapsed/);
   await page.setViewportSize({ width: 390, height: 844 });
   await expect(page.locator('main')).toBeVisible();
+});
+
+test('作品详情把 current 解析为单一快照，并保存或清除 CustomCover @smoke', async ({ page }) => {
+  const requests: string[] = [];
+  page.on('request', (request) => requests.push(request.url()));
+
+  await page.goto('/works/work_01SYNTHETIC');
+
+  await expect(page.getByRole('heading', { name: '合成作品' })).toBeVisible();
+  await expect(page.getByRole('img', { name: '《合成作品》的封面' })).toHaveAttribute(
+    'src',
+    '/api/v1/media/media_01FIRST/content?queryPublicationId=qpub_01SYNTHETIC'
+  );
+  await expect(page.getByText('有效封面', { exact: true })).toBeVisible();
+  const accessibility = await new AxeBuilder({ page }).disableRules(['color-contrast']).analyze();
+  expect(
+    accessibility.violations.filter((item) => ['critical', 'serious'].includes(item.impact ?? ''))
+  ).toEqual([]);
+
+  const workRequest = requests.find((value) => new URL(value).pathname === '/api/v1/works/work_01SYNTHETIC');
+  const mediaRequest = requests.find(
+    (value) => new URL(value).pathname === '/api/v1/works/work_01SYNTHETIC/media'
+  );
+  if (!workRequest || !mediaRequest) throw new Error('作品详情请求未完成');
+  expect(new URL(workRequest).searchParams.has('queryPublicationId')).toBe(false);
+  expect(new URL(mediaRequest).searchParams.get('queryPublicationId')).toBe(publication);
+  expect(
+    requests
+      .filter((value) => new URL(value).pathname.endsWith('/content'))
+      .every((value) => new URL(value).searchParams.get('queryPublicationId') === publication)
+  ).toBe(true);
+
+  await page.getByText(/^媒体 #2/).click();
+  const selectedRequest = page.waitForRequest(
+    (request) => request.method() === 'PUT' && new URL(request.url()).pathname.endsWith('/overlay')
+  );
+  await page.getByRole('button', { name: '保存事实' }).click();
+  expect((await selectedRequest).postDataJSON()).toMatchObject({ customCoverMediaId: 'media_01SECOND' });
+
+  await page.getByText(/^使用规则封面/).click();
+  const clearedRequest = page.waitForRequest(
+    (request) => request.method() === 'PUT' && new URL(request.url()).pathname.endsWith('/overlay')
+  );
+  await page.getByRole('button', { name: '保存事实' }).click();
+  expect((await clearedRequest).postDataJSON()).not.toHaveProperty('customCoverMediaId');
 });
 
 test('核心页面没有严重可访问性违规 @smoke', async ({ page }) => {

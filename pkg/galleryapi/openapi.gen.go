@@ -2782,7 +2782,9 @@ type PublishedMediaContentVerificationState string
 
 // PublishedWork defines model for PublishedWork.
 type PublishedWork struct {
-	Creator string `json:"creator"`
+	// CoverMediaId publication 冻结的有效封面媒体；没有可用封面时为 null。
+	CoverMediaId *CanonicalMediaId `json:"coverMediaId"`
+	Creator      string            `json:"creator"`
 
 	// Favorite 本次查询所在 publication 冻结的 snapshot 值，用于解释本次结果的过滤/排序 判据；不是 control.db 当前 live 值。真正的 live 值见 GET /works/{workId}/overlay（也见响应 liveUserStateFields）。
 	Favorite bool            `json:"favorite"`
@@ -4078,6 +4080,12 @@ type ListWorksParams struct {
 // ListWorksParamsSortDirection defines parameters for ListWorks.
 type ListWorksParamsSortDirection string
 
+// GetWorkParams defines parameters for GetWork.
+type GetWorkParams struct {
+	// QueryPublicationId 省略时读取当前 active publication；显式提供时只读取该历史快照，不静默回退。
+	QueryPublicationId *QueryPublicationId `form:"queryPublicationId,omitempty" json:"queryPublicationId,omitempty"`
+}
+
 // ListWorkMediaParams defines parameters for ListWorkMedia.
 type ListWorkMediaParams struct {
 	QueryPublicationId *QueryPublicationId `form:"queryPublicationId,omitempty" json:"queryPublicationId,omitempty"`
@@ -4752,7 +4760,7 @@ type ClientInterface interface {
 	ListWorks(ctx context.Context, params *ListWorksParams, reqEditors ...RequestEditorFn) (*http.Response, error)
 
 	// GetWork request
-	GetWork(ctx context.Context, workId CanonicalWorkId, reqEditors ...RequestEditorFn) (*http.Response, error)
+	GetWork(ctx context.Context, workId CanonicalWorkId, params *GetWorkParams, reqEditors ...RequestEditorFn) (*http.Response, error)
 
 	// ListWorkMedia request
 	ListWorkMedia(ctx context.Context, workId CanonicalWorkId, params *ListWorkMediaParams, reqEditors ...RequestEditorFn) (*http.Response, error)
@@ -6722,8 +6730,8 @@ func (c *Client) ListWorks(ctx context.Context, params *ListWorksParams, reqEdit
 	return c.Client.Do(req)
 }
 
-func (c *Client) GetWork(ctx context.Context, workId CanonicalWorkId, reqEditors ...RequestEditorFn) (*http.Response, error) {
-	req, err := NewGetWorkRequest(c.Server, workId)
+func (c *Client) GetWork(ctx context.Context, workId CanonicalWorkId, params *GetWorkParams, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewGetWorkRequest(c.Server, workId, params)
 	if err != nil {
 		return nil, err
 	}
@@ -12718,7 +12726,7 @@ func NewListWorksRequest(server string, params *ListWorksParams) (*http.Request,
 }
 
 // NewGetWorkRequest generates requests for GetWork
-func NewGetWorkRequest(server string, workId CanonicalWorkId) (*http.Request, error) {
+func NewGetWorkRequest(server string, workId CanonicalWorkId, params *GetWorkParams) (*http.Request, error) {
 	var err error
 
 	var pathParam0 string
@@ -12741,6 +12749,33 @@ func NewGetWorkRequest(server string, workId CanonicalWorkId) (*http.Request, er
 	queryURL, err := serverURL.Parse(operationPath)
 	if err != nil {
 		return nil, err
+	}
+
+	if params != nil {
+		// queryValues collects non-styled parameters (passthrough, JSON)
+		// that are safe to round-trip through url.Values.Encode().
+		queryValues := queryURL.Query()
+		// rawQueryFragments collects pre-encoded query fragments from
+		// styled parameters, preserving literal commas as delimiters
+		// per the OpenAPI spec (e.g. "color=blue,black,brown").
+		var rawQueryFragments []string
+
+		if params.QueryPublicationId != nil {
+
+			if queryFrag, err := runtime.StyleParamWithOptions("form", true, "queryPublicationId", *params.QueryPublicationId, runtime.StyleParamOptions{ParamLocation: runtime.ParamLocationQuery, Type: "string", Format: ""}); err != nil {
+				return nil, err
+			} else {
+				for _, qp := range strings.Split(queryFrag, "&") {
+					rawQueryFragments = append(rawQueryFragments, qp)
+				}
+			}
+
+		}
+
+		if encoded := queryValues.Encode(); encoded != "" {
+			rawQueryFragments = append(rawQueryFragments, encoded)
+		}
+		queryURL.RawQuery = strings.Join(rawQueryFragments, "&")
 	}
 
 	req, err := http.NewRequest(http.MethodGet, queryURL.String(), nil)
@@ -13390,7 +13425,7 @@ type ClientWithResponsesInterface interface {
 	ListWorksWithResponse(ctx context.Context, params *ListWorksParams, reqEditors ...RequestEditorFn) (*ListWorksResponse, error)
 
 	// GetWorkWithResponse request
-	GetWorkWithResponse(ctx context.Context, workId CanonicalWorkId, reqEditors ...RequestEditorFn) (*GetWorkResponse, error)
+	GetWorkWithResponse(ctx context.Context, workId CanonicalWorkId, params *GetWorkParams, reqEditors ...RequestEditorFn) (*GetWorkResponse, error)
 
 	// ListWorkMediaWithResponse request
 	ListWorkMediaWithResponse(ctx context.Context, workId CanonicalWorkId, params *ListWorkMediaParams, reqEditors ...RequestEditorFn) (*ListWorkMediaResponse, error)
@@ -17189,6 +17224,7 @@ type GetWorkResponse struct {
 	JSON401      *UnauthenticatedError
 	JSON403      *ForbiddenError
 	JSON404      *NotFoundError
+	JSON409      *ConflictError
 }
 
 // Status returns HTTPResponse.Status
@@ -18735,8 +18771,8 @@ func (c *ClientWithResponses) ListWorksWithResponse(ctx context.Context, params 
 }
 
 // GetWorkWithResponse request returning *GetWorkResponse
-func (c *ClientWithResponses) GetWorkWithResponse(ctx context.Context, workId CanonicalWorkId, reqEditors ...RequestEditorFn) (*GetWorkResponse, error) {
-	rsp, err := c.GetWork(ctx, workId, reqEditors...)
+func (c *ClientWithResponses) GetWorkWithResponse(ctx context.Context, workId CanonicalWorkId, params *GetWorkParams, reqEditors ...RequestEditorFn) (*GetWorkResponse, error) {
+	rsp, err := c.GetWork(ctx, workId, params, reqEditors...)
 	if err != nil {
 		return nil, err
 	}
@@ -24229,6 +24265,13 @@ func ParseGetWorkResponse(rsp *http.Response) (*GetWorkResponse, error) {
 			return nil, err
 		}
 		response.JSON404 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 409:
+		var dest ConflictError
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON409 = &dest
 
 	}
 

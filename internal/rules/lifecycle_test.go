@@ -130,6 +130,55 @@ func TestMediaOrderUsesNaturalSortForNumericFilenames(t *testing.T) {
 	}
 }
 
+func TestRuleCoverUsesScoreThenStableMediaOrder(t *testing.T) {
+	lifecycle, err := rules.NewLifecycle()
+	if err != nil {
+		t.Fatal(err)
+	}
+	result, err := lifecycle.DryRun(context.Background(), complexRulePackage(), []byte(`{"minimumSize":1}`), rules.DryRunInput{
+		Path: "work-cover", Metadata: map[string]any{
+			"post":    map[string]any{"id": "cover", "title": "封面测试"},
+			"creator": map[string]any{"id": "creator", "name": "作者"},
+			"flags":   []any{"allow"},
+		},
+		Files: []rules.DryRunFile{
+			{Path: "cover.b.jpg", Size: 1},
+			{Path: "aaa.jpg", Size: 1},
+			{Path: "cover.a.jpg", Size: 1},
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(result.Work.Media) != 3 || result.Work.Media[0].Path != "aaa.jpg" {
+		t.Fatalf("规则媒体顺序不稳定: %+v", result.Work.Media)
+	}
+	if result.Work.CoverPath != "cover.a.jpg" {
+		t.Fatalf("同分封面未按稳定媒体顺序选择，或错误回退首媒体: %q", result.Work.CoverPath)
+	}
+}
+
+func TestRuleCoverFallsBackToFirstOrderedMedia(t *testing.T) {
+	lifecycle, err := rules.NewLifecycle()
+	if err != nil {
+		t.Fatal(err)
+	}
+	result, err := lifecycle.DryRun(context.Background(), readRulePackage(t), []byte(`{}`), rules.DryRunInput{
+		Path:     "work-fallback",
+		Metadata: map[string]any{"creator": map[string]any{"name": "作者"}},
+		Files: []rules.DryRunFile{
+			{Path: "2.bin", Size: 1},
+			{Path: "1.bin", Size: 1},
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(result.Work.Media) != 2 || result.Work.Media[0].Path != "1.bin" || result.Work.CoverPath != "1.bin" {
+		t.Fatalf("无 cover_candidate 时未回退稳定排序后的首媒体: media=%+v cover=%q", result.Work.Media, result.Work.CoverPath)
+	}
+}
+
 func TestCELProfileRejectsUnknownHostFunction(t *testing.T) {
 	invalid := bytes.Replace(complexRulePackage(), []byte(`file.size >= params.minimumSize`), []byte(`read_file(file.path)`), 1)
 	_, err := rules.CompilePackage(invalid)

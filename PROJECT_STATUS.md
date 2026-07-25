@@ -58,12 +58,12 @@ Gallery 是一个"本地优先"（数据主要放在自己电脑上，不依赖�
 | 阶段 1：领域和数据所有权 | ✅ | ✅（限定范围内） | 备份/恢复、目录库整体重建、作者合并/撤销合并、文件"孤儿"处理等全部完成并通过验证 | 真实网络共享盘（SMB/NAS）、Windows/Linux 底层文件身份识别等留待以后阶段 | 已完成 |
 | 阶段 2：规则系统 | ✅（正确性层面） | ✅（限定范围内） | 规则生命周期、编译执行、参数/绑定和影响调度已形成闭环 | 正式性能/平台测试尚未完成 | 已完成 |
 | 阶段 3：扫描、任务与目录库 | ✅（代码与模拟数据层面） | 🟡（真实大盘抽样通过，全量未完成） | 真实固态硬盘（SSD）、机械硬盘（HDD）各完成几十万文件规模的抽样验收，发现并修复了 2 个真实 bug | 真实全量扫描被主动叫停，正式性能门禁尚未跑完；网络共享盘尚未验证 | 阶段 4 正式压力测试 |
-| 阶段 4：查询与媒体 | 🟡（主线代码完成，部分参数未冻结） | 🟡（正确性收口完成，500,000 规模正式压力测试已执行） | 搜索、排序、分页、媒体读取/下载、缩略图生成全部有真实代码闭环；500,000 规模 Correctness/Cursor 通过，Perf 矩阵在预算内完成（EV-36） | 排序权重、结果总数计算方式、锁的有效期等仍是暂定值；500,000 规模下 `wide-cjk`/结构化过滤类别仍有已知未修复的架构性延迟；正式 API 冻结尚未完成 | 阶段 4 性能优化候选清单评估与接口冻结 |
+| 阶段 4：查询与媒体 | 🟡（主线代码完成，部分参数未冻结） | 🟡（正确性收口完成，500,000 规模正式压力测试已执行） | 搜索、排序、分页、显式规则/有效封面、媒体读取/下载、缩略图生成全部有代码闭环；500,000 规模 Correctness/Cursor 通过，Perf 矩阵在预算内完成（EV-36、EV-42） | 排序权重、结果总数计算方式、锁的有效期等仍是暂定值；封面新增链路只有合成证据；正式 API 冻结尚未完成 | 阶段 4 性能优化候选清单评估与接口冻结 |
 | 阶段 5：账户、安全与多客户端 | 🟠（代码与合成安全收尾已实现） | 🟡（Chrome/Edge 同机主路径补证，正式 Gate 未通过） | EV-37 安全闭环之外，Personal/LAN 双浏览器上下文、Session/WS 吊销和当前工作站 Argon2id 基准已有 EV-38 证据 | 真实 LAN 多设备、目标低端设备 Argon2id 与真实恶意输入资源门禁未完成 | 完成外部设备安全门禁 |
-| 阶段 6：Web/PWA 界面 | 🟠（页面代码基线已实现；EV-39 发现的实时通道与写入口阻断已在 EV-40 修复） | 🟡（Chrome/Edge 认证与实时通道主路径通过；完整写路径 E2E 仍未覆盖，正式 Gate 未通过） | 同源内嵌 Web/PWA 覆盖认证、浏览/媒体、Overlay、任务、规则、安全和维护页面骨架（EV-38）；实时 WebSocket 与主要写入口已在真实 Chrome/Edge 复验可用（EV-40） | 完整管理写路径的浏览器端到端覆盖仍然缺失，Firefox、真实移动设备/屏幕阅读器与窄屏焦点陷阱未完成 | 扩大写路径与可访问性门禁，不进入桌面壳 |
+| 阶段 6：Web/PWA 界面 | 🟠（页面代码基线已实现；EV-39 发现的实时通道与写入口阻断已在 EV-40 修复） | 🟡（Chrome/Edge 认证与实时通道主路径通过；完整写路径 E2E 仍未覆盖，正式 Gate 未通过） | 同源内嵌 Web/PWA 覆盖认证、浏览/媒体、Overlay、任务、规则、安全和维护页面骨架；EV-42 新增同快照封面与 CustomCover 编辑 | 封面链路只有 Vitest/Chromium mock、尚无真实后端浏览器复验；完整管理写路径 E2E、Firefox、真实移动设备/屏幕阅读器与窄屏焦点陷阱未完成 | 扩大写路径与可访问性门禁，不进入桌面壳 |
 | 阶段 7：平台适配与正式发行 | ⏳（仅早期实验代码涉及，不属于正式产品） | ⛔ | 无 | Windows 之外的平台、安装包、签名、升级等均尚未开始 | 最后阶段 |
 
-**概览**：Gallery 已有正式后端和同源内嵌 Web/PWA 代码基线，Chrome/Edge 已验证主要认证与浏览器恢复路径；但真实大规模、真实多平台、真实网络硬盘、完整 Security/Web Gate 和正式发行仍未完成。2026-07-23 的独立审计（[验证记录 EV-39](Documents/证据/验证记录.md)）用真实浏览器探针发现阶段 6 的「业务闭环」此前被高估：实时 WebSocket 通道在真实浏览器中 100% 握手失败，网页端多数写入口因 capability 名不符而不渲染。这些阻断性缺陷已在同日的 [EV-40](Documents/证据/验证记录.md) 修复并经真实 Chrome/Edge 复验；但完整业务写路径的浏览器端到端覆盖仍未建立，阶段 6 Web Gate 依旧未通过。
+**概览**：Gallery 已有正式后端和同源内嵌 Web/PWA 代码基线，Chrome/Edge 已验证主要认证与浏览器恢复路径；但真实大规模、真实多平台、真实网络硬盘、完整 Security/Web Gate 和正式发行仍未完成。2026-07-23 的独立审计（[验证记录 EV-39](Documents/证据/验证记录.md)）用真实浏览器探针发现阶段 6 的「业务闭环」此前被高估：实时 WebSocket 通道在真实浏览器中 100% 握手失败，网页端多数写入口因 capability 名不符而不渲染。这些阻断性缺陷已在同日的 [EV-40](Documents/证据/验证记录.md) 修复并经真实 Chrome/Edge 复验；EV-42 后同快照封面与 CustomCover 编辑已有合成/mock 闭环，但尚无真实后端浏览器证据。完整业务写路径的浏览器端到端覆盖仍未建立，阶段 6 Web Gate 依旧未通过。
 
 ---
 
@@ -81,7 +81,7 @@ Gallery 是一个"本地优先"（数据主要放在自己电脑上，不依赖�
 | 前端框架与 CSS 组件库 | 明确「尚未冻结，不要仅凭原型替未来实现做决定」 | **新增决策** | ADR-009 接受 React 19 + TypeScript strict + Vite + TanStack Query + React Aria + RJSF/AJV；`规范/02` 新增「阶段 0 工程实现选型」表 | 阶段 6 正式实现需要确定组合 | 已接受，视觉组件样式与细粒度路由仍未冻结 |
 | 阶段 2 内置示例来源 | 「将**真实样本中验证过的**三类目录/metadata 形态转为内置示例」 | 细化（净室边界收紧） | 改为「将三类**通用**目录/metadata 形态转为**仓库内嵌合成示例**和黄金测试」 | 净室与只读 Source 边界要求，避免真实样本内容进入仓库 | 已落地，示例位于 `internal/rules/testdata/examples/` |
 | SourceWork 拆分/合并 | 初始阶段 1 只写「SourceWork inactive/orphaned 和人工 Binding review」 | **新增** | 增加基于 ContentBlob digest 集合交集的拆分/合并检测、人工结构决策与仅限未消费决策的撤回 | 阶段 1 领域闭环需要（EV-20） | 已落地；`split.bind_existing` 与显式可撤销 CanonicalWork merge 明确延后 |
-| Overlay 一致性分类 | 「Overlay 不按字段永久划分一致性类别，planner 按当前查询生成 `overlay_dependency_set`」 | 细化 | 增加静态字段能力注册表 + 按查询动态生成的 dependency set planner，取代此前实现里的全局静态二元分类 | 阶段 4 Correctness 收口（EV-31） | 与初始意图一致，实现补齐 |
+| Overlay 一致性分类 | 「Overlay 不按字段永久划分一致性类别，planner 按当前查询生成 `overlay_dependency_set`」 | 细化 | 增加静态字段能力注册表 + 按查询和响应资源投影动态生成的 dependency set planner；`PublishedWork.coverMediaId` 使普通作品查询固定包含 CustomCover resource | 阶段 4 Correctness 收口（EV-31、EV-42） | 与初始意图一致，实现补齐 |
 | 读己之写屏障 | 规范 04 描述客户端携带 `after_overlay_fact_version` 屏障，服务端只返回覆盖该水位的快照 | **未实现（文档超前）** | 全仓库（Go/OpenAPI/Web）无任何该字段；读己之写目前只能靠客户端等待 WebSocket publication 事件 | EV-39 全文 grep 核对 | 规范该段落描述的是目标态而非当前实现 |
 | 搜索技术选型 | ADR-005：v1 用 SQLite FTS5 + 自定义中文分词；Bleve 原型在特定配置下搜不到文件名中缀 | 保持不变 | 结论未变，用真实百万级/千万级数据重新做了性能对比 | 实验数据持续积累，支持原结论 | 结论稳定，但这些测试仍只在早期实验代码（Test-Bench）里执行过 |
 | 目录库发布模型 | ADR-003：整体重新生成快照发布 | 保持不变 | 已在正式代码落地并通过强制中断模拟测试 | 增量发布在 50% 变化时需 20.774 秒，整体快照稳定在 3-8 毫秒 | 已固化，阶段 1-3 验证通过 |
@@ -101,17 +101,17 @@ Gallery 是一个"本地优先"（数据主要放在自己电脑上，不依赖�
 | `galleryd`（后端主程序） | 唯一真正运行业务逻辑的独立进程，负责数据处理和对外接口 | ✅ 完整实现，能启动、能自愈（重启后自动恢复未完成的任务） |
 | `galleryctl`（命令行工具） | 通过命令行操作 Gallery 的工具 | 🟠 当前只提供 `version`（查看版本）和 `health`（查看健康状态）两个命令，尚未覆盖后端已有的约 70 个接口对应的管理能力 |
 | `control.db`（控制数据库） | 存放不能凭空重建的数据：用户的收藏、备注、账号、规则配置等 | ✅ 有完整的备份/恢复机制，验证过删库重建不会丢失用户数据 |
-| `catalog.db`（目录数据库） | 存放扫描出来、可以随时重新生成的数据：作品列表、搜索索引等 | ✅ 支持整体删除后重新扫描重建，且验证过重建后用户的收藏等信息不会丢失 |
+| `catalog.db`（目录数据库） | 存放扫描出来、可以随时重新生成的数据：作品列表、搜索索引、规则/有效封面投影等 | ✅ 支持整体删除后重新扫描重建；catalog v11 已把封面从负 ordinal 哨兵迁到显式列 |
 | 规则系统 | 让用户自定义"什么样的文件夹结构算一个作品"的规则引擎 | ✅ 规则的编写、检查、试运行、影响分析、上线、回滚全部完成 |
 | 任务系统（Job/Attempt） | 后台长时间任务（比如扫描、计算哈希）的排队和进度追踪系统 | ✅ 支持取消、重试、断点恢复，有 6 个独立的任务池（一种任务卡住不会影响其他任务） |
 | 扫描（Scanner） | 读取用户文件夹、识别文件的模块 | ✅ 支持"索引/增量/校验"三种模式，真实几十万文件规模的抽样测试通过 |
 | Catalog publication（目录库发布） | 把扫描结果"生效"的机制，保证不会出现扫描到一半的数据被用户看到 | ✅ 采用整体快照发布，验证过在 8 个不同的强制中断时刻都能正确恢复 |
-| Query / 搜索排序 / Overlay（用户覆盖信息） | 提供浏览、搜索、排序、用户自定义信息（收藏/标签/自定义封面）的模块 | 🟡 功能齐全，但排序权重、结果总数计算、锁的持续时间等参数仍是暂定值 |
+| Query / 搜索排序 / Overlay（用户覆盖信息） | 提供浏览、搜索、排序、用户自定义信息（收藏/标签/自定义封面）的模块 | 🟡 已支持 publication 冻结的有效封面与 CustomCover 回退，但排序权重、结果总数计算、锁的持续时间等参数仍是暂定值 |
 | 媒体与派生资源（DerivedAsset，比如缩略图） | 提供原始文件的分段下载（Range 请求）、缩略图生成 | ✅ 支持标准的按字节范围下载协议，缩略图生成走完整的任务队列流程 |
 | 恢复/备份 | 程序崩溃或被强制终止后的自愈机制 | ✅ 已用真实进程强制终止模拟测试过多个关键时间点 |
 | API/WebSocket（接口与实时推送） | 对外的网络接口，以及"任务完成了"这类实时通知 | ✅ 100 条 OpenAPI 路径 / 120 条服务端路由，契约完整且有路由集合契约测试；`/ws/v1` 的浏览器握手缺陷已在 EV-40 修复并经真实 Chrome/Edge 验证 |
 | 平台适配层 | 让核心逻辑不用关心操作系统差异的隔离层 | 🟡 接口设计已完成，但真实 Windows 文件身份识别（FileID）、Linux 原生文件系统等具体对接尚未完成 |
-| Web/PWA 网页界面 | 用户实际会看到、操作的网页界面 | 🟠 正式代码基线已嵌入 `galleryd`，完整浏览器 Gate 未通过 |
+| Web/PWA 网页界面 | 用户实际会看到、操作的网页界面 | 🟠 已显示同快照实际封面并可编辑 CustomCover；该新增链路只有 mock 证据，完整浏览器 Gate 未通过 |
 | 桌面壳 / 多账户 / 局域网多用户 | 桌面客户端外壳，以及局域网内多人共用时的账号体系 | 🟠 多账户后端与合成安全收尾已实现；桌面壳、真实 LAN 多设备和完整安全门禁未完成 |
 | 正式发行（安装包、签名、跨平台） | 面向普通用户的安装、更新、签名流程 | ⏳ 尚未开始 |
 
@@ -210,6 +210,7 @@ Gallery 是一个"本地优先"（数据主要放在自己电脑上，不依赖�
 | 结果总数三态语义（精确/下限/不计算） | 计划外细化 | 新增 | `internal/query` | ✅（结构） | 单元测试 | EV-30 | 🟡 | 具体"预算"数值同样是暂定值 |
 | 签名分页游标（防篡改、绑定发布版本） | 需要 | 已扩充（新增排名协议版本字段） | `internal/contract/query/cursor.schema.json` | ✅ | 契约测试（含篡改/过期测试） | EV-30/31 | ✅ | 游标的有效期（5 分钟）是暂定值 |
 | 覆盖层（Overlay）字段能力注册表 + 按查询动态计算依赖 | 需要 | 从"全局静态划分"改为"按查询动态计算"（真实的设计修正） | `internal/overlay` | ✅ | 单元测试 | EV-31 | ✅ | 无 |
+| 规则封面、CustomCover 与 Work 快照封面 | 需要 | `CoverPath` 映射稳定 SourceMedia/CanonicalMedia；显式规则/有效封面列；CustomCover 优先、失效保留并回退；`PublishedWork.coverMediaId` required nullable；Work 详情接受 `queryPublicationId` | `internal/rules`、`internal/scanner`、`internal/catalog`、`internal/query`、`internal/transport/httpapi` | ✅ | 8 包定向 Go + 合成 v10→v11 migration | EV-42 | ✅（合成范围） | 未使用真实 Source/媒体，未做真实规模或 API Freeze 验证 |
 | 媒体文件按需校验单个文件（VerificationTarget） | 计划外新增 | 新增，经历 5 轮修正（EV-30→34） | `internal/transport/httpapi/server.go` | ✅（以最新一轮结论为准） | 单元+回归测试 | EV-34 明确说明这是最新、最终生效的结论，此前 EV-33 的判断被更正 | ✅（限定为压力测试前的正确性） | 只证明压力测试前的正确性已收口，不代表压力测试已完成或参数已冻结 |
 | 派生资源（缩略图）公开接口 + 真实 JPEG 缩略图生成闭环 | 需要 | 未变 | `internal/derived`、`internal/derived/thumbnail`、`internal/derivedjob` | ✅ | 端到端测试 | EV-30/32/33 | ✅ | 曾发现重试次数上限设为 0 导致重试不生效的问题，已修复 |
 | 正式 API 冻结（API Freeze Gate） | 需要在阶段 4/5 完成 | 阶段 5 新资源已兼容扩展，仍未冻结 | `internal/contract/api/openapi.yaml` 当前为 `0.6.0-pre-alpha` | 🟡 | OpenAPI 生成一致性已通过 | EV-37；仍列为关键门禁 | ⏳ | 阶段 4 PRE_FREEZE 数值、性能与阶段 5 真实 LAN 门禁未完成，不能冻结 |
@@ -232,7 +233,7 @@ Gallery 是一个"本地优先"（数据主要放在自己电脑上，不依赖�
 
 | 功能项 | 初始计划 | 当前计划 | 事实代码证据 | 功能状态 | 测试/门禁项目 | 文档证据 | 测试状态 | 局限或缺口 |
 |---|---|---|---|---|---|---|---|---|
-| 浏览/搜索/作品/作者/媒体、Overlay、任务、规则、安全与维护界面 | 需要 | 以 OpenAPI/HTTP snapshot 为事实源，同源嵌入 `galleryd` | `web/src/pages/*`、`web/src/api/*`、`internal/webapp` | 🟠（页面骨架已实现；真实后端下 Overlay 编辑、任务取消/重试、Library 创建、Source 登记、按需确认与治理动作因 capability 名不符而不渲染，等同只读） | Vitest、Playwright mock、真实后端 Chrome/Edge Personal/LAN | EV-38、EV-39、ADR-009 | 🟡 | 写路径 E2E 完全未覆盖，这正是 EV-39 的 `CAP-1` 得以潜伏的原因；Firefox、真实移动设备与跨设备 LAN 同样未覆盖 |
+| 浏览/搜索/作品/作者/媒体、Overlay、任务、规则、安全与维护界面 | 需要 | 以 OpenAPI/HTTP snapshot 为事实源，同源嵌入 `galleryd`；列表/详情/封面/媒体沿用同一 publication | `web/src/pages/*`、`web/src/components/work-cover.tsx`、`web/src/api/*`、`internal/webapp` | 🟠（页面骨架已实现；EV-40 已关闭 capability 写入口阻断，EV-42 新增实际封面与 CustomCover 编辑） | Vitest、Playwright mock、真实后端 Chrome/Edge Personal/LAN | EV-38～EV-40、EV-42、ADR-009 | 🟡 | EV-42 封面路径尚无真实后端浏览器 E2E；完整管理写路径、Firefox、真实移动设备与跨设备 LAN 同样未覆盖 |
 | 实时通道（WebSocket → HTTP snapshot 恢复） | 需要 | WS 只作提示，断线/gap 以 HTTP snapshot 恢复 | `web/src/realtime/{realtime.tsx,envelope.ts}`、`internal/contract/realtime` | ✅（EV-40 修复 `WS-1`/`WS-2` 后可用） | 真实 Chrome/Edge E2E 断言连接建立、收到帧且无 CSP 违规 | EV-39、EV-40 | 🟡 | 已有持续门禁覆盖连接建立与信封字段，但 gap 恢复、吊销推送与弱网重连仍无浏览器端断言 |
 | 无障碍访问（键盘、屏幕阅读器等） | 需要 | React Aria + 语义 token、reduced motion、焦点与触控样式 | `web/src/components`、`web/src/styles`、`web/e2e/gallery.spec.ts` 的 axe 断言 | 🟠 | Playwright + axe 浏览器 smoke（只扫 `/browse` 单页，且显式禁用 `color-contrast`） | EV-38、EV-39 | 🟡 | 尚缺人工屏幕阅读器、真实触控与完整对比度审计；EV-39 另发现折叠态侧栏仍留在键盘 Tab 序中、窄屏覆盖层无焦点陷阱。**不存在 `web/tests/accessibility.test.tsx`**，此前的引用是错误的 |
 
@@ -254,20 +255,20 @@ Gallery 是一个"本地优先"（数据主要放在自己电脑上，不依赖�
 
 | 测试项目 | 所属阶段/门禁 | 测试代码位置 | 正式记录 | 状态 | 环境与样本 | 不能扩大解释的局限 |
 |---|---|---|---|---|---|---|
-| 全部单元测试（317 个 `Test*`/`Benchmark*`/`Example*` 函数，覆盖 41 个目录/包） | 贯穿各阶段 | 各 `internal/*/**_test.go` 等共 87 个测试文件 | `scripts/Check.ps1` 每次运行 | ✅（在 CI 上持续运行并要求全部通过；EV-39 本轮复跑退出码 0） | Windows + Ubuntu（GitHub Actions） | 全部是模拟/合成数据，不是真实媒体库；Argon2id benchmark 需手动 `-bench`，CI 从不执行 |
-| 数据库迁移（control 20 个迁移文件，catalog 10 个迁移文件） | 阶段 0-5 | `internal/storage/migrations/{control,catalog}` | EV-12 及各阶段收尾记录、EV-37 | ✅ | 空库/旧库升级单元测试 | 最终物理 Schema 仍未冻结 |
+| 全部 Go 测试（352 个 `Test*`/`Benchmark*`/`Example*` 函数，覆盖 43 个目录/包） | 贯穿各阶段 | `cmd`/`internal`/`pkg`/`tools` 共 96 个 `*_test.go` 文件 | `scripts/Check.ps1` 每次运行 | ✅（在 CI 上持续运行并要求全部通过） | Windows + Ubuntu（GitHub Actions） | 全部是模拟/合成数据，不是真实媒体库；Argon2id benchmark 需手动 `-bench`，CI 从不执行 |
+| 数据库迁移（control 20 个迁移文件，catalog 11 个迁移文件） | 阶段 0-5 | `internal/storage/migrations/{control,catalog}` | EV-12 及各阶段收尾记录、EV-37、EV-42 | ✅ | 空库/旧库升级单元测试；v10→v11 合成 1,200 Work/3,600 Media 约 54 ms | 最终物理 Schema 仍未冻结；旧规则封面只能近似回填，需重扫精确恢复 |
 | 契约/OpenAPI/WebSocket/游标/错误码 Schema 一致性 | 阶段 0、4、5 | `internal/contract/{api,fault,query,realtime}/*_test.go` | EV-12、EV-30、EV-37 | ✅（生成一致性） | 单元测试 | 当前 `0.6.0-pre-alpha`，尚未正式冻结 |
 | 集成/端到端（使用固定的小型合成文件夹样例） | Walking Skeleton、Architecture Proof | `internal/bootstrap/run_test.go`、`internal/scanner/{service_test.go,discovery_test.go}`，样例文件在 `tests/fixtures/` | EV-13、EV-14 | ✅（限定范围内） | 单个/几个文件规模，非大规模 | 不能代表大规模真实场景 |
 | 强制终止/恢复（8 个关键时间点） | Architecture Proof | `internal/recovery/killpoints_test.go`（真实拉起子进程并终止） | EV-14 | ✅ | Windows + WSL | 只覆盖这 8 个预设场景 |
 | 应用级单实例锁的强制终止恢复 | 阶段 1 | `internal/platform/lock/lock_test.go` | EV-18 | ✅ | Windows + WSL | 无 |
 | 只读 Source（媒体来源文件夹零写入保证） | 全局不变量 | `Test-Bench/cleanroom-lab-real/cmd/realprobe`（原型工具，非正式测试） | EV-01：真实约 628.6 GiB、37.9 万文件，前后指纹一致 | 🟡（仅原型验证，非正式自动化测试） | 真实 Windows 媒体库（3 个真实文件夹） | 只验证过 Windows 可见磁盘卷，未验证网络盘；由原型工具执行，不是产品自带的持续测试 |
-| 查询/搜索/游标/Overlay 正确性 | 阶段 4 | `internal/query/*_test.go`、`internal/querytext/*_test.go` | EV-30~34 | ✅（正确性收口，压力测试前） | 单元+黄金样例 | 不代表百万级/千万级真实压力表现 |
+| 查询/搜索/游标/Overlay/封面正确性 | 阶段 4 | `internal/query/*_test.go`、`internal/catalog/cover_projection_test.go`、`internal/querytext/*_test.go` | EV-30～34、EV-42 | ✅（正确性收口，压力测试前） | 单元+黄金样例+合成 migration | 不代表真实 Source、百万级/千万级压力或 API Freeze |
 | 媒体 Range 请求/DerivedAsset（缩略图）正确性 | 阶段 4 | `internal/media/*_test.go`、`internal/derived*/**_test.go` | EV-30/32/33 | ✅ | 单元+端到端 | 无 |
 | 性能测试（Reference Performance） | 阶段 3、4 | `internal/query/reference_performance_test.go`（默认跳过，需手动设置环境变量开启，最多合成 100 万条记录） | EV-23 明确写"不构成正式 Reference/Degradation Performance Gate 的结论" | 🟡 | 单台参考机器，最多合成 100 万行 | 明确不能当作正式性能门禁结论 |
 | HDD/SMB/NAS 真实场景 | 阶段 3、7 | 无正式代码测试；早期实验里有相关原型 | EV-25 明确写"全量扫描未完成，正式全量性能 Gate 仍未通过" | 🟡（仅抽样） / ⏳（全量与网络盘） | 真实 SSD ~36.6 万文件、真实 HDD ~63.2 万文件（均为抽样，非全量） | 抽样结果不能当作全量场景的性能保证；网络共享盘尚未验证 |
 | Windows/Linux/macOS/Docker 平台支持 | 阶段 7 | CI 只有 Windows + Ubuntu 两个系统 | ADR-007 四级支持成熟度表 | 🟡（Windows/Linux 停在"CI 能运行"层级）/ ⏳（macOS/Docker） | GitHub Actions | 未达到"发行候选"或"正式支持"级别；CI 上的 Linux 也不是原生 Linux 全部行为的完整验证 |
 | 安全（认证、授权、Web 边界、路径穿越、恶意元数据/媒体、限流） | 阶段 5 | 正式生产包覆盖账户/Token/Grant/Session/WS/Web 与合成攻击；真实 Chrome/Edge 已覆盖 Personal/LAN 主路径和吊销 | EV-09、EV-37、EV-38 | 🟡 | Windows 合成与浏览器；WSL race | 真实物理 LAN 多设备、目标低端设备与真实恶意资源门禁未完成，整体 Gate 未通过 |
-| Web/PWA 界面测试 | 阶段 6 | `web/src/**/*.test.ts(x)`（3 个文件 9 个用例）、`web/e2e`、`internal/webapp/*_test.go` | EV-38、EV-39 | 🟡 | Vitest；Chrome/Edge mock + 真实后端；CI 只跑 chromium 的 2 个 `@smoke` | CI 的浏览器 Job **全程 mock API 且用假 WebSocket 替换**，不接触 `galleryd`；真实后端 E2E（`@real`/`@lan-real`）在 CI 中恒跳过，只覆盖配对/登录/吊销，不点击任何写入口。11 个业务页面零单元测试。EV-39 本轮因 4173 端口被占用**无法执行** mock smoke |
+| Web/PWA 界面测试 | 阶段 6 | `web/src/**/*.test.ts(x)`（6 个文件 11 个用例）与 `web/scripts/dependency-audit.test.mjs`（16 个用例）、`web/e2e`、`internal/webapp/*_test.go` | EV-38～EV-40、EV-42 | 🟡 | Vitest 合计 7 个文件 27 项；既有 Chrome/Edge 真实后端证据；EV-42 为 Chromium mock smoke 3/3 | CI 浏览器 Job 仍全程 mock API；真实后端 E2E 在 CI 中恒跳过。EV-42 只证明 WorkCover、作品详情/编辑组件与静态壳 mock 交互，未复验真实 `galleryd`、publication lease 或媒体正文 |
 | 阶段 4 查询/媒体 Correctness（testlab） | 阶段 4 | `tools/testlab/stages/stage4/**`（约 1,100 行断言） | EV-36 | 🧪（人工一次性执行，不在 CI） | 手动 `testlabprobe` CLI | 该目录**没有任何 `go test` 入口**，`go test ./...` 与 CI 都不执行；其 `perf_test.go`/`cursor_test.go` 断言的是测试框架自身而非产品。EV-36 的「39 项 Correctness + 6 项 Cursor 通过」是一次性快照，此后每次提交都不再复验 |
 | 发布/签名/SBOM | 阶段 7 | CI 里仅有依赖漏洞扫描 `govulncheck`（只在 Linux 任务中运行） | ci.yml | 🟡（仅依赖漏洞扫描这一项） | GitHub Actions Linux | 签名、SBOM、安装包流程尚不存在 |
 | Fuzz（随机变异输入）测试、Benchmark（性能基准）测试 | — | `internal/auth/password_benchmark_test.go` 已有 Argon2id benchmark，尚无正式 Fuzz | EV-38 | 🟡 | 当前 Windows 高性能工作站 | 不代表目标低端设备参数门禁 |

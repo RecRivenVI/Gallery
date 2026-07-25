@@ -295,6 +295,7 @@ func TestPersonalPairingIsSingleUseAndRevocationInvalidatesREST(t *testing.T) {
 	if err != nil || worksResponse.JSON200 == nil || len(worksResponse.JSON200.Works) != 1 {
 		t.Fatalf("公开 Work 查询失败: %v status=%d", err, worksResponse.StatusCode())
 	}
+	basePublicationID := worksResponse.JSON200.QueryPublicationId
 	mediaResponse, err := client.ListWorkMediaWithResponse(context.Background(), worksResponse.JSON200.Works[0].Id, &api.ListWorkMediaParams{})
 	if err != nil || mediaResponse.JSON200 == nil || len(mediaResponse.JSON200.Media) != 1 {
 		t.Fatalf("公开 Media 查询失败: %v status=%d", err, mediaResponse.StatusCode())
@@ -314,6 +315,20 @@ func TestPersonalPairingIsSingleUseAndRevocationInvalidatesREST(t *testing.T) {
 		t.Fatalf("Overlay projection Job 未完成或伪造 Source: %+v", overlayJob)
 	}
 	overlaySequence := waitForWebSocketJobCompleted(t, websocketConnection, overlayJob.Id)
+	historicalWork, err := client.GetWorkWithResponse(context.Background(), worksResponse.JSON200.Works[0].Id,
+		&api.GetWorkParams{QueryPublicationId: &basePublicationID})
+	if err != nil || historicalWork.JSON200 == nil || historicalWork.JSON200.QueryPublicationId != basePublicationID ||
+		historicalWork.JSON200.Favorite || historicalWork.JSON200.Progress != 0 {
+		t.Fatalf("显式旧 publication 的 Work 详情未保留 Favorite/Progress 快照: %v status=%d body=%s",
+			err, historicalWork.StatusCode(), historicalWork.Body)
+	}
+	currentWork, err := client.GetWorkWithResponse(context.Background(), worksResponse.JSON200.Works[0].Id, &api.GetWorkParams{})
+	if err != nil || currentWork.JSON200 == nil || overlayJob.QueryPublicationId == nil ||
+		currentWork.JSON200.QueryPublicationId != *overlayJob.QueryPublicationId ||
+		!currentWork.JSON200.Favorite || currentWork.JSON200.Progress != 0.4 {
+		t.Fatalf("current Work 详情未返回新 publication 的 Favorite/Progress 快照: %v status=%d body=%s",
+			err, currentWork.StatusCode(), currentWork.Body)
+	}
 	searchText, tag := "覆盖标题", "HTTP 标签"
 	searched, err := client.ListWorksWithResponse(context.Background(), &api.ListWorksParams{Q: &searchText, Tag: &tag})
 	if err != nil || searched.JSON200 == nil || len(searched.JSON200.Works) != 1 || searched.JSON200.Works[0].Title != "HTTP 覆盖标题" {

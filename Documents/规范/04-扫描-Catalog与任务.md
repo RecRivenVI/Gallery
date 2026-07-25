@@ -22,6 +22,8 @@ validate Source/SourceRuleBinding
   → schedule derived assets and maintenance
 ```
 
+规则执行产出的 `Work.CoverPath` 必须命中同一作品本次已发现的媒体；扫描器把它固化为 SourceMedia 稳定键，并经 MediaBinding 解析为 CanonicalMedia。`source_works.rule_cover_media_source_key` 保存 Source-derived 规则选择，`work_projections.rule_cover_media_id` 保存解析后的规则封面，`work_projections.cover_media_id` 保存叠加当前 Overlay 后的 publication 有效封面。存在媒体却无法完成这条映射时，候选以规则错误失败，不得回退为负 `ordinal` 哨兵。
+
 发现阶段只读 Source。相对路径、FileID/inode、大小和 mtime 用于判断是否需要进一步读取，是常见、廉价且有价值的组合证据，但都只能产生候选，不能单独确认内容；新内容或冲突候选在建立 ContentBlob 时必须由持久哈希任务完成完整 SHA-256，任何时候都不得以这些线索伪造或替代 digest。`verify` 档案与默认 `incremental` 档案对新增或疑似变化媒体，首次哈希成功前 SourceMedia 保持 staging `hash_pending`，默认阻塞受影响 Source publication；超大文件或网络盘只延长带进度、可取消的候选构建，不能降低身份强度。`index` 档案是唯一例外，允许媒体以 `located_unverified` 状态正式发布而不建立 ContentBlob，详见下一节。具体失败、重试和续算语义见 [文件系统与媒体处理](08-文件系统与媒体处理.md)。
 
 ## 扫描档案与内容确认状态
@@ -125,13 +127,15 @@ content_verified     已通过完整 SHA-256 确认，ContentBlob/FileLocation �
 
 对外只使用不可猜测、不可拆分的 `query_publication_id` 引用该二元组。`catalog.db` 的 publication 记录至少保存 `query_publication_id`、两类 revision、control Overlay 输入水位、创建时间和状态；只有同一发布事务成功写入的合法组合才能获得 ID。客户端不得提交两个裸 revision 任意组合，公共 API、游标、WebSocket publication 事件和租约均以 `query_publication_id` 为选择句柄。两类原始 revision 可作为只读诊断元数据返回，但不能单独选择查询快照。
 
-- `catalog_revision` 冻结 Source-derived 事实、ContentBlob/FileLocation 和来源侧关系；
-- `overlay_projection_revision` 冻结基于某个确定 `catalog_revision` 与一组具备查询能力的 Overlay 输入生成的有效字段、可见性、关系、SortKey 和 FTS；它必须记录所依赖的 Catalog revision 与 control Overlay 输入水位；
+- `catalog_revision` 冻结 Source-derived 事实、规则选择的 SourceMedia 稳定封面引用、ContentBlob/FileLocation 和来源侧关系；
+- `overlay_projection_revision` 冻结基于某个确定 `catalog_revision` 与一组具备查询能力的 Overlay 输入生成的有效字段、规则/有效 CanonicalMedia 封面引用、可见性、关系、SortKey 和 FTS；它必须记录所依赖的 Catalog revision 与 control Overlay 输入水位；
 - 新 Catalog 发布时，候选必须带有与之匹配的 Overlay projection，发布事务为该组合创建新 `query_publication_id` 并切换活动指针；
 - Overlay 是否影响某次查询快照，取决于该事实是否参与**当前查询**的过滤、排序、搜索、可见性或集合判断，而不是字段的永久分类。Schema 只声明字段可参与哪些查询能力，query planner 生成本次 `overlay_dependency_set`；
 - 能进入任一查询依赖的 Overlay 写入不改写 `catalog_revision`，而是异步构建新的 `overlay_projection_revision`。新 projection publication 为同一 Catalog revision 创建新的 `query_publication_id`；未依赖该字段的当前查询无需把它当作集合变化；
 - 仅作为当前响应附加展示、未进入 `overlay_dependency_set` 的值可以从 `control.db` 实时读取，但不得反向改变当前页的集合和顺序；
 - 任一 Overlay projection 只能与其声明的 Catalog revision 配对。不存在“新 Catalog + 旧投影”或“一页内切换投影”的合法读路径。
+
+Catalog candidate 与 Overlay candidate 发布前都必须验证：规则 SourceMedia 引用命中同 SourceWork，规则 CanonicalMedia 与有效 CanonicalMedia 均属于同一 Work，存在规则封面时有效封面不为空，且所有媒体的 `ordinal`/`base_ordinal` 非负。构造新的 Overlay revision 或克隆未变化 Source 时先恢复规则封面，再从 `control.db` 重放 `CustomCover`；CustomCover 不存在或已不属于该 Work 时仅让有效封面回退规则封面，不删除用户事实。
 
 ## Overlay 写入、投影与读己之写
 
@@ -179,6 +183,8 @@ forward-only migration 给 `work_projections`/`media_projections` 等既有表�
 标准做法是复用既有 Overlay 投影管线触发一次不改变任何 `work_overlays` 事实、只重建当前 active revision 整个查询投影的 Job（`overlay.Service.TriggerReprojection`）：`ApplyOverlayFacts` 本身已经对 revision 内每一个 Work 重新计算这些字段——快照类 Overlay 字段（如 `favorite`/`progress`）的权威来源是 control.db 的既有事实，可从中安全重新计算；纯文本派生字段（如 `search_*_norm`）的权威来源是同一 revision 里已经存在的 `source_works` 原始文本，同样可以安全重新计算，不需要重新扫描、也不伪造任何无法从既有数据推导的事实。启动流程在完成迁移与既有 Job/Overlay reconciliation 之后、开始监听服务请求之前，检查是否已经为本次新增列完成过这次回填（持久标记）；没有 active publication（全新安装）视为无需回填。
 
 持久标记表达的是"这次回填已经确认完成"，不是"已经排队"或"已经尝试过"：`EnqueueOverlayProjectionTx` 可能把这次请求合并到一个既有的 `queued`/`running`/`publishing` overlay_projection Job（例如与另一个无关的 Overlay 写入排队竞争、或是上一次进程崩溃遗留的行）而不是新建一个，这种情况下不能因为"Job 已经存在"就提前写入完成标记；启动流程必须先把这个 Job（无论是否本次创建）驱动到真正的 `completed`——沿用既有 `Retry`/`Execute`/`ReconcileAttempts` 收敛陈旧租约与可重试失败，不新增等待或超时语义——才允许写入标记。若该 Job 排队、执行或重试期间遇到不可恢复的失败，启动本身失败并保持标记未写入，不得把"曾经触发"误当作"已经完成"而放行服务；下一次启动会重新观察到未回填、重新执行整个流程。这一模式不引入第二套 Job/状态机：完成判定完全基于既有 Job 状态机的终态，中断后由既有 Job 恢复循环正常收敛，重复触发会与既有非终态 Job 安全合并。
+
+catalog v10→v11 是一次有界例外：旧 Catalog 未持久化规则 `CoverPath`，无法在不重读 Source 的情况下精确恢复规则封面。migration 以每个既有 Work 的稳定首媒体确定性近似回填 `rule_cover_media_source_key`/`rule_cover_media_id`，从历史 `ordinal=-1` 恢复既有 CustomCover 到显式 `cover_media_id`，随后把负 `base_ordinal`/`ordinal` 规范为非负内容顺序。该回填只保证旧 publication 可一致读取，不声称还原原 RuleVersion 的精确封面选择；下一次正式重扫以实际 `CoverPath` 替换近似值。
 
 ## 取消、崩溃和离线
 
