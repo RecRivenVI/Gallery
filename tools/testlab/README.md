@@ -21,9 +21,10 @@ tools/testlab/
 │   ├── report/       Finding/LatencySample/Report，脱敏与原子持久化
 │   └── sourceguard/   真实 Source 只读清单与零写入校验
 ├── stages/
+│   ├── stage3/        生产契约 smoke：扫描档案、publication、Job/Attempt 恢复与 Source 零写入
 │   ├── stage4/
-│       ├── query/  结构化过滤/搜索/排序/Ranking/Total/Cursor/性能矩阵
-│       └── media/  真实/合成 Source 建立、按需确认、Range/ETag、DerivedAsset
+│   │   ├── query/     结构化过滤/搜索/排序/Ranking/Total/Cursor/性能矩阵
+│   │   └── media/     真实/合成 Source 建立、按需确认、Range/ETag、DerivedAsset
 │   └── stage5/
 │       └── security/  LAN Owner、Session、Grant、API Token、路径/metadata/媒体/恢复攻击输入与安全报告闭环
 ├── fixtures/
@@ -32,9 +33,11 @@ tools/testlab/
 └── schemas/         （规则/结果 Schema 以 internal/rules、internal/report 为唯一权威，本目录只放跨阶段共用的补充 Schema，避免重复定义）
 ```
 
-`stages/stage3/{scan,catalog,jobs,recovery}` 目录已按模板建立，尚无内容——阶段 3 现有测试证据仍在
-`Documents/证据/验证记录.md` 与 `Documents/证据/阶段3-4大规模测试归档.md`，本轮未把阶段 3 遗留脚本
-重写进本框架，留待阶段 3 下一轮正式压力测试时补齐，不预先塞入空文件。
+`stages/stage3/smoke_test.go` 直接组合生产 `application`、`scanner`、`hashjob`、`jobs`、`catalog`
+与 `recovery` 契约，在临时 AppDirs 和合成只读 Source 上复核 `index`/`incremental`/`verify`、完整
+SHA-256、publication 不可变性、同一 Job 多 Attempt 恢复与 Source guard。它是可重复的正确性 smoke，
+不替代 `Documents/证据/验证记录.md` 和 `Documents/证据/阶段3-4大规模测试归档.md` 中的真实规模证据，
+也不代表 HDD、SMB/NAS 或正式性能门禁已经完成。
 
 ## 规模分级
 
