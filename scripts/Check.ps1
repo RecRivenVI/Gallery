@@ -21,6 +21,16 @@ $gofmt = Join-Path $goBin $gofmtName
 # `./...`，使 vet/test/build 的实际范围取决于 node_modules 是否存在（EV-39 的 BLD-1）。
 $goPackages = @('./cmd/...', './internal/...', './pkg/...', './tools/...')
 
+# tracked files 的换行事实源是 `.gitattributes`（`* text=auto eol=lf`）。此处直接断言
+# index 与工作树都只使用 LF，使本地门禁与 CI runner 在任意 `core.autocrlf`/`core.eol`
+# 下得到同一结论：否则 Windows 检出会得到 CRLF 工作树而只在 CI 里触发 Prettier 失败
+# （EV-41 的 EOL-1）。
+$repoRoot = (Resolve-Path -LiteralPath (Join-Path $PSScriptRoot '..')).Path
+$eolEntries = & git -C $repoRoot ls-files --eol
+if ($LASTEXITCODE -ne 0) { throw 'git ls-files --eol 失败' }
+$badEol = $eolEntries | Where-Object { $_ -match '(^|\s)(i|w)/(crlf|mixed)(\s|$)' }
+if ($badEol) { throw "以下 tracked 文件的换行不是 LF，请检查 .gitattributes 与本地检出：`n$($badEol -join "`n")" }
+
 & $go mod tidy -diff
 if ($LASTEXITCODE -ne 0) { throw 'go.mod/go.sum 不是 tidy 状态' }
 

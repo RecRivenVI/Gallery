@@ -1,18 +1,15 @@
-* text=auto
+# 本文件是仓库中 tracked files 换行的唯一权威事实源。
+#
+# `text=auto` 让 Git 在提交时把检测为文本的内容规范化为 LF；`eol=lf` 让检出后的
+# 工作树同样使用 LF。两者合并作用于 `*`，因此任何平台、任何 `core.autocrlf` 或
+# `core.eol` 设置下的检出结果都一致，新增的文件类型也自动继承该规则，不需要在
+# 引入新语言或新前端资产时逐个补充扩展名。
+#
+# 提交信息（commit message）的行分隔符是另一套规则，见 AGENTS.md 的
+# 「排版：行分隔符」，不由本文件保证。
+* text=auto eol=lf
 
-# Go 源码与模块清单固定 LF
-*.go   text eol=lf
-go.mod text eol=lf
-go.sum text eol=lf
-
-# 结构化配置、SQL 与脚本固定 LF
-*.yaml text eol=lf
-*.yml  text eol=lf
-*.json text eol=lf
-*.sql  text eol=lf
-*.ps1  text eol=lf
-
-# 媒体与字体等二进制资产不做换行规范化
+# 媒体与字体等二进制资产不做换行规范化，也不做逐行 diff/merge
 *.png   binary
 *.jpg   binary
 *.woff2 binary
