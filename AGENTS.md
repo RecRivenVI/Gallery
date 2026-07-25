@@ -17,6 +17,7 @@
 - Gallery 是独立的净室产品，不以任何旧 Gallery 的数据库、配置、API、目录结构或行为作为兼容、迁移或对拍目标。
 - 当前仓库已有正式产品代码（`cmd/`、`internal/`、`pkg/`、`web/`）。阶段 0 契约骨架、Walking Skeleton、Architecture Proof 正确性切片、阶段 1「领域和数据所有权」、阶段 2「规则闭环」、阶段 3「扫描、任务和 Catalog」与阶段 4「查询和媒体」均已完成代码与合成 Correctness 实现；阶段 5「账户、安全和多客户端」已完成代码/合成安全收尾，并取得 Chrome/Edge 同机 Personal/LAN 主路径与当前工作站 Argon2id 补证，但正式 Security Gate 尚未通过（见 [验证记录 EV-37、EV-38](Documents/证据/验证记录.md)）。阶段 6 已实现 React/TypeScript Web/PWA 页面代码基线、OpenAPI 生成客户端、同源嵌入资产、静态壳 PWA，以及认证、浏览/媒体、Overlay、任务、规则、安全和维护页面骨架；Chrome/Edge 真实后端认证主路径通过，但正式 Web Gate 尚未通过（见 EV-38）。阶段 4 的 EV-35/EV-36 结论保持：500,000 WorkProjection 的 Correctness/Cursor 通过，Reference Performance Gate 未通过，Gank/Pawchive 未完成有界验证。
 - **[EV-39](Documents/证据/验证记录.md)（2026-07-23）的真实浏览器复核下调了阶段 6 的完成度陈述**：`/ws/v1` 在 Chrome/Edge 中 100% 握手失败（服务端对 WebSocket 强制要求浏览器不会发送的 `Sec-Fetch-Site` 头），前端信封字段名与 `internal/contract/realtime` 不符，且 6 个前端 capability 名不在后端权威词表中，导致 Overlay 编辑、任务取消/重试、Library 创建、Source 登记、按需内容确认与全部治理动作对任何主体都不渲染。[EV-40](Documents/证据/验证记录.md) 已修复这些阻断项并经真实 Chrome/Edge 复验，但**仍不得把阶段 6 描述为「已完成业务闭环」**——完整管理写路径的浏览器端到端覆盖尚未建立。同轮记录的 `MED-1`、`SEC-3`、`AUTHZ-1`、`QRY-1`、`TEST-2` 等仍未关闭，详见 EV-39 与 EV-40。
+- [EV-42](Documents/证据/验证记录.md)（2026-07-26）补齐规则 `CoverPath` 到 SourceMedia/CanonicalMedia、显式规则/有效封面投影、CustomCover 优先与失效回退、`PublishedWork.coverMediaId`、Work 详情快照绑定和 Web 同快照封面/编辑；当前证据为根级 `Check.ps1`、WSL2 Debian 定向 race、合成 migration 与 Web Vitest/Chromium mock，不含真实 Source、真实媒体或真实后端浏览器，阶段 4/5/6 Gate 均未因此通过。
 - 尚未完成：阶段 5 真实物理 LAN 多设备、目标低端设备 Argon2id 和真实恶意资源门禁；阶段 6 Firefox、真实移动设备/屏幕阅读器与完整业务 E2E；以及真实全量 HDD、SMB/NAS、真实 FileID/`dev+inode`、正式 Reference/Degradation Performance Gate、ranking/total/租约等 PRE_FREEZE 数值、AND/OR canonical 化、Progress 排序和平台发行。
 - 本文件是需要随真实开发状态持续维护的 Agent 规则；发现与代码、有效 ADR 或规范不一致时应更新本文件，但不得放宽安全、只读 Source、Git、签名或测试要求，也不得把临时实装写成已冻结决策。
 
@@ -68,7 +69,7 @@
 
 ### 当前限定的暂定行为
 
-- **Overlay 查询影响是当前实现，不是字段永久分类**：TitleOverride/ManualTag/Hidden/CustomCover 目前属于 query-affecting snapshot，Favorite/ReadingProgress 属于实时附加。某字段未来一旦参与过滤、排序、搜索或集合成员判断，必须进入当前查询的 dependency set 与 revision。
+- **Overlay 查询影响由字段能力与本次查询动态决定，不是字段永久分类**：TitleOverride/ManualTag/Hidden/CustomCover/Favorite/ReadingProgress 的查询能力都经 publication 写后屏障；Favorite/ReadingProgress 额外提供 live 展示。`PublishedWork.coverMediaId` 是 publication 冻结的有效封面，因此普通作品查询也固定把 CustomCover 以 `{overlay.customCoverMediaId, resource}` 放入 dependency set；同 Work 有效 CustomCover 优先，失效事实保留并回退规则封面。
 - **SourceRuleBinding 当前正式兼容基线是单生效规则**：按 active、受限条件匹配、priority、binding_id 稳定选择一条；同一 Source 同一 priority 由数据库拒绝，未匹配时返回稳定错误。多规则链、Provider 路由组合和多 Binding 合并执行仍未冻结，不得声称已支持。
 - 已实装但未冻结的常量与选择集中登记在 `Documents/指南/01-v1实施计划.md` 的「暂定实装决策」表，修改前先查该表的冻结阶段与重新审议门禁。
 
@@ -115,6 +116,8 @@
 4. 按领域/规则/扫描/查询与媒体/安全/Web/PWA/平台发行的顺序扩展。**（阶段 1～4 已完成代码与合成 Correctness；阶段 5 代码基线完成但 Security Gate 未通过；阶段 6 Web/PWA 正式代码基线已实现但 Web Gate 未通过。下一步并行完成阶段 4 性能/API Freeze、阶段 5 外部设备安全门禁和阶段 6 完整浏览器/可访问性门禁，不进入桌面壳或发行）**
 
 阶段 1 已完成。阶段 1 Schema Freeze Gate 冻结的是**核心领域身份与唯一约束**（不是最终物理数据库唯一约束）：`(source_id, source_key) WHERE status='active'`、`(work_id, ordinal)`、CanonicalWork 持久 ID 身份、Work/Creator/Media Binding 的 active/inactive/manual_unbound/orphan_candidate/orphaned 生命周期、同 Blob 多 occurrence、SourceWork 拆分/合并检测与结构决策 fingerprint 唯一、多 Source 隔离、Binding issue 指纹去重，登记于 control 迁移 `00016_schema_freeze_phase1` 的 `schema_freeze` 表（FROZEN）。SourceWork 决策的撤回仅适用于尚未被扫描消费的 pre-seed Binding；消费后返回结构化 `CONFLICT`，不执行已生效结构变化的完整反向操作。阶段 2 的 RulePackage canonical JSON 所有权、已发布版本不可变、草稿 revision CAS 和 Job 规则执行快照登记于 `00017_rules_lifecycle` 的 `schema_freeze` 表；Rule extension 注册表、单生效 Binding、参数最终命名空间、Impact 调度联动和完整表单 UI 保持 compatibility baseline。阶段 3 已增加并修正持久 Hash Job、同一 Job 多 Attempt、周期租约回收和退避重试、六类独立非阻塞资源池、动态 Watcher 与低频周期收敛、staging/publication、所有权 Temp GC、GC/VACUUM 服务端空间预检和外部执行边界，但真实 HDD、SMB/NAS、网络挂载与正式 Reference/Degradation Performance Gate 仍待下一轮实测。阶段 5 安全结构方向登记于 control v20 的 `schema_freeze` 表；Argon2id、Session 与限流数值仍 PRE_FREEZE。阶段 6 的 Web 交付架构由 ADR-009 接受，但浏览器/可访问性 Gate 未冻结为发布支持。仍保持 pre-freeze/compatibility-baseline/deferred 的其它旧项不因此重开已完成阶段。修改标记 FROZEN 的约束前须新增或修订 ADR；不得因阶段 6 代码基线存在而跳过阶段 5 未完成门禁或提前进入桌面壳/发行。
+
+EV-42 在上述 compatibility baseline 内增加 catalog v11 显式封面列：规则 `CoverPath` 映射同一 SourceWork 的稳定 SourceMedia，经 Binding 解析 CanonicalMedia；媒体 `ordinal` 仅保留非负内容顺序。`PublishedWork.coverMediaId` 为 required nullable，`GET /api/v1/works/{workId}` 可用 `queryPublicationId` 绑定 publication 并建立显式快照读取租约；这些是当前实现，不代表 API Freeze。
 
 Walking Skeleton 功能可以少，但基础模型不能是临时替代品：
 
@@ -1651,7 +1654,7 @@ feat(核心): 建立状态转换的服务端约束\n\n变动内容：\n- 定义�
 
 ## 当前可开工结论
 
-阶段 0～4 已完成代码与合成 Correctness；阶段 5 安全代码基线及 EV-37 合成证据完整，EV-38 又补充 Chrome/Edge 同机 Personal/LAN 与当前工作站 Argon2id 证据，但正式 Security Gate 未通过。阶段 6 React/TypeScript Web/PWA、同源嵌入资产、静态壳 PWA 和主要页面骨架已实现，Chrome/Edge 真实后端认证主路径通过，但正式 Web Gate 未通过，且 EV-39 证明其「业务闭环」此前被高估。阶段 4 的 EV-35/EV-36 结论保持：500,000 规模 Correctness/Cursor 通过，Reference Performance Gate 未通过，Gank/Pawchive 真实有界验证未完成。
+阶段 0～4 已完成代码与合成 Correctness；EV-42 又补齐显式规则/有效封面、Work 快照契约和 Web 同快照封面/编辑的合成 Correctness，但不改变 API Freeze/Reference Performance 结论。阶段 5 安全代码基线及 EV-37 合成证据完整，EV-38 又补充 Chrome/Edge 同机 Personal/LAN 与当前工作站 Argon2id 证据，但正式 Security Gate 未通过。阶段 6 React/TypeScript Web/PWA、同源嵌入资产、静态壳 PWA 和主要页面骨架已实现，Chrome/Edge 真实后端认证主路径通过，但正式 Web Gate 未通过，且 EV-39 证明其「业务闭环」此前被高估；EV-42 的封面闭环只有 mock 浏览器证据。阶段 4 的 EV-35/EV-36 结论保持：500,000 规模 Correctness/Cursor 通过，Reference Performance Gate 未通过，Gank/Pawchive 真实有界验证未完成。
 
 EV-39 登记的阻断性缺陷已由 [EV-40](Documents/证据/验证记录.md) 关闭：`WS-1`、`WS-2`、`CAP-1`、`API-1`、`SEC-1`、`SEC-2`、`SEC-4`、`TEST-1`、`BLD-1` 与 `A11Y-1` 的键盘部分均已修复并各自配套会在旧实现下失败的回归测试。**未关闭且不得静默跳过的项**：`MED-1`（媒体正文每请求整文件复制 + 全量哈希）涉及「正文字节是否始终与已发布 ContentBlob 摘要一致」这一不变量，须先由 ADR 裁决再实施；`AUTHZ-1`（global 作用域列表查询上 deny grant 不生效）与 `QRY-1`（`internal/query` 用扁平 capability 列表判定 `overlay.hidden`）需要把授权判定上移或改为注入回调；`SEC-3`（媒体正文 MIME 白名单与 `Content-Disposition` 策略）须与 `规范/08` 的媒体类型范围一起裁决；`TEST-2`（阶段 4 testlab Correctness 无自动化入口）与「真实后端 E2E 未进入 CI」是当前最大的门禁缺口。
 
