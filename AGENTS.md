@@ -154,11 +154,20 @@ Walking Skeleton 功能可以少，但基础模型不能是临时替代品：
 
 ## 构建、依赖和发行
 
-- 仓库已有正式构建与检查入口：根级 `Check.ps1`（委托 `scripts/Check.ps1`）执行 `go mod tidy -diff`、OpenAPI Go 生成一致性（`go generate ./...`）、Web 的 `npm ci`、OpenAPI TypeScript/图标生成一致性、TypeScript、ESLint、Prettier、Vitest 和生产构建，再执行 gofmt、`go vet ./...`、`CGO_ENABLED=0 go test ./...` 与 `go build ./cmd/...`；`Check.ps1 -Race` 追加 `go test -race ./...`。Web 独立浏览器 smoke 使用 `cd web && npm run build && npm run test:smoke`，真实后端 E2E 只允许临时 AppDirs/隔离端口。也可直接运行 Go 门禁与 `govulncheck ./...`。Windows 本机 race 有 `WaitOnAddress` 限制，race 门禁在 Linux/WSL 执行。`go` 不在 PATH 时用 `GALLERY_GO` 指定固定工具链。不要另建重复脚本。
+- 仓库已有正式构建与检查入口：根级 `Check.ps1`（委托 `scripts/Check.ps1`）先断言 tracked 文件的 index 与工作树换行均为 LF（规则见「仓库文本换行与跨平台格式一致性」），再执行 `go mod tidy -diff`、OpenAPI Go 生成一致性（`go generate ./...`）、Web 的 `npm ci`、OpenAPI TypeScript/图标生成一致性、TypeScript、ESLint、Prettier、Vitest 和生产构建，再执行 gofmt、`go vet ./...`、`CGO_ENABLED=0 go test ./...` 与 `go build ./cmd/...`；`Check.ps1 -Race` 追加 `go test -race ./...`。Web 独立浏览器 smoke 使用 `cd web && npm run build && npm run test:smoke`，真实后端 E2E 只允许临时 AppDirs/隔离端口。也可直接运行 Go 门禁与 `govulncheck ./...`。Windows 本机 race 有 `WaitOnAddress` 限制，race 门禁在 Linux/WSL 执行。`go` 不在 PATH 时用 `GALLERY_GO` 指定固定工具链。不要另建重复脚本。
 - ffmpeg/ffprobe 等外部工具必须经 ToolDiscovery、版本允许列表、参数数组、超时和资源限制调用，不能拼接 shell 命令。
 - 程序资源与用户 AppDirs 分离；覆盖升级不得删除用户数据。数据升级前优先备份 control，Catalog 不兼容时可重建。
 - 发行前完成 OpenAPI/WS/规则/数据版本、许可证、SBOM、依赖安全、签名和升级/降级说明。
 - Windows、Linux、macOS、Docker 和网络盘能力分别验收，不从 Go 可交叉编译目标自动生成支持矩阵。
+
+### 仓库文本换行与跨平台格式一致性
+
+- `.gitattributes` 是 tracked files 换行的唯一权威事实源，当前规则是 `* text=auto eol=lf` 加少量二进制 `binary` 声明。任何平台、任何 `core.autocrlf`/`core.eol` 下的检出结果都必须一致。
+- 提交信息（commit message）的行分隔符要求见「排版：行分隔符」，与本节是两套彼此独立的规则：前者约束 commit object 的原始字节，后者约束 tracked 文件的 blob 与工作树内容。二者不得互相引用为保障，也不得合并表述。
+- 不得依赖用户或 runner 的全局 `core.autocrlf`/`core.eol` 来达成换行一致，不得为解决换行问题建议或修改开发者的全局 Git 配置，也不得只修正当前 runner 而不落到仓库事实源。
+- 引入新语言、新前端资产或新文件类型时不需要逐个补充扩展名；确需例外（例如必须保留 CRLF 的脚本或新的二进制类型）时，只为仓库中实际存在的类型添加规则，不得套用覆盖大量无关扩展名的通用模板。
+- 修改 `.gitattributes` 后必须执行 `git add --renormalize .` 并逐项审查 `git status --short`、`git diff --cached --numstat` 与 `git diff --check`：确认只有预期文本变化、二进制文件未被改动、生成产物未发生无关变化。若产生无法解释的大范围变化，撤回暂存结果并缩小规则，不得直接提交。索引本来就正确时不得为形式制造全仓库 renormalize 提交。
+- Windows 与 Ubuntu 必须运行同一条格式检查命令并得到同一结论。跨平台格式失败只能通过修正仓库事实源解决，禁止把 Prettier `endOfLine` 改为 `auto`、删除或跳过某个平台的 Job、对失败命令加 `continue-on-error`、忽略退出码、在 CI 中先 `prettier --write` 再检查，或把普通源码批量写入 `.prettierignore`。
 
 ### 第三方材料与依赖安全
 
@@ -554,6 +563,8 @@ Repository Topics
 - 只允许普通 fast-forward push；禁止裸 `--force`；本类普通任务也不得使用 `--force-with-lease`（历史重写场景的受限 `--force-with-lease` 用法见“签名、测试与历史重写”一节，二者不冲突、不得混用）。“主动推送”只指推送本轮任务自身提交的普通 fast-forward push，不得被解释为允许强制推送、创建 PR 或推送无关提交。
 - 完成 Actions 检查后，无论成功、失败还是无法取得状态，都不得因此继续修改代码、测试、文档、提交或历史，也不得自行追加修复、重跑 workflow、推送新的 SHA 或重写历史，除非用户另行明确下令。
 - 最终报告中的 Actions 部分三选一记录：成功；失败并附失败步骤的最小相关日志片段；或“无法取得状态”。不得在该部分继续提出或执行修复方案、给出建议或描述后续计划。
+- 上一条只约束本轮任务的边界，不是让已知失败长期存在的许可。若某个失败签名在 `main` 上已经不是第一次出现，Agent 必须在本轮结束时把它记入 `PROJECT_STATUS.md` 的已知缺口或对应门禁文档，作为下一轮的正式修复任务；不得只在报告里描述为“既有问题”“与本轮无关”而不留下任何可追踪的修复入口。判断是否重复出现要读实际 run 历史，不得依据模型记忆。
+- 修复重复出现的 CI 失败时，必须先用干净检出复现并确认根因，再落到仓库事实源；只让 CI 表面变绿的处理（跳过步骤、忽略退出码、排除失败文件、放宽检查口径）一律不接受。
 
 ## Git Commit Message 规范
 
