@@ -33,6 +33,13 @@
 - Git，并了解本仓库的提交信息规范（见下文）。
 - 修改 OpenAPI 定义后必须运行 `go generate ./...` 同步生成的客户端代码。
 
+### 文本换行
+
+- 仓库内所有 tracked 文本文件统一使用 LF，权威规则写在 [.gitattributes](.gitattributes)（`* text=auto eol=lf`），clone 后的换行由它决定。
+- 不需要、也不应该为本仓库修改全局 `core.autocrlf` 或 `core.eol`；无论你的 Git 全局配置是什么，检出结果都一致。
+- 若你的本地副本是在 2026-07-25 之前 clone 的，工作树中可能残留 CRLF。执行一次 `git add --renormalize .` 确认索引无变化后，用 `git rm --cached -r .` 加 `git reset --hard` 刷新工作树即可（该操作会丢弃未提交改动，请先提交或 stash）。
+- Windows 与 Linux/macOS 运行的是同一套格式检查，结果必须一致。若 `Check.ps1` 报出大量 Prettier 失败，先确认工作树换行（`git ls-files --eol`），而不是直接运行 `prettier --write`。
+
 ## 代码与架构要求
 
 以下边界摘自 [AGENTS.md](AGENTS.md) 的产品不变量，PR 审查会据此把关：
@@ -52,7 +59,7 @@
 
 ## 测试
 
-- 常规检查使用仓库根目录的 `Check.ps1`（Windows/跨平台 `pwsh`），会执行 Go/OpenAPI 生成一致性、`gofmt`、`go vet`、测试和构建，以及 Web 的 `npm ci`、生成一致性、TypeScript、ESLint、Prettier、Vitest 与生产构建。
+- 常规检查使用仓库根目录的 `Check.ps1`（Windows/跨平台 `pwsh`），会先断言 tracked 文件换行为 LF，再执行 Go/OpenAPI 生成一致性、`gofmt`、`go vet`、测试和构建，以及 Web 的 `npm ci`、生成一致性、TypeScript、ESLint、Prettier、Vitest 与生产构建。
 - 浏览器 smoke 运行 `cd web && npm run build && npx playwright install chromium && npm run test:smoke`；真实后端 E2E 只使用合成数据与临时 AppDirs。
 - Race 检测（`-race`）需要在 Linux 环境（原生 Linux 或 WSL2）执行；Windows 原生 Go race runtime 在本项目环境下有已知限制。
 - 新增功能或修复 Bug 必须包含直接测试；migration、OpenAPI 变更需要对应的契约/集成测试覆盖。
