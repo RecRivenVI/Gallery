@@ -12,6 +12,14 @@ if ($env:GALLERY_GO) {
     $go = $goCommand.Source
 }
 
+$env:GOTOOLCHAIN = 'local'
+$goVersion = & $go version
+if ($LASTEXITCODE -ne 0) { throw 'go version 失败' }
+if ($goVersion -notmatch '\bgo1\.26\.5\b') {
+    throw "正式门禁要求 Go 1.26.5，实际为：$goVersion"
+}
+Write-Host "Go: $goVersion; GOTOOLCHAIN: $env:GOTOOLCHAIN"
+
 $goBin = Split-Path -Parent $go
 $env:PATH = "$goBin;$env:PATH"
 $gofmtName = if ($IsWindows) { 'gofmt.exe' } else { 'gofmt' }
@@ -69,6 +77,8 @@ if (-not $Race) {
     try {
         & $npm.Source ci
         if ($LASTEXITCODE -ne 0) { throw 'npm ci 失败' }
+        & $npm.Source run audit:ci
+        if ($LASTEXITCODE -ne 0) { throw 'Web 依赖审计失败' }
         & $npm.Source run typecheck
         if ($LASTEXITCODE -ne 0) { throw 'Web TypeScript 检查失败' }
         & $npm.Source run lint
