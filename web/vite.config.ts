@@ -8,7 +8,7 @@ export default defineConfig({
     VitePWA({
       registerType: 'prompt',
       injectRegister: false,
-      includeAssets: ['favicon.svg', 'icons/gallery-192.png', 'icons/gallery-512.png'],
+      includeManifestIcons: false,
       manifest: {
         id: '/',
         name: 'Gallery · 画廊',
@@ -27,7 +27,16 @@ export default defineConfig({
         ]
       },
       workbox: {
-        globPatterns: ['**/*.{js,css,html,svg,png,json,webmanifest}'],
+        globPatterns: ['**/*.{js,css,html,svg,png,json}'],
+        manifestTransforms: [
+          (entries) =>
+            Promise.resolve({
+              manifest: [...entries].sort((left, right) =>
+                left.url < right.url ? -1 : left.url > right.url ? 1 : 0
+              ),
+              warnings: []
+            })
+        ],
         navigateFallback: '/index.html',
         navigateFallbackDenylist: [/^\/api\//, /^\/ws\//],
         cleanupOutdatedCaches: true,

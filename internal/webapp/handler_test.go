@@ -1,8 +1,11 @@
 package webapp
 
 import (
+	"io/fs"
 	"net/http"
 	"net/http/httptest"
+	"regexp"
+	"slices"
 	"strings"
 	"testing"
 )
@@ -52,5 +55,75 @@ func TestRootWebPatternCanCoexistWithWebSocketPattern(t *testing.T) {
 	mux.ServeHTTP(response, request)
 	if response.Code != http.StatusOK {
 		t.Fatalf("WebSocket 精确路由被根 Web handler 截获: %d", response.Code)
+	}
+}
+
+func TestPrecacheManifestIsCanonical(t *testing.T) {
+	contents, err := embedded.ReadFile("dist/sw.js")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	const marker = "precacheAndRoute("
+	start := strings.Index(string(contents), marker)
+	if start < 0 {
+		t.Fatal("sw.js 缺少 precacheAndRoute 清单")
+	}
+	manifest := string(contents[start+len(marker):])
+	end := strings.Index(manifest, "],{})")
+	if end < 0 {
+		t.Fatal("sw.js 的 precacheAndRoute 清单格式不可识别")
+	}
+
+	matches := regexp.MustCompile(`url:"([^"]+)"`).FindAllStringSubmatch(manifest[:end+1], -1)
+	if len(matches) == 0 {
+		t.Fatal("precache 清单为空")
+	}
+
+	urls := make([]string, len(matches))
+	for i, match := range matches {
+		urls[i] = match[1]
+	}
+	want := slices.Clone(urls)
+	slices.Sort(want)
+	if !slices.Equal(urls, want) {
+		t.Fatalf("precache URL 未按稳定二元序排列: got=%v want=%v", urls, want)
+	}
+	for i := 1; i < len(urls); i++ {
+		if urls[i-1] == urls[i] {
+			t.Fatalf("precache URL 重复: %q", urls[i])
+		}
+	}
+
+	var expected []string
+	err = fs.WalkDir(embedded, "dist", func(name string, entry fs.DirEntry, walkErr error) error {
+		if walkErr != nil {
+			return walkErr
+		}
+		if entry.IsDir() {
+			return nil
+		}
+		name = strings.TrimPrefix(name, "dist/")
+		if name == "sw.js" || strings.HasPrefix(name, "workbox-") && strings.HasSuffix(name, ".js") {
+			return nil
+		}
+		switch {
+		case strings.HasSuffix(name, ".js"),
+			strings.HasSuffix(name, ".css"),
+			strings.HasSuffix(name, ".html"),
+			strings.HasSuffix(name, ".svg"),
+			strings.HasSuffix(name, ".png"),
+			strings.HasSuffix(name, ".json"),
+			strings.HasSuffix(name, ".webmanifest"):
+			expected = append(expected, name)
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("枚举嵌入 Web 资产: %v", err)
+	}
+	slices.Sort(expected)
+	if !slices.Equal(urls, expected) {
+		t.Fatalf("precache 资产集合不完整: got=%v want=%v", urls, expected)
 	}
 }
