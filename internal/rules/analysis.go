@@ -327,6 +327,7 @@ func (l *Lifecycle) Explain(ctx context.Context, input, parameters []byte, sampl
 	}
 	fields := []ExplainField{
 		{Field: "work.stable_key", FinalValue: result.Work.StableKey},
+		{Field: "creator.stable_key", FinalValue: result.Work.CreatorStableKey},
 		{Field: "work.title", FinalValue: result.Work.Title},
 		{Field: "work.external_id", FinalValue: result.Work.ExternalID},
 		{Field: "work.provider_id", FinalValue: result.Work.ProviderID},

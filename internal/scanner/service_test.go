@@ -88,6 +88,104 @@ func TestWalkingSkeletonScanPublishesAndFailurePreservesOldPublication(t *testin
 	}
 }
 
+func TestFantiaCreatorOccurrencesReuseCanonicalCreatorByStableRuleIdentity(t *testing.T) {
+	ctx := context.Background()
+	resources, jobStore, catalogStore, service, baselineSource, store := setup(t, []byte("unused baseline fixture"))
+	defer store.Close()
+
+	fixtureRoot := filepath.Join("..", "..", "tests", "fixtures", "creator-aggregation", "fantia")
+	sourceRoot := filepath.Join(filepath.Dir(baselineSource.RootPath), "fantia-source")
+	if err := os.CopyFS(sourceRoot, os.DirFS(filepath.Join(fixtureRoot, "source"))); err != nil {
+		t.Fatal(err)
+	}
+	source, err := resources.CreateSource(ctx, baselineSource.LibraryID, "Fantia Synthetic", sourceRoot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	packageJSON, err := os.ReadFile(filepath.Join(fixtureRoot, "rule-package.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	version, err := resources.CreateRuleVersion(ctx, packageJSON)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := resources.CreateSourceRuleBinding(ctx, source.ID, version.SemanticHash, []byte(`{}`), 0); err != nil {
+		t.Fatal(err)
+	}
+
+	job, err := service.CreateScanWithProfile(ctx, source.ID, "personal-owner", "", scanner.ScanProfileIncremental)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := service.Execute(ctx, job.ID); err != nil {
+		t.Fatal(err)
+	}
+	completed, err := jobStore.Get(ctx, job.ID)
+	if err != nil || completed.Status != jobs.StatusCompleted || completed.PublicationID == "" {
+		t.Fatalf("Fantia Creator 聚合扫描未完成: %+v %v", completed, err)
+	}
+
+	var canonicalWorks, canonicalCreators, creatorBindings int
+	if err := store.Control.SQL().QueryRowContext(ctx, "SELECT count(*) FROM canonical_works").Scan(&canonicalWorks); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.Control.SQL().QueryRowContext(ctx, "SELECT count(*) FROM canonical_creators").Scan(&canonicalCreators); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.Control.SQL().QueryRowContext(ctx,
+		"SELECT count(*) FROM creator_bindings WHERE source_id=? AND status='active'", source.ID).Scan(&creatorBindings); err != nil {
+		t.Fatal(err)
+	}
+	if canonicalWorks != 3 || canonicalCreators != 2 || creatorBindings != 3 {
+		t.Fatalf("Creator 聚合基数错误: works=%d canonicalCreators=%d sourceOccurrences=%d", canonicalWorks, canonicalCreators, creatorBindings)
+	}
+
+	creatorByIdentity := map[string]string{}
+	identityOccurrences := map[string]int{}
+	rows, err := store.Control.SQL().QueryContext(ctx, `SELECT external_id, creator_id FROM creator_bindings
+WHERE source_id=? AND status='active' ORDER BY source_key`, source.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var identityKey, creatorID string
+		if err := rows.Scan(&identityKey, &creatorID); err != nil {
+			t.Fatal(err)
+		}
+		if existing := creatorByIdentity[identityKey]; existing != "" && existing != creatorID {
+			t.Fatalf("相同规则身份被拆成多个 CanonicalCreator: identity=%s first=%s next=%s", identityKey, existing, creatorID)
+		}
+		creatorByIdentity[identityKey] = creatorID
+		identityOccurrences[identityKey]++
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatal(err)
+	}
+	if identityOccurrences["fantia:fanclub:900004"] != 2 || identityOccurrences["fantia:fanclub:900005"] != 1 ||
+		len(creatorByIdentity) != 2 || creatorByIdentity["fantia:fanclub:900004"] == creatorByIdentity["fantia:fanclub:900005"] {
+		t.Fatalf("稳定身份聚合或同名隔离错误: occurrences=%+v creators=%+v", identityOccurrences, creatorByIdentity)
+	}
+
+	publication, err := catalogStore.Current(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var sourceCreators, relations, distinctRelationCreators int
+	if err := store.Catalog.SQL().QueryRowContext(ctx, `SELECT
+  (SELECT count(*) FROM source_creators WHERE catalog_revision_id=? AND source_id=?),
+  (SELECT count(*) FROM work_creator_relations WHERE catalog_revision_id=? AND overlay_revision_id=?),
+  (SELECT count(DISTINCT creator_id) FROM work_creator_relations WHERE catalog_revision_id=? AND overlay_revision_id=?)`,
+		publication.CatalogRevisionID, source.ID, publication.CatalogRevisionID, publication.OverlayRevisionID,
+		publication.CatalogRevisionID, publication.OverlayRevisionID).Scan(&sourceCreators, &relations, &distinctRelationCreators); err != nil {
+		t.Fatal(err)
+	}
+	if sourceCreators != 3 || relations != 3 || distinctRelationCreators != 2 {
+		t.Fatalf("Catalog Creator 投影基数错误: sourceCreators=%d relations=%d distinctCreators=%d", sourceCreators, relations, distinctRelationCreators)
+	}
+}
+
 func TestReconciliationRepairsBothCrossDatabaseStates(t *testing.T) {
 	fixture := []byte("reconciliation fixture")
 	_, jobStore, catalogStore, service, source, store := setup(t, fixture)

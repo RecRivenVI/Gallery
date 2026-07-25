@@ -55,15 +55,19 @@ type DryRunResult struct {
 }
 
 type DryRunWork struct {
-	StableKey  string        `json:"stableKey"`
-	Title      string        `json:"title"`
-	ExternalID string        `json:"externalId,omitempty"`
-	ProviderID string        `json:"providerId,omitempty"`
-	Creator    string        `json:"creator,omitempty"`
-	Tags       []string      `json:"tags"`
-	Ignored    bool          `json:"ignored"`
-	Media      []DryRunMedia `json:"media"`
-	CoverPath  string        `json:"coverPath,omitempty"`
+	StableKey  string `json:"stableKey"`
+	Title      string `json:"title"`
+	ExternalID string `json:"externalId,omitempty"`
+	ProviderID string `json:"providerId,omitempty"`
+	Creator    string `json:"creator,omitempty"`
+	// CreatorStableKey 是规则为 SourceCreator occurrence 生成的稳定身份候选。
+	// 它只供扫描/Binding 链使用，不扩张当前 Dry Run 公共 DTO；Trace/Explain 仍会
+	// 记录该字段由哪个原语产生，但不会泄露 metadata 原值。
+	CreatorStableKey string        `json:"-"`
+	Tags             []string      `json:"tags"`
+	Ignored          bool          `json:"ignored"`
+	Media            []DryRunMedia `json:"media"`
+	CoverPath        string        `json:"coverPath,omitempty"`
 }
 
 type DryRunMedia struct {
@@ -571,14 +575,26 @@ func applyMetadataMap(primitive IRPrimitive, metadata any, result *DryRunResult)
 
 func applyStableKey(primitive IRPrimitive, metadata any, result *DryRunResult) {
 	config := rawConfig(primitive.Config)
-	if stringConfig(config, "target") != "work" {
+	pointer := stringConfig(config, "pointer")
+	if pointer == "" {
 		return
 	}
-	if pointer := stringConfig(config, "pointer"); pointer != "" {
-		if value, ok := resolvePointer(metadata, pointer); ok && fmt.Sprint(value) != "" {
-			result.Work.StableKey = stringConfig(config, "prefix") + fmt.Sprint(value)
-			result.Trace = append(result.Trace, TraceStep{ID: primitive.ID, Kind: primitive.Kind, InputPointer: pointer, InputSummary: "pointer_resolved", OutputSummary: "field=work.stable_key", CandidateCount: 1, Selected: true, ReasonCode: "selected"})
-		}
+	value, ok := resolvePointer(metadata, pointer)
+	if !ok || fmt.Sprint(value) == "" {
+		return
+	}
+	stableKey := stringConfig(config, "prefix") + fmt.Sprint(value)
+	field := ""
+	switch stringConfig(config, "target") {
+	case "work":
+		result.Work.StableKey = stableKey
+		field = "work.stable_key"
+	case "creator":
+		result.Work.CreatorStableKey = stableKey
+		field = "creator.stable_key"
+	}
+	if field != "" {
+		result.Trace = append(result.Trace, TraceStep{ID: primitive.ID, Kind: primitive.Kind, InputPointer: pointer, InputSummary: "pointer_resolved", OutputSummary: "field=" + field, CandidateCount: 1, Selected: true, ReasonCode: "selected"})
 	}
 }
 

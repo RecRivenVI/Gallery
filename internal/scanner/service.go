@@ -833,6 +833,7 @@ func (s *Service) recoverAlreadyPublished(ctx context.Context, jobID string) err
 
 type discoveredWork struct {
 	SourceKey, ProviderID, ExternalID, Title, Creator string
+	CreatorStableKey                                  string
 	Tags                                              []string
 	Media                                             []discoveredMedia
 }
@@ -852,11 +853,20 @@ func creatorReference(work discoveredWork) application.DiscoveredCreator {
 	if work.ExternalID != "" {
 		workReference = "origin:" + work.ProviderID + ":" + work.ExternalID
 	}
-	return application.DiscoveredCreator{
+	result := application.DiscoveredCreator{
 		SourceKey:  workReference + "/creator:primary:0",
 		ProviderID: work.ProviderID,
 		Name:       work.Creator,
 	}
+	if work.CreatorStableKey != "" {
+		// SourceCreator 仍是逐作品 occurrence，SourceKey 因而继续包含 Work 稳定引用；
+		// 规则生成的 Creator 稳定键作为同一 Source 内的强身份候选，使不同 occurrence
+		// 通过既有 CreatorBinding 外部身份匹配复用 CanonicalCreator。Provider 留空，
+		// 避免把平台或 metadata 形状写死在扫描器中；规则 prefix 自行承担命名空间。
+		result.ProviderID = ""
+		result.ExternalID = work.CreatorStableKey
+	}
+	return result
 }
 
 func discover(ctx context.Context, root string, ir rules.RuleIR, parameters []byte) ([]discoveredWork, error) {
@@ -927,7 +937,7 @@ func discover(ctx context.Context, root string, ir rules.RuleIR, parameters []by
 			return filepath.SkipDir
 		}
 		work := discoveredWork{SourceKey: evaluated.Work.StableKey, ProviderID: evaluated.Work.ProviderID, ExternalID: evaluated.Work.ExternalID,
-			Title: evaluated.Work.Title, Creator: evaluated.Work.Creator, Tags: evaluated.Work.Tags}
+			Title: evaluated.Work.Title, Creator: evaluated.Work.Creator, CreatorStableKey: evaluated.Work.CreatorStableKey, Tags: evaluated.Work.Tags}
 		for _, item := range evaluated.Work.Media {
 			mediaRelative := path.Join(relative, item.Path)
 			if _, err := media.ValidateRelativePath(mediaRelative); err != nil {

@@ -1,0 +1,20 @@
+{
+  "rule_set_id": "rset_018f47d2-5c16-7a44-a8a0-000000000123",
+  "version": "1.0.0",
+  "schema_version": 1,
+  "normalization_algorithm_version": "gallery-canonical-json-v1",
+  "compiler_requirement": "gallery-rule-compiler-v1",
+  "cel_profile_version": "gallery-cel-v1",
+  "parameter_schema": {"type": "object", "additionalProperties": false},
+  "provider_namespaces": ["fantia.synthetic"],
+  "primitives": [
+    {"id": "work", "kind": "path_match", "config": {"scope": "work_directory", "glob": "*", "title": "directory_name", "stable_key": "relative_path", "metadata_file": "metadata.json"}},
+    {"id": "facts", "kind": "metadata_map", "config": {"fields": {"title": ["/post_title"], "external_id": ["/id"], "creator": ["/fanclub_user_name"]}}},
+    {"id": "work-identity", "kind": "stable_key", "config": {"target": "work", "pointer": "/id", "prefix": "fantia:post:"}},
+    {"id": "creator-identity", "kind": "stable_key", "config": {"target": "creator", "pointer": "/fanclub_user_id", "prefix": "fantia:fanclub:"}},
+    {"id": "media", "kind": "media_classify", "config": {"glob": "*.bin", "kind": "image", "mime": "application/octet-stream"}}
+  ],
+  "cel_expressions": [],
+  "tests": [{"id": "fantia-creator-aggregation", "description": "同一 fanclub_user_id 的多件作品复用 CanonicalCreator，同名不同 ID 保持分离"}],
+  "extensions": {}
+}

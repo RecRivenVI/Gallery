@@ -17,6 +17,7 @@
       "description": ["/comment"],
       "tags": ["/tags"]
     }}},
+    {"id": "creator-identity", "kind": "stable_key", "config": {"target": "creator", "pointer": "/fanclub_user_id", "prefix": "fantia:fanclub:"}},
     {"id": "url", "kind": "fallback", "config": {"target": "sourceUrl", "pointers": ["/postUrl", "/post_url", "/url", "/sourceUrl", "/source_url", "/permalink", "/link", "/source/url"], "default": ""}},
     {"id": "media-jpg", "kind": "media_classify", "config": {"glob": "*.jpg", "kind": "image", "mime": "image/jpeg"}},
     {"id": "media-jpeg", "kind": "media_classify", "config": {"glob": "*.jpeg", "kind": "image", "mime": "image/jpeg"}},

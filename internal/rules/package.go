@@ -353,6 +353,16 @@ func validateExtendedPrimitive(primitive rawPrimitive) error {
 		if err := requireString("target"); err != nil {
 			return err
 		}
+		if err := requireString("pointer"); err != nil {
+			return err
+		}
+		var target string
+		if err := json.Unmarshal(config["target"], &target); err != nil {
+			return fmt.Errorf("stable_key %s target 无效", primitive.ID)
+		}
+		if target != "work" && target != "creator" {
+			return fmt.Errorf("stable_key %s target %q 不受支持", primitive.ID, target)
+		}
 	case "media_order":
 		if err := requireString("by"); err != nil {
 			return err

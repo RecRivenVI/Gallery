@@ -3,11 +3,52 @@ package scanner
 import (
 	"context"
 	"fmt"
+	"os"
 	"path/filepath"
 	"testing"
 
 	"github.com/RecRivenVI/gallery/internal/rules"
 )
+
+func TestFantiaCreatorStableIdentityIsSharedWithoutDisplayNameMerging(t *testing.T) {
+	fixtureRoot := filepath.Join("..", "..", "tests", "fixtures", "creator-aggregation", "fantia")
+	packageJSON, err := os.ReadFile(filepath.Join(fixtureRoot, "rule-package.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	compiled, err := rules.CompilePackage(packageJSON)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ir, _, parameters, err := rules.CompileBinding(compiled, []byte(`{}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	works, err := discover(context.Background(), filepath.Join(fixtureRoot, "source"), ir, parameters)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(works) != 3 {
+		t.Fatalf("Fantia 合成夹具作品数=%d，期望 3: %+v", len(works), works)
+	}
+
+	identityOccurrences := map[string]int{}
+	sourceCreatorKeys := map[string]struct{}{}
+	for _, work := range works {
+		creator := creatorReference(work)
+		identityOccurrences[creator.ExternalID]++
+		sourceCreatorKeys[creator.SourceKey] = struct{}{}
+		if creator.Name != "同名创作者" || creator.ProviderID != "" {
+			t.Fatalf("Creator 来源事实错误: %+v", creator)
+		}
+	}
+	if len(sourceCreatorKeys) != 3 {
+		t.Fatalf("逐作品 SourceCreator occurrence 未保持独立: %+v", sourceCreatorKeys)
+	}
+	if identityOccurrences["fantia:fanclub:900004"] != 2 || identityOccurrences["fantia:fanclub:900005"] != 1 || len(identityOccurrences) != 2 {
+		t.Fatalf("规则驱动 Creator 稳定身份错误: %+v", identityOccurrences)
+	}
+}
 
 func TestRuleIRDiscoversDifferentDirectoryAndMetadataShapes(t *testing.T) {
 	root := filepath.Join("..", "..", "tests", "fixtures", "architecture-proof")

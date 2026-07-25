@@ -70,7 +70,7 @@ func TestLifecycleDryRunTraceCELAndImpact(t *testing.T) {
 	}
 	result, err := lifecycle.DryRun(context.Background(), packageJSON, []byte(`{"minimumSize":1}`), rules.DryRunInput{
 		Path: "layout-b/work-7", Metadata: map[string]any{
-			"post": map[string]any{"id": "7", "title": "标题七"}, "creator": map[string]any{"name": "作者"},
+			"post": map[string]any{"id": "7", "title": "标题七"}, "creator": map[string]any{"id": "creator-42", "name": "作者"},
 			"tags": []any{"alpha", "beta"}, "flags": []any{"allow"},
 		},
 		Files: []rules.DryRunFile{{Path: "cover.jpg", Size: 20}, {Path: "02.hidden.jpg", Size: 10}, {Path: "skip.bin", Size: 2}},
@@ -78,7 +78,7 @@ func TestLifecycleDryRunTraceCELAndImpact(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if result.Work.StableKey != "provider:7" || result.Work.Title != "标题七" || result.Work.Creator != "作者" || len(result.Work.Tags) != 2 {
+	if result.Work.StableKey != "provider:7" || result.Work.CreatorStableKey != "creator:creator-42" || result.Work.Title != "标题七" || result.Work.Creator != "作者" || len(result.Work.Tags) != 2 {
 		t.Fatalf("selector/fallback/stable key 未生效: %+v", result.Work)
 	}
 	if len(result.Work.Media) != 2 || result.Work.Media[0].Path != "cover.jpg" && result.Work.Media[1].Path != "cover.jpg" || result.Work.CoverPath != "cover.jpg" {
@@ -138,6 +138,28 @@ func TestCELProfileRejectsUnknownHostFunction(t *testing.T) {
 	}
 }
 
+func TestStableKeyRejectsMissingPointerAndUnsupportedTarget(t *testing.T) {
+	base := complexRulePackage()
+	tests := []struct {
+		name    string
+		old     string
+		new     string
+		message string
+	}{
+		{name: "missing-pointer", old: `{"target":"creator","pointer":"/creator/id","prefix":"creator:"}`, new: `{"target":"creator","prefix":"creator:"}`, message: "缺少 pointer"},
+		{name: "unsupported-target", old: `{"target":"creator","pointer":"/creator/id","prefix":"creator:"}`, new: `{"target":"provider","pointer":"/creator/id","prefix":"creator:"}`, message: "不受支持"},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			invalid := bytes.Replace(base, []byte(test.old), []byte(test.new), 1)
+			_, err := rules.CompilePackage(invalid)
+			if err == nil || !strings.Contains(err.Error(), test.message) {
+				t.Fatalf("stable_key 非法配置未被拒绝: %v", err)
+			}
+		})
+	}
+}
+
 func TestUIMetadataDoesNotChangeRuntimeIdentity(t *testing.T) {
 	base := readRulePackage(t)
 	withUI := bytes.Replace(base, []byte(`"extensions": {}`), []byte(`"extensions": {}, "ui_metadata": {"group":"basic","help":"synthetic"}`), 1)
@@ -174,6 +196,7 @@ func complexRulePackage() []byte {
     {"id":"title","kind":"selector","config":{"target":"title","pointers":["/post/title","/title"],"required":true}},
     {"id":"fields","kind":"metadata_map","config":{"fields":{"creator":["/creator/name"],"tags":["/tags"]}}},
     {"id":"identity","kind":"stable_key","config":{"target":"work","pointer":"/post/id","prefix":"provider:"}},
+    {"id":"creator-identity","kind":"stable_key","config":{"target":"creator","pointer":"/creator/id","prefix":"creator:"}},
     {"id":"image","kind":"media_classify","config":{"glob":"*.jpg","kind":"image","mime":"image/jpeg","condition":"eligible"}},
     {"id":"order","kind":"media_order","config":{"by":"path","direction":"asc"}},
     {"id":"hidden","kind":"condition","config":{"scope":"media","expression":"hidden","effect":"hide"}},
