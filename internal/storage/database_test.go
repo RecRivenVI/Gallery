@@ -33,7 +33,7 @@ func openTestStore(t *testing.T) (*Store, appdirs.Dirs) {
 
 func TestIndependentWALMigrationsAndBackup(t *testing.T) {
 	store, dirs := openTestStore(t)
-	wantVersions := map[Role]int{RoleControl: 20, RoleCatalog: 12}
+	wantVersions := map[Role]int{RoleControl: 20, RoleCatalog: 13}
 	for _, database := range []*Database{store.Control, store.Catalog} {
 		var version int
 		if err := database.db.QueryRow("PRAGMA user_version").Scan(&version); err != nil {
@@ -211,7 +211,7 @@ VALUES
 		if err := upgraded.db.QueryRow(`SELECT count(*) FROM catalog_revision_sources`).Scan(&count); err != nil {
 			t.Fatal(err)
 		}
-		if version != 12 || count != 2 {
+		if version != 13 || count != 2 {
 			t.Fatalf("v11 升级结果: version=%d membership=%d", version, count)
 		}
 		var libraryID string
@@ -239,6 +239,89 @@ VALUES
 			t.Fatalf("有歧义 membership 升级错误 = %v", err)
 		}
 	})
+}
+
+// TestMediaProjectionMTimeMigrationUpgradesPopulatedV12Catalog 验证 00013 迁移把发布时刻
+// 的 mtime 证据从 source_media 精确回填进 media_projections：(catalog_revision_id,
+// source_id, source_key) 是 source_media 的主键，因此回填必须是一对一映射；没有对应
+// source_media 行的历史投影保留 0，读取端据此退回 size 与整文件 digest 复算，不伪造证据。
+func TestMediaProjectionMTimeMigrationUpgradesPopulatedV12Catalog(t *testing.T) {
+	ctx := context.Background()
+	path := filepath.Join(t.TempDir(), "catalog.db")
+	db, err := sql.Open("sqlite", "file:"+filepath.ToSlash(path)+"?_pragma=foreign_keys(ON)")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.ExecContext(ctx, `CREATE TABLE gallery_schema_migrations (
+version INTEGER PRIMARY KEY NOT NULL, name TEXT NOT NULL, sha256 TEXT NOT NULL,
+applied_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))) STRICT`); err != nil {
+		db.Close()
+		t.Fatal(err)
+	}
+	sub, err := fs.Sub(migrationFiles, "migrations/catalog")
+	if err != nil {
+		db.Close()
+		t.Fatal(err)
+	}
+	migrations, err := readMigrations(sub)
+	if err != nil {
+		db.Close()
+		t.Fatal(err)
+	}
+	for _, item := range migrations[:12] {
+		if err := applyMigration(ctx, db, item); err != nil {
+			db.Close()
+			t.Fatal(err)
+		}
+	}
+	if _, err := db.ExecContext(ctx, `
+INSERT INTO catalog_revisions VALUES ('cat_old', 'job_old', 'src_a', 'published', 1, 2);
+INSERT INTO overlay_projection_revisions
+(overlay_revision_id, catalog_revision_id, control_watermark, status, created_at, published_at)
+VALUES ('ovr_old', 'cat_old', 0, 'published', 1, 2);
+INSERT INTO source_media
+(catalog_revision_id, source_id, source_key, work_source_key, relative_path, media_kind, mime_type,
+ size_bytes, rule_key, mtime_ns)
+VALUES ('cat_old', 'src_a', 'media-a', 'work-a', 'a/1.jpg', 'image', 'image/jpeg', 11, 'rule', 1730000000123456789);
+INSERT INTO media_projections
+(catalog_revision_id, overlay_revision_id, media_id, work_id, source_id, source_key, relative_path,
+ media_kind, mime_type, size_bytes, algorithm, digest, location_status, ordinal, base_ordinal)
+VALUES
+('cat_old', 'ovr_old', 'med-a', 'work-a', 'src_a', 'media-a', 'a/1.jpg', 'image', 'image/jpeg', 11,
+ 'sha256-v1', '`+strings.Repeat("a", 64)+`', 'present', 0, 0),
+('cat_old', 'ovr_old', 'med-orphan', 'work-a', 'src_a', 'media-missing', 'a/2.jpg', 'image', 'image/jpeg', 12,
+ 'sha256-v1', '`+strings.Repeat("b", 64)+`', 'present', 1, 1);`); err != nil {
+		db.Close()
+		t.Fatal(err)
+	}
+	if err := db.Close(); err != nil {
+		t.Fatal(err)
+	}
+	upgraded, err := openDatabase(ctx, RoleCatalog, path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer upgraded.Close()
+	var version int
+	if err := upgraded.db.QueryRow("PRAGMA user_version").Scan(&version); err != nil {
+		t.Fatal(err)
+	}
+	if version != 13 {
+		t.Fatalf("v12 升级后 user_version = %d", version)
+	}
+	var backfilled, orphan int64
+	if err := upgraded.db.QueryRow(`SELECT mtime_ns FROM media_projections WHERE media_id='med-a'`).Scan(&backfilled); err != nil {
+		t.Fatal(err)
+	}
+	if err := upgraded.db.QueryRow(`SELECT mtime_ns FROM media_projections WHERE media_id='med-orphan'`).Scan(&orphan); err != nil {
+		t.Fatal(err)
+	}
+	if backfilled != 1730000000123456789 {
+		t.Fatalf("mtime 未从 source_media 精确回填: got=%d", backfilled)
+	}
+	if orphan != 0 {
+		t.Fatalf("缺少 source_media 对应行的历史投影必须保留 0，不得伪造证据: got=%d", orphan)
+	}
 }
 
 // TestMediaVerificationMigrationUpgradesPopulatedV8Catalog 验证 00009 迁移把历史上借用

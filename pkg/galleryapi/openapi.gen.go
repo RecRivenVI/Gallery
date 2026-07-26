@@ -413,6 +413,7 @@ const (
 	CATALOGPUBLICATIONMISSING        ErrorCode = "CATALOG_PUBLICATION_MISSING"
 	CONFIGINVALID                    ErrorCode = "CONFIG_INVALID"
 	CONFLICT                         ErrorCode = "CONFLICT"
+	CONTENTCHANGED                   ErrorCode = "CONTENT_CHANGED"
 	CONTENTCHANGEDDURINGHASH         ErrorCode = "CONTENT_CHANGED_DURING_HASH"
 	CONTENTDISAPPEARED               ErrorCode = "CONTENT_DISAPPEARED"
 	CONTENTHASHPENDING               ErrorCode = "CONTENT_HASH_PENDING"
@@ -439,6 +440,7 @@ const (
 	LANOWNERREQUIRED                 ErrorCode = "LAN_OWNER_REQUIRED"
 	MAINTENANCEBLOCKED               ErrorCode = "MAINTENANCE_BLOCKED"
 	MEDIAOFFLINE                     ErrorCode = "MEDIA_OFFLINE"
+	MEDIAREADBUSY                    ErrorCode = "MEDIA_READ_BUSY"
 	MIGRATIONFAILED                  ErrorCode = "MIGRATION_FAILED"
 	NOTFOUND                         ErrorCode = "NOT_FOUND"
 	ORIGINREJECTED                   ErrorCode = "ORIGIN_REJECTED"
@@ -510,6 +512,8 @@ func (e ErrorCode) Valid() bool {
 		return true
 	case CONFLICT:
 		return true
+	case CONTENTCHANGED:
+		return true
 	case CONTENTCHANGEDDURINGHASH:
 		return true
 	case CONTENTDISAPPEARED:
@@ -561,6 +565,8 @@ func (e ErrorCode) Valid() bool {
 	case MAINTENANCEBLOCKED:
 		return true
 	case MEDIAOFFLINE:
+		return true
+	case MEDIAREADBUSY:
 		return true
 	case MIGRATIONFAILED:
 		return true

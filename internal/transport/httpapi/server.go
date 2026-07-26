@@ -44,28 +44,38 @@ import (
 )
 
 type Server struct {
-	mode         config.Mode
-	store        *storage.Store
-	clock        ports.Clock
-	logger       *slog.Logger
-	auth         *auth.Personal
-	data         *application.Resources
-	jobs         *jobs.Store
-	catalog      *catalog.Store
-	scanner      *scanner.Service
-	hub          *realtime.Hub
-	rules        *rules.Lifecycle
-	query        *queryservice.Service
-	overlay      *overlay.Service
-	creators     *creators.Service
-	backup       *backup.Service
-	maintenance  *maintenance.Service
-	watcher      *watcherservice.Service
-	scheduler    JobController
-	derived      *derived.Service
-	derivedJob   *derivedjob.Service
-	allowedHosts []string
+	mode          config.Mode
+	store         *storage.Store
+	clock         ports.Clock
+	logger        *slog.Logger
+	auth          *auth.Personal
+	data          *application.Resources
+	jobs          *jobs.Store
+	catalog       *catalog.Store
+	scanner       *scanner.Service
+	hub           *realtime.Hub
+	rules         *rules.Lifecycle
+	query         *queryservice.Service
+	overlay       *overlay.Service
+	creators      *creators.Service
+	backup        *backup.Service
+	maintenance   *maintenance.Service
+	watcher       *watcherservice.Service
+	scheduler     JobController
+	derived       *derived.Service
+	derivedJob    *derivedjob.Service
+	allowedHosts  []string
+	mediaGate     chan struct{}
+	mediaGateWait time.Duration
 }
+
+// 媒体正文读取已改为流式（见 media.ContentHandle），单个请求的内存与临时空间占用不再随
+// 文件大小增长，因此这里限制的是并发打开的 Source 句柄数与并发磁盘寻道，而不是空间。
+// 两个数值都是 PRE_FREEZE，冻结条件见实施计划「暂定实装决策」。
+const (
+	defaultMediaReadConcurrency = 16
+	defaultMediaReadGateWait    = 5 * time.Second
+)
 
 type JobController interface {
 	Submit(class, jobID string) bool
@@ -80,6 +90,10 @@ type Options struct {
 	DerivedJob   *derivedjob.Service
 	AllowedHosts []string
 	Web          http.Handler
+	// MediaReadConcurrency 与 MediaReadGateWait 为零时使用默认值；只在测试中显式收窄，
+	// 用于确定性地触发 MEDIA_READ_BUSY。
+	MediaReadConcurrency int
+	MediaReadGateWait    time.Duration
 }
 
 func New(mode config.Mode, store *storage.Store, clock ports.Clock, personal *auth.Personal, resources *application.Resources, jobStore *jobs.Store, catalogStore *catalog.Store, scannerService *scanner.Service, overlayService *overlay.Service, creatorsService *creators.Service, backupService *backup.Service, hub *realtime.Hub, logger *slog.Logger, options ...Options) http.Handler {
@@ -98,7 +112,15 @@ func New(mode config.Mode, store *storage.Store, clock ports.Clock, personal *au
 	if len(options) > 0 {
 		option = options[0]
 	}
-	server := &Server{mode: mode, store: store, clock: clock, auth: personal, data: resources, jobs: jobStore, catalog: catalogStore, scanner: scannerService, hub: hub, logger: logger, rules: ruleLifecycle, query: queryService, overlay: overlayService, creators: creatorsService, backup: backupService, maintenance: option.Maintenance, watcher: option.Watcher, scheduler: option.Scheduler, derived: option.Derived, derivedJob: option.DerivedJob, allowedHosts: append([]string(nil), option.AllowedHosts...)}
+	mediaConcurrency := option.MediaReadConcurrency
+	if mediaConcurrency <= 0 {
+		mediaConcurrency = defaultMediaReadConcurrency
+	}
+	mediaWait := option.MediaReadGateWait
+	if mediaWait <= 0 {
+		mediaWait = defaultMediaReadGateWait
+	}
+	server := &Server{mode: mode, store: store, clock: clock, auth: personal, data: resources, jobs: jobStore, catalog: catalogStore, scanner: scannerService, hub: hub, logger: logger, rules: ruleLifecycle, query: queryService, overlay: overlayService, creators: creatorsService, backup: backupService, maintenance: option.Maintenance, watcher: option.Watcher, scheduler: option.Scheduler, derived: option.Derived, derivedJob: option.DerivedJob, allowedHosts: append([]string(nil), option.AllowedHosts...), mediaGate: make(chan struct{}, mediaConcurrency), mediaGateWait: mediaWait}
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /api/v1/health", server.health)
 	mux.HandleFunc("GET /api/v1/bootstrap", server.bootstrap)
@@ -2715,17 +2737,53 @@ func (s *Server) serveMediaItem(w http.ResponseWriter, r *http.Request, item cat
 		return
 	}
 	defer blobLease.Close()
-	snapshot, err := media.PrepareSnapshot(source.RootPath, item.RelativePath, item.Algorithm, item.Digest, item.Size, s.data.TempRoot())
+	releaseGate, err := s.acquireMediaRead(r.Context())
 	if err != nil {
-		var structured *fault.Error
-		if errors.As(err, &structured) && (structured.Code == fault.CodeSourceUnavailable || structured.Code == fault.CodeSourceReadFailed || structured.Code == fault.CodeContentDisappeared) {
-			err = fault.New(fault.CodeMediaOffline, true, nil)
-		}
 		s.writeRequestError(w, err)
 		return
 	}
-	defer snapshot.Close()
-	s.writeMediaSnapshot(w, r, snapshot, item.Algorithm, item.Digest, item.MIME, download)
+	defer releaseGate()
+	handle, err := media.OpenContent(source.RootPath, item.RelativePath, media.PublishedIdentity{
+		Algorithm: item.Algorithm, Digest: item.Digest, Size: item.Size, MTimeNanos: item.MTimeNanos,
+	})
+	if err != nil {
+		s.writeRequestError(w, mediaOpenFault(err))
+		return
+	}
+	defer handle.Close()
+	s.writeMediaContent(w, r, handle, item.Algorithm, item.Digest, item.MIME, download)
+}
+
+// acquireMediaRead 为一次正文读取取得名额。名额已满时先短暂等待，超时后返回可重试的
+// MEDIA_READ_BUSY，而不是让请求无限排队占用连接与 Source 句柄。
+func (s *Server) acquireMediaRead(ctx context.Context) (func(), error) {
+	select {
+	case s.mediaGate <- struct{}{}:
+		return func() { <-s.mediaGate }, nil
+	default:
+	}
+	timer := time.NewTimer(s.mediaGateWait)
+	defer timer.Stop()
+	select {
+	case s.mediaGate <- struct{}{}:
+		return func() { <-s.mediaGate }, nil
+	case <-ctx.Done():
+		return nil, fault.New(fault.CodeProcessInterrupted, true, ctx.Err())
+	case <-timer.C:
+		return nil, fault.New(fault.CodeMediaReadBusy, true, nil)
+	}
+}
+
+// mediaOpenFault 把 Source 侧的读取失败收敛为对外可解释的 MEDIA_OFFLINE，不泄露根路径
+// 与底层 OS 错误；内容身份不再成立时保留 CONTENT_CHANGED 以便客户端区分「暂时不可达」
+// 与「已发布内容已经失效」。
+func mediaOpenFault(err error) error {
+	var structured *fault.Error
+	if errors.As(err, &structured) &&
+		(structured.Code == fault.CodeSourceUnavailable || structured.Code == fault.CodeSourceReadFailed || structured.Code == fault.CodeContentDisappeared) {
+		return fault.New(fault.CodeMediaOffline, true, nil)
+	}
+	return err
 }
 
 func (s *Server) serveFixedShareBlob(w http.ResponseWriter, r *http.Request, share auth.Share, download bool) {
@@ -2741,6 +2799,12 @@ func (s *Server) serveFixedShareBlob(w http.ResponseWriter, r *http.Request, sha
 		return
 	}
 	defer lease.Close()
+	releaseGate, err := s.acquireMediaRead(r.Context())
+	if err != nil {
+		s.writeRequestError(w, err)
+		return
+	}
+	defer releaseGate()
 	var lastErr error
 	for _, location := range locations {
 		source, sourceErr := s.data.GetSource(r.Context(), location.SourceID)
@@ -2748,14 +2812,15 @@ func (s *Server) serveFixedShareBlob(w http.ResponseWriter, r *http.Request, sha
 			lastErr = sourceErr
 			continue
 		}
-		snapshot, snapshotErr := media.PrepareSnapshot(source.RootPath, location.RelativePath,
-			location.Algorithm, location.Digest, location.Size, s.data.TempRoot())
-		if snapshotErr != nil {
-			lastErr = snapshotErr
+		handle, openErr := media.OpenContent(source.RootPath, location.RelativePath, media.PublishedIdentity{
+			Algorithm: location.Algorithm, Digest: location.Digest, Size: location.Size, MTimeNanos: location.MTimeNanos,
+		})
+		if openErr != nil {
+			lastErr = openErr
 			continue
 		}
-		s.writeMediaSnapshot(w, r, snapshot, location.Algorithm, location.Digest, location.MIME, download)
-		_ = snapshot.Close()
+		s.writeMediaContent(w, r, handle, location.Algorithm, location.Digest, location.MIME, download)
+		_ = handle.Close()
 		return
 	}
 	if lastErr == nil {
@@ -2769,7 +2834,7 @@ func (s *Server) serveFixedShareBlob(w http.ResponseWriter, r *http.Request, sha
 	s.writeRequestError(w, fault.New(fault.CodeMediaOffline, true, nil))
 }
 
-func (s *Server) writeMediaSnapshot(w http.ResponseWriter, r *http.Request, snapshot *media.Snapshot, algorithm, digest, mimeType string, download bool) {
+func (s *Server) writeMediaContent(w http.ResponseWriter, r *http.Request, handle *media.ContentHandle, algorithm, digest, mimeType string, download bool) {
 	etag := `"gallery-` + algorithm + `-` + digest + `"`
 	w.Header().Set("Accept-Ranges", "bytes")
 	w.Header().Set("ETag", etag)
@@ -2792,27 +2857,33 @@ func (s *Server) writeMediaSnapshot(w http.ResponseWriter, r *http.Request, snap
 	if ifRange := r.Header.Get("If-Range"); rangeHeader != "" && ifRange != "" && !etagMatches(ifRange, etag) {
 		rangeHeader = ""
 	}
-	selected, partial, err := media.ParseSingleRange(rangeHeader, snapshot.Size)
+	selected, partial, err := media.ParseSingleRange(rangeHeader, handle.Size)
 	if err != nil {
-		w.Header().Set("Content-Range", fmt.Sprintf("bytes */%d", snapshot.Size))
+		w.Header().Set("Content-Range", fmt.Sprintf("bytes */%d", handle.Size))
 		s.writeRequestError(w, err)
 		return
 	}
 	status := http.StatusOK
-	start, length := int64(0), snapshot.Size
+	start, length := int64(0), handle.Size
 	if partial {
 		status, start, length = http.StatusPartialContent, selected.Start, selected.Length()
-		w.Header().Set("Content-Range", fmt.Sprintf("bytes %d-%d/%d", selected.Start, selected.End, snapshot.Size))
+		w.Header().Set("Content-Range", fmt.Sprintf("bytes %d-%d/%d", selected.Start, selected.End, handle.Size))
 	}
 	w.Header().Set("Content-Length", strconv.FormatInt(length, 10))
 	w.WriteHeader(status)
+	// HEAD 只回答"这个正文有多大、身份是什么"，因此到此为止：OpenContent 已经完成安全
+	// 路径解析与身份复核，全程没有读取任何正文字节。
 	if r.Method == http.MethodHead {
 		return
 	}
-	if _, err := snapshot.File.Seek(start, io.SeekStart); err != nil {
-		return
+	// 覆盖整个文件的请求顺带复算 digest，这不产生额外读 I/O，却能发现身份证据无法覆盖的
+	// 内容替换；Range 请求只能依赖身份证据复核。
+	if _, err := handle.CopyRange(w, start, length, start == 0 && length == handle.Size); err != nil {
+		// 响应头与部分正文可能已经送出，无法再改写成错误信封。中断响应让客户端在
+		// Content-Length 不足与连接异常两个层面都无法把结果误判为完整正文。
+		s.logger.WarnContext(r.Context(), "media_content_aborted", "reason", string(asFault(err).Code))
+		panic(http.ErrAbortHandler)
 	}
-	_, _ = io.CopyN(w, snapshot.File, length)
 }
 
 // createMediaVerificationJob 为 located_unverified 媒体建立按需内容确认闭环：不在 HTTP
@@ -3660,10 +3731,12 @@ func statusForFault(err error) int {
 		return http.StatusConflict
 	case fault.CodeBindingReviewRequired:
 		return http.StatusConflict
-	case fault.CodeContentChangedDuringHash:
+	case fault.CodeContentChangedDuringHash, fault.CodeContentChanged:
 		return http.StatusConflict
 	case fault.CodeContentNotVerified:
 		return http.StatusConflict
+	case fault.CodeMediaReadBusy:
+		return http.StatusServiceUnavailable
 	case fault.CodeRangeInvalid:
 		return http.StatusRequestedRangeNotSatisfiable
 	case fault.CodeMediaOffline, fault.CodeSourceUnavailable, fault.CodeSourceReadFailed, fault.CodeContentDisappeared:

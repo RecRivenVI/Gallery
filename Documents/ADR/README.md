@@ -23,6 +23,7 @@
 | [ADR-007 跨平台适配层](ADR-007-跨平台适配层.md) | 接受 | 核心与 OS/文件系统/系统能力通过端口隔离 |
 | [ADR-008 可替换桌面壳](ADR-008-可替换桌面壳.md) | 有条件接受 | Wails 是当前 Windows 优先候选，壳不是后端依赖 |
 | [ADR-009 Web 与 PWA 交付架构](ADR-009-Web与PWA交付架构.md) | 接受 | React/TypeScript API-first Web、同源嵌入资产、静态壳 PWA 与 HTTP snapshot 事实源 |
+| [ADR-010 已确认媒体的正文读取语义](ADR-010-已确认媒体的正文读取语义.md) | 接受 | 正文流式读取不复制；publication 冻结 size/mtime 作身份证据，整文件读取顺带复算 digest |
 
 ## 延期决策登记
 

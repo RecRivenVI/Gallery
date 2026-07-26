@@ -509,8 +509,10 @@ func TestPersonalPairingIsSingleUseAndRevocationInvalidatesREST(t *testing.T) {
 	if err := os.WriteFile(mediaPath, changed, 0o400); err != nil {
 		t.Fatal(err)
 	}
+	// 正文读取已改为流式（ADR-010）：publication 冻结的 size 与 mtime 证据让内容变化仍在
+	// 发送任何字节之前被判定，返回稳定的 CONTENT_CHANGED，而不是靠每请求整文件复算 digest。
 	contentChanged, err := client.GetMediaContentWithResponse(context.Background(), mediaID, &api.GetMediaContentParams{})
-	if err != nil || contentChanged.JSON409 == nil || contentChanged.JSON409.Error.Code != api.CONTENTCHANGEDDURINGHASH {
+	if err != nil || contentChanged.JSON409 == nil || contentChanged.JSON409.Error.Code != api.CONTENTCHANGED {
 		t.Fatalf("内容变化未在发送前拒绝: %v status=%d body=%s", err, contentChanged.StatusCode(), contentChanged.Body)
 	}
 	if err := os.Remove(mediaPath); err != nil {

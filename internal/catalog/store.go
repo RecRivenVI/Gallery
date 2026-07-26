@@ -140,8 +140,12 @@ type Media struct {
 	ContentVerificationState string
 	// VerifiedAt 是媒体最近一次真正完成完整 SHA-256 确认的时间；located_unverified 媒体
 	// 恒为零值，API 必须据此返回 null 而不是伪造时间。
-	VerifiedAt   time.Time
-	Ordinal      int
+	VerifiedAt time.Time
+	Ordinal    int
+	// MTimeNanos 是发布时刻观察到的文件 mtime，与 Size/Algorithm/Digest 同属该 revision
+	// 的身份证据。0 表示该 revision 发布时没有留下 mtime 证据（v12 之前的历史快照），
+	// 读取端据此退回到 size 与整文件 digest 复算，不得伪造证据。
+	MTimeNanos   int64
 	RelativePath string
 }
 
@@ -152,6 +156,7 @@ type BlobLocation struct {
 	RelativePath string
 	MIME         string
 	Size         int64
+	MTimeNanos   int64
 	Algorithm    string
 	Digest       string
 }
@@ -537,10 +542,10 @@ FROM work_projections WHERE catalog_revision_id=? AND overlay_revision_id=?`,
 	if _, err := tx.ExecContext(ctx, `INSERT INTO media_projections
 (catalog_revision_id, overlay_revision_id, media_id, work_id, source_id, source_key, relative_path,
  media_kind, mime_type, size_bytes, algorithm, digest, location_status, ordinal, hidden, base_ordinal,
- content_verification_state, verified_at)
+ content_verification_state, verified_at, mtime_ns)
 SELECT catalog_revision_id, ?, media_id, work_id, source_id, source_key, relative_path,
 media_kind, mime_type, size_bytes, algorithm, digest, location_status, base_ordinal,
-hidden, base_ordinal, content_verification_state, verified_at
+hidden, base_ordinal, content_verification_state, verified_at, mtime_ns
 FROM media_projections WHERE catalog_revision_id=? AND overlay_revision_id=?`,
 		candidate.OverlayRevisionID, candidate.CatalogRevisionID, candidate.BaseOverlayRevisionID); err != nil {
 		return OverlayCandidate{}, fault.New(fault.CodeInternal, true, err)
@@ -957,7 +962,7 @@ func (s *Store) BlobLocations(ctx context.Context, blob domain.ContentBlobRef) (
 		return nil, fault.New(fault.CodeValidation, false, err)
 	}
 	rows, err := s.db.QueryContext(ctx, `SELECT f.source_id, f.relative_path,
-COALESCE(sm.mime_type, 'application/octet-stream'), b.size_bytes
+COALESCE(sm.mime_type, 'application/octet-stream'), b.size_bytes, COALESCE(sm.mtime_ns, 0)
 FROM query_publications q
 JOIN content_blobs b ON b.catalog_revision_id=q.catalog_revision_id
 JOIN file_locations f ON f.catalog_revision_id=b.catalog_revision_id
@@ -974,7 +979,7 @@ ORDER BY q.created_at DESC, f.source_id, f.location_key`, blob.Algorithm, blob.D
 	var result []BlobLocation
 	for rows.Next() {
 		var item BlobLocation
-		if err := rows.Scan(&item.SourceID, &item.RelativePath, &item.MIME, &item.Size); err != nil {
+		if err := rows.Scan(&item.SourceID, &item.RelativePath, &item.MIME, &item.Size, &item.MTimeNanos); err != nil {
 			return nil, fault.New(fault.CodeInternal, true, err)
 		}
 		key := item.SourceID + "\x00" + item.RelativePath
@@ -1010,10 +1015,10 @@ func (s *Store) GetMediaAt(ctx context.Context, publicationID, id string) (Publi
 	var media Media
 	var verifiedAt sql.NullInt64
 	err = s.db.QueryRowContext(ctx, `SELECT media_id, work_id, source_id, media_kind, mime_type, size_bytes,
-algorithm, digest, location_status, content_verification_state, verified_at, ordinal, relative_path FROM media_projections
+algorithm, digest, location_status, content_verification_state, verified_at, ordinal, relative_path, mtime_ns FROM media_projections
 WHERE catalog_revision_id = ? AND overlay_revision_id = ? AND media_id = ?`, publication.CatalogRevisionID, publication.OverlayRevisionID, id).Scan(
 		&media.ID, &media.WorkID, &media.SourceID, &media.Kind, &media.MIME, &media.Size,
-		&media.Algorithm, &media.Digest, &media.LocationStatus, &media.ContentVerificationState, &verifiedAt, &media.Ordinal, &media.RelativePath,
+		&media.Algorithm, &media.Digest, &media.LocationStatus, &media.ContentVerificationState, &verifiedAt, &media.Ordinal, &media.RelativePath, &media.MTimeNanos,
 	)
 	if errors.Is(err, sql.ErrNoRows) {
 		return Publication{}, Media{}, fault.New(fault.CodeNotFound, false, nil)
@@ -1040,7 +1045,7 @@ func (s *Store) ListMediaForWorkAt(ctx context.Context, publicationID, workID st
 		return Publication{}, nil, err
 	}
 	rows, err := s.db.QueryContext(ctx, `SELECT media_id, work_id, source_id, media_kind, mime_type, size_bytes,
-algorithm, digest, location_status, content_verification_state, verified_at, ordinal, relative_path FROM media_projections
+algorithm, digest, location_status, content_verification_state, verified_at, ordinal, relative_path, mtime_ns FROM media_projections
 WHERE catalog_revision_id = ? AND overlay_revision_id = ? AND work_id = ? ORDER BY ordinal, media_id`, publication.CatalogRevisionID, publication.OverlayRevisionID, workID)
 	if err != nil {
 		return Publication{}, nil, fault.New(fault.CodeInternal, true, err)
@@ -1050,7 +1055,7 @@ WHERE catalog_revision_id = ? AND overlay_revision_id = ? AND work_id = ? ORDER 
 	for rows.Next() {
 		var media Media
 		var verifiedAt sql.NullInt64
-		if err := rows.Scan(&media.ID, &media.WorkID, &media.SourceID, &media.Kind, &media.MIME, &media.Size, &media.Algorithm, &media.Digest, &media.LocationStatus, &media.ContentVerificationState, &verifiedAt, &media.Ordinal, &media.RelativePath); err != nil {
+		if err := rows.Scan(&media.ID, &media.WorkID, &media.SourceID, &media.Kind, &media.MIME, &media.Size, &media.Algorithm, &media.Digest, &media.LocationStatus, &media.ContentVerificationState, &verifiedAt, &media.Ordinal, &media.RelativePath, &media.MTimeNanos); err != nil {
 			return Publication{}, nil, fault.New(fault.CodeInternal, true, err)
 		}
 		if verifiedAt.Valid {
@@ -1455,8 +1460,8 @@ VALUES (?, ?, ?, ?, ?, ?, ?, 'present')`, candidate.CatalogRevisionID, item.Sour
 		}
 		if _, err := tx.ExecContext(ctx, `INSERT INTO media_projections
 (catalog_revision_id, overlay_revision_id, media_id, work_id, source_id, source_key, relative_path,
- media_kind, mime_type, size_bytes, algorithm, digest, location_status, content_verification_state, verified_at, ordinal, base_ordinal)
-VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`, candidate.CatalogRevisionID, candidate.OverlayRevisionID, item.MediaID, item.WorkID, item.SourceID, item.SourceKey, item.RelativePath, item.Kind, item.MIME, item.Size, item.Algorithm, item.Digest, locationStatus, state, verifiedAt, item.Ordinal, item.Ordinal); err != nil {
+ media_kind, mime_type, size_bytes, algorithm, digest, location_status, content_verification_state, verified_at, ordinal, base_ordinal, mtime_ns)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`, candidate.CatalogRevisionID, candidate.OverlayRevisionID, item.MediaID, item.WorkID, item.SourceID, item.SourceKey, item.RelativePath, item.Kind, item.MIME, item.Size, item.Algorithm, item.Digest, locationStatus, state, verifiedAt, item.Ordinal, item.Ordinal, item.MTimeNanos); err != nil {
 			return fault.New(fault.CodeInternal, true, err)
 		}
 	}
@@ -1676,8 +1681,8 @@ WHERE c.catalog_revision_id=q.catalog_revision_id AND c.overlay_revision_id=q.ov
 		{`INSERT INTO media_projections
 (catalog_revision_id, overlay_revision_id, media_id, work_id, source_id, source_key, relative_path,
  media_kind, mime_type, size_bytes, algorithm, digest, location_status, ordinal, hidden, base_ordinal,
- content_verification_state, verified_at)
-SELECT ?, ?, m.media_id, m.work_id, m.source_id, m.source_key, m.relative_path, m.media_kind, m.mime_type, m.size_bytes, m.algorithm, m.digest, m.location_status, m.base_ordinal, m.hidden, m.base_ordinal, m.content_verification_state, m.verified_at FROM media_projections m
+ content_verification_state, verified_at, mtime_ns)
+SELECT ?, ?, m.media_id, m.work_id, m.source_id, m.source_key, m.relative_path, m.media_kind, m.mime_type, m.size_bytes, m.algorithm, m.digest, m.location_status, m.base_ordinal, m.hidden, m.base_ordinal, m.content_verification_state, m.verified_at, m.mtime_ns FROM media_projections m
 JOIN active_query_publication a ON a.singleton=1 JOIN query_publications q ON q.query_publication_id=a.query_publication_id
 WHERE m.catalog_revision_id=q.catalog_revision_id AND m.overlay_revision_id=q.overlay_revision_id AND m.source_id<>?`, []any{candidate.CatalogRevisionID, candidate.OverlayRevisionID, candidate.SourceID}},
 		{`INSERT INTO work_search (catalog_revision_id, overlay_revision_id, work_id, normalized_original_text, cjk_bigram_token_text, latin_trigram_token_text)
