@@ -16,7 +16,12 @@ const LOCK_PATH = path.join(webRoot, 'package-lock.json');
 const PACKAGE_PATH = path.join(webRoot, 'package.json');
 const OPENAPI_PATH = path.join(repoRoot, 'internal', 'contract', 'api', 'openapi.yaml');
 const SOURCE_ROOT = path.join(webRoot, 'src');
-const MAIN_PATH = path.join(SOURCE_ROOT, 'main.tsx');
+// 双入口：画廊与管理是两个独立 SPA，`web-spa-no-rsc-ssr` 这条静态前提必须对**每一个**入口
+// 成立。只检查其中一个等于给另一个开了后门。
+const ENTRY_PATHS = [
+  path.join(SOURCE_ROOT, 'gallery', 'main.tsx'),
+  path.join(SOURCE_ROOT, 'manage', 'main.tsx')
+];
 const VITE_CONFIG_PATH = path.join(webRoot, 'vite.config.ts');
 const MAX_EXCEPTION_EXPIRY = '2026-08-09';
 
@@ -372,7 +377,7 @@ const forbiddenWebPatterns = [
   { pattern: /\bhydrateRoot\s*\(/, reason: 'SSR hydration entrypoint' }
 ];
 
-export function validateWebPremise({ packageJson, mainSource, viteConfig, sourceFiles }) {
+export function validateWebPremise({ packageJson, entrySources, viteConfig, sourceFiles }) {
   assertGate(
     packageJson.dependencies?.['react-router-dom'] === '7.18.1',
     'react-router-dom 不再锁定为 7.18.1'
@@ -397,11 +402,19 @@ export function validateWebPremise({ packageJson, mainSource, viteConfig, source
     !/(?:react-router|remix)\s+(?:build|dev|serve)\b|(?:^|\s)--ssr(?:\s|$)/m.test(scriptCommands),
     'Web package scripts 出现 RSC/SSR 构建或服务入口'
   );
-  assertGate(
-    mainSource.includes("import { BrowserRouter } from 'react-router-dom';"),
-    'main.tsx 不再使用 BrowserRouter SPA'
-  );
-  assertGate(mainSource.includes('createRoot(root).render('), 'main.tsx 不再使用纯客户端 createRoot');
+  assertGate(Array.isArray(entrySources) && entrySources.length > 0, 'Web 入口列表为空');
+  for (const entry of entrySources) {
+    assertString(entry?.path, 'entrySources[].path');
+    assertString(entry?.content, `${entry?.path} 入口内容`);
+    assertGate(
+      entry.content.includes("import { BrowserRouter } from 'react-router-dom';"),
+      `${entry.path} 不再使用 BrowserRouter SPA`
+    );
+    assertGate(
+      entry.content.includes('createRoot(root).render('),
+      `${entry.path} 不再使用纯客户端 createRoot`
+    );
+  }
   assertGate(!/\bssr\s*:/.test(viteConfig), 'Vite 配置出现 SSR build 入口');
 
   for (const source of sourceFiles) {
@@ -436,9 +449,15 @@ async function validateRepositoryPremises(packageJson) {
   const openApiText = await readFile(OPENAPI_PATH, 'utf8');
   const internalRefCount = validateOpenApiPremise(packageJson, openApiText);
   const sourceFiles = await collectSourceFiles(SOURCE_ROOT);
+  const entrySources = await Promise.all(
+    ENTRY_PATHS.map(async (entryPath) => ({
+      path: path.relative(webRoot, entryPath).replaceAll(path.sep, '/'),
+      content: await readFile(entryPath, 'utf8')
+    }))
+  );
   validateWebPremise({
     packageJson,
-    mainSource: await readFile(MAIN_PATH, 'utf8'),
+    entrySources,
     viteConfig: await readFile(VITE_CONFIG_PATH, 'utf8'),
     sourceFiles
   });

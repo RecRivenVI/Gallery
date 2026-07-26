@@ -26,8 +26,6 @@
     "test:smoke": "playwright test --project=chromium --grep @smoke"
   },
   "dependencies": {
-    "@rjsf/core": "6.7.0",
-    "@rjsf/validator-ajv8": "6.7.0",
     "@tanstack/react-query": "5.101.4",
     "openapi-fetch": "0.17.0",
     "react": "19.2.8",

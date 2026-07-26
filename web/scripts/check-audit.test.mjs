@@ -137,14 +137,28 @@ describe('local reachability premises', () => {
   });
 
   it('accepts the SPA entrypoint and rejects RSC or SSR APIs', () => {
+    const spaEntry =
+      "import { BrowserRouter } from 'react-router-dom';\ncreateRoot(root).render(<BrowserRouter />);";
     const valid = {
       packageJson,
-      mainSource:
-        "import { BrowserRouter } from 'react-router-dom';\ncreateRoot(root).render(<BrowserRouter />);",
+      // 双入口：画廊与管理各是一个独立 SPA，前提必须对每一个都成立。
+      entrySources: [
+        { path: 'src/gallery/main.tsx', content: spaEntry },
+        { path: 'src/manage/main.tsx', content: spaEntry }
+      ],
       viteConfig: 'export default { build: {} };',
-      sourceFiles: [{ path: 'src/main.tsx', content: "import { Link } from 'react-router-dom';" }]
+      sourceFiles: [{ path: 'src/gallery/main.tsx', content: "import { Link } from 'react-router-dom';" }]
     };
     expect(() => validateWebPremise(valid)).not.toThrow();
+    expect(() =>
+      validateWebPremise({
+        ...valid,
+        entrySources: [
+          { path: 'src/gallery/main.tsx', content: spaEntry },
+          { path: 'src/manage/main.tsx', content: 'hydrateRoot(root, <App />);' }
+        ]
+      })
+    ).toThrow(/src\/manage\/main\.tsx/);
     expect(() =>
       validateWebPremise({
         ...valid,

@@ -206,98 +206,53 @@ async function respond(route: Route) {
 
 test.beforeEach(async ({ page }) => mockGallery(page));
 
-test('浏览、主题和响应式导航可用 @smoke', async ({ page }) => {
-  await page.goto('/browse');
-  await expect(page.getByRole('heading', { name: '浏览作品' })).toBeVisible();
-  await expect(page.getByRole('link', { name: '合成作品' })).toBeVisible();
-  await expect(page.locator('.work-card img')).toHaveAttribute(
-    'src',
-    '/api/v1/media/media_01FIRST/content?queryPublicationId=qpub_01SYNTHETIC'
-  );
-  await page.getByRole('button', { name: '切换导航' }).click();
-  await expect(page.locator('.app-shell')).toHaveClass(/sidebar-collapsed/);
-  await page.setViewportSize({ width: 390, height: 844 });
-  await expect(page.locator('main')).toBeVisible();
+// 本轮前端从零重写：旧的页面级用例（浏览/作品详情/CustomCover/错误态/分享 credential）针对的
+// 页面已随旧单入口一并删除，因此不能原样保留——让它们"通过"只会让门禁自证。
+//
+// 下面这组覆盖的是本切片**真正交付**的东西：双入口各自加载、Service Worker 只归画廊、主题跨入口
+// 共享、两个入口的可访问性基线。页面级端到端在画廊端与管理端实现后由 M6f 重建，届时连同真实后端
+// 一起进 CI，而不是继续用浏览器内合成 API。
+//
+// 刻意**不**在这里测 `/manage/jobs` 深链：那条回落由 Go 侧的嵌入处理器按路径前缀决定，
+// `vite preview` 用的是它自己的单入口回落，在这里测只会测到预览服务器的行为。该语义已由
+// internal/webapp 的 TestManagementDeepLinkServesManagementShell 覆盖，并将在 M6f 对真实
+// galleryd 复验。
+test('双入口各自加载自己的外壳 @smoke', async ({ page }) => {
+  await page.goto('/');
+  await expect(page).toHaveTitle(/画廊/);
+  await expect(page.locator('meta[name="robots"]')).toHaveCount(0);
+  await expect(page.locator('#root')).toBeAttached();
+
+  await page.goto('/manage.html');
+  await expect(page).toHaveTitle(/管理/);
+  await expect(page.locator('#root')).toBeAttached();
 });
 
-test('作品详情把 current 解析为单一快照，并保存或清除 CustomCover @smoke', async ({ page }) => {
-  const requests: string[] = [];
-  page.on('request', (request) => requests.push(request.url()));
+test('只有画廊进入 PWA scope @smoke', async ({ page }) => {
+  await page.goto('/manage.html');
+  // 管理端不是可分享内容，也不应出现"安装 Gallery"入口。
+  await expect(page.locator('link[rel="manifest"]')).toHaveCount(0);
+  await expect(page.locator('meta[name="robots"]')).toHaveAttribute('content', /noindex/);
 
-  await page.goto('/works/work_01SYNTHETIC');
-
-  await expect(page.getByRole('heading', { name: '合成作品' })).toBeVisible();
-  await expect(page.getByRole('img', { name: '《合成作品》的封面' })).toHaveAttribute(
-    'src',
-    '/api/v1/media/media_01FIRST/content?queryPublicationId=qpub_01SYNTHETIC'
-  );
-  await expect(page.getByText('有效封面', { exact: true })).toBeVisible();
-  const accessibility = await new AxeBuilder({ page }).disableRules(['color-contrast']).analyze();
-  expect(
-    accessibility.violations.filter((item) => ['critical', 'serious'].includes(item.impact ?? ''))
-  ).toEqual([]);
-
-  const workRequest = requests.find((value) => new URL(value).pathname === '/api/v1/works/work_01SYNTHETIC');
-  const mediaRequest = requests.find(
-    (value) => new URL(value).pathname === '/api/v1/works/work_01SYNTHETIC/media'
-  );
-  if (!workRequest || !mediaRequest) throw new Error('作品详情请求未完成');
-  expect(new URL(workRequest).searchParams.has('queryPublicationId')).toBe(false);
-  expect(new URL(mediaRequest).searchParams.get('queryPublicationId')).toBe(publication);
-  expect(
-    requests
-      .filter((value) => new URL(value).pathname.endsWith('/content'))
-      .every((value) => new URL(value).searchParams.get('queryPublicationId') === publication)
-  ).toBe(true);
-
-  await page.getByText(/^媒体 #2/).click();
-  const selectedRequest = page.waitForRequest(
-    (request) => request.method() === 'PUT' && new URL(request.url()).pathname.endsWith('/overlay')
-  );
-  await page.getByRole('button', { name: '保存事实' }).click();
-  expect((await selectedRequest).postDataJSON()).toMatchObject({ customCoverMediaId: 'media_01SECOND' });
-
-  await page.getByText(/^使用规则封面/).click();
-  const clearedRequest = page.waitForRequest(
-    (request) => request.method() === 'PUT' && new URL(request.url()).pathname.endsWith('/overlay')
-  );
-  await page.getByRole('button', { name: '保存事实' }).click();
-  expect((await clearedRequest).postDataJSON()).not.toHaveProperty('customCoverMediaId');
+  await page.goto('/');
+  await expect(page.locator('link[rel="manifest"]')).toHaveCount(1);
 });
 
-test('核心页面没有严重可访问性违规 @smoke', async ({ page }) => {
-  await page.goto('/browse');
-  const results = await new AxeBuilder({ page }).disableRules(['color-contrast']).analyze();
-  expect(results.violations.filter((item) => ['critical', 'serious'].includes(item.impact ?? ''))).toEqual(
-    []
-  );
+test('主题选择跨两个入口共享 @smoke', async ({ page }) => {
+  await page.goto('/');
+  await page.evaluate(() => window.localStorage.setItem('gallery.theme', 'dark'));
+  await page.reload();
+  await expect(page.locator('html')).toHaveAttribute('data-theme', 'dark');
+
+  await page.goto('/manage.html');
+  await expect(page.locator('html')).toHaveAttribute('data-theme', 'dark');
 });
 
-test('服务端错误显示稳定、可恢复的中文状态', async ({ page }) => {
-  await page.route('**/api/v1/works*', (route) =>
-    route.fulfill({
-      status: 409,
-      contentType: 'application/json',
-      body: JSON.stringify({
-        error: { code: 'CURSOR_EXPIRED', retryable: false, correlationId: 'corr_expired' }
-      })
-    })
-  );
-  await page.goto('/browse?cursor=expired');
-  await expect(page.getByText('查询快照已过期，请从第一页重新开始。')).toBeVisible();
-  await expect(page.getByRole('button', { name: '重试' })).toBeVisible();
-});
-
-test('安全写路径只在内存显示一次性分享 credential', async ({ page }) => {
-  await page.goto('/security');
-  await page.getByLabel('范围 ID').fill('work_01SYNTHETIC');
-  await page.getByRole('button', { name: '创建 7 天只读分享' }).click();
-  await expect(page.getByRole('heading', { name: '请立即保存分享链接' })).toBeVisible();
-  const storage = await page.evaluate(() => Object.fromEntries(Object.entries(localStorage)));
-  expect(JSON.stringify(storage)).not.toContain('share_abcdefghijklmnopqrstuvwxyz123456');
-
-  await page.getByLabel('新账户用户名').fill('viewer');
-  await page.getByLabel('显示名称').fill('只读访客');
-  await page.getByLabel('初始密码').fill('synthetic-password');
-  await page.getByRole('button', { name: '创建 Viewer 账户' }).click();
+test('两个入口都没有严重可访问性违规 @smoke', async ({ page }) => {
+  for (const path of ['/', '/manage.html']) {
+    await page.goto(path);
+    // color-contrast 必须启用：旧基线把它 disableRules 掉了，等于放弃了对比度这一项。
+    const results = await new AxeBuilder({ page }).withTags(['wcag2a', 'wcag2aa']).analyze();
+    expect(results.violations, `${path} 存在可访问性违规`).toEqual([]);
+  }
 });

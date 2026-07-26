@@ -1,0 +1,116 @@
+/*
+ * 最小 reset。只做三件事：统一盒模型、去掉浏览器默认外边距与字体继承断层、
+ * 建立全局焦点与减少动效的兜底。不在这里写任何组件外观——那属于 primitives.css。
+ */
+
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+html {
+  min-width: 20rem;
+  /* 防止 iOS 横竖屏切换时自动放大正文字号，破坏 rem 体系。 */
+  -webkit-text-size-adjust: 100%;
+  background: var(--color-bg);
+  color: var(--color-text);
+  font-family: var(--font-sans);
+  font-size: 100%;
+  line-height: var(--leading-normal);
+}
+
+body {
+  margin: 0;
+  min-height: 100vh;
+  min-height: 100dvh;
+  background: var(--color-bg);
+  color: var(--color-text);
+  font-size: var(--text-base);
+}
+
+h1,
+h2,
+h3,
+h4,
+h5,
+h6 {
+  margin: 0;
+  line-height: var(--leading-tight);
+  font-weight: 650;
+}
+
+p,
+figure,
+blockquote,
+dl,
+dd {
+  margin: 0;
+}
+
+ul,
+ol {
+  margin: 0;
+  padding: 0;
+}
+
+img,
+picture,
+video,
+canvas,
+svg {
+  display: block;
+  max-width: 100%;
+}
+
+button,
+input,
+select,
+textarea {
+  font: inherit;
+  color: inherit;
+  margin: 0;
+}
+
+a {
+  color: var(--color-accent);
+  text-underline-offset: 0.2em;
+}
+
+code,
+kbd,
+samp,
+pre {
+  font-family: var(--font-mono);
+  font-size: 0.9em;
+}
+
+table {
+  border-collapse: collapse;
+}
+
+/*
+ * 全局焦点。默认 outline 在深色/高对比主题下经常被背景吞掉，这里统一改成
+ * 「底色描边 + 强调色环」的双层 focus-ring，任何主题下都能与背景分离。
+ * 用 :focus-visible 而不是 :focus，避免鼠标点击也出现焦点环。
+ */
+:focus-visible {
+  outline: 2px solid transparent;
+  outline-offset: 0;
+  box-shadow: var(--focus-ring);
+}
+
+/*
+ * 减少动效兜底。tokens.css 已把 --motion-* 归零，这里再拦住直接写死时长的第三方样式
+ * （例如 react-aria-components 的入场动画），保证「用户要求减少动效」是硬约束。
+ */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+}

@@ -1,0 +1,243 @@
+/*
+ * Gallery 设计 token。
+ *
+ * 这是画廊与管理两套界面**唯一**的视觉事实源：两端共享同一套 token 名，只在密度
+ * （--control-height / --row-height）与用法上分离，不允许任何一端另建一套颜色或间距。
+ *
+ * 主题优先级（自上而下，后者覆盖前者）：
+ *   1. :root                                 浅色基线
+ *   2. @media (prefers-color-scheme: dark)   系统偏好深色
+ *   3. :root[data-theme='...']               用户显式选择，必须**覆盖**系统偏好
+ * 因此显式主题块写在媒体查询之后；media 块只作用于 :root:not([data-theme])，即
+ * 「用户没有显式选择」的情况。ThemeProvider 在 system 模式下会移除 data-theme 属性。
+ *
+ * 间距与字号以 rem 表达，默认根字号 16px 时分别等于 4/8/12/16/24/32/48/64px 与
+ * 12/14/16/18/20/24/30px。用 rem 是为了跟随用户在浏览器里放大的字号，不要改回 px。
+ */
+
+:root {
+  color-scheme: light;
+
+  /* —— 颜色（浅色基线） —— */
+  --color-bg: #f4f6f5;
+  --color-surface: #ffffff;
+  --color-surface-raised: #ffffff;
+  --color-border: #7f8d89;
+  --color-text: #14201d;
+  --color-text-muted: #55635f;
+  --color-accent: #06715c;
+  --color-accent-text: #ffffff;
+  --color-danger: #b3261e;
+  --color-warning: #8a5b00;
+  --color-success: #1d6b4a;
+
+  /* 派生颜色：仅用于弱强调背景与遮罩，不承载正文文字。 */
+  --color-accent-soft: #d8f0e9;
+  --color-danger-soft: #fbe6e4;
+  --color-warning-soft: #fdefcf;
+  --color-success-soft: #ddf1e7;
+  --color-overlay: rgb(10 18 16 / 0.55);
+  --color-focus: #06715c;
+
+  /* —— 间距 —— */
+  --space-1: 0.25rem;
+  --space-2: 0.5rem;
+  --space-3: 0.75rem;
+  --space-4: 1rem;
+  --space-5: 1.5rem;
+  --space-6: 2rem;
+  --space-7: 3rem;
+  --space-8: 4rem;
+
+  /* —— 圆角 —— */
+  --radius-sm: 0.25rem;
+  --radius-md: 0.5rem;
+  --radius-lg: 1rem;
+  --radius-full: 9999px;
+
+  /* —— 字体 —— */
+  --font-sans:
+    'Segoe UI', 'PingFang SC', 'Microsoft YaHei', ui-sans-serif, system-ui, -apple-system, 'Noto Sans SC',
+    sans-serif;
+  --font-mono: 'Cascadia Mono', 'Cascadia Code', ui-monospace, 'SFMono-Regular', Consolas, monospace;
+  --text-xs: 0.75rem;
+  --text-sm: 0.875rem;
+  --text-base: 1rem;
+  --text-lg: 1.125rem;
+  --text-xl: 1.25rem;
+  --text-2xl: 1.5rem;
+  --text-3xl: 1.875rem;
+  --leading-tight: 1.25;
+  --leading-normal: 1.6;
+
+  /* —— 阴影 —— */
+  --shadow-sm: 0 1px 2px rgb(10 18 16 / 0.08);
+  --shadow-md: 0 4px 16px rgb(10 18 16 / 0.12);
+  --shadow-lg: 0 16px 48px rgb(10 18 16 / 0.2);
+
+  /* —— 动效 —— */
+  --motion-fast: 120ms;
+  --motion-base: 200ms;
+  --motion-slow: 320ms;
+
+  /* —— 焦点 —— */
+  --focus-ring: 0 0 0 2px var(--color-bg), 0 0 0 4px var(--color-focus);
+
+  /* —— 密度（默认 comfortable，画廊使用） —— */
+  --control-height: 2.75rem;
+  --row-height: 3.5rem;
+}
+
+/* 系统偏好深色。只在用户没有显式选择主题时生效。 */
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme]) {
+    color-scheme: dark;
+
+    --color-bg: #0f1416;
+    --color-surface: #171d20;
+    --color-surface-raised: #1f272a;
+    --color-border: #5d6b66;
+    --color-text: #eef3f1;
+    --color-text-muted: #a3b1ad;
+    --color-accent: #5fd6b4;
+    --color-accent-text: #052019;
+    --color-danger: #ff9c92;
+    --color-warning: #f0c05a;
+    --color-success: #6fd99f;
+
+    --color-accent-soft: #123a31;
+    --color-danger-soft: #43201d;
+    --color-warning-soft: #3d3210;
+    --color-success-soft: #14372a;
+    --color-overlay: rgb(0 0 0 / 0.68);
+    --color-focus: #5fd6b4;
+
+    --shadow-sm: 0 1px 2px rgb(0 0 0 / 0.5);
+    --shadow-md: 0 4px 16px rgb(0 0 0 / 0.55);
+    --shadow-lg: 0 16px 48px rgb(0 0 0 / 0.65);
+  }
+}
+
+/* 用户显式选择浅色：必须覆盖系统深色偏好，因此重复声明浅色值而不是依赖继承。 */
+:root[data-theme='light'] {
+  color-scheme: light;
+
+  --color-bg: #f4f6f5;
+  --color-surface: #ffffff;
+  --color-surface-raised: #ffffff;
+  --color-border: #7f8d89;
+  --color-text: #14201d;
+  --color-text-muted: #55635f;
+  --color-accent: #06715c;
+  --color-accent-text: #ffffff;
+  --color-danger: #b3261e;
+  --color-warning: #8a5b00;
+  --color-success: #1d6b4a;
+
+  --color-accent-soft: #d8f0e9;
+  --color-danger-soft: #fbe6e4;
+  --color-warning-soft: #fdefcf;
+  --color-success-soft: #ddf1e7;
+  --color-overlay: rgb(10 18 16 / 0.55);
+  --color-focus: #06715c;
+
+  --shadow-sm: 0 1px 2px rgb(10 18 16 / 0.08);
+  --shadow-md: 0 4px 16px rgb(10 18 16 / 0.12);
+  --shadow-lg: 0 16px 48px rgb(10 18 16 / 0.2);
+}
+
+:root[data-theme='dark'] {
+  color-scheme: dark;
+
+  --color-bg: #0f1416;
+  --color-surface: #171d20;
+  --color-surface-raised: #1f272a;
+  --color-border: #5d6b66;
+  --color-text: #eef3f1;
+  --color-text-muted: #a3b1ad;
+  --color-accent: #5fd6b4;
+  --color-accent-text: #052019;
+  --color-danger: #ff9c92;
+  --color-warning: #f0c05a;
+  --color-success: #6fd99f;
+
+  --color-accent-soft: #123a31;
+  --color-danger-soft: #43201d;
+  --color-warning-soft: #3d3210;
+  --color-success-soft: #14372a;
+  --color-overlay: rgb(0 0 0 / 0.68);
+  --color-focus: #5fd6b4;
+
+  --shadow-sm: 0 1px 2px rgb(0 0 0 / 0.5);
+  --shadow-md: 0 4px 16px rgb(0 0 0 / 0.55);
+  --shadow-lg: 0 16px 48px rgb(0 0 0 / 0.65);
+}
+
+/*
+ * 高对比主题：纯黑底 + 纯白文字与边框，所有语义色都提到浅色端，全部前景对背景 ≥ 7:1。
+ * 阴影在高对比下不是可靠的层级信号（低视力用户可能完全看不到），因此层级改由 1px 实边框
+ * 承担：这里把 shadow 全部退化为边框状描边。
+ */
+:root[data-theme='high-contrast'] {
+  color-scheme: dark;
+
+  --color-bg: #000000;
+  --color-surface: #000000;
+  --color-surface-raised: #101010;
+  --color-border: #ffffff;
+  --color-text: #ffffff;
+  --color-text-muted: #ececec;
+  --color-accent: #6ff5d0;
+  --color-accent-text: #000000;
+  --color-danger: #ff9b8f;
+  --color-warning: #ffd166;
+  --color-success: #7dfab5;
+
+  --color-accent-soft: #001a14;
+  --color-danger-soft: #1a0605;
+  --color-warning-soft: #1a1300;
+  --color-success-soft: #001a0e;
+  --color-overlay: rgb(0 0 0 / 0.85);
+  --color-focus: #ffffff;
+
+  --shadow-sm: 0 0 0 1px #ffffff;
+  --shadow-md: 0 0 0 1px #ffffff;
+  --shadow-lg: 0 0 0 2px #ffffff;
+}
+
+/*
+ * 密度。管理端信息密集，默认 compact；画廊沉浸浏览，默认 comfortable。
+ * 由 ThemeProvider 写在 :root 的 data-density 上，不允许组件自己内联覆盖控件高度。
+ */
+:root[data-density='comfortable'] {
+  --control-height: 2.75rem;
+  --row-height: 3.5rem;
+}
+
+:root[data-density='compact'] {
+  --control-height: 2rem;
+  --row-height: 2.25rem;
+}
+
+/*
+ * 触控设备把 compact 抬回 44px 触控目标。密度是信息密度选择，不是可以牺牲触控可达性的
+ * 借口；在没有精确指针的设备上，紧凑行高会让管理端无法可靠点击。
+ */
+@media (pointer: coarse) {
+  :root[data-density='compact'] {
+    --control-height: 2.75rem;
+    --row-height: 3rem;
+  }
+}
+
+/*
+ * 用户要求减少动效时，所有动效 token 归零。组件只允许用这三个 token 表达时长，
+ * 因此这一处归零即可关闭全部过渡；额外的 !important 兜底见 reset.css。
+ */
+@media (prefers-reduced-motion: reduce) {
+  :root {
+    --motion-fast: 0ms;
+    --motion-base: 0ms;
+    --motion-slow: 0ms;
+  }
+}
