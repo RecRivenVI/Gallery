@@ -17,8 +17,8 @@
       "description": ["/content", "/description", "/text"],
       "tags": ["/tags"]
     }}},
-    {"id": "date", "kind": "fallback", "config": {"target": "date", "pointers": ["/published", "/date", "/added", "/edited"], "default": ""}},
-    {"id": "url", "kind": "fallback", "config": {"target": "sourceUrl", "pointers": ["/postUrl", "/post_url", "/url", "/sourceUrl", "/source_url", "/permalink", "/link", "/source/url"], "default": ""}},
+    {"id": "date", "kind": "work_date", "config": {"pointers": ["/published", "/date", "/added", "/edited"], "input_timezone": "UTC"}},
+    {"id": "url", "kind": "fallback", "config": {"target": "source_url", "pointers": ["/postUrl", "/post_url", "/url", "/sourceUrl", "/source_url", "/permalink", "/link", "/source/url"], "default": ""}},
     {"id": "media-jpg", "kind": "media_classify", "config": {"glob": "*.jpg", "kind": "image", "mime": "image/jpeg"}},
     {"id": "media-jpeg", "kind": "media_classify", "config": {"glob": "*.jpeg", "kind": "image", "mime": "image/jpeg"}},
     {"id": "media-png", "kind": "media_classify", "config": {"glob": "*.png", "kind": "image", "mime": "image/png"}},

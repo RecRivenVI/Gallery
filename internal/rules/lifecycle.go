@@ -10,6 +10,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/RecRivenVI/gallery/internal/querytext"
 )
@@ -63,12 +64,33 @@ type DryRunWork struct {
 	// CreatorStableKey 是规则为 SourceCreator occurrence 生成的稳定身份候选。
 	// 它只供扫描/Binding 链使用，不扩张当前 Dry Run 公共 DTO；Trace/Explain 仍会
 	// 记录该字段由哪个原语产生，但不会泄露 metadata 原值。
-	CreatorStableKey string        `json:"-"`
-	Tags             []string      `json:"tags"`
-	Ignored          bool          `json:"ignored"`
-	Media            []DryRunMedia `json:"media"`
-	CoverPath        string        `json:"coverPath,omitempty"`
-	Badges           []DryRunBadge `json:"badges,omitempty"`
+	CreatorStableKey string `json:"-"`
+	// Description 与 SourceURL 是来源自述的作品描述与原始链接。真实规则为每个平台声明了它们的
+	// 回退链（例如 pixiv 的 `caption`→`text`、通用的 `postUrl`→…→`source.url`），此前这两个
+	// target 在编译期被放行、在求值期被静默丢弃。
+	Description string        `json:"description,omitempty"`
+	SourceURL   string        `json:"sourceUrl,omitempty"`
+	Tags        []string      `json:"tags"`
+	Ignored     bool          `json:"ignored"`
+	Media       []DryRunMedia `json:"media"`
+	CoverPath   string        `json:"coverPath,omitempty"`
+	Badges      []DryRunBadge `json:"badges,omitempty"`
+	// Date 是规则解析出的作品发布时间。它只能由 `work_date` 原语产出，因此要么带有完整的
+	// instant + 原始输入 + 解析器版本，要么整体缺失——不存在「有原始串但没有 instant」的中间态。
+	Date *DryRunWorkDate `json:"date,omitempty"`
+}
+
+// DryRunWorkDate 是作品发布时间的对外形态。RawValue 与 ParserVersion 是 `规范/06` 对时间排序的
+// 明确要求：解析规则一旦变化，必须能识别出历史结果由旧规则产生，而不是让两代解析静默混用。
+type DryRunWorkDate struct {
+	// Instant 是 RFC3339 形式的 UTC 时刻。
+	Instant string `json:"instant"`
+	// RawValue 是产生该时刻的原始输入，逐字保留。
+	RawValue string `json:"rawValue"`
+	// Source 说明来自哪个 JSON Pointer，或 `$path`。
+	Source string `json:"source"`
+	// ParserVersion 是产生该 Instant 的解析规则版本。
+	ParserVersion string `json:"parserVersion"`
 }
 
 // DryRunBadge 是规则为该作品派生的角标。它是 Source-derived 展示事实：随重扫重新计算，
@@ -405,6 +427,33 @@ func (l *Lifecycle) evaluate(ctx context.Context, ir RuleIR, params map[string]a
 	}
 	result.Work.CoverPath = selectCoverPath(ir, sample, result.Work.Media)
 	result.Work.Badges = evaluateBadges(ir, sample, result.Work)
+	// 作品发布时间在媒体与角标之后解析：它只依赖 metadata 与作品相对路径，放在末尾使前面的
+	// 求值顺序不受影响，也让「没有 work_date 原语」这一常见情况完全零成本。
+	if ir.WorkDate != nil {
+		resolved, err := resolveWorkDate(*ir.WorkDate, sample.Metadata, sample.Path)
+		if err != nil {
+			return DryRunResult{}, err
+		}
+		if resolved.HasInstant() {
+			result.Work.Date = &DryRunWorkDate{
+				Instant:       resolved.Instant.Format(time.RFC3339Nano),
+				RawValue:      resolved.Raw,
+				Source:        resolved.Source,
+				ParserVersion: resolved.ParserVersion,
+			}
+			result.Trace = append(result.Trace, TraceStep{
+				ID: "work_date", Kind: "work_date", InputPointer: resolved.Source,
+				OutputSummary: "field=date", Selected: true, ReasonCode: "selected",
+			})
+		} else {
+			// 解析不出时间不是错误：多数来源的部分作品确实没有可用日期。但必须留下可解释的
+			// issue，而不是像旧的静默丢弃那样让缺失无迹可寻。
+			result.Issues = append(result.Issues, RuleIssue{Code: "RULE_WORK_DATE_MISSING"})
+			result.Trace = append(result.Trace, TraceStep{
+				ID: "work_date", Kind: "work_date", OutputSummary: "field=date", ReasonCode: "missing",
+			})
+		}
+	}
 	return result, nil
 }
 
@@ -787,6 +836,11 @@ func applyStableKey(primitive IRPrimitive, metadata any, result *DryRunResult) {
 	}
 }
 
+// assignTarget 把 selector/fallback/metadata_map 选出的值写入作品字段。
+//
+// 分支集合必须与 package.go 的 assignableTargets 逐项一致：那里在**编译期**拒绝未知 target，
+// 这里才可以安全地没有 default 分支。两处一旦不同步，就会退回到旧实现「规则声明了一个字段、
+// 扫描成功、值凭空消失」的静默丢弃行为。新增可赋值字段必须同时改两处。
 func assignTarget(work *DryRunWork, target string, value any) {
 	switch target {
 	case "title":
@@ -799,6 +853,10 @@ func assignTarget(work *DryRunWork, target string, value any) {
 		work.Creator = fmt.Sprint(value)
 	case "tags":
 		work.Tags = anyStringList(value)
+	case "description":
+		work.Description = fmt.Sprint(value)
+	case "source_url":
+		work.SourceURL = fmt.Sprint(value)
 	}
 }
 

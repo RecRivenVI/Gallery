@@ -17,10 +17,13 @@ import (
 	contractschema "github.com/RecRivenVI/gallery/internal/contract/schema"
 )
 
-// PrimitiveRegistryVersion 参与 rule_ir_hash，因此新增或改变原语语义必须递增它：v2 增加
-// media_hidden（按名称 glob 隐藏媒体）、cover_disable_marker（`.nocover` 禁用封面）与
-// badge（规则派生的作品角标），并让 cover_candidate 支持 priority 与 media_type。
-const PrimitiveRegistryVersion = "gallery-primitives-v2"
+// PrimitiveRegistryVersion 参与 rule_ir_hash，因此新增或改变原语语义必须递增它。
+//
+//   - v2：media_hidden（按名称 glob 隐藏媒体）、cover_disable_marker（`.nocover` 禁用封面）、
+//     badge（规则派生的作品角标），并让 cover_candidate 支持 priority 与 media_type。
+//   - v3：work_date（作品发布时间解析），把 selector/fallback/metadata_map 的 target 收敛为
+//     封闭枚举以消除静默丢弃，并新增 description 与 source_url 两个可赋值字段。
+const PrimitiveRegistryVersion = "gallery-primitives-v3"
 
 var jsonNumberPattern = regexp.MustCompile(`^(-?)(0|[1-9][0-9]*)(?:\.([0-9]+))?(?:[eE]([+-]?[0-9]+))?$`)
 
@@ -51,6 +54,7 @@ type RuleIR struct {
 	HiddenNameGlobs          []string              `json:"hiddenNameGlobs,omitempty"`
 	CoverDisableMarker       string                `json:"coverDisableMarker,omitempty"`
 	Badges                   []IRBadge             `json:"badges,omitempty"`
+	WorkDate                 *IRWorkDate           `json:"workDate,omitempty"`
 	Primitives               []IRPrimitive         `json:"primitives"`
 	CELExpressions           []IRExpression        `json:"celExpressions"`
 	Extensions               []IRCompiledExtension `json:"extensions,omitempty"`
@@ -86,6 +90,14 @@ type IRBadge struct {
 	MetadataValues  []json.RawMessage `json:"metadataValues,omitempty"`
 	MediaSuffix     []string          `json:"mediaSuffix,omitempty"`
 	CaseInsensitive bool              `json:"caseInsensitive,omitempty"`
+}
+
+// IRWorkDate 是编译后的作品发布时间解析计划。它只描述「去哪里取、怎么解释」，实际解析在
+// resolveWorkDate 中执行，见 worktime.go。
+type IRWorkDate struct {
+	Pointers      []string `json:"pointers,omitempty"`
+	PathPattern   string   `json:"pathPattern,omitempty"`
+	InputTimezone string   `json:"inputTimezone,omitempty"`
 }
 
 type IRExpression struct {
@@ -416,6 +428,20 @@ func compilePrimitives(primitives []rawPrimitive, expressions []IRExpression) (R
 				MetadataValues: config.When.MetadataValues, MediaSuffix: config.When.MediaSuffix,
 				CaseInsensitive: config.When.CaseInsensitive,
 			})
+		case "work_date":
+			var config workDateConfig
+			if err := strictDecode(primitive.Config, &config); err != nil {
+				return RuleIR{}, withField(fmt.Sprintf("/primitives/%d/config", index), fmt.Errorf("work_date %s: %w", primitive.ID, err))
+			}
+			if ir.WorkDate != nil {
+				return RuleIR{}, withField(fmt.Sprintf("/primitives/%d", index),
+					fmt.Errorf("work_date %s 重复声明；一个规则包只能有一条作品发布时间解析计划", primitive.ID))
+			}
+			plan, err := compileWorkDate(config, primitive.ID)
+			if err != nil {
+				return RuleIR{}, withField(fmt.Sprintf("/primitives/%d/config", index), err)
+			}
+			ir.WorkDate = &plan
 		case "selector", "fallback", "stable_key", "media_order", "cover_candidate", "metadata_map", "condition":
 			if err := validateExtendedPrimitive(primitive); err != nil {
 				return RuleIR{}, withField(fmt.Sprintf("/primitives/%d/config", index), err)
@@ -469,6 +495,39 @@ func compileSemanticExtensions(raw json.RawMessage) ([]IRCompiledExtension, erro
 	return result, nil
 }
 
+// assignableTargets 是 selector/fallback/metadata_map 可以写入的**封闭**字段集合，与
+// lifecycle.assignTarget 的分支一一对应。
+//
+// 这里必须是封闭枚举而不是「非空字符串」：旧实现只校验 target 非空，而 assignTarget 对未知
+// target 没有 default 分支，于是规则可以声明一个永远不生效的 target——规则导入成功、扫描成功、
+// 值凭空消失，既无 issue 也无 trace 告警。仓库自己的 Pawchive 真实来源夹具就声明了
+// `target: "date"` 并因此被静默丢弃。任何新增可赋值字段都必须同时改这里与 assignTarget。
+//
+// **`date` 刻意不在此列。** 作品发布时间必须携带解析后的 instant、原始输入与解析器版本
+// （见 `规范/06` 对时间排序的要求），而普通 selector 只能搬运原始值、无法产出 instant。
+// 因此时间只能由 `work_date` 原语产出，规则里写 `target: "date"` 会在编译期被明确拒绝，
+// 而不是留下一个看似成功却没有时间的规则。
+var assignableTargets = map[string]struct{}{
+	"title":       {},
+	"external_id": {},
+	"provider_id": {},
+	"creator":     {},
+	"tags":        {},
+	"description": {},
+	"source_url":  {},
+}
+
+func requireAssignableTarget(raw json.RawMessage, primitive rawPrimitive) error {
+	var target string
+	if json.Unmarshal(raw, &target) != nil {
+		return fmt.Errorf("%s %s target 无效", primitive.Kind, primitive.ID)
+	}
+	if _, ok := assignableTargets[target]; !ok {
+		return fmt.Errorf("%s %s target %q 不受支持", primitive.Kind, primitive.ID, target)
+	}
+	return nil
+}
+
 func validateExtendedPrimitive(primitive rawPrimitive) error {
 	var config map[string]json.RawMessage
 	if err := strictDecode(primitive.Config, &config); err != nil {
@@ -487,6 +546,9 @@ func validateExtendedPrimitive(primitive rawPrimitive) error {
 	switch primitive.Kind {
 	case "selector", "fallback":
 		if err := requireString("target"); err != nil {
+			return err
+		}
+		if err := requireAssignableTarget(config["target"], primitive); err != nil {
 			return err
 		}
 		if _, pointer := config["pointer"]; !pointer {
@@ -536,8 +598,24 @@ func validateExtendedPrimitive(primitive rawPrimitive) error {
 			}
 		}
 	case "metadata_map":
-		if _, ok := config["fields"]; !ok {
+		raw, ok := config["fields"]
+		if !ok {
 			return fmt.Errorf("metadata_map %s 缺少 fields", primitive.ID)
+		}
+		var fields map[string]json.RawMessage
+		if err := json.Unmarshal(raw, &fields); err != nil {
+			return fmt.Errorf("metadata_map %s fields 无效: %w", primitive.ID, err)
+		}
+		// fields 的每个 key 都是赋值 target，与 selector/fallback 走同一条落地路径，
+		// 因此必须受同一张封闭白名单约束。
+		for name := range fields {
+			encoded, err := json.Marshal(name)
+			if err != nil {
+				return fmt.Errorf("metadata_map %s field 名无效", primitive.ID)
+			}
+			if err := requireAssignableTarget(encoded, primitive); err != nil {
+				return err
+			}
 		}
 	case "condition":
 		for _, name := range []string{"scope", "expression", "effect"} {
