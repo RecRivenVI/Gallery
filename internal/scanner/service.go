@@ -5,7 +5,9 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"io/fs"
+	"log/slog"
 	"os"
 	"path"
 	"path/filepath"
@@ -390,9 +392,16 @@ func (s *Service) Execute(ctx context.Context, jobID string) error {
 			return s.fail(ctx, job.ID, err)
 		}
 	}
-	discovered, err := discover(ctx, source.RootPath, binding.IR, binding.Parameters)
+	discoveryResult, err := discover(ctx, source.RootPath, binding.IR, binding.Parameters)
 	if err != nil {
 		return s.fail(ctx, job.ID, err)
+	}
+	discovered := discoveryResult.Works
+	if discoveryResult.SkippedWorks > 0 {
+		// 被跳过的作品不会进入库，因此必须留下痕迹而不是静默丢失。这里只记类别与计数，
+		// 不记路径或 metadata 内容。
+		slog.Warn("scan_skipped_works", "sourceId", source.ID,
+			"skippedWorks", discoveryResult.SkippedWorks, "reason", discoveryResult.SkippedReason)
 	}
 	if len(discovered) == 0 {
 		return s.fail(ctx, job.ID, fault.New(fault.CodeRuleEval, false, nil))
@@ -906,12 +915,46 @@ func creatorReference(work discoveredWork) application.DiscoveredCreator {
 	return result
 }
 
-func discover(ctx context.Context, root string, ir rules.RuleIR, parameters []byte) ([]discoveredWork, error) {
+// readWorkMetadata 读取并解析单个作品的 metadata。第二个返回值为 false 表示该作品应被跳过，
+// 第一个返回值是脱敏的原因（只说明是哪一类问题，不包含路径或 metadata 内容）。
+//
+// 大小上限用**已打开句柄**上的有界读取来施加，而不是先 Stat 再整文件读取：后者在 Stat 与读取之间
+// 存在时间窗，文件在窗口内增大时仍会被整体读入。
+func readWorkMetadata(workDir, metadataFile string, sample *rules.DryRunInput) (string, bool) {
+	file, err := os.Open(filepath.Join(workDir, filepath.FromSlash(metadataFile)))
+	if err != nil {
+		return "metadata 不可读", false
+	}
+	defer func() { _ = file.Close() }()
+	limit := int64(rules.CELProfileV1.InputJSONBytes)
+	content, err := io.ReadAll(io.LimitReader(file, limit+1))
+	if err != nil {
+		return "metadata 读取失败", false
+	}
+	if int64(len(content)) > limit {
+		return "metadata 超过大小上限", false
+	}
+	if err := json.Unmarshal(content, &sample.Metadata); err != nil {
+		return "metadata 不是合法 JSON", false
+	}
+	return "", true
+}
+
+// discoverResult 附带扫描过程中被跳过的作品统计，使「跳过」永远是可报告的事实而不是静默丢失。
+type discoverResult struct {
+	Works         []discoveredWork
+	SkippedWorks  int
+	SkippedReason string
+}
+
+func discover(ctx context.Context, root string, ir rules.RuleIR, parameters []byte) (discoverResult, error) {
 	lifecycle, err := rules.NewLifecycle()
 	if err != nil {
-		return nil, fault.New(fault.CodeRuleEval, false, err)
+		return discoverResult{}, fault.New(fault.CodeRuleEval, false, err)
 	}
 	var result []discoveredWork
+	skippedWorks := 0
+	skippedReason := ""
 	err = filepath.WalkDir(root, func(onDisk string, entry fs.DirEntry, walkErr error) error {
 		if walkErr != nil {
 			return walkErr
@@ -947,17 +990,21 @@ func discover(ctx context.Context, root string, ir rules.RuleIR, parameters []by
 		}
 		sample := rules.DryRunInput{Path: relative, Metadata: map[string]any{}, Files: []rules.DryRunFile{}}
 		if ir.MetadataFile != "" {
-			metadataPath := filepath.Join(onDisk, filepath.FromSlash(ir.MetadataFile))
-			info, statErr := os.Stat(metadataPath)
-			if statErr != nil || info.Size() > int64(rules.CELProfileV1.InputJSONBytes) {
-				return fmt.Errorf("metadata 不可用或超限")
-			}
-			content, readErr := os.ReadFile(metadataPath)
-			if readErr != nil {
-				return readErr
-			}
-			if err := json.Unmarshal(content, &sample.Metadata); err != nil {
-				return fmt.Errorf("metadata 损坏: %w", err)
+			// 单个作品的 metadata 不可用**只跳过该作品**，不中断整次扫描。
+			//
+			// 旧实现在这里直接返回错误，于是 filepath.WalkDir 中止，整个 Source 的扫描以
+			// RULE_EVAL_ERROR 失败。真实来源上实测到该后果：某平台 11,686 个作品目录中有 19 个
+			// 缺少 metadata 文件，剩下 11,667 个完全正常的作品因此一个都索引不出来——一个作品的
+			// 数据缺陷让整个平台不可用，且失败信息里没有任何线索指向是哪一个目录。
+			//
+			// 跳过是有代价的（这些作品不会出现在库里），因此必须计数并随作业如实报告，不能静默。
+			skipped, ok := readWorkMetadata(onDisk, ir.MetadataFile, &sample)
+			if !ok {
+				skippedWorks++
+				if skippedReason == "" {
+					skippedReason = skipped
+				}
+				return filepath.SkipDir
 			}
 		}
 		for _, child := range children {
@@ -1025,12 +1072,12 @@ func discover(ctx context.Context, root string, ir rules.RuleIR, parameters []by
 	})
 	if err != nil {
 		if errors.Is(err, fs.ErrNotExist) {
-			return nil, fault.New(fault.CodeSourceUnavailable, true, err)
+			return discoverResult{}, fault.New(fault.CodeSourceUnavailable, true, err)
 		}
-		return nil, fault.New(fault.CodeRuleEval, false, err)
+		return discoverResult{}, fault.New(fault.CodeRuleEval, false, err)
 	}
 	sort.Slice(result, func(i, j int) bool { return result[i].SourceKey < result[j].SourceKey })
-	return result, nil
+	return discoverResult{Works: result, SkippedWorks: skippedWorks, SkippedReason: skippedReason}, nil
 }
 
 func pathOnDisk(root, relative string) string {

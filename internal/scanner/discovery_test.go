@@ -25,17 +25,17 @@ func TestFantiaCreatorStableIdentityIsSharedWithoutDisplayNameMerging(t *testing
 	if err != nil {
 		t.Fatal(err)
 	}
-	works, err := discover(context.Background(), filepath.Join(fixtureRoot, "source"), ir, parameters)
+	result, err := discover(context.Background(), filepath.Join(fixtureRoot, "source"), ir, parameters)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(works) != 3 {
-		t.Fatalf("Fantia 合成夹具作品数=%d，期望 3: %+v", len(works), works)
+	if len(result.Works) != 3 {
+		t.Fatalf("Fantia 合成夹具作品数=%d，期望 3: %+v", len(result.Works), result.Works)
 	}
 
 	identityOccurrences := map[string]int{}
 	sourceCreatorKeys := map[string]struct{}{}
-	for _, work := range works {
+	for _, work := range result.Works {
 		creator := creatorReference(work)
 		identityOccurrences[creator.ExternalID]++
 		sourceCreatorKeys[creator.SourceKey] = struct{}{}
@@ -84,12 +84,12 @@ func TestRuleIRDiscoversDifferentDirectoryAndMetadataShapes(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			works, err := discover(context.Background(), filepath.Join(root, test.relativeRoot), ir, parameters)
+			result, err := discover(context.Background(), filepath.Join(root, test.relativeRoot), ir, parameters)
 			if err != nil {
 				t.Fatal(err)
 			}
-			if len(works) != 1 || works[0].SourceKey != test.wantWorkKey || works[0].Title != test.wantTitle || len(works[0].Media) == 0 || works[0].Media[0].SourceKey != test.wantMedia || works[0].RuleCoverMediaSourceKey != test.wantMedia {
-				t.Fatalf("规则驱动发现错误: %+v", works)
+			if len(result.Works) != 1 || result.Works[0].SourceKey != test.wantWorkKey || result.Works[0].Title != test.wantTitle || len(result.Works[0].Media) == 0 || result.Works[0].Media[0].SourceKey != test.wantMedia || result.Works[0].RuleCoverMediaSourceKey != test.wantMedia {
+				t.Fatalf("规则驱动发现错误: %+v", result.Works)
 			}
 		})
 	}
@@ -119,15 +119,15 @@ func TestDiscoveryMapsRuleCoverPathToDiscoveredStableSourceKey(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	works, err := discover(context.Background(), root, ir, parameters)
+	result, err := discover(context.Background(), root, ir, parameters)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(works) != 1 || len(works[0].Media) != 2 {
-		t.Fatalf("发现结果不完整: %+v", works)
+	if len(result.Works) != 1 || len(result.Works[0].Media) != 2 {
+		t.Fatalf("发现结果不完整: %+v", result.Works)
 	}
-	if works[0].Media[0].SourceKey != "work/aaa.bin" || works[0].RuleCoverMediaSourceKey != "work/cover.bin" {
-		t.Fatalf("封面没有映射到实际发现媒体的稳定 SourceKey: %+v", works[0])
+	if result.Works[0].Media[0].SourceKey != "work/aaa.bin" || result.Works[0].RuleCoverMediaSourceKey != "work/cover.bin" {
+		t.Fatalf("封面没有映射到实际发现媒体的稳定 SourceKey: %+v", result.Works[0])
 	}
 }
 
@@ -159,4 +159,75 @@ func ruleForDiscovery(workGlob, metadataFile, mediaGlob, selectors, expressions,
   ],
   "cel_expressions":[%s],"tests":[{"id":"discovery"}],"extensions":{}
 }`, workGlob, metadataFile, selectors, mediaGlob, condition, expressions)
+}
+
+// TestDiscoverSkipsUnreadableWorkWithoutAbortingScan 锁定「单个作品的 metadata 缺陷只跳过该作品」。
+//
+// 旧实现在这里直接返回错误，filepath.WalkDir 因此中止，整个 Source 的扫描以 RULE_EVAL_ERROR 失败。
+// 真实来源上实测到该后果：某平台 11,686 个作品目录中有 19 个缺少 metadata 文件，剩下 11,667 个
+// 完全正常的作品一个都索引不出来，而失败信息里没有任何线索指向是哪一类问题。
+func TestDiscoverSkipsUnreadableWorkWithoutAbortingScan(t *testing.T) {
+	root := t.TempDir()
+	ir, parameters := metadataRequiringIR(t)
+
+	// 三个作品：正常、缺 metadata、metadata 不是合法 JSON。
+	for _, item := range []struct{ dir, metadata string }{
+		{"作者/正常作品", `{"title":"正常"}`},
+		{"作者/缺失作品", ""},
+		{"作者/损坏作品", "{ 这不是 JSON"},
+	} {
+		dir := filepath.Join(root, filepath.FromSlash(item.dir))
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(dir, "01.jpg"), []byte("x"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		if item.metadata != "" {
+			if err := os.WriteFile(filepath.Join(dir, "metadata.json"), []byte(item.metadata), 0o644); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+
+	result, err := discover(context.Background(), root, ir, parameters)
+	if err != nil {
+		t.Fatalf("单个作品的 metadata 缺陷中断了整次扫描: %v", err)
+	}
+	if len(result.Works) != 1 {
+		t.Fatalf("正常作品未被索引: 作品数=%d", len(result.Works))
+	}
+	if result.SkippedWorks != 2 {
+		t.Fatalf("跳过计数=%d，期望 2（缺失 + 损坏）", result.SkippedWorks)
+	}
+	if result.SkippedReason == "" {
+		t.Fatal("跳过原因为空：跳过必须可解释，不能静默丢失")
+	}
+}
+
+// metadataRequiringIR 构造一个声明了 metadata 文件的最小规则 IR，使 discover 走必须读取
+// metadata 的分支。
+func metadataRequiringIR(t *testing.T) (rules.RuleIR, []byte) {
+	t.Helper()
+	const packageJSON = `{
+  "rule_set_id":"rset_018f47d2-5c16-7a44-a8a0-0000000000f1","version":"1.0.0",
+  "schema_version":1,"normalization_algorithm_version":"gallery-canonical-json-v1",
+  "compiler_requirement":"gallery-rule-compiler-v1","cel_profile_version":"gallery-cel-v1",
+  "parameter_schema":{"type":"object","additionalProperties":false},"provider_namespaces":[],
+  "primitives":[
+    {"id":"work","kind":"path_match","config":{"scope":"work_directory","glob":"*/*",
+      "title":"directory_name","stable_key":"relative_path","metadata_file":"metadata.json"}},
+    {"id":"media","kind":"media_classify","config":{"glob":"*.jpg","kind":"image","mime":"image/jpeg"}}
+  ],
+  "cel_expressions":[],"tests":[{"id":"t"}],"extensions":{}
+}`
+	compiled, err := rules.CompilePackage([]byte(packageJSON))
+	if err != nil {
+		t.Fatal(err)
+	}
+	ir, _, parameters, err := rules.CompileBinding(compiled, []byte(`{}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	return ir, parameters
 }

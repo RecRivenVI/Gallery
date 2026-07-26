@@ -68,15 +68,15 @@ func TestDiscoveryTreatsDirectoryLinksAsLinksNotMedia(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	works, err := discover(context.Background(), root, ir, parameters)
+	result, err := discover(context.Background(), root, ir, parameters)
 	if err != nil {
 		t.Fatalf("发现失败: %v", err)
 	}
-	if len(works) != 1 {
-		t.Fatalf("作品数=%d，期望 1: %+v", len(works), works)
+	if len(result.Works) != 1 {
+		t.Fatalf("作品数=%d，期望 1: %+v", len(result.Works), result.Works)
 	}
 	var keys []string
-	for _, item := range works[0].Media {
+	for _, item := range result.Works[0].Media {
 		keys = append(keys, item.SourceKey)
 	}
 	if len(keys) != 2 || keys[0] != "work/aaa.bin" || keys[1] != "work/zzz.bin" {
@@ -116,11 +116,11 @@ func TestDiscoveryDoesNotDescendIntoLinkedSubtrees(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	works, err := discover(context.Background(), root, ir, parameters)
+	result, err := discover(context.Background(), root, ir, parameters)
 	if err != nil {
 		t.Fatalf("发现失败: %v", err)
 	}
-	if len(works) != 1 || len(works[0].Media) != 1 || works[0].Media[0].SourceKey != "inside-work/kept.bin" {
-		t.Fatalf("链接子树越过 Source 根进入发现结果: %+v", works)
+	if len(result.Works) != 1 || len(result.Works[0].Media) != 1 || result.Works[0].Media[0].SourceKey != "inside-work/kept.bin" {
+		t.Fatalf("链接子树越过 Source 根进入发现结果: %+v", result.Works)
 	}
 }
