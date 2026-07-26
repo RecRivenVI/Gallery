@@ -28,11 +28,32 @@ type Handler struct {
 	version string
 }
 
+// defaultShell 是画廊入口，也是未被任何 appShells 前缀认领的路径的 SPA 外壳。
+const defaultShell = "index.html"
+
+// appShells 声明「同源但彼此分离」的第二套界面各自的 SPA 外壳。
+//
+// 没有它时，任何不存在的路径都回落到 index.html——包括 `/manage/jobs` 这样的管理端深链，于是
+// 刷新、书签或直接打开管理端链接会落进**画廊**外壳。两套界面共用一个 Handler，因此外壳的选择
+// 必须按路径前缀决定，不能只有一个全局回落。
+//
+// 前缀不存在对应外壳文件时**不回落到画廊**：那正是本缺陷的表现形式，静默回落会让「管理端还没
+// 构建出来」表现为「管理端深链打开了画廊」。此时按资源缺失处理，让失败可见。
+var appShells = []struct{ prefix, shell string }{
+	{prefix: "manage", shell: "manage.html"},
+}
+
 func New(expectedContractVersion, expectedAPIVersion string) *Handler {
 	dist, err := fs.Sub(embedded, "dist")
 	if err != nil {
 		return &Handler{detail: "WEB_ASSETS_UNAVAILABLE"}
 	}
+	return newFromAssets(dist, expectedContractVersion, expectedAPIVersion)
+}
+
+// newFromAssets 是 New 的实现，接受任意资源集合，使外壳路由能用合成资源单独验证——否则只有在
+// 真实构建产物里存在 manage.html 之后才测得了，而那正是它必须先正确的时候。
+func newFromAssets(dist fs.FS, expectedContractVersion, expectedAPIVersion string) *Handler {
 	manifestBytes, err := fs.ReadFile(dist, "gallery-web.json")
 	if err != nil {
 		return &Handler{assets: dist, detail: "WEB_ASSETS_UNAVAILABLE"}
@@ -44,7 +65,7 @@ func New(expectedContractVersion, expectedAPIVersion string) *Handler {
 	if manifest.ContractVersion != expectedContractVersion || manifest.APIVersion != expectedAPIVersion {
 		return &Handler{assets: dist, detail: "WEB_VERSION_MISMATCH", version: manifest.WebVersion}
 	}
-	if _, err := fs.Stat(dist, "index.html"); err != nil {
+	if _, err := fs.Stat(dist, defaultShell); err != nil {
 		return &Handler{assets: dist, detail: "WEB_ASSETS_UNAVAILABLE", version: manifest.WebVersion}
 	}
 	return &Handler{assets: dist, ready: true, version: manifest.WebVersion}
@@ -70,10 +91,17 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 	name := strings.TrimPrefix(path.Clean("/"+r.URL.Path), "/")
 	if name == "." || name == "" {
-		name = "index.html"
+		name = defaultShell
 	}
 	if info, err := fs.Stat(h.assets, name); err != nil || info.IsDir() {
-		name = "index.html"
+		shell, ok := h.shellFor(name)
+		if !ok {
+			// 该路径归属某套界面，但它的外壳不在产物里。回落到画廊会把「管理端未构建」伪装成
+			// 「管理端深链打开了画廊」，因此按资源缺失如实报告。
+			writeWebError(w, http.StatusServiceUnavailable, "WEB_ASSETS_UNAVAILABLE")
+			return
+		}
+		name = shell
 	}
 	contents, err := fs.ReadFile(h.assets, name)
 	if err != nil {
@@ -91,6 +119,23 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 	w.WriteHeader(http.StatusOK)
 	_, _ = w.Write(contents)
+}
+
+// shellFor 决定某个不存在的路径应当由哪套界面的外壳承接。
+//
+// 第二个返回值为 false 表示该路径归属某套已声明的界面，但它的外壳不在产物里——调用方必须按失败
+// 处理，不得回落到画廊外壳。
+func (h *Handler) shellFor(name string) (string, bool) {
+	for _, candidate := range appShells {
+		if name != candidate.prefix && !strings.HasPrefix(name, candidate.prefix+"/") {
+			continue
+		}
+		if _, err := fs.Stat(h.assets, candidate.shell); err != nil {
+			return "", false
+		}
+		return candidate.shell, true
+	}
+	return defaultShell, true
 }
 
 func reservedPath(requestPath string) bool {

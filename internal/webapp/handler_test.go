@@ -8,6 +8,7 @@ import (
 	"slices"
 	"strings"
 	"testing"
+	"testing/fstest"
 )
 
 func TestHandlerServesIndexAndSPAFallback(t *testing.T) {
@@ -125,5 +126,72 @@ func TestPrecacheManifestIsCanonical(t *testing.T) {
 	slices.Sort(expected)
 	if !slices.Equal(urls, expected) {
 		t.Fatalf("precache 资产集合不完整: got=%v want=%v", urls, expected)
+	}
+}
+
+// synthAssets 构造一份最小的合成产物集合，使外壳路由能在真实构建产物之外单独验证。
+// withManage 为 false 时刻意不含 manage.html，用于验证「声明了界面但外壳缺失」的行为。
+func synthAssets(withManage bool) fstest.MapFS {
+	assets := fstest.MapFS{
+		"gallery-web.json": &fstest.MapFile{Data: []byte(
+			`{"webVersion":"0.0.0-test","contractVersion":"0.6.0-pre-alpha","apiVersion":"v1"}`)},
+		"index.html":        &fstest.MapFile{Data: []byte("<main>gallery</main>")},
+		"assets/app-abc.js": &fstest.MapFile{Data: []byte("// gallery bundle")},
+		"assets/mng-def.js": &fstest.MapFile{Data: []byte("// manage bundle")},
+	}
+	if withManage {
+		assets["manage.html"] = &fstest.MapFile{Data: []byte("<main>manage</main>")}
+	}
+	return assets
+}
+
+// TestManagementDeepLinkServesManagementShell 锁定双入口的深链行为。
+//
+// 此前任何不存在的路径都回落到 index.html，因此 `/manage/jobs` 这类管理端深链——刷新、书签或
+// 直接打开链接——会落进**画廊**外壳。两套界面共用一个 Handler，外壳必须按路径前缀决定。
+func TestManagementDeepLinkServesManagementShell(t *testing.T) {
+	handler := newFromAssets(synthAssets(true), "0.6.0-pre-alpha", "v1")
+	for _, item := range []struct{ path, want string }{
+		{"/", "gallery"},
+		{"/browse", "gallery"},
+		{"/works/wrk_1", "gallery"},
+		{"/manage", "manage"},
+		{"/manage.html", "manage"},
+		{"/manage/jobs", "manage"},
+		{"/manage/rules/pkg_1/versions", "manage"},
+		// 前缀必须是完整路径段：`/management` 不属于管理端。
+		{"/management", "gallery"},
+		{"/manageable/thing", "gallery"},
+	} {
+		t.Run(item.path, func(t *testing.T) {
+			recorder := httptest.NewRecorder()
+			handler.ServeHTTP(recorder, httptest.NewRequest(http.MethodGet, item.path, nil))
+			if recorder.Code != http.StatusOK {
+				t.Fatalf("status = %d", recorder.Code)
+			}
+			if !strings.Contains(recorder.Body.String(), item.want) {
+				t.Fatalf("%s 未由 %s 外壳承接: %q", item.path, item.want, recorder.Body.String())
+			}
+		})
+	}
+}
+
+// TestManagementDeepLinkFailsLoudlyWhenShellMissing 保证外壳缺失时**不静默回落到画廊**。
+// 回落会把「管理端还没构建出来」伪装成「管理端深链打开了画廊」，让缺陷不可见。
+func TestManagementDeepLinkFailsLoudlyWhenShellMissing(t *testing.T) {
+	handler := newFromAssets(synthAssets(false), "0.6.0-pre-alpha", "v1")
+	recorder := httptest.NewRecorder()
+	handler.ServeHTTP(recorder, httptest.NewRequest(http.MethodGet, "/manage/jobs", nil))
+	if recorder.Code != http.StatusServiceUnavailable {
+		t.Fatalf("status = %d want %d", recorder.Code, http.StatusServiceUnavailable)
+	}
+	if strings.Contains(recorder.Body.String(), "gallery") {
+		t.Fatalf("外壳缺失时回落到了画廊: %q", recorder.Body.String())
+	}
+	// 画廊本身不受影响。
+	recorder = httptest.NewRecorder()
+	handler.ServeHTTP(recorder, httptest.NewRequest(http.MethodGet, "/browse", nil))
+	if recorder.Code != http.StatusOK || !strings.Contains(recorder.Body.String(), "gallery") {
+		t.Fatalf("画廊深链被连带影响: status=%d body=%q", recorder.Code, recorder.Body.String())
 	}
 }
