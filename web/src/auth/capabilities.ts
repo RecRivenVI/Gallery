@@ -18,6 +18,7 @@ export const CAPABILITIES = [
   'audit.read',
   'bindings.read',
   'bindings.write',
+  'files.browse',
   'clients.manage',
   'creators.write',
   'library.read',

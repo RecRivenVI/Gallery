@@ -19,9 +19,14 @@ import (
 
 // latestCatalogVersion 返回程序内嵌的最高 catalog migration 版本。升级测试用它断言「升级到最新」，
 // 而不是写死一个每加一次迁移就要手改一次的数字。
-func latestCatalogVersion(t *testing.T) int64 {
+func latestCatalogVersion(t *testing.T) int64 { return latestVersion(t, RoleCatalog) }
+
+// latestControlVersion 同理用于 control 库的升级测试。
+func latestControlVersion(t *testing.T) int64 { return latestVersion(t, RoleControl) }
+
+func latestVersion(t *testing.T, role Role) int64 {
 	t.Helper()
-	embedded, err := EmbeddedSchemaState(RoleCatalog)
+	embedded, err := EmbeddedSchemaState(role)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -932,7 +937,7 @@ VALUES ('decision_existing', 'issue_existing', 'src_existing', 'split', 'split_c
 	if err := upgraded.db.QueryRowContext(ctx, "PRAGMA user_version").Scan(&version); err != nil {
 		t.Fatal(err)
 	}
-	if version != 20 {
+	if int64(version) != latestControlVersion(t) {
 		t.Fatalf("v15 数据升级后的 user_version = %d", version)
 	}
 	var issueFingerprint, decisionFingerprint string
@@ -1004,7 +1009,7 @@ VALUES ('ses_00000000-0000-7000-8000-000000000001', 'old-secret-hash', 'personal
 	if err := upgraded.db.QueryRowContext(ctx, "PRAGMA user_version").Scan(&version); err != nil {
 		t.Fatal(err)
 	}
-	if version != 20 {
+	if int64(version) != latestControlVersion(t) {
 		t.Fatalf("v19 数据升级后的 user_version = %d", version)
 	}
 	var libraryName string

@@ -30,6 +30,7 @@ import (
 	"github.com/RecRivenVI/gallery/internal/derived/thumbnail"
 	"github.com/RecRivenVI/gallery/internal/derivedjob"
 	"github.com/RecRivenVI/gallery/internal/domain"
+	"github.com/RecRivenVI/gallery/internal/fileroot"
 	"github.com/RecRivenVI/gallery/internal/jobs"
 	"github.com/RecRivenVI/gallery/internal/maintenance"
 	"github.com/RecRivenVI/gallery/internal/media"
@@ -65,6 +66,7 @@ type Server struct {
 	derived       *derived.Service
 	derivedJob    *derivedjob.Service
 	allowedHosts  []string
+	fileRoots     *fileroot.Registry
 	mediaGate     chan struct{}
 	mediaGateWait time.Duration
 }
@@ -90,6 +92,8 @@ type Options struct {
 	DerivedJob   *derivedjob.Service
 	AllowedHosts []string
 	Web          http.Handler
+	// FileRoots 未注入时文件根端点返回空列表与 404，而不是空指针。
+	FileRoots *fileroot.Registry
 	// MediaReadConcurrency 与 MediaReadGateWait 为零时使用默认值；只在测试中显式收窄，
 	// 用于确定性地触发 MEDIA_READ_BUSY。
 	MediaReadConcurrency int
@@ -120,7 +124,7 @@ func New(mode config.Mode, store *storage.Store, clock ports.Clock, personal *au
 	if mediaWait <= 0 {
 		mediaWait = defaultMediaReadGateWait
 	}
-	server := &Server{mode: mode, store: store, clock: clock, auth: personal, data: resources, jobs: jobStore, catalog: catalogStore, scanner: scannerService, hub: hub, logger: logger, rules: ruleLifecycle, query: queryService, overlay: overlayService, creators: creatorsService, backup: backupService, maintenance: option.Maintenance, watcher: option.Watcher, scheduler: option.Scheduler, derived: option.Derived, derivedJob: option.DerivedJob, allowedHosts: append([]string(nil), option.AllowedHosts...), mediaGate: make(chan struct{}, mediaConcurrency), mediaGateWait: mediaWait}
+	server := &Server{mode: mode, store: store, clock: clock, auth: personal, data: resources, jobs: jobStore, catalog: catalogStore, scanner: scannerService, hub: hub, logger: logger, rules: ruleLifecycle, query: queryService, overlay: overlayService, creators: creatorsService, backup: backupService, maintenance: option.Maintenance, watcher: option.Watcher, scheduler: option.Scheduler, derived: option.Derived, derivedJob: option.DerivedJob, allowedHosts: append([]string(nil), option.AllowedHosts...), fileRoots: option.FileRoots, mediaGate: make(chan struct{}, mediaConcurrency), mediaGateWait: mediaWait}
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /api/v1/health", server.health)
 	mux.HandleFunc("GET /api/v1/bootstrap", server.bootstrap)
@@ -194,6 +198,8 @@ func New(mode config.Mode, store *storage.Store, clock ports.Clock, personal *au
 	mux.HandleFunc("GET /api/v1/source-rule-bindings/{bindingId}", server.getSourceRuleBinding)
 	mux.HandleFunc("PATCH /api/v1/source-rule-bindings/{bindingId}", server.updateSourceRuleBinding)
 	mux.HandleFunc("GET /api/v1/sources/{sourceId}/effective-rule-binding", server.getEffectiveRuleBinding)
+	mux.HandleFunc("GET /api/v1/file-roots", server.listFileRoots)
+	mux.HandleFunc("GET /api/v1/file-roots/{rootId}/entries", server.listFileRootEntries)
 	mux.HandleFunc("POST /api/v1/sources/{sourceId}/scan-jobs", server.createScanJob)
 	mux.HandleFunc("GET /api/v1/jobs/{jobId}", server.getJob)
 	mux.HandleFunc("GET /api/v1/jobs", server.listJobs)

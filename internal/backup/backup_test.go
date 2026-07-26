@@ -107,8 +107,14 @@ func TestBackupProducesConsistentRestorableCopy(t *testing.T) {
 	if manifest.Role != string(storage.RoleControl) || manifest.ManifestVersion != backup.ManifestVersion {
 		t.Fatalf("manifest 基本字段错误: %+v", manifest)
 	}
-	if manifest.SchemaVersion != 20 {
-		t.Fatalf("manifest schemaVersion = %d，应等于 control 最高 migration", manifest.SchemaVersion)
+	// 从内嵌 migration 集合推导，而不是写死数字：断言的是「manifest 记录的 schema 版本等于程序
+	// 内嵌的 control 最高 migration」这条不变量，新增迁移不需要同步改测试。
+	embedded, err := storage.EmbeddedSchemaState(storage.RoleControl)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if int64(manifest.SchemaVersion) != embedded.Version {
+		t.Fatalf("manifest schemaVersion = %d，应等于 control 最高 migration %d", manifest.SchemaVersion, embedded.Version)
 	}
 	if manifest.Database.ChecksumAlgorithm != "sha256" || manifest.Database.FileName != "control.db" {
 		t.Fatalf("manifest 文件条目错误: %+v", manifest.Database)

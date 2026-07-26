@@ -706,6 +706,27 @@ func (e FieldMatchField) Valid() bool {
 	}
 }
 
+// Defines values for FileRootEntryKind.
+const (
+	Directory FileRootEntryKind = "directory"
+	File      FileRootEntryKind = "file"
+	Link      FileRootEntryKind = "link"
+)
+
+// Valid indicates whether the value is a known member of the FileRootEntryKind enum.
+func (e FileRootEntryKind) Valid() bool {
+	switch e {
+	case Directory:
+		return true
+	case File:
+		return true
+	case Link:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for HealthResponseApiVersion.
 const (
 	HealthResponseApiVersionV1 HealthResponseApiVersion = "v1"
@@ -2531,6 +2552,47 @@ type FileLocationRef struct {
 	SourceId        SourceId `json:"sourceId"`
 }
 
+// FileRoot defines model for FileRoot.
+type FileRoot struct {
+	// Id 配置提供的稳定标识，不是领域 UUID。
+	Id   string `json:"id"`
+	Name string `json:"name"`
+
+	// Order 展示顺序；服务端已排好，客户端不得重排。
+	Order int `json:"order"`
+}
+
+// FileRootEntry 一个目录项。刻意不含绝对路径，也不解析或暴露链接目标——链接目标是绝对路径，返回它会泄露 文件系统布局。
+type FileRootEntry struct {
+	// Kind `link` 是独立的第三态，不是 file 也不是 directory。Windows 目录联接的 isDir 为 false 且大小无意义，把它并入 file 会让客户端显示一个 0 字节的普通文件，那是错误信息。 链接可见但不可下降：以链接作为 path 列举会被拒绝。
+	Kind         FileRootEntryKind `json:"kind"`
+	ModifiedUnix *int              `json:"modifiedUnix,omitempty"`
+	Name         string            `json:"name"`
+
+	// RelativePath 相对文件根的斜杠路径，可直接用于下一次列举。
+	RelativePath string `json:"relativePath"`
+
+	// SizeBytes 只对普通文件有意义；目录与链接为 null，不用 0 冒充。
+	SizeBytes *int `json:"sizeBytes,omitempty"`
+}
+
+// FileRootEntryKind `link` 是独立的第三态，不是 file 也不是 directory。Windows 目录联接的 isDir 为 false 且大小无意义，把它并入 file 会让客户端显示一个 0 字节的普通文件，那是错误信息。 链接可见但不可下降：以链接作为 path 列举会被拒绝。
+type FileRootEntryKind string
+
+// FileRootEntryListResponse defines model for FileRootEntryListResponse.
+type FileRootEntryListResponse struct {
+	Entries []FileRootEntry `json:"entries"`
+
+	// NextAfter 下一页的续页锚点；为 null 表示已到末尾。
+	NextAfter *string `json:"nextAfter,omitempty"`
+	RootId    string  `json:"rootId"`
+}
+
+// FileRootListResponse defines model for FileRootListResponse.
+type FileRootListResponse struct {
+	FileRoots []FileRoot `json:"fileRoots"`
+}
+
 // GrantId defines model for GrantId.
 type GrantId = string
 
@@ -3857,6 +3919,16 @@ type GetDerivedAssetContentParams struct {
 	IfNoneMatch *string `json:"If-None-Match,omitempty"`
 }
 
+// ListFileRootEntriesParams defines parameters for ListFileRootEntries.
+type ListFileRootEntriesParams struct {
+	// Path 相对文件根的目录路径；省略表示根目录。必须是规范化的相对路径。
+	Path *string `form:"path,omitempty" json:"path,omitempty"`
+
+	// After 续页锚点，取自上一页响应的 nextAfter。
+	After *string `form:"after,omitempty" json:"after,omitempty"`
+	Limit *int    `form:"limit,omitempty" json:"limit,omitempty"`
+}
+
 // ListJobsParams defines parameters for ListJobs.
 type ListJobsParams struct {
 	Status *string `form:"status,omitempty" json:"status,omitempty"`
@@ -4630,6 +4702,12 @@ type ClientInterface interface {
 
 	// GetDerivedAssetContent request
 	GetDerivedAssetContent(ctx context.Context, assetKey string, params *GetDerivedAssetContentParams, reqEditors ...RequestEditorFn) (*http.Response, error)
+
+	// ListFileRoots request
+	ListFileRoots(ctx context.Context, reqEditors ...RequestEditorFn) (*http.Response, error)
+
+	// ListFileRootEntries request
+	ListFileRootEntries(ctx context.Context, rootId string, params *ListFileRootEntriesParams, reqEditors ...RequestEditorFn) (*http.Response, error)
 
 	// GetHealth request
 	GetHealth(ctx context.Context, reqEditors ...RequestEditorFn) (*http.Response, error)
@@ -5579,6 +5657,30 @@ func (c *Client) GetCreator(ctx context.Context, creatorId CanonicalCreatorId, r
 
 func (c *Client) GetDerivedAssetContent(ctx context.Context, assetKey string, params *GetDerivedAssetContentParams, reqEditors ...RequestEditorFn) (*http.Response, error) {
 	req, err := NewGetDerivedAssetContentRequest(c.Server, assetKey, params)
+	if err != nil {
+		return nil, err
+	}
+	req = req.WithContext(ctx)
+	if err := c.applyEditors(ctx, req, reqEditors); err != nil {
+		return nil, err
+	}
+	return c.Client.Do(req)
+}
+
+func (c *Client) ListFileRoots(ctx context.Context, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewListFileRootsRequest(c.Server)
+	if err != nil {
+		return nil, err
+	}
+	req = req.WithContext(ctx)
+	if err := c.applyEditors(ctx, req, reqEditors); err != nil {
+		return nil, err
+	}
+	return c.Client.Do(req)
+}
+
+func (c *Client) ListFileRootEntries(ctx context.Context, rootId string, params *ListFileRootEntriesParams, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewListFileRootEntriesRequest(c.Server, rootId, params)
 	if err != nil {
 		return nil, err
 	}
@@ -8672,6 +8774,118 @@ func NewGetDerivedAssetContentRequest(server string, assetKey string, params *Ge
 			req.Header.Set("If-None-Match", headerParam0)
 		}
 
+	}
+
+	return req, nil
+}
+
+// NewListFileRootsRequest generates requests for ListFileRoots
+func NewListFileRootsRequest(server string) (*http.Request, error) {
+	var err error
+
+	serverURL, err := url.Parse(server)
+	if err != nil {
+		return nil, err
+	}
+
+	operationPath := fmt.Sprintf("/api/v1/file-roots")
+	if operationPath[0] == '/' {
+		operationPath = "." + operationPath
+	}
+
+	queryURL, err := serverURL.Parse(operationPath)
+	if err != nil {
+		return nil, err
+	}
+
+	req, err := http.NewRequest(http.MethodGet, queryURL.String(), nil)
+	if err != nil {
+		return nil, err
+	}
+
+	return req, nil
+}
+
+// NewListFileRootEntriesRequest generates requests for ListFileRootEntries
+func NewListFileRootEntriesRequest(server string, rootId string, params *ListFileRootEntriesParams) (*http.Request, error) {
+	var err error
+
+	var pathParam0 string
+
+	pathParam0, err = runtime.StyleParamWithOptions("simple", false, "rootId", rootId, runtime.StyleParamOptions{ParamLocation: runtime.ParamLocationPath, Type: "string", Format: ""})
+	if err != nil {
+		return nil, err
+	}
+
+	serverURL, err := url.Parse(server)
+	if err != nil {
+		return nil, err
+	}
+
+	operationPath := fmt.Sprintf("/api/v1/file-roots/%s/entries", pathParam0)
+	if operationPath[0] == '/' {
+		operationPath = "." + operationPath
+	}
+
+	queryURL, err := serverURL.Parse(operationPath)
+	if err != nil {
+		return nil, err
+	}
+
+	if params != nil {
+		// queryValues collects non-styled parameters (passthrough, JSON)
+		// that are safe to round-trip through url.Values.Encode().
+		queryValues := queryURL.Query()
+		// rawQueryFragments collects pre-encoded query fragments from
+		// styled parameters, preserving literal commas as delimiters
+		// per the OpenAPI spec (e.g. "color=blue,black,brown").
+		var rawQueryFragments []string
+
+		if params.Path != nil {
+
+			if queryFrag, err := runtime.StyleParamWithOptions("form", true, "path", *params.Path, runtime.StyleParamOptions{ParamLocation: runtime.ParamLocationQuery, Type: "string", Format: ""}); err != nil {
+				return nil, err
+			} else {
+				for _, qp := range strings.Split(queryFrag, "&") {
+					rawQueryFragments = append(rawQueryFragments, qp)
+				}
+			}
+
+		}
+
+		if params.After != nil {
+
+			if queryFrag, err := runtime.StyleParamWithOptions("form", true, "after", *params.After, runtime.StyleParamOptions{ParamLocation: runtime.ParamLocationQuery, Type: "string", Format: ""}); err != nil {
+				return nil, err
+			} else {
+				for _, qp := range strings.Split(queryFrag, "&") {
+					rawQueryFragments = append(rawQueryFragments, qp)
+				}
+			}
+
+		}
+
+		if params.Limit != nil {
+
+			if queryFrag, err := runtime.StyleParamWithOptions("form", true, "limit", *params.Limit, runtime.StyleParamOptions{ParamLocation: runtime.ParamLocationQuery, Type: "integer", Format: ""}); err != nil {
+				return nil, err
+			} else {
+				for _, qp := range strings.Split(queryFrag, "&") {
+					rawQueryFragments = append(rawQueryFragments, qp)
+				}
+			}
+
+		}
+
+		if encoded := queryValues.Encode(); encoded != "" {
+			rawQueryFragments = append(rawQueryFragments, encoded)
+		}
+		queryURL.RawQuery = strings.Join(rawQueryFragments, "&")
+	}
+
+	req, err := http.NewRequest(http.MethodGet, queryURL.String(), nil)
+	if err != nil {
+		return nil, err
 	}
 
 	return req, nil
@@ -13320,6 +13534,12 @@ type ClientWithResponsesInterface interface {
 	// GetDerivedAssetContentWithResponse request
 	GetDerivedAssetContentWithResponse(ctx context.Context, assetKey string, params *GetDerivedAssetContentParams, reqEditors ...RequestEditorFn) (*GetDerivedAssetContentResponse, error)
 
+	// ListFileRootsWithResponse request
+	ListFileRootsWithResponse(ctx context.Context, reqEditors ...RequestEditorFn) (*ListFileRootsResponse, error)
+
+	// ListFileRootEntriesWithResponse request
+	ListFileRootEntriesWithResponse(ctx context.Context, rootId string, params *ListFileRootEntriesParams, reqEditors ...RequestEditorFn) (*ListFileRootEntriesResponse, error)
+
 	// GetHealthWithResponse request
 	GetHealthWithResponse(ctx context.Context, reqEditors ...RequestEditorFn) (*GetHealthResponse, error)
 
@@ -14837,6 +15057,72 @@ func (r GetDerivedAssetContentResponse) StatusCode() int {
 
 // ContentType is a convenience method to retrieve the Content-Type value from the HTTP response headers
 func (r GetDerivedAssetContentResponse) ContentType() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Header.Get("Content-Type")
+	}
+	return ""
+}
+
+type ListFileRootsResponse struct {
+	Body         []byte
+	HTTPResponse *http.Response
+	JSON200      *FileRootListResponse
+	JSON401      *UnauthenticatedError
+	JSON403      *ForbiddenError
+}
+
+// Status returns HTTPResponse.Status
+func (r ListFileRootsResponse) Status() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Status
+	}
+	return http.StatusText(0)
+}
+
+// StatusCode returns HTTPResponse.StatusCode
+func (r ListFileRootsResponse) StatusCode() int {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.StatusCode
+	}
+	return 0
+}
+
+// ContentType is a convenience method to retrieve the Content-Type value from the HTTP response headers
+func (r ListFileRootsResponse) ContentType() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Header.Get("Content-Type")
+	}
+	return ""
+}
+
+type ListFileRootEntriesResponse struct {
+	Body         []byte
+	HTTPResponse *http.Response
+	JSON200      *FileRootEntryListResponse
+	JSON400      *ValidationError
+	JSON401      *UnauthenticatedError
+	JSON403      *ForbiddenError
+	JSON404      *NotFoundError
+}
+
+// Status returns HTTPResponse.Status
+func (r ListFileRootEntriesResponse) Status() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Status
+	}
+	return http.StatusText(0)
+}
+
+// StatusCode returns HTTPResponse.StatusCode
+func (r ListFileRootEntriesResponse) StatusCode() int {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.StatusCode
+	}
+	return 0
+}
+
+// ContentType is a convenience method to retrieve the Content-Type value from the HTTP response headers
+func (r ListFileRootEntriesResponse) ContentType() string {
 	if r.HTTPResponse != nil {
 		return r.HTTPResponse.Header.Get("Content-Type")
 	}
@@ -18012,6 +18298,24 @@ func (c *ClientWithResponses) GetDerivedAssetContentWithResponse(ctx context.Con
 	return ParseGetDerivedAssetContentResponse(rsp)
 }
 
+// ListFileRootsWithResponse request returning *ListFileRootsResponse
+func (c *ClientWithResponses) ListFileRootsWithResponse(ctx context.Context, reqEditors ...RequestEditorFn) (*ListFileRootsResponse, error) {
+	rsp, err := c.ListFileRoots(ctx, reqEditors...)
+	if err != nil {
+		return nil, err
+	}
+	return ParseListFileRootsResponse(rsp)
+}
+
+// ListFileRootEntriesWithResponse request returning *ListFileRootEntriesResponse
+func (c *ClientWithResponses) ListFileRootEntriesWithResponse(ctx context.Context, rootId string, params *ListFileRootEntriesParams, reqEditors ...RequestEditorFn) (*ListFileRootEntriesResponse, error) {
+	rsp, err := c.ListFileRootEntries(ctx, rootId, params, reqEditors...)
+	if err != nil {
+		return nil, err
+	}
+	return ParseListFileRootEntriesResponse(rsp)
+}
+
 // GetHealthWithResponse request returning *GetHealthResponse
 func (c *ClientWithResponses) GetHealthWithResponse(ctx context.Context, reqEditors ...RequestEditorFn) (*GetHealthResponse, error) {
 	rsp, err := c.GetHealth(ctx, reqEditors...)
@@ -20662,6 +20966,100 @@ func ParseGetDerivedAssetContentResponse(rsp *http.Response) (*GetDerivedAssetCo
 	}
 
 	switch {
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 401:
+		var dest UnauthenticatedError
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON401 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 403:
+		var dest ForbiddenError
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON403 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 404:
+		var dest NotFoundError
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON404 = &dest
+
+	}
+
+	return response, nil
+}
+
+// ParseListFileRootsResponse parses an HTTP response from a ListFileRootsWithResponse call
+func ParseListFileRootsResponse(rsp *http.Response) (*ListFileRootsResponse, error) {
+	bodyBytes, err := io.ReadAll(rsp.Body)
+	defer func() { _ = rsp.Body.Close() }()
+	if err != nil {
+		return nil, err
+	}
+
+	response := &ListFileRootsResponse{
+		Body:         bodyBytes,
+		HTTPResponse: rsp,
+	}
+
+	switch {
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 200:
+		var dest FileRootListResponse
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON200 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 401:
+		var dest UnauthenticatedError
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON401 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 403:
+		var dest ForbiddenError
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON403 = &dest
+
+	}
+
+	return response, nil
+}
+
+// ParseListFileRootEntriesResponse parses an HTTP response from a ListFileRootEntriesWithResponse call
+func ParseListFileRootEntriesResponse(rsp *http.Response) (*ListFileRootEntriesResponse, error) {
+	bodyBytes, err := io.ReadAll(rsp.Body)
+	defer func() { _ = rsp.Body.Close() }()
+	if err != nil {
+		return nil, err
+	}
+
+	response := &ListFileRootEntriesResponse{
+		Body:         bodyBytes,
+		HTTPResponse: rsp,
+	}
+
+	switch {
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 200:
+		var dest FileRootEntryListResponse
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON200 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 400:
+		var dest ValidationError
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON400 = &dest
+
 	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 401:
 		var dest UnauthenticatedError
 		if err := json.Unmarshal(bodyBytes, &dest); err != nil {

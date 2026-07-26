@@ -37,6 +37,7 @@ var PersonalOwnerCapabilities = []string{
 	"bindings.write",
 	"clients.manage",
 	"creators.write",
+	"files.browse",
 	"library.read",
 	"library.write",
 	"media.derive",

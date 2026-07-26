@@ -23,6 +23,15 @@ type Config struct {
 	Listen      string
 	AppDirs     appdirs.Dirs
 	SourceRoots []string
+	// FileRoots 是只读的文件根声明，形如 `id=path`。文件根与 Source 是不同概念：它不产生
+	// Catalog 事实、不绑定规则、不被扫描，且**可以**是 Source 的祖先——真实配置正是这个形状。
+	FileRoots []FileRootDeclaration
+}
+
+// FileRootDeclaration 是一条命令行文件根声明。
+type FileRootDeclaration struct {
+	ID   string
+	Path string
 }
 
 type stringList []string
@@ -45,6 +54,8 @@ func Parse(args []string) (Config, error) {
 	appRoot := flags.String("app-root", "", "开发/测试用 AppDirs 统一父目录")
 	var sourceRoots stringList
 	flags.Var(&sourceRoots, "source-root", "只读 Source 根；可重复指定，仅用于启动重叠守卫")
+	var fileRoots stringList
+	flags.Var(&fileRoots, "file-root", "只读文件根，形如 id=path；可重复指定")
 	if err := flags.Parse(args); err != nil {
 		return Config{}, err
 	}
@@ -54,7 +65,16 @@ func Parse(args []string) (Config, error) {
 	if *appRoot != "" {
 		defaults = appdirs.UnderRoot(*appRoot)
 	}
-	cfg := Config{Mode: Mode(*mode), Listen: *listen, AppDirs: defaults, SourceRoots: sourceRoots}
+	declarations := make([]FileRootDeclaration, 0, len(fileRoots))
+	for _, item := range fileRoots {
+		id, path, ok := strings.Cut(item, "=")
+		if !ok || id == "" || path == "" {
+			return Config{}, fault.WithField(fault.CodeConfigInvalid, "file-root",
+				fmt.Errorf("文件根声明必须形如 id=path"))
+		}
+		declarations = append(declarations, FileRootDeclaration{ID: id, Path: path})
+	}
+	cfg := Config{Mode: Mode(*mode), Listen: *listen, AppDirs: defaults, SourceRoots: sourceRoots, FileRoots: declarations}
 	if err := cfg.Validate(); err != nil {
 		return Config{}, err
 	}

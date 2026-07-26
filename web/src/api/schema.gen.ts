@@ -1017,6 +1017,46 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/file-roots": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * 列出只读文件根
+         * @description 文件根是独立于 Source 的只读浏览入口：它不产生 Catalog 事实、不绑定规则、不被扫描， 且允许是 Source 的祖先。响应不含任何绝对路径。
+         */
+        get: operations["listFileRoots"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/file-roots/{rootId}/entries": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * 列举文件根下某个目录的一页内容
+         * @description **分页语义与 Catalog 查询不同**：文件系统是实时的，没有 publication 快照，因此续页只保证 「从 after 锚点之后继续」，**不保证可重复读**——两次请求之间目录发生变化时可能漏项或重复。 Catalog 查询那套 publication 与租约的一致性承诺在这里不成立，客户端不得据此假设快照一致。
+         */
+        get: operations["listFileRootEntries"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/sources/{sourceId}/scan-jobs": {
         parameters: {
             query?: never;
@@ -2343,6 +2383,36 @@ export interface components {
             libraryId: components["schemas"]["LibraryId"];
             displayName: string;
             rootPath: string;
+        };
+        FileRoot: {
+            /** @description 配置提供的稳定标识，不是领域 UUID。 */
+            id: string;
+            name: string;
+            /** @description 展示顺序；服务端已排好，客户端不得重排。 */
+            order: number;
+        };
+        FileRootListResponse: {
+            fileRoots: components["schemas"]["FileRoot"][];
+        };
+        /** @description 一个目录项。刻意不含绝对路径，也不解析或暴露链接目标——链接目标是绝对路径，返回它会泄露 文件系统布局。 */
+        FileRootEntry: {
+            name: string;
+            /** @description 相对文件根的斜杠路径，可直接用于下一次列举。 */
+            relativePath: string;
+            /**
+             * @description `link` 是独立的第三态，不是 file 也不是 directory。Windows 目录联接的 isDir 为 false 且大小无意义，把它并入 file 会让客户端显示一个 0 字节的普通文件，那是错误信息。 链接可见但不可下降：以链接作为 path 列举会被拒绝。
+             * @enum {string}
+             */
+            kind: "file" | "directory" | "link";
+            /** @description 只对普通文件有意义；目录与链接为 null，不用 0 冒充。 */
+            sizeBytes?: number | null;
+            modifiedUnix?: number | null;
+        };
+        FileRootEntryListResponse: {
+            rootId: string;
+            entries: components["schemas"]["FileRootEntry"][];
+            /** @description 下一页的续页锚点；为 null 表示已到末尾。 */
+            nextAfter?: string | null;
         };
         /** @description 规则声明的平台呈现配置。它是**语义**配置而非编辑器元数据：改动会产生新的 RuleVersion 并触发重投影，因此不放在规则包的 ui_metadata 中。 */
         SourcePresentation: {
@@ -5091,6 +5161,60 @@ export interface operations {
                     "application/json": components["schemas"]["SourceRuleBinding"];
                 };
             };
+            401: components["responses"]["UnauthenticatedError"];
+            403: components["responses"]["ForbiddenError"];
+            404: components["responses"]["NotFoundError"];
+        };
+    };
+    listFileRoots: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description 文件根列表 */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["FileRootListResponse"];
+                };
+            };
+            401: components["responses"]["UnauthenticatedError"];
+            403: components["responses"]["ForbiddenError"];
+        };
+    };
+    listFileRootEntries: {
+        parameters: {
+            query?: {
+                /** @description 相对文件根的目录路径；省略表示根目录。必须是规范化的相对路径。 */
+                path?: string;
+                /** @description 续页锚点，取自上一页响应的 nextAfter。 */
+                after?: string;
+                limit?: number;
+            };
+            header?: never;
+            path: {
+                rootId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description 一页目录内容 */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["FileRootEntryListResponse"];
+                };
+            };
+            400: components["responses"]["ValidationError"];
             401: components["responses"]["UnauthenticatedError"];
             403: components["responses"]["ForbiddenError"];
             404: components["responses"]["NotFoundError"];

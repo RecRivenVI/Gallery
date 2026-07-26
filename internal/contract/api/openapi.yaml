@@ -1486,6 +1486,58 @@ paths:
         "401": {$ref: "#/components/responses/UnauthenticatedError"}
         "403": {$ref: "#/components/responses/ForbiddenError"}
         "404": {$ref: "#/components/responses/NotFoundError"}
+  /api/v1/file-roots:
+    get:
+      operationId: listFileRoots
+      summary: 列出只读文件根
+      description: >-
+        文件根是独立于 Source 的只读浏览入口：它不产生 Catalog 事实、不绑定规则、不被扫描，
+        且允许是 Source 的祖先。响应不含任何绝对路径。
+      responses:
+        "200":
+          description: 文件根列表
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/FileRootListResponse"}
+        "401": {$ref: "#/components/responses/UnauthenticatedError"}
+        "403": {$ref: "#/components/responses/ForbiddenError"}
+  /api/v1/file-roots/{rootId}/entries:
+    get:
+      operationId: listFileRootEntries
+      summary: 列举文件根下某个目录的一页内容
+      description: >-
+        **分页语义与 Catalog 查询不同**：文件系统是实时的，没有 publication 快照，因此续页只保证
+        「从 after 锚点之后继续」，**不保证可重复读**——两次请求之间目录发生变化时可能漏项或重复。
+        Catalog 查询那套 publication 与租约的一致性承诺在这里不成立，客户端不得据此假设快照一致。
+      parameters:
+        - name: rootId
+          in: path
+          required: true
+          schema: {type: string, minLength: 1, maxLength: 128}
+        - name: path
+          in: query
+          required: false
+          description: 相对文件根的目录路径；省略表示根目录。必须是规范化的相对路径。
+          schema: {type: string, maxLength: 4096}
+        - name: after
+          in: query
+          required: false
+          description: 续页锚点，取自上一页响应的 nextAfter。
+          schema: {type: string, maxLength: 4096}
+        - name: limit
+          in: query
+          required: false
+          schema: {type: integer, minimum: 1, maximum: 500}
+      responses:
+        "200":
+          description: 一页目录内容
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/FileRootEntryListResponse"}
+        "400": {$ref: "#/components/responses/ValidationError"}
+        "401": {$ref: "#/components/responses/UnauthenticatedError"}
+        "403": {$ref: "#/components/responses/ForbiddenError"}
+        "404": {$ref: "#/components/responses/NotFoundError"}
   /api/v1/sources/{sourceId}/scan-jobs:
     post:
       operationId: createScanJob
@@ -4102,6 +4154,57 @@ components:
           type: string
           minLength: 1
           maxLength: 32768
+    FileRoot:
+      type: object
+      additionalProperties: false
+      required: [id, name, order]
+      properties:
+        id: {type: string, minLength: 1, maxLength: 128, description: 配置提供的稳定标识，不是领域 UUID。}
+        name: {type: string}
+        order: {type: integer, description: 展示顺序；服务端已排好，客户端不得重排。}
+    FileRootListResponse:
+      type: object
+      additionalProperties: false
+      required: [fileRoots]
+      properties:
+        fileRoots:
+          type: array
+          items: {$ref: "#/components/schemas/FileRoot"}
+    FileRootEntry:
+      type: object
+      additionalProperties: false
+      description: >-
+        一个目录项。刻意不含绝对路径，也不解析或暴露链接目标——链接目标是绝对路径，返回它会泄露
+        文件系统布局。
+      required: [name, relativePath, kind]
+      properties:
+        name: {type: string}
+        relativePath: {type: string, description: 相对文件根的斜杠路径，可直接用于下一次列举。}
+        kind:
+          type: string
+          enum: [file, directory, link]
+          description: >-
+            `link` 是独立的第三态，不是 file 也不是 directory。Windows 目录联接的 isDir 为 false
+            且大小无意义，把它并入 file 会让客户端显示一个 0 字节的普通文件，那是错误信息。
+            链接可见但不可下降：以链接作为 path 列举会被拒绝。
+        sizeBytes:
+          type: integer
+          nullable: true
+          description: 只对普通文件有意义；目录与链接为 null，不用 0 冒充。
+        modifiedUnix: {type: integer, nullable: true}
+    FileRootEntryListResponse:
+      type: object
+      additionalProperties: false
+      required: [rootId, entries]
+      properties:
+        rootId: {type: string}
+        entries:
+          type: array
+          items: {$ref: "#/components/schemas/FileRootEntry"}
+        nextAfter:
+          type: string
+          nullable: true
+          description: 下一页的续页锚点；为 null 表示已到末尾。
     SourcePresentation:
       type: object
       additionalProperties: false
