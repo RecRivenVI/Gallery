@@ -87,8 +87,21 @@ func openDatabase(ctx context.Context, role Role, path string) (*Database, error
 	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
 		return nil, fault.New(fault.CodeDatabaseOpen, false, err)
 	}
+	// _txlock=immediate 让 BeginTx 发出 BEGIN IMMEDIATE 而不是默认的 BEGIN DEFERRED。
+	//
+	// DEFERRED 事务在第一条 SELECT 时取得读快照，直到第一条写语句才尝试升级为写事务。
+	// 若两步之间另一个连接完成提交，SQLite 返回 SQLITE_BUSY_SNAPSHOT(517)，而
+	// busy_timeout 对这种情况**不生效**——该事务的读快照已经过期，再等也不可能成功。
+	// 本仓库几乎所有事务都是「先读校验、后写」形态（配对交换、Job 领取、Overlay 写入、
+	// staging/publication），因此这条竞态会在并发下把稳定语义变成间歇性 INTERNAL_ERROR。
+	//
+	// BEGIN IMMEDIATE 在事务开始时就取得写锁：此时的 SQLITE_BUSY 是普通锁竞争，
+	// busy_timeout 会正常重试，语义因此从「偶发失败」变成「短暂等待后成功」。
+	// 代价是显式事务之间串行化；单写者本来就是 SQLite 的模型，而事务外的普通
+	// QueryContext 读取不经过 BeginTx，不受影响。
 	dsn := "file:" + filepath.ToSlash(path) +
-		"?_pragma=journal_mode(WAL)&_pragma=synchronous(NORMAL)&_pragma=foreign_keys(ON)&_pragma=busy_timeout(5000)"
+		"?_pragma=journal_mode(WAL)&_pragma=synchronous(NORMAL)&_pragma=foreign_keys(ON)&_pragma=busy_timeout(5000)" +
+		"&_txlock=immediate"
 	db, err := sql.Open("sqlite", dsn)
 	if err != nil {
 		return nil, fault.New(fault.CodeDatabaseOpen, false, err)
