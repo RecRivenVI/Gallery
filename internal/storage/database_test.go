@@ -657,13 +657,39 @@ PRIMARY KEY (catalog_revision_id, source_id, work_source_key)) WITHOUT ROWID`); 
 		t.Fatal(err)
 	}
 
+	// 同机校准：一次覆盖全部 MediaProjection 的整表改写，与 00011 中的整表 UPDATE 属于
+	// 同一类写放大与 fsync 行为，因此它能代表这台机器在这批数据上的单遍重写成本。
+	calibrationStarted := time.Now()
+	if _, err := db.ExecContext(ctx, `UPDATE media_projections SET size_bytes = size_bytes`); err != nil {
+		t.Fatal(err)
+	}
+	calibration := time.Since(calibrationStarted)
+
 	started := time.Now()
 	if err := applyMigration(ctx, db, migrations[10]); err != nil {
 		t.Fatal(err)
 	}
 	duration := time.Since(started)
-	if duration > 5*time.Second {
-		t.Fatalf("%d Work/%d Media 的 00011 合成迁移超过有界普通测试预算: %s", workCount, workCount*mediaPerWork, duration)
+	// 绝对墙钟预算在共享 CI runner 上不成立：同一段迁移在本机 NVMe 上约 0.04 秒，在
+	// GitHub Windows runner 上实测过 22.95 秒（run 30206908399），差异来自 runner 磁盘
+	// 争用而不是算法变化，此前的 5 秒固定预算因此是间歇性假阳性，且与「性能结论必须
+	// 记录硬件与存储」这条门禁原则冲突。
+	//
+	// 预算改为相对同机校准，倍数按原有严格度等价换算：5 秒对本机 0.05 秒的迁移相当于
+	// 约 100 倍余量，因此这里取校准值的 100 倍——严格度不变，但不再依赖机器绝对速度。
+	// 该断言拦截的是数量级回归：退回逐 Work 相关子查询会把行访问量从 3,600 推到
+	// 4,320,000（约 1200 倍），远超 100 倍上限；整机变慢则不改变比值。
+	// 精确的结构性保证由上面的 EXPLAIN QUERY PLAN 断言承担。
+	const budgetFactor = 100
+	budget := budgetFactor * calibration
+	if floor := time.Second; budget < floor {
+		// 校准值过小时（计时器分辨率量级）退回一个固定下限，避免用噪声当分母。
+		budget = floor
+	}
+	t.Logf("00011 合成迁移: 同机校准整表改写 %s，迁移 %s，预算 %s", calibration, duration, budget)
+	if duration > budget {
+		t.Fatalf("%d Work/%d Media 的 00011 合成迁移超过同机有界预算: 迁移 %s 校准 %s 预算 %s",
+			workCount, workCount*mediaPerWork, duration, calibration, budget)
 	}
 	var sourceCovers, ruleCovers, customCovers, negativeOrdinals int
 	if err := db.QueryRowContext(ctx, `SELECT
