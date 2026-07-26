@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/RecRivenVI/gallery/internal/contract/fault"
+	"github.com/RecRivenVI/gallery/internal/platform/filesystem"
 	"github.com/RecRivenVI/gallery/internal/ports"
 )
 
@@ -155,12 +156,12 @@ ORDER BY d.job_id, d.attempt`)
 	}
 	jobDirs, _ := os.ReadDir(s.root)
 	for _, jobDir := range jobDirs {
-		if !jobDir.IsDir() || jobDir.Type()&os.ModeSymlink != 0 {
+		if !jobDir.IsDir() || filesystem.IsLink(jobDir.Type()) {
 			continue
 		}
 		attemptDirs, _ := os.ReadDir(filepath.Join(s.root, jobDir.Name()))
 		for _, attemptDir := range attemptDirs {
-			if !attemptDir.IsDir() || attemptDir.Type()&os.ModeSymlink != 0 {
+			if !attemptDir.IsDir() || filesystem.IsLink(attemptDir.Type()) {
 				continue
 			}
 			directory := filepath.Join(s.root, jobDir.Name(), attemptDir.Name())
@@ -195,7 +196,10 @@ func (s *TempStore) removeOwned(target string) error {
 		if err != nil {
 			return fault.New(fault.CodeInternal, true, err)
 		}
-		if info.Mode()&os.ModeSymlink != 0 {
+		// 逐段拒绝经由链接删除：Windows junction 报告为 fs.ModeIrregular 而不是
+		// fs.ModeSymlink，只判断后者会让「在 Temp 根内植入一个指向外部目录的 junction，
+		// 借 GC 的 RemoveAll 删掉根外内容」这条路径绕过守卫。
+		if filesystem.IsLink(info.Mode()) {
 			return fault.New(fault.CodePathEscape, false, nil)
 		}
 	}

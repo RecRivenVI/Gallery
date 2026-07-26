@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"time"
 
+	"github.com/RecRivenVI/gallery/internal/platform/filesystem"
 	"github.com/RecRivenVI/gallery/internal/ports"
 )
 
@@ -76,10 +77,10 @@ func snapshot(root string) (map[string]stamp, error) {
 		if walkErr != nil {
 			return walkErr
 		}
-		if entry.Type()&fs.ModeSymlink != 0 {
-			if entry.IsDir() {
-				return filepath.SkipDir
-			}
+		// 与扫描器使用同一条链接判定：Windows junction 报告为 fs.ModeIrregular，只判断
+		// fs.ModeSymlink 会让它作为一个普通文件进入快照，从而在每轮轮询中产生与真实媒体
+		// 无关的 dirty hint。对非目录项返回 SkipDir 会连带跳过兄弟项，因此返回 nil。
+		if filesystem.IsLink(entry.Type()) {
 			return nil
 		}
 		if path == root || entry.IsDir() {

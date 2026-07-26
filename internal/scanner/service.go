@@ -22,6 +22,7 @@ import (
 	"github.com/RecRivenVI/gallery/internal/maintenance"
 	"github.com/RecRivenVI/gallery/internal/media"
 	"github.com/RecRivenVI/gallery/internal/platform/clock"
+	"github.com/RecRivenVI/gallery/internal/platform/filesystem"
 	"github.com/RecRivenVI/gallery/internal/ports"
 	"github.com/RecRivenVI/gallery/internal/rules"
 )
@@ -885,10 +886,14 @@ func discover(ctx context.Context, root string, ir rules.RuleIR, parameters []by
 		if walkErr != nil {
 			return walkErr
 		}
-		if entry.Type()&fs.ModeSymlink != 0 {
-			if entry.IsDir() {
-				return filepath.SkipDir
-			}
+		// 链接不下降：跟随会引入环、跨卷语义和越出 Source 根的路径。判定必须走平台层，
+		// 因为 Windows junction 报告为 fs.ModeIrregular 且 IsDir() 为 false，只看
+		// fs.ModeSymlink 会把整棵子树静默漏掉（见 filesystem.IsLink）。
+		//
+		// WalkDir 用 Lstat 判定目录，因此链接项的 IsDir() 恒为 false、本来就不会被下降；
+		// 这里返回 nil 而不是 SkipDir——对非目录项返回 SkipDir 会连带跳过同目录下剩余的
+		// 兄弟项，那是比漏扫链接更严重的静默漏扫。
+		if filesystem.IsLink(entry.Type()) {
 			return nil
 		}
 		if !entry.IsDir() || onDisk == root {
@@ -926,7 +931,9 @@ func discover(ctx context.Context, root string, ir rules.RuleIR, parameters []by
 			}
 		}
 		for _, child := range children {
-			if child.IsDir() || child.Type()&fs.ModeSymlink != 0 || child.Name() == ir.MetadataFile {
+			// 同一条链接判定：junction 的 IsDir() 为 false，若只排除 fs.ModeSymlink，它会
+			// 作为一个 0 字节的普通文件混进媒体列表，产生规则和 Catalog 都无法解释的幽灵媒体。
+			if child.IsDir() || filesystem.IsLink(child.Type()) || child.Name() == ir.MetadataFile {
 				continue
 			}
 			info, err := child.Info()
