@@ -16,7 +16,7 @@
 - 建议后端命令：`galleryd`；建议 CLI：`galleryctl`。
 - Gallery 是独立的净室产品，不以任何旧 Gallery 的数据库、配置、API、目录结构或行为作为兼容、迁移或对拍目标。
 - 当前仓库已有正式产品代码（`cmd/`、`internal/`、`pkg/`、`web/`）。阶段 0 契约骨架、Walking Skeleton、Architecture Proof 正确性切片、阶段 1「领域和数据所有权」、阶段 2「规则闭环」、阶段 3「扫描、任务和 Catalog」与阶段 4「查询和媒体」均已完成代码与合成 Correctness 实现；阶段 5「账户、安全和多客户端」已完成代码/合成安全收尾，并取得 Chrome/Edge 同机 Personal/LAN 主路径与当前工作站 Argon2id 补证，但正式 Security Gate 尚未通过（见 [验证记录 EV-37、EV-38](Documents/证据/验证记录.md)）。阶段 6 已实现 React/TypeScript Web/PWA 页面代码基线、OpenAPI 生成客户端、同源嵌入资产、静态壳 PWA，以及认证、浏览/媒体、Overlay、任务、规则、安全和维护页面骨架；Chrome/Edge 真实后端认证主路径通过，但正式 Web Gate 尚未通过（见 EV-38）。阶段 4 的 EV-35/EV-36 结论保持：500,000 WorkProjection 的 Correctness/Cursor 通过，Reference Performance Gate 未通过，Gank/Pawchive 未完成有界验证。
-- **[EV-39](Documents/证据/验证记录.md)（2026-07-23）的真实浏览器复核下调了阶段 6 的完成度陈述**：`/ws/v1` 在 Chrome/Edge 中 100% 握手失败（服务端对 WebSocket 强制要求浏览器不会发送的 `Sec-Fetch-Site` 头），前端信封字段名与 `internal/contract/realtime` 不符，且 6 个前端 capability 名不在后端权威词表中，导致 Overlay 编辑、任务取消/重试、Library 创建、Source 登记、按需内容确认与全部治理动作对任何主体都不渲染。[EV-40](Documents/证据/验证记录.md) 已修复这些阻断项并经真实 Chrome/Edge 复验，但**仍不得把阶段 6 描述为「已完成业务闭环」**——完整管理写路径的浏览器端到端覆盖尚未建立。[EV-44](Documents/证据/验证记录.md) 又关闭 `AUTHZ-1` 与 `QRY-1`，[EV-45](Documents/证据/验证记录.md) 关闭 `TEST-2`；当前仍未关闭 `MED-1` 与 `SEC-3`，详见 EV-39、EV-40、EV-44 与 EV-45。
+- **[EV-39](Documents/证据/验证记录.md)（2026-07-23）的真实浏览器复核下调了阶段 6 的完成度陈述**：`/ws/v1` 在 Chrome/Edge 中 100% 握手失败（服务端对 WebSocket 强制要求浏览器不会发送的 `Sec-Fetch-Site` 头），前端信封字段名与 `internal/contract/realtime` 不符，且 6 个前端 capability 名不在后端权威词表中，导致 Overlay 编辑、任务取消/重试、Library 创建、Source 登记、按需内容确认与全部治理动作对任何主体都不渲染。[EV-40](Documents/证据/验证记录.md) 已修复这些阻断项并经真实 Chrome/Edge 复验，但**仍不得把阶段 6 描述为「已完成业务闭环」**——完整管理写路径的浏览器端到端覆盖尚未建立。[EV-44](Documents/证据/验证记录.md) 又关闭 `AUTHZ-1` 与 `QRY-1`，[EV-45](Documents/证据/验证记录.md) 关闭 `TEST-2`，[EV-46](Documents/证据/验证记录.md) 关闭 `MED-1` 与 `SEC-3`。**EV-39 登记的缺陷至此全部关闭**；EV-46 另行发现并修复了三项新缺陷（`LINK-1` Windows 目录联接被识别为普通文件、`TX-1` WAL 下读后写事务的过期读快照失败、迁移预算门禁用固定墙钟导致不可复现），详见 EV-39、EV-40、EV-44、EV-45 与 EV-46。
 - [EV-42](Documents/证据/验证记录.md)（2026-07-26）补齐规则 `CoverPath` 到 SourceMedia/CanonicalMedia、显式规则/有效封面投影、CustomCover 优先与失效回退、`PublishedWork.coverMediaId`、Work 详情快照绑定和 Web 同快照封面/编辑；当前证据为根级 `Check.ps1`、WSL2 Debian 定向 race、合成 migration 与 Web Vitest/Chromium mock，不含真实 Source、真实媒体或真实后端浏览器，阶段 4/5/6 Gate 均未因此通过。
 - 尚未完成：阶段 5 真实物理 LAN 多设备、目标低端设备 Argon2id 和真实恶意资源门禁；阶段 6 Firefox、真实移动设备/屏幕阅读器与完整业务 E2E；以及真实全量 HDD、SMB/NAS、真实 FileID/`dev+inode`、正式 Reference/Degradation Performance Gate、ranking/total/租约等 PRE_FREEZE 数值、AND/OR canonical 化、Progress 排序和平台发行。
 - 本文件是需要随真实开发状态持续维护的 Agent 规则；发现与代码、有效 ADR 或规范不一致时应更新本文件，但不得放宽安全、只读 Source、Git、签名或测试要求，也不得把临时实装写成已冻结决策。
@@ -120,6 +120,10 @@
 EV-42 在上述 compatibility baseline 内增加 catalog v11 显式封面列：规则 `CoverPath` 映射同一 SourceWork 的稳定 SourceMedia，经 Binding 解析 CanonicalMedia；媒体 `ordinal` 仅保留非负内容顺序。`PublishedWork.coverMediaId` 为 required nullable，`GET /api/v1/works/{workId}` 可用 `queryPublicationId` 绑定 publication 并建立显式快照读取租约；这些是当前实现，不代表 API Freeze。
 
 EV-44 在此后增加 catalog v12 revision Source/Library 成员表及 Source/Library browse 索引，用于 Work 聚合查询逐成员授权与发布完整性复核；该迁移仍属兼容演进实现，不代表物理 Schema、API 或性能数值已经 Freeze。
+
+EV-46 继续在同一 compatibility baseline 内演进到 catalog v14：v13 把发布时刻的 mtime 固化进 `media_projections.mtime_ns`，使已确认媒体的正文可以在发送任何字节之前判定身份是否仍然成立（ADR-010）；v14 用**独立列**承载规则派生的展示事实——`media_projections.rule_hidden` 与 `work_projections.badges_json`。规则隐藏与用户 Overlay 的 `hidden` 必须保持两列，合并会让重扫抹掉不可重建的用户事实。规则原语注册表同时递增为 `gallery-primitives-v2`（新增 `media_hidden`、`cover_disable_marker`、`badge`，`cover_candidate` 支持 `priority`/`media_type`）。这些同样是当前实现，不代表 Schema 或 API Freeze。
+
+数据库事务基线：`control.db` 与 `catalog.db` 的 DSN 使用 `_txlock=immediate`。默认 DEFERRED 事务在 WAL 下的读后写形态会遇到 `SQLITE_BUSY_SNAPSHOT`，而 `busy_timeout` 对该情况不生效；新增读后写路径不得改回延迟事务，详见 EV-46 的 `TX-1`。
 
 Walking Skeleton 功能可以少，但基础模型不能是临时替代品：
 
@@ -1658,6 +1662,12 @@ feat(核心): 建立状态转换的服务端约束\n\n变动内容：\n- 定义�
 
 阶段 0～4 已完成代码与合成 Correctness；EV-42 又补齐显式规则/有效封面、Work 快照契约和 Web 同快照封面/编辑的合成 Correctness，EV-44 关闭 Work 聚合查询逐成员授权缺口并增加 catalog v12 revision 成员事实，EV-45 再把 1,000 Work 的查询/Cursor/媒体/DerivedAsset Correctness 接入普通 `go test` 持续门禁，但均不改变 API Freeze/Reference Performance 结论。阶段 5 安全代码基线及 EV-37 合成证据完整，EV-38 又补充 Chrome/Edge 同机 Personal/LAN 与当前工作站 Argon2id 证据，EV-44 补齐 deny/Token scope/hidden 写权限的合成授权证据，但正式 Security Gate 未通过。阶段 6 React/TypeScript Web/PWA、同源嵌入资产、静态壳 PWA 和主要页面骨架已实现，Chrome/Edge 真实后端认证主路径通过，但正式 Web Gate 未通过，且 EV-39 证明其「业务闭环」此前被高估；EV-42 的封面闭环和 EV-44 的安全审计空态只有 mock/组件证据。阶段 4 的 EV-35/EV-36 结论保持：500,000 规模 Correctness/Cursor 通过，Reference Performance Gate 未通过，Gank/Pawchive 真实有界验证未完成。
 
-EV-39 登记的阻断性缺陷已由 [EV-40](Documents/证据/验证记录.md)、[EV-44](Documents/证据/验证记录.md) 与 [EV-45](Documents/证据/验证记录.md) 分轮关闭：EV-40 关闭 `WS-1`、`WS-2`、`CAP-1`、`API-1`、`SEC-1`、`SEC-2`、`SEC-4`、`TEST-1`、`BLD-1` 与 `A11Y-1` 的键盘部分；EV-44 关闭 `AUTHZ-1` 与 `QRY-1`，使 Work 聚合查询在 total/分页前按 publication 成员应用 effective capability、deny 与 Token scope，并使 `overlay.hidden` 同时要求逐成员 `library.write`；EV-45 关闭 `TEST-2`，使 39 项查询、6 项 Cursor 与 20 项媒体/DerivedAsset finding 通过生产 bootstrap、真实 loopback HTTP 和临时 AppDirs 进入普通 `go test`。**未关闭且不得静默跳过的项**：`MED-1`（媒体正文每请求整文件复制 + 全量哈希）仍须在保持已接受 ContentBlob/完整 digest 强语义的前提下改为有界验证读取；现有 ADR/规范已经禁止用 size/mtime/FileID 直接替代内容证明，只有弱化该语义才需修订 ADR。`SEC-3`（媒体正文 MIME 白名单与 `Content-Disposition` 策略）仍须先在 `规范/08` 冻结安全 inline 类型与分享行为。「真实后端 E2E 未进入 CI」仍是当前最大的门禁缺口之一。
+EV-39 登记的阻断性缺陷已由 [EV-40](Documents/证据/验证记录.md)、[EV-44](Documents/证据/验证记录.md) 与 [EV-45](Documents/证据/验证记录.md) 分轮关闭：EV-40 关闭 `WS-1`、`WS-2`、`CAP-1`、`API-1`、`SEC-1`、`SEC-2`、`SEC-4`、`TEST-1`、`BLD-1` 与 `A11Y-1` 的键盘部分；EV-44 关闭 `AUTHZ-1` 与 `QRY-1`，使 Work 聚合查询在 total/分页前按 publication 成员应用 effective capability、deny 与 Token scope，并使 `overlay.hidden` 同时要求逐成员 `library.write`；EV-45 关闭 `TEST-2`，使 39 项查询、6 项 Cursor 与 20 项媒体/DerivedAsset finding 通过生产 bootstrap、真实 loopback HTTP 和临时 AppDirs 进入普通 `go test`；[EV-46](Documents/证据/验证记录.md) 关闭 `MED-1` 与 `SEC-3`。**EV-39 登记的缺陷至此全部关闭。**
+
+`MED-1` 的裁决见 [ADR-010](Documents/ADR/ADR-010-已确认媒体的正文读取语义.md)：正文改为流式区间读取，完整性由 publication 冻结的 size/mtime 证据（catalog v13）+ 整文件读取顺带复算 digest 分层保证。「快速指纹只能筛选候选、不能代替完整内容哈希」这条边界**未被弱化**——身份证据只用于判定既有 ContentBlob 是否仍然成立，建立新 Blob 仍以首次完整 SHA-256 为前置条件。`SEC-3` 的呈现策略已写入 `规范/08`「呈现策略与内联白名单」。
+
+EV-46 另行发现并修复三项本轮新缺陷，后续开发必须继续遵守其结论：`LINK-1` Windows 目录联接报告为 `fs.ModeIrregular` 而非 `fs.ModeSymlink`，链接判定一律走 `internal/platform/filesystem.IsLink`；`TX-1` WAL 下 DEFERRED 事务的读后写会遇到 `busy_timeout` 无法吸收的 `SQLITE_BUSY_SNAPSHOT`，DSN 固定 `_txlock=immediate`，新增读后写路径不得改回延迟事务；迁移耗时预算不得以固定墙钟写进可移植单元测试。
+
+「真实后端 E2E 未进入 CI」仍是当前最大的门禁缺口之一。`gallery-rules.json` 所需的聚合封面、文件根浏览与平台呈现/排序集下发仍未实现。
 
 其后并行关闭阶段 4 性能/API Freeze、阶段 5 真实物理 LAN/目标低端设备/恶意资源门禁和阶段 6 Firefox/真实移动设备/屏幕阅读器/完整业务 E2E；在这些完成前不要进入桌面壳或发行。真实 HDD/SMB/NAS、FileID、ranking/total/租约等 PRE_FREEZE 数值、AND/OR canonical 化、Progress 排序、Wails/Tauri 与跨平台发行仍属后续门禁。

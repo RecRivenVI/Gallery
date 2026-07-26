@@ -59,7 +59,7 @@ Gallery 是一个"本地优先"（数据主要放在自己电脑上，不依赖�
 | 阶段 2：规则系统 | ✅（正确性层面） | ✅（限定范围内） | 规则生命周期、编译执行、参数/绑定和影响调度已形成闭环 | 正式性能/平台测试尚未完成 | 已完成 |
 | 阶段 3：扫描、任务与目录库 | ✅（代码与模拟数据层面） | 🟡（真实大盘抽样通过，全量未完成） | 真实固态硬盘（SSD）、机械硬盘（HDD）各完成几十万文件规模的抽样验收，发现并修复了 2 个真实 bug | 真实全量扫描被主动叫停，正式性能门禁尚未跑完；网络共享盘尚未验证 | 阶段 4 正式压力测试 |
 | 阶段 4：查询与媒体 | 🟡（主线代码完成，部分参数未冻结） | 🟡（正确性收口完成，500,000 规模正式压力测试已执行） | 搜索、排序、分页、显式规则/有效封面、媒体读取/下载、缩略图生成全部有代码闭环；500,000 规模 Correctness/Cursor 通过，EV-44 关闭逐 Source 授权缺口，EV-45 又把 1k 查询/Cursor/媒体 smoke 接入持续门禁 | 排序权重、结果总数计算方式、锁的有效期等仍是暂定值；持续 smoke 不是 Reference/Degradation Performance；正式 API 冻结尚未完成 | 阶段 4 性能优化候选清单评估与接口冻结 |
-| 阶段 5：账户、安全与多客户端 | 🟠（代码与合成安全收尾已实现） | 🟡（Chrome/Edge 同机主路径补证，正式 Gate 未通过） | EV-37 安全闭环之外，Personal/LAN 双浏览器上下文、Session/WS 吊销和当前工作站 Argon2id 基准已有 EV-38 证据；EV-44 关闭 Work 聚合查询逐成员 deny/Token scope/hidden 写权限缺口 | `SEC-3`、真实 LAN 多设备、目标低端设备 Argon2id 与真实恶意输入资源门禁未完成 | 完成剩余安全缺陷与外部设备门禁 |
+| 阶段 5：账户、安全与多客户端 | 🟠（代码与合成安全收尾已实现） | 🟡（Chrome/Edge 同机主路径补证，正式 Gate 未通过） | EV-37 安全闭环之外，Personal/LAN 双浏览器上下文、Session/WS 吊销和当前工作站 Argon2id 基准已有 EV-38 证据；EV-44 关闭 Work 聚合查询逐成员 deny/Token scope/hidden 写权限缺口 | 真实 LAN 多设备、目标低端设备 Argon2id 与真实恶意输入资源门禁未完成 | 完成外部设备门禁 |
 | 阶段 6：Web/PWA 界面 | 🟠（页面代码基线已实现；EV-39 发现的实时通道与写入口阻断已在 EV-40 修复） | 🟡（Chrome/Edge 认证与实时通道主路径通过；完整写路径 E2E 仍未覆盖，正式 Gate 未通过） | 同源内嵌 Web/PWA 覆盖认证、浏览/媒体、Overlay、任务、规则、安全和维护页面骨架；EV-42 新增同快照封面与 CustomCover 编辑 | 封面链路只有 Vitest/Chromium mock、尚无真实后端浏览器复验；完整管理写路径 E2E、Firefox、真实移动设备/屏幕阅读器与窄屏焦点陷阱未完成 | 扩大写路径与可访问性门禁，不进入桌面壳 |
 | 阶段 7：平台适配与正式发行 | ⏳（仅早期实验代码涉及，不属于正式产品） | ⛔ | 无 | Windows 之外的平台、安装包、签名、升级等均尚未开始 | 最后阶段 |
 
@@ -101,7 +101,7 @@ Gallery 是一个"本地优先"（数据主要放在自己电脑上，不依赖�
 | `galleryd`（后端主程序） | 唯一真正运行业务逻辑的独立进程，负责数据处理和对外接口 | ✅ 完整实现，能启动、能自愈（重启后自动恢复未完成的任务） |
 | `galleryctl`（命令行工具） | 通过命令行操作 Gallery 的工具 | 🟠 当前只提供 `version`（查看版本）和 `health`（查看健康状态）两个命令，尚未覆盖后端已有的约 70 个接口对应的管理能力 |
 | `control.db`（控制数据库） | 存放不能凭空重建的数据：用户的收藏、备注、账号、规则配置等 | ✅ 有完整的备份/恢复机制，验证过删库重建不会丢失用户数据 |
-| `catalog.db`（目录数据库） | 存放扫描出来、可以随时重新生成的数据：作品列表、搜索索引、规则/有效封面投影等 | ✅ 支持整体删除后重新扫描重建；catalog v11 把封面迁到显式列，v12 增加 revision Source/Library 成员事实与发布完整性复核 |
+| `catalog.db`（目录数据库） | 存放扫描出来、可以随时重新生成的数据：作品列表、搜索索引、规则/有效封面投影等 | ✅ 支持整体删除后重新扫描重建；catalog v11 把封面迁到显式列，v12 增加 revision Source/Library 成员事实，v13 固化发布时刻 mtime 供正文读取判定身份，v14 用独立列承载规则隐藏与角标 |
 | 规则系统 | 让用户自定义"什么样的文件夹结构算一个作品"的规则引擎 | ✅ 规则的编写、检查、试运行、影响分析、上线、回滚全部完成 |
 | 任务系统（Job/Attempt） | 后台长时间任务（比如扫描、计算哈希）的排队和进度追踪系统 | ✅ 支持取消、重试、断点恢复，有 6 个独立的任务池（一种任务卡住不会影响其他任务） |
 | 扫描（Scanner） | 读取用户文件夹、识别文件的模块 | ✅ 支持"索引/增量/校验"三种模式，真实几十万文件规模的抽样测试通过 |
@@ -257,7 +257,7 @@ Gallery 是一个"本地优先"（数据主要放在自己电脑上，不依赖�
 | 测试项目 | 所属阶段/门禁 | 测试代码位置 | 正式记录 | 状态 | 环境与样本 | 不能扩大解释的局限 |
 |---|---|---|---|---|---|---|
 | 全部 Go 测试（371 个 `Test*`/`Benchmark*`/`Example*` 函数，覆盖 44 个目录/包） | 贯穿各阶段 | `cmd`/`internal`/`pkg`/`tools` 共 102 个 `*_test.go` 文件 | `scripts/Check.ps1` 每次运行 | ✅（在 CI 上持续运行并要求全部通过） | Windows + Ubuntu（GitHub Actions） | 全部是模拟/合成数据，不是真实媒体库；Argon2id benchmark 需手动 `-bench`，CI 从不执行 |
-| 数据库迁移（control 20 个迁移文件，catalog 12 个迁移文件） | 阶段 0-5 | `internal/storage/migrations/{control,catalog}` | EV-12 及各阶段收尾记录、EV-37、EV-42、EV-44 | ✅ | 空库/旧库升级单元测试；v10→v11 封面回填，v11→v12 成员精确回填与歧义拒绝 | 最终物理 Schema 仍未冻结；旧规则封面只能近似回填，需重扫精确恢复；v12 索引宽度 PRE_FREEZE |
+| 数据库迁移（control 20 个迁移文件，catalog 14 个迁移文件） | 阶段 0-5 | `internal/storage/migrations/{control,catalog}` | EV-12 及各阶段收尾记录、EV-37、EV-42、EV-44、EV-46 | ✅ | 空库/旧库升级单元测试；v10→v11 封面回填，v11→v12 成员精确回填与歧义拒绝，v12→v13 mtime 精确一对一回填且缺行不伪造 | 最终物理 Schema 仍未冻结；旧规则封面只能近似回填，需重扫精确恢复；v14 的规则隐藏与角标只能通过重扫获得，不做近似回填；v12 索引宽度 PRE_FREEZE |
 | 契约/OpenAPI/WebSocket/游标/错误码 Schema 一致性 | 阶段 0、4、5 | `internal/contract/{api,fault,query,realtime}/*_test.go` | EV-12、EV-30、EV-37 | ✅（生成一致性） | 单元测试 | 当前 `0.6.0-pre-alpha`，尚未正式冻结 |
 | 集成/端到端（使用固定的小型合成文件夹样例） | Walking Skeleton、Architecture Proof | `internal/bootstrap/run_test.go`、`internal/scanner/{service_test.go,discovery_test.go}`，样例文件在 `tests/fixtures/` | EV-13、EV-14 | ✅（限定范围内） | 单个/几个文件规模，非大规模 | 不能代表大规模真实场景 |
 | 强制终止/恢复（8 个关键时间点） | Architecture Proof | `internal/recovery/killpoints_test.go`（真实拉起子进程并终止） | EV-14 | ✅ | Windows + WSL | 只覆盖这 8 个预设场景 |
@@ -268,7 +268,7 @@ Gallery 是一个"本地优先"（数据主要放在自己电脑上，不依赖�
 | 性能测试（Reference Performance） | 阶段 3、4 | `internal/query/reference_performance_test.go`（默认跳过，需手动设置环境变量开启，最多合成 100 万条记录） | EV-23 明确写"不构成正式 Reference/Degradation Performance Gate 的结论" | 🟡 | 单台参考机器，最多合成 100 万行 | 明确不能当作正式性能门禁结论 |
 | HDD/SMB/NAS 真实场景 | 阶段 3、7 | 无正式代码测试；早期实验里有相关原型 | EV-25 明确写"全量扫描未完成，正式全量性能 Gate 仍未通过" | 🟡（仅抽样） / ⏳（全量与网络盘） | 真实 SSD ~36.6 万文件、真实 HDD ~63.2 万文件（均为抽样，非全量） | 抽样结果不能当作全量场景的性能保证；网络共享盘尚未验证 |
 | Windows/Linux/macOS/Docker 平台支持 | 阶段 7 | CI 只有 Windows + Ubuntu 两个系统 | ADR-007 四级支持成熟度表 | 🟡（Windows/Linux 停在"CI 能运行"层级）/ ⏳（macOS/Docker） | GitHub Actions | 未达到"发行候选"或"正式支持"级别；CI 上的 Linux 也不是原生 Linux 全部行为的完整验证 |
-| 安全（认证、授权、Web 边界、路径穿越、恶意元数据/媒体、限流） | 阶段 5 | 正式生产包覆盖账户/Token/Grant/Session/WS/Web 与合成攻击；Work 查询逐成员授权；真实 Chrome/Edge 已覆盖 Personal/LAN 主路径和吊销 | EV-09、EV-37、EV-38、EV-44 | 🟡 | Windows 合成与浏览器；WSL race | `SEC-3`、真实物理 LAN 多设备、目标低端设备与真实恶意资源门禁未完成，整体 Gate 未通过 |
+| 安全（认证、授权、Web 边界、路径穿越、恶意元数据/媒体、限流） | 阶段 5 | 正式生产包覆盖账户/Token/Grant/Session/WS/Web 与合成攻击；Work 查询逐成员授权；真实 Chrome/Edge 已覆盖 Personal/LAN 主路径和吊销 | EV-09、EV-37、EV-38、EV-44 | 🟡 | Windows 合成与浏览器；WSL race | 真实物理 LAN 多设备、目标低端设备与真实恶意资源门禁未完成，整体 Gate 未通过 |
 | Web/PWA 界面测试 | 阶段 6 | `web/src/**/*.test.ts(x)`（7 个文件 12 个用例）与 `web/scripts/check-audit.test.mjs`（16 个用例）、`web/e2e`、`internal/webapp/*_test.go` | EV-38～EV-40、EV-42、EV-44 | 🟡 | Vitest 合计 8 个文件 28 项；既有 Chrome/Edge 真实后端证据；EV-42 为 Chromium mock smoke 3/3；EV-44 增加安全审计空态组件测试 | CI 浏览器 Job 仍全程 mock API；真实后端 E2E 在 CI 中恒跳过。封面与安全审计空态新增路径未复验真实 `galleryd` |
 | 阶段 4 查询/媒体 Correctness（testlab） | 阶段 4 | `tools/testlab/stages/stage4/smoke_test.go` 与既有 query/media orchestrator | EV-36、EV-45 | ✅（1k 合成持续 smoke）/ 🧪（500k 人工正式矩阵） | 普通 `go test` 经生产 bootstrap + 真实 loopback HTTP 执行 39 查询 + 6 Cursor + 20 media/derived finding | 持续入口只关闭 `TEST-2`；不运行 perf，`creator.id` 和裸伪造 publication 错误码差异仍是显式限制，不代表 500k Reference、HDD/SMB/NAS 或 API Freeze |
 | 发布/签名/SBOM | 阶段 7 | CI 里仅有依赖漏洞扫描 `govulncheck`（只在 Linux 任务中运行） | ci.yml | 🟡（仅依赖漏洞扫描这一项） | GitHub Actions Linux | 签名、SBOM、安装包流程尚不存在 |
@@ -344,7 +344,7 @@ Gallery 是一个"本地优先"（数据主要放在自己电脑上，不依赖�
 | 正确性风险 | 阶段 4 的"按需校验单个文件"功能经历多轮验证才发现全部问题，说明涉及发布快照版本绑定这类跨模块一致性的功能容易隐藏缺陷，值得在未来的分享功能、多用户权限等同样涉及跨模块状态一致性的能力上保持关注 |
 | 性能风险 | 真实机械硬盘（HDD）全量扫描此前实测约需 22 小时才能扫完 20 万文件（在改为增量模式前），虽已缓解，但正式的全量性能门禁至今尚未跑完，真实使用中大型库的完整扫描表现仍待验证 |
 | 平台风险 | Linux 支持目前只验证过 WSL（Windows 内置的 Linux 兼容层）和 GitHub Actions 的 `ubuntu-latest`，尚未验证独立安装的原生 Linux 系统；macOS、Docker、真实网络共享盘（SMB/NAS）尚未验证 |
-| 安全风险 | 阶段 5 账户/凭据/授权、匿名 Share、全资源矩阵、恶意输入与 WS 防滥用代码及合成测试已落地；EV-44 已关闭 Work 聚合查询逐成员授权缺口，但 `SEC-3`、真实 LAN 多设备/浏览器和目标设备 Argon2id 门禁仍缺，不能描述为完整 Security Gate 通过 |
+| 安全风险 | 阶段 5 账户/凭据/授权、匿名 Share、全资源矩阵、恶意输入与 WS 防滥用代码及合成测试已落地；EV-44 已关闭 Work 聚合查询逐成员授权缺口，EV-46 已关闭 `SEC-3`（媒体呈现改由服务端内联白名单决定，三条正文路径统一加 sandbox CSP）；真实 LAN 多设备/浏览器和目标设备 Argon2id 门禁仍缺，不能描述为完整 Security Gate 通过 |
 | 产品/UI 缺口 | Web/PWA 代码基线已存在，EV-39 发现的实时通道与写入口阻断已在 EV-40 修复并经真实 Chrome/Edge 复验；但 Firefox、真实移动设备/屏幕阅读器、窄屏侧栏焦点陷阱、完整管理写路径 E2E 和正式可用性 Gate 均未完成 |
 | 测试体系缺口 | CI 的浏览器 Job 仍全程 mock，真实后端 E2E 在 CI 中恒跳过；EV-45 已让阶段 4 testlab Correctness 进入普通 `go test`，但 500k 性能/十来源矩阵仍是人工门禁；全仓库 0 个 Fuzz；`internal/platform/{process,watcher,disk,filesystem,identity,clock}` 与 `cmd/galleryd` 为零测试包。EV-40 已为 `WS-1`/`WS-2`/`CAP-1`/`API-1` 各自建立回归防线（含跨语言词表比对与契约 Schema 比对），但把真实后端 E2E 纳入 CI 仍是未关闭的缺口 |
 | 发行缺口 | 没有安装包、没有代码签名、没有软件物料清单（SBOM）、没有升级机制的正式实现 |
@@ -358,7 +358,7 @@ Gallery 是一个"本地优先"（数据主要放在自己电脑上，不依赖�
 
 | 顺序 | 阶段 | 需要做的事 | 排序依据 |
 |---|---|---|---|
-| 0 | 缺陷收口（进行中，见 EV-40、EV-44、EV-45） | EV-40 已关闭 6 项 P1 及 `SEC-4`/`TEST-1`/`BLD-1`/`A11Y-1` 键盘部分；EV-44 已关闭 `AUTHZ-1`/`QRY-1`；EV-45 已关闭 `TEST-2`。剩余 `MED-1`、`SEC-3` 未关闭 | 阻断性缺陷优先；保持既有 ContentBlob 强语义不需新 ADR，MIME presentation 仍须先在规范中裁决 |
+| 0 | 缺陷收口（EV-39 登记项已全部关闭，见 EV-40、EV-44、EV-45、EV-46） | EV-40 关闭 6 项 P1 及 `SEC-4`/`TEST-1`/`BLD-1`/`A11Y-1` 键盘部分；EV-44 关闭 `AUTHZ-1`/`QRY-1`；EV-45 关闭 `TEST-2`；EV-46 关闭 `MED-1`、`SEC-3`，并新发现修复 `LINK-1`（Windows 目录联接被识别为普通文件）、`TX-1`（WAL 读后写事务过期读快照）与迁移预算门禁不可复现 | 阻断性缺陷优先；`MED-1` 由 ADR-010 裁决完整性证据分层，`SEC-3` 由规范 08 新增呈现策略裁决 |
 | 1 | 阶段 4 收尾 | 正式性能门禁（Reference/Degradation Performance Gate）与 API 接口冻结 | 1k testlab Correctness 已持续化；正式性能、十来源与接口数值仍未冻结 |
 | 2 | 阶段 5 | 完成真实 LAN 多设备与目标低端设备 Argon2id 延迟/并发验证 | 同机 Chrome/Edge 和高性能工作站证据已取得，剩余缺口需要外部设备环境 |
 | 3 | 阶段 6 | 在缺陷收口后扩大 Web/PWA 的浏览器、可访问性、真实设备与完整业务写路径门禁 | 只有写路径 E2E 进入门禁，才能防止同类完成度高估再次发生 |
