@@ -9,7 +9,7 @@
   "provider_namespaces": ["testlab.gank-library-bounded"],
   "primitives": [
     {"id": "work", "kind": "path_match", "config": {"scope": "work_directory", "glob": "*", "title": "directory_name", "stable_key": "relative_path", "metadata_file": "metadata.json"}},
-    {"id": "title", "kind": "fallback", "config": {"target": "title", "pointers": ["/title"], "default": ""}},
+    {"id": "title", "kind": "fallback", "config": {"target": "title", "pointers": ["/title"]}},
     {"id": "facts", "kind": "metadata_map", "config": {"fields": {
       "external_id": ["/id"],
       "provider_id": ["/user/id", "/author", "/authorUser/id"],
@@ -17,7 +17,7 @@
       "description": ["/content"],
       "tags": ["/tags"]
     }}},
-    {"id": "url", "kind": "fallback", "config": {"target": "source_url", "pointers": ["/postUrl", "/post_url", "/url", "/sourceUrl", "/source_url", "/permalink", "/link", "/source/url"], "default": ""}},
+    {"id": "url", "kind": "fallback", "config": {"target": "source_url", "pointers": ["/postUrl", "/post_url", "/url", "/sourceUrl", "/source_url", "/permalink", "/link", "/source/url"]}},
     {"id": "media-jpg", "kind": "media_classify", "config": {"glob": "*.jpg", "kind": "image", "mime": "image/jpeg"}},
     {"id": "media-jpeg", "kind": "media_classify", "config": {"glob": "*.jpeg", "kind": "image", "mime": "image/jpeg"}},
     {"id": "media-png", "kind": "media_classify", "config": {"glob": "*.png", "kind": "image", "mime": "image/png"}},

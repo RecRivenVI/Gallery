@@ -73,9 +73,11 @@ func TestUnknownAssignTargetIsRejectedAtCompileTime(t *testing.T) {
 
 // TestDescriptionAndSourceURLAreAssignable 覆盖 8 个真实来源夹具都声明、旧实现却全部丢弃的两个字段。
 func TestDescriptionAndSourceURLAreAssignable(t *testing.T) {
+	// 刻意不带 default：空串 default 会在取值链全部落空时把字段赋成空串而不留缺失记录，
+	// 已在编译期被拒绝（见 TestEmptyDefaultIsRejectedAtCompileTime）。
 	const primitives = `,
-    {"id":"desc","kind":"fallback","config":{"target":"description","pointers":["/caption","/text"],"default":""}},
-    {"id":"url","kind":"fallback","config":{"target":"source_url","pointers":["/postUrl","/url"],"default":""}}`
+    {"id":"desc","kind":"fallback","config":{"target":"description","pointers":["/caption","/text"]}},
+    {"id":"url","kind":"fallback","config":{"target":"source_url","pointers":["/postUrl","/url"]}}`
 	result := evaluateWork(t, primitives, "work", map[string]any{
 		"text": "来自 text 的描述", "url": "https://example.invalid/a",
 	})
@@ -238,5 +240,34 @@ func TestWorkDateRejectsInvalidConfiguration(t *testing.T) {
 				t.Fatal("非法 work_date 配置未在编译期被拒绝")
 			}
 		})
+	}
+}
+
+// TestEmptyDefaultIsRejectedAtCompileTime 锁定空串 default 在编译期被拒绝。
+//
+// 求值端只把 nil 当作「没取到值」，空串 default 是非 nil 的接口值，因此既不留下
+// RULE_SELECTOR_MISSING 也不走缺失分支，而是直接把空串赋给目标字段。真实来源的夹具里曾出现
+// `title` 取值链带空串 default：`path_match` 已把标题初始化为目录名，该 default 会在 metadata
+// 缺标题时把它覆盖成空，得到一个没有标题、也没有任何问题记录的作品。
+func TestEmptyDefaultIsRejectedAtCompileTime(t *testing.T) {
+	for _, item := range []struct{ name, primitives string }{
+		{"fallback 空串 default", `,{"id":"t","kind":"fallback","config":{"target":"title","pointers":["/title"],"default":""}}`},
+		{"selector 空串 default", `,{"id":"t","kind":"selector","config":{"target":"creator","pointer":"/creator","default":""}}`},
+	} {
+		t.Run(item.name, func(t *testing.T) {
+			if _, err := rules.CompilePackage([]byte(datePackage(item.primitives))); err == nil {
+				t.Fatal("空串 default 未在编译期被拒绝")
+			}
+		})
+	}
+	// 非空 default 仍然合法：它表达的是一个真实的回退取值，不是「没有值」。
+	if _, err := rules.CompilePackage([]byte(datePackage(
+		`,{"id":"t","kind":"fallback","config":{"target":"title","pointers":["/title"],"default":"未命名"}}`))); err != nil {
+		t.Fatalf("非空 default 被误拒: %v", err)
+	}
+	// 省略 default 也合法，且是表达「没有值」的正确方式。
+	if _, err := rules.CompilePackage([]byte(datePackage(
+		`,{"id":"t","kind":"fallback","config":{"target":"title","pointers":["/title"]}}`))); err != nil {
+		t.Fatalf("省略 default 被误拒: %v", err)
 	}
 }

@@ -25,7 +25,8 @@ import (
 //     封闭枚举以消除静默丢弃，并新增 description 与 source_url 两个可赋值字段。
 //   - v4：presentation（平台呈现、排序集合与时间显示语义）。
 //   - v5：work_date 的 path_timezone —— 目录名日期与 metadata 时间戳分别声明各自的朴素时间时区。
-const PrimitiveRegistryVersion = "gallery-primitives-v5"
+//   - v6：selector/fallback 的空串 default 在编译期被拒绝（它会静默覆盖已有默认值且不留缺失记录）。
+const PrimitiveRegistryVersion = "gallery-primitives-v6"
 
 var jsonNumberPattern = regexp.MustCompile(`^(-?)(0|[1-9][0-9]*)(?:\.([0-9]+))?(?:[eE]([+-]?[0-9]+))?$`)
 
@@ -546,6 +547,28 @@ func requireAssignableTarget(raw json.RawMessage, primitive rawPrimitive) error 
 	return nil
 }
 
+// rejectEmptyDefault 在编译期拒绝 `"default": ""`。
+//
+// 求值端只把 **nil** 当作「没取到值」：`default` 为空串时它是一个非 nil 的接口值，于是既不会留下
+// `RULE_SELECTOR_MISSING`，也不会走缺失分支，而是直接把空串赋给目标字段。后果是**静默破坏**——
+// 例如 `path_match` 已经把作品标题初始化为目录名，一条带空串 default 的 title 取值链会在 metadata
+// 缺少标题时把它覆盖成空，得到一个没有标题、也没有任何问题记录的作品。
+//
+// 空串 default 从来不表达有用的事实：它想说的「这个字段没有值」正是省略 default 的语义，而省略会
+// 如实留下 `RULE_SELECTOR_MISSING`。因此这里不做运行期兼容，直接在编译期拒绝，让这一类彻底不可写出。
+func rejectEmptyDefault(config map[string]json.RawMessage, primitive rawPrimitive) error {
+	raw, ok := config["default"]
+	if !ok {
+		return nil
+	}
+	var value string
+	if json.Unmarshal(raw, &value) == nil && value == "" {
+		return fmt.Errorf("%s %s 的 default 是空串：它会覆盖已有默认值并且不留下缺失记录；"+
+			"要表达「没有值」请省略 default", primitive.Kind, primitive.ID)
+	}
+	return nil
+}
+
 func validateExtendedPrimitive(primitive rawPrimitive) error {
 	var config map[string]json.RawMessage
 	if err := strictDecode(primitive.Config, &config); err != nil {
@@ -573,6 +596,9 @@ func validateExtendedPrimitive(primitive rawPrimitive) error {
 			if _, pointers := config["pointers"]; !pointers {
 				return fmt.Errorf("%s %s 缺少 pointer/pointers", primitive.Kind, primitive.ID)
 			}
+		}
+		if err := rejectEmptyDefault(config, primitive); err != nil {
+			return err
 		}
 	case "stable_key":
 		if err := requireString("target"); err != nil {
