@@ -46,9 +46,17 @@ type workDateConfig struct {
 	// PathPattern 是作用于作品相对路径的受限正则，用命名捕获组提供日期分量。
 	// 支持的组名：year、month、day、hour、minute、second。year 与 month、day 必需。
 	PathPattern string `json:"path_pattern,omitempty"`
-	// InputTimezone 是**朴素时间戳**（不带偏移量的输入）的解释时区，IANA 名称。
+	// InputTimezone 是 **metadata 中朴素时间戳**（不带偏移量的输入）的解释时区，IANA 名称。
 	// 缺省为 UTC。带明确偏移量的输入不受它影响。
 	InputTimezone string `json:"input_timezone,omitempty"`
+	// PathTimezone 是 **PathPattern 从目录名捕获的日期分量**的解释时区，IANA 名称。缺省沿用
+	// InputTimezone。
+	//
+	// 它必须与 InputTimezone 分开，因为二者是**来源不同的两类朴素时间戳**：metadata 里的时间戳由
+	// 抓取工具按它自己的约定写入，目录名里的时间戳由归档工具按**另一套**约定命名，二者用同一个时区
+	// 假设纯属巧合。一旦二者不同而实现只有一个时区，错误是静默的——仍然产出一个格式合法、排序正常、
+	// 只是偏移了若干小时的时刻，没有任何 issue 或告警能暴露它。
+	PathTimezone string `json:"path_timezone,omitempty"`
 }
 
 // workDatePatternLimit 与 CEL Profile 的 RegexCharacters 采用同一上限：路径模式同样是规则包提供的
@@ -66,6 +74,7 @@ func compileWorkDate(config workDateConfig, primitiveID string) (IRWorkDate, err
 		Pointers:      append([]string(nil), config.Pointers...),
 		PathPattern:   config.PathPattern,
 		InputTimezone: config.InputTimezone,
+		PathTimezone:  config.PathTimezone,
 	}
 	if len(config.Pointers) == 0 && config.PathPattern == "" {
 		return IRWorkDate{}, fmt.Errorf("work_date %s 既没有 pointers 也没有 path_pattern", primitiveID)
@@ -105,7 +114,27 @@ func compileWorkDate(config workDateConfig, primitiveID string) (IRWorkDate, err
 			return IRWorkDate{}, fmt.Errorf("work_date %s 的 input_timezone %q 不是有效 IANA 时区: %w", primitiveID, config.InputTimezone, err)
 		}
 	}
+	if config.PathTimezone != "" {
+		if config.PathPattern == "" {
+			return IRWorkDate{}, fmt.Errorf("work_date %s 声明了 path_timezone 却没有 path_pattern", primitiveID)
+		}
+		if _, err := time.LoadLocation(config.PathTimezone); err != nil {
+			return IRWorkDate{}, fmt.Errorf("work_date %s 的 path_timezone %q 不是有效 IANA 时区: %w", primitiveID, config.PathTimezone, err)
+		}
+	}
 	return result, nil
+}
+
+// loadTimezone 加载 IANA 时区；空串表示 UTC。字段名进错误信息，使「两个时区里哪一个配错了」可辨。
+func loadTimezone(name, field string) (*time.Location, error) {
+	if name == "" {
+		return time.UTC, nil
+	}
+	loaded, err := time.LoadLocation(name)
+	if err != nil {
+		return nil, fmt.Errorf("加载 %s: %w", field, err)
+	}
+	return loaded, nil
 }
 
 func hasGroup(expression *regexp.Regexp, name string) bool {
@@ -122,13 +151,18 @@ func hasGroup(expression *regexp.Regexp, name string) bool {
 // 顺序不可颠倒：metadata 是来源自己声明的事实，路径只是回退推断。任一 pointer 解析成功即停止，
 // 与真实规则中 `date` 的回退链语义一致。
 func resolveWorkDate(plan IRWorkDate, metadata any, workPath string) (WorkDate, error) {
-	location := time.UTC
-	if plan.InputTimezone != "" {
-		loaded, err := time.LoadLocation(plan.InputTimezone)
+	location, err := loadTimezone(plan.InputTimezone, "input_timezone")
+	if err != nil {
+		return WorkDate{}, err
+	}
+	// 路径日期用**独立**时区解释：目录命名约定与 metadata 的时间戳约定是两套互不相关的约定。
+	// 未声明时沿用 input_timezone，因为「只有一种朴素时间约定」是常见情形，强制两处都写反而更易写错。
+	pathLocation := location
+	if plan.PathTimezone != "" {
+		pathLocation, err = loadTimezone(plan.PathTimezone, "path_timezone")
 		if err != nil {
-			return WorkDate{}, fmt.Errorf("加载 input_timezone: %w", err)
+			return WorkDate{}, err
 		}
-		location = loaded
 	}
 	for _, pointer := range plan.Pointers {
 		value, ok := resolvePointer(metadata, pointer)
@@ -148,9 +182,9 @@ func resolveWorkDate(plan IRWorkDate, metadata any, workPath string) (WorkDate, 
 	if plan.PathPattern == "" {
 		return WorkDate{}, nil
 	}
-	expression, err := regexp.Compile(plan.PathPattern)
-	if err != nil {
-		return WorkDate{}, fmt.Errorf("编译 path_pattern: %w", err)
+	expression, compileErr := regexp.Compile(plan.PathPattern)
+	if compileErr != nil {
+		return WorkDate{}, fmt.Errorf("编译 path_pattern: %w", compileErr)
 	}
 	match := expression.FindStringSubmatch(workPath)
 	if match == nil {
@@ -161,14 +195,14 @@ func resolveWorkDate(plan IRWorkDate, metadata any, workPath string) (WorkDate, 
 		if name == "" || index >= len(match) {
 			continue
 		}
-		number, err := strconv.Atoi(match[index])
-		if err != nil {
+		number, convErr := strconv.Atoi(match[index])
+		if convErr != nil {
 			return WorkDate{}, nil
 		}
 		parts[name] = number
 	}
 	instant := time.Date(parts["year"], time.Month(parts["month"]), parts["day"],
-		parts["hour"], parts["minute"], parts["second"], 0, location)
+		parts["hour"], parts["minute"], parts["second"], 0, pathLocation)
 	// time.Date 会把越界分量规范化（例如 13 月变成次年 1 月）。日期来自不可信输入，因此这里回读
 	// 校验：规范化后与输入不一致说明输入本身非法，按未解析处理，不产生一个看似合理的错误时刻。
 	if instant.Year() != parts["year"] || int(instant.Month()) != parts["month"] || instant.Day() != parts["day"] ||

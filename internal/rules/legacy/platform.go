@@ -113,23 +113,26 @@ func convertPlatform(config Config, platform Platform, ruleSetID string) (json.R
 		})
 	}
 
-	// 发布时间：metadata 链 + 路径回退 + 输入时区。
+	// 发布时间：metadata 链 + 路径回退，两类朴素时间戳各自的时区分别映射。
+	//
+	// 旧配置把它们分成两个独立字段：`time.naive_timestamp_timezone` 管 metadata 里不带偏移量的时间戳，
+	// `time.directory_timestamp_timezone` 管从目录名解析出的时间。二者当前恰好都是 UTC，但这是配置
+	// 值巧合，不是语义等同——把目录时间也按 metadata 时区解释，会在用户改动其中一个时静默产生偏移了
+	// 若干小时的发布时间，且格式合法、排序正常，没有任何信号能暴露它。
 	datePointers := pointerChain(platform.Metadata.Date, platform.ID, "date", &notes)
 	wantsPathDate := hasPathDatetime(platform.Metadata.Date)
 	if len(datePointers) > 0 || wantsPathDate {
-		inputTimezone := platform.Metadata.Time.InputTimezone
-		if inputTimezone == "" {
-			inputTimezone = config.Time.NaiveTimestampTimezone
+		item := map[string]any{
+			"input_timezone": firstNonEmpty(
+				platform.Metadata.Time.InputTimezone, config.Time.NaiveTimestampTimezone, "UTC"),
 		}
-		if inputTimezone == "" {
-			inputTimezone = "UTC"
-		}
-		item := map[string]any{"input_timezone": inputTimezone}
 		if len(datePointers) > 0 {
 			item["pointers"] = datePointers
 		}
 		if wantsPathDate {
 			item["path_pattern"] = PathDatetimePattern
+			// 平台级 metadata.time 没有对应的目录时区字段，因此目录时间只有库级声明可用。
+			item["path_timezone"] = firstNonEmpty(config.Time.DirectoryTimestampTimezone, "UTC")
 		}
 		primitives = append(primitives, primitive{ID: "work-date", Kind: "work_date", Config: item})
 	}
@@ -360,6 +363,16 @@ func regexToGlob(expression string) (string, bool) {
 		return "", false
 	}
 	return stem + ".*", true
+}
+
+// firstNonEmpty 返回第一个非空串，用于「平台级 → 库级 → 内置默认」的逐级回退。
+func firstNonEmpty(values ...string) string {
+	for _, value := range values {
+		if value != "" {
+			return value
+		}
+	}
+	return ""
 }
 
 func hasPathDatetime(values []string) bool {

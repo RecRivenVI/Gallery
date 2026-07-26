@@ -151,6 +151,51 @@ func TestWorkDateHonoursExplicitOffsetOverInputTimezone(t *testing.T) {
 	}
 }
 
+// TestWorkDatePathTimezoneIsIndependentOfMetadataTimezone 锁定「目录名日期」与「metadata 朴素
+// 时间戳」使用**各自**的时区。
+//
+// 二者曾共用一个 input_timezone。那是一处静默缺陷：来源不同的两类朴素时间戳被同一个时区假设解释，
+// 一旦真实配置里两个时区不同，产出的仍是格式合法、排序正常、只是偏移了若干小时的时刻，没有任何
+// issue、告警或校验会暴露它。本测试刻意让两个时区相差 13 小时，使任何共用都无法通过。
+func TestWorkDatePathTimezoneIsIndependentOfMetadataTimezone(t *testing.T) {
+	const primitives = `,
+    {"id":"date","kind":"work_date","config":{
+      "pointers":["/date"],
+      "path_pattern":"(?P<year>\\d{4})-(?P<month>\\d{2})-(?P<day>\\d{2})_(?P<hour>\\d{2})",
+      "input_timezone":"Asia/Shanghai",
+      "path_timezone":"America/Los_Angeles"}}`
+
+	// 路径日期按 path_timezone 解释：洛杉矶 2024-03-05 是 -08:00，因此 04:00 对应 UTC 12:00。
+	// 若错误沿用 input_timezone（上海 +08:00），会得到前一日 20:00 —— 相差正好 16 小时。
+	fromPath := evaluateWork(t, primitives, "2024-03-05_04-work", map[string]any{})
+	if fromPath.Work.Date == nil {
+		t.Fatal("路径日期未解析")
+	}
+	if fromPath.Work.Date.Instant != "2024-03-05T12:00:00Z" {
+		t.Fatalf("路径日期 instant = %q want %q（沿用 metadata 时区会得到 2024-03-04T20:00:00Z）",
+			fromPath.Work.Date.Instant, "2024-03-05T12:00:00Z")
+	}
+
+	// 同一个规则包里，metadata 朴素时间戳仍按 input_timezone 解释，不受 path_timezone 影响。
+	fromMetadata := evaluateWork(t, primitives, "2024-03-05_04-work", map[string]any{"date": "2024-03-05 04:00:00"})
+	if fromMetadata.Work.Date == nil || fromMetadata.Work.Date.Instant != "2024-03-04T20:00:00Z" {
+		t.Fatalf("metadata 时间戳被 path_timezone 污染: %+v", fromMetadata.Work.Date)
+	}
+}
+
+// TestWorkDatePathTimezoneDefaultsToInputTimezone 保证未声明 path_timezone 时行为不变——已发布的
+// 规则包不因为新增这个可选字段而改变解析结果。
+func TestWorkDatePathTimezoneDefaultsToInputTimezone(t *testing.T) {
+	const primitives = `,
+    {"id":"date","kind":"work_date","config":{
+      "path_pattern":"(?P<year>\\d{4})-(?P<month>\\d{2})-(?P<day>\\d{2})_(?P<hour>\\d{2})",
+      "input_timezone":"Asia/Shanghai"}}`
+	result := evaluateWork(t, primitives, "2024-03-05_04-work", map[string]any{})
+	if result.Work.Date == nil || result.Work.Date.Instant != "2024-03-04T20:00:00Z" {
+		t.Fatalf("缺省 path_timezone 未沿用 input_timezone: %+v", result.Work.Date)
+	}
+}
+
 // TestWorkDateRejectsOutOfRangePathComponents 证明越界的路径日期分量按未解析处理，而不是被
 // time.Date 静默规范化成一个看似合理的错误时刻。
 func TestWorkDateRejectsOutOfRangePathComponents(t *testing.T) {
@@ -184,6 +229,9 @@ func TestWorkDateRejectsInvalidConfiguration(t *testing.T) {
 		{"不受支持的捕获组", `,{"id":"d","kind":"work_date","config":{"path_pattern":"(?P<century>\\d{2})"}}`},
 		{"缺少 day 分量", `,{"id":"d","kind":"work_date","config":{"path_pattern":"(?P<year>\\d{4})-(?P<month>\\d{2})"}}`},
 		{"重复声明", `,{"id":"a","kind":"work_date","config":{"pointers":["/a"]}},{"id":"b","kind":"work_date","config":{"pointers":["/b"]}}`},
+		{"非法路径时区", `,{"id":"d","kind":"work_date","config":{"path_pattern":"(?P<year>\\d{4})-(?P<month>\\d{2})-(?P<day>\\d{2})","path_timezone":"Mars/Olympus"}}`},
+		// path_timezone 没有 path_pattern 时无处生效，静默忽略会让配置者以为它起了作用。
+		{"path_timezone 无对应 pattern", `,{"id":"d","kind":"work_date","config":{"pointers":["/date"],"path_timezone":"UTC"}}`},
 	} {
 		t.Run(item.name, func(t *testing.T) {
 			if _, err := rules.CompilePackage([]byte(datePackage(item.primitives))); err == nil {

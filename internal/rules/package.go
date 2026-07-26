@@ -24,7 +24,8 @@ import (
 //   - v3：work_date（作品发布时间解析），把 selector/fallback/metadata_map 的 target 收敛为
 //     封闭枚举以消除静默丢弃，并新增 description 与 source_url 两个可赋值字段。
 //   - v4：presentation（平台呈现、排序集合与时间显示语义）。
-const PrimitiveRegistryVersion = "gallery-primitives-v4"
+//   - v5：work_date 的 path_timezone —— 目录名日期与 metadata 时间戳分别声明各自的朴素时间时区。
+const PrimitiveRegistryVersion = "gallery-primitives-v5"
 
 var jsonNumberPattern = regexp.MustCompile(`^(-?)(0|[1-9][0-9]*)(?:\.([0-9]+))?(?:[eE]([+-]?[0-9]+))?$`)
 
@@ -100,6 +101,7 @@ type IRWorkDate struct {
 	Pointers      []string `json:"pointers,omitempty"`
 	PathPattern   string   `json:"pathPattern,omitempty"`
 	InputTimezone string   `json:"inputTimezone,omitempty"`
+	PathTimezone  string   `json:"pathTimezone,omitempty"`
 }
 
 type IRExpression struct {
