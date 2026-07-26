@@ -227,6 +227,15 @@ func classifyDiffPath(pointer string, leftRoot, rightRoot map[string]any) string
 			return "REPROJECT"
 		case "selector", "fallback", "metadata_map":
 			return "REPROJECT"
+		case "presentation":
+			// 平台呈现只改变已有事实如何展示，不改变任何 Source-derived 事实，因此重投影足够，
+			// 不需要重扫。它与 `ui_metadata` 的区别正在于此：后者不影响运行行为所以是 NO_ACTION，
+			// 而这里会改变客户端的实际渲染与默认排序，必须产生新 RuleVersion 并触发重投影。
+			return "REPROJECT"
+		case "badge", "media_hidden", "cover_disable_marker", "work_date":
+			// 这些原语改变的是随快照冻结的 Source-derived 事实（角标、隐藏、封面、发布时间），
+			// 必须重扫才能重新产出，重投影不够。
+			return "RESCAN_FULL"
 		default:
 			return "RESCAN_FULL"
 		}

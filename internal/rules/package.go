@@ -23,7 +23,8 @@ import (
 //     badge（规则派生的作品角标），并让 cover_candidate 支持 priority 与 media_type。
 //   - v3：work_date（作品发布时间解析），把 selector/fallback/metadata_map 的 target 收敛为
 //     封闭枚举以消除静默丢弃，并新增 description 与 source_url 两个可赋值字段。
-const PrimitiveRegistryVersion = "gallery-primitives-v3"
+//   - v4：presentation（平台呈现、排序集合与时间显示语义）。
+const PrimitiveRegistryVersion = "gallery-primitives-v4"
 
 var jsonNumberPattern = regexp.MustCompile(`^(-?)(0|[1-9][0-9]*)(?:\.([0-9]+))?(?:[eE]([+-]?[0-9]+))?$`)
 
@@ -55,6 +56,7 @@ type RuleIR struct {
 	CoverDisableMarker       string                `json:"coverDisableMarker,omitempty"`
 	Badges                   []IRBadge             `json:"badges,omitempty"`
 	WorkDate                 *IRWorkDate           `json:"workDate,omitempty"`
+	Presentation             *Presentation         `json:"presentation,omitempty"`
 	Primitives               []IRPrimitive         `json:"primitives"`
 	CELExpressions           []IRExpression        `json:"celExpressions"`
 	Extensions               []IRCompiledExtension `json:"extensions,omitempty"`
@@ -442,6 +444,20 @@ func compilePrimitives(primitives []rawPrimitive, expressions []IRExpression) (R
 				return RuleIR{}, withField(fmt.Sprintf("/primitives/%d/config", index), err)
 			}
 			ir.WorkDate = &plan
+		case "presentation":
+			var config presentationConfig
+			if err := strictDecode(primitive.Config, &config); err != nil {
+				return RuleIR{}, withField(fmt.Sprintf("/primitives/%d/config", index), fmt.Errorf("presentation %s: %w", primitive.ID, err))
+			}
+			if ir.Presentation != nil {
+				return RuleIR{}, withField(fmt.Sprintf("/primitives/%d", index),
+					fmt.Errorf("presentation %s 重复声明；一个规则包只能有一份平台呈现配置", primitive.ID))
+			}
+			resolved, err := compilePresentation(config, primitive.ID)
+			if err != nil {
+				return RuleIR{}, withField(fmt.Sprintf("/primitives/%d/config", index), err)
+			}
+			ir.Presentation = &resolved
 		case "selector", "fallback", "stable_key", "media_order", "cover_candidate", "metadata_map", "condition":
 			if err := validateExtendedPrimitive(primitive); err != nil {
 				return RuleIR{}, withField(fmt.Sprintf("/primitives/%d/config", index), err)

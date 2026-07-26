@@ -1282,7 +1282,7 @@ func (s *Server) listSources(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		if allowed {
-			result = append(result, withSourceCover(sourceDTO(item, s.data.SourceAvailable(item)), publicationID, covers))
+			result = append(result, s.withSourcePresentation(r.Context(), withSourceCover(sourceDTO(item, s.data.SourceAvailable(item)), publicationID, covers)))
 		}
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"sources": result})
@@ -1299,7 +1299,7 @@ func (s *Server) getSource(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	publicationID, covers := s.aggregateCoversForScope(r.Context(), catalog.AggregateScopeSource)
-	writeJSON(w, http.StatusOK, withSourceCover(sourceDTO(result, s.data.SourceAvailable(result)), publicationID, covers))
+	writeJSON(w, http.StatusOK, s.withSourcePresentation(r.Context(), withSourceCover(sourceDTO(result, s.data.SourceAvailable(result)), publicationID, covers)))
 }
 
 func (s *Server) createRuleVersion(w http.ResponseWriter, r *http.Request) {
@@ -3195,6 +3195,49 @@ func withSourceCover(dto api.Source, publicationID string, covers map[string]cat
 	return dto
 }
 
+// withSourcePresentation 把该 Source 生效规则声明的平台呈现配置附加到 DTO 上。
+//
+// 客户端据此渲染平台名、图标、作者称谓与默认排序，因此**前端不得再按平台名硬编码任何差异**。
+// 解析不出生效 Binding（尚未绑定规则、或存在同优先级冲突）时不附加配置，让客户端回退到自己的
+// 默认呈现——这是正常的未配置状态，不应让来源列表因此失败。
+func (s *Server) withSourcePresentation(ctx context.Context, dto api.Source) api.Source {
+	binding, err := s.data.BindingForSource(ctx, dto.Id)
+	if err != nil || binding.IR.Presentation == nil {
+		return dto
+	}
+	source := binding.IR.Presentation
+	presentation := api.SourcePresentation{
+		Name:          optionalString(source.Name),
+		Description:   optionalString(source.Description),
+		AuthorLabel:   optionalString(source.AuthorLabel),
+		ShowInSidebar: source.ShowInSidebar,
+		ShowInManager: source.ShowInManager,
+	}
+	if source.Icon != nil {
+		presentation.Icon = &api.SourcePresentationIcon{
+			Kind: api.SourcePresentationIconKind(source.Icon.Kind), Glyph: source.Icon.Glyph,
+			Background: optionalString(source.Icon.Background), Color: optionalString(source.Icon.Color),
+			Border: optionalString(source.Icon.Border),
+		}
+	}
+	if source.Sort != nil {
+		presentation.Sort = &api.SourcePresentationSort{
+			Collation:   optionalString(source.Sort.Collation),
+			WorkDefault: optionalString(source.Sort.WorkDefault), WorkOptions: optionalStrings(source.Sort.WorkOptions),
+			AuthorDefault: optionalString(source.Sort.AuthorDefault), AuthorOptions: optionalStrings(source.Sort.AuthorOptions),
+			BrowseDefault: optionalString(source.Sort.BrowseDefault), BrowseOptions: optionalStrings(source.Sort.BrowseOptions),
+		}
+	}
+	if source.Time != nil {
+		presentation.Time = &api.SourcePresentationTime{
+			DisplayTimezone: optionalString(source.Time.DisplayTimezone),
+			DisplayFormat:   optionalString(source.Time.DisplayFormat),
+		}
+	}
+	dto.Presentation = &presentation
+	return dto
+}
+
 func ruleVersionDTO(value application.RuleVersion) api.RuleVersion {
 	result := api.RuleVersion{RuleSetId: value.RuleSetID, Version: value.Version, PackageHash: value.PackageHash, SemanticHash: value.SemanticHash, RuleIrHash: value.RuleIRHash, CreatedAt: value.CreatedAt}
 	if value.ID != "" {
@@ -3587,6 +3630,15 @@ func optionalString(value string) *string {
 		return nil
 	}
 	return &value
+}
+
+// optionalStrings 把空集合表达为 null 而不是空数组：可选排序集合缺省意味着「规则没有声明」，
+// 与「规则声明了一个空集合」是不同的意图，客户端据此决定是否回退到自身默认菜单。
+func optionalStrings(values []string) *[]string {
+	if len(values) == 0 {
+		return nil
+	}
+	return &values
 }
 
 func workDTO(publication catalog.Publication, value catalog.Work) api.PublishedWork {

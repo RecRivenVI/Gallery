@@ -1642,6 +1642,21 @@ func (e ShareCreatedScopeKind) Valid() bool {
 	}
 }
 
+// Defines values for SourcePresentationIconKind.
+const (
+	Glyph SourcePresentationIconKind = "glyph"
+)
+
+// Valid indicates whether the value is a known member of the SourcePresentationIconKind enum.
+func (e SourcePresentationIconKind) Valid() bool {
+	switch e {
+	case Glyph:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for SourceRuleBindingStatus.
 const (
 	SourceRuleBindingStatusActive  SourceRuleBindingStatus = "active"
@@ -3387,6 +3402,9 @@ type Source struct {
 	Id           SourceId          `json:"id"`
 	LibraryId    LibraryId         `json:"libraryId"`
 
+	// Presentation 该来源生效规则声明的平台呈现配置。客户端据此渲染平台名、图标、作者称谓与默认排序， **不得再按平台名硬编码任何差异**。尚未绑定规则或绑定存在冲突时为 null， 客户端回退到自身默认呈现。
+	Presentation *SourcePresentation `json:"presentation,omitempty"`
+
 	// QueryPublicationId coverMediaId 所属的快照；没有可用快照时为 null。
 	QueryPublicationId *QueryPublicationId `json:"queryPublicationId,omitempty"`
 	ReadOnly           bool                `json:"readOnly"`
@@ -3405,6 +3423,64 @@ type SourceId = string
 // SourceListResponse defines model for SourceListResponse.
 type SourceListResponse struct {
 	Sources []Source `json:"sources"`
+}
+
+// SourcePresentation 规则声明的平台呈现配置。它是**语义**配置而非编辑器元数据：改动会产生新的 RuleVersion 并触发重投影，因此不放在规则包的 ui_metadata 中。
+type SourcePresentation struct {
+	// AuthorLabel 该平台对「作者」的称谓，例如画师、用户、本子。
+	AuthorLabel *string `json:"authorLabel,omitempty"`
+	Description *string `json:"description,omitempty"`
+
+	// Icon 字形图标。不支持位图或外链，避免规则包引入外部资源加载。
+	Icon *SourcePresentationIcon `json:"icon,omitempty"`
+
+	// Name 平台显示名；缺省时客户端使用来源的 displayName。
+	Name *string `json:"name,omitempty"`
+
+	// ShowInManager 是否在管理前端的来源列表中出现。
+	ShowInManager bool `json:"showInManager"`
+
+	// ShowInSidebar 是否在画廊前端的平台导航中出现。
+	ShowInSidebar bool `json:"showInSidebar"`
+
+	// Sort 默认排序与可选排序集合。实际排序仍由查询协议在服务端执行；客户端不得据此在本地重排 服务端返回的列表，那会破坏游标分页的一致性。
+	Sort *SourcePresentationSort `json:"sort,omitempty"`
+
+	// Time 时间**显示**语义。存储时区固定为 UTC，解析语义属于规则的时间原语，此处不重复声明。
+	Time *SourcePresentationTime `json:"time,omitempty"`
+}
+
+// SourcePresentationIcon 字形图标。不支持位图或外链，避免规则包引入外部资源加载。
+type SourcePresentationIcon struct {
+	Background *string                    `json:"background,omitempty"`
+	Border     *string                    `json:"border,omitempty"`
+	Color      *string                    `json:"color,omitempty"`
+	Glyph      string                     `json:"glyph"`
+	Kind       SourcePresentationIconKind `json:"kind"`
+}
+
+// SourcePresentationIconKind defines model for SourcePresentationIcon.Kind.
+type SourcePresentationIconKind string
+
+// SourcePresentationSort 默认排序与可选排序集合。实际排序仍由查询协议在服务端执行；客户端不得据此在本地重排 服务端返回的列表，那会破坏游标分页的一致性。
+type SourcePresentationSort struct {
+	AuthorDefault *string   `json:"authorDefault,omitempty"`
+	AuthorOptions *[]string `json:"authorOptions,omitempty"`
+	BrowseDefault *string   `json:"browseDefault,omitempty"`
+	BrowseOptions *[]string `json:"browseOptions,omitempty"`
+
+	// Collation 排序所用的语言环境，例如 zh-CN。
+	Collation   *string   `json:"collation,omitempty"`
+	WorkDefault *string   `json:"workDefault,omitempty"`
+	WorkOptions *[]string `json:"workOptions,omitempty"`
+}
+
+// SourcePresentationTime 时间**显示**语义。存储时区固定为 UTC，解析语义属于规则的时间原语，此处不重复声明。
+type SourcePresentationTime struct {
+	DisplayFormat *string `json:"displayFormat,omitempty"`
+
+	// DisplayTimezone IANA 时区名，例如 Asia/Shanghai。
+	DisplayTimezone *string `json:"displayTimezone,omitempty"`
 }
 
 // SourceRuleBinding defines model for SourceRuleBinding.

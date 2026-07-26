@@ -4102,6 +4102,61 @@ components:
           type: string
           minLength: 1
           maxLength: 32768
+    SourcePresentation:
+      type: object
+      additionalProperties: false
+      description: >-
+        规则声明的平台呈现配置。它是**语义**配置而非编辑器元数据：改动会产生新的 RuleVersion
+        并触发重投影，因此不放在规则包的 ui_metadata 中。
+      required: [showInSidebar, showInManager]
+      properties:
+        name: {type: string, description: 平台显示名；缺省时客户端使用来源的 displayName。}
+        description: {type: string}
+        authorLabel: {type: string, description: 该平台对「作者」的称谓，例如画师、用户、本子。}
+        showInSidebar: {type: boolean, description: 是否在画廊前端的平台导航中出现。}
+        showInManager: {type: boolean, description: 是否在管理前端的来源列表中出现。}
+        icon:
+          $ref: "#/components/schemas/SourcePresentationIcon"
+          nullable: true
+        sort:
+          $ref: "#/components/schemas/SourcePresentationSort"
+          nullable: true
+        time:
+          $ref: "#/components/schemas/SourcePresentationTime"
+          nullable: true
+    SourcePresentationIcon:
+      type: object
+      additionalProperties: false
+      description: 字形图标。不支持位图或外链，避免规则包引入外部资源加载。
+      required: [kind, glyph]
+      properties:
+        kind: {type: string, enum: [glyph]}
+        glyph: {type: string, minLength: 1, maxLength: 8}
+        background: {type: string}
+        color: {type: string}
+        border: {type: string}
+    SourcePresentationSort:
+      type: object
+      additionalProperties: false
+      description: >-
+        默认排序与可选排序集合。实际排序仍由查询协议在服务端执行；客户端不得据此在本地重排
+        服务端返回的列表，那会破坏游标分页的一致性。
+      properties:
+        collation: {type: string, description: 排序所用的语言环境，例如 zh-CN。}
+        workDefault: {type: string}
+        workOptions: {type: array, items: {type: string}}
+        authorDefault: {type: string}
+        authorOptions: {type: array, items: {type: string}}
+        browseDefault: {type: string}
+        browseOptions: {type: array, items: {type: string}}
+    SourcePresentationTime:
+      type: object
+      additionalProperties: false
+      description: >-
+        时间**显示**语义。存储时区固定为 UTC，解析语义属于规则的时间原语，此处不重复声明。
+      properties:
+        displayTimezone: {type: string, description: IANA 时区名，例如 Asia/Shanghai。}
+        displayFormat: {type: string}
     Source:
       type: object
       additionalProperties: false
@@ -4124,6 +4179,14 @@ components:
           description: coverMediaId 所属的快照；没有可用快照时为 null。
           allOf:
             - $ref: "#/components/schemas/QueryPublicationId"
+          nullable: true
+        presentation:
+          description: >-
+            该来源生效规则声明的平台呈现配置。客户端据此渲染平台名、图标、作者称谓与默认排序，
+            **不得再按平台名硬编码任何差异**。尚未绑定规则或绑定存在冲突时为 null，
+            客户端回退到自身默认呈现。
+          allOf:
+            - $ref: "#/components/schemas/SourcePresentation"
           nullable: true
         readOnly:
           type: boolean

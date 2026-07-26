@@ -293,6 +293,35 @@ func (l *Lifecycle) Impact(before, after []byte) (ImpactResult, error) {
 		result.ReasonCodes = append(result.ReasonCodes, "semantic_extension_changed")
 		result.FullRescan = true
 	}
+	// 平台呈现只改变已有事实如何展示（平台名、图标、作者称谓、默认排序、显示时区），不改变任何
+	// Source-derived 事实，因此重投影足够。若落到下方「未识别的语义变化一律全量重扫」的兜底分支，
+	// 改一个平台名字就会触发整库重扫。
+	if !bytes.Equal(mustJSON(left.IR.Presentation), mustJSON(right.IR.Presentation)) {
+		result.Fields = append(result.Fields, "platform_presentation")
+		result.EntityTypes = append(result.EntityTypes, "source")
+		result.ReasonCodes = append(result.ReasonCodes, "platform_presentation_changed")
+		result.Reproject = true
+	}
+	// 下列原语改变的是随快照冻结的 Source-derived 事实，必须重扫才能重新产出；这里显式登记
+	// 是为了让影响报告给出具体字段与原因，而不是笼统的 runtime_semantics。
+	if primitiveKindsChanged(left.IR, right.IR, "badge") {
+		result.Fields = append(result.Fields, "badges")
+		result.EntityTypes = append(result.EntityTypes, "work")
+		result.ReasonCodes = append(result.ReasonCodes, "badge_rules_changed")
+		result.FullRescan = true
+	}
+	if primitiveKindsChanged(left.IR, right.IR, "media_hidden", "cover_disable_marker") {
+		result.Fields = append(result.Fields, "media_visibility")
+		result.EntityTypes = append(result.EntityTypes, "media", "work")
+		result.ReasonCodes = append(result.ReasonCodes, "media_visibility_rules_changed")
+		result.FullRescan = true
+	}
+	if !bytes.Equal(mustJSON(left.IR.WorkDate), mustJSON(right.IR.WorkDate)) {
+		result.Fields = append(result.Fields, "published_at")
+		result.EntityTypes = append(result.EntityTypes, "work")
+		result.ReasonCodes = append(result.ReasonCodes, "work_date_rules_changed")
+		result.FullRescan = true
+	}
 	if len(result.Fields) == 0 {
 		result.Fields = append(result.Fields, "runtime_semantics")
 		result.FullRescan = true

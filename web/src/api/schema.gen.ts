@@ -2344,6 +2344,47 @@ export interface components {
             displayName: string;
             rootPath: string;
         };
+        /** @description 规则声明的平台呈现配置。它是**语义**配置而非编辑器元数据：改动会产生新的 RuleVersion 并触发重投影，因此不放在规则包的 ui_metadata 中。 */
+        SourcePresentation: {
+            /** @description 平台显示名；缺省时客户端使用来源的 displayName。 */
+            name?: string;
+            description?: string;
+            /** @description 该平台对「作者」的称谓，例如画师、用户、本子。 */
+            authorLabel?: string;
+            /** @description 是否在画廊前端的平台导航中出现。 */
+            showInSidebar: boolean;
+            /** @description 是否在管理前端的来源列表中出现。 */
+            showInManager: boolean;
+            icon?: components["schemas"]["SourcePresentationIcon"];
+            sort?: components["schemas"]["SourcePresentationSort"];
+            time?: components["schemas"]["SourcePresentationTime"];
+        };
+        /** @description 字形图标。不支持位图或外链，避免规则包引入外部资源加载。 */
+        SourcePresentationIcon: {
+            /** @enum {string} */
+            kind: "glyph";
+            glyph: string;
+            background?: string;
+            color?: string;
+            border?: string;
+        };
+        /** @description 默认排序与可选排序集合。实际排序仍由查询协议在服务端执行；客户端不得据此在本地重排 服务端返回的列表，那会破坏游标分页的一致性。 */
+        SourcePresentationSort: {
+            /** @description 排序所用的语言环境，例如 zh-CN。 */
+            collation?: string;
+            workDefault?: string;
+            workOptions?: string[];
+            authorDefault?: string;
+            authorOptions?: string[];
+            browseDefault?: string;
+            browseOptions?: string[];
+        };
+        /** @description 时间**显示**语义。存储时区固定为 UTC，解析语义属于规则的时间原语，此处不重复声明。 */
+        SourcePresentationTime: {
+            /** @description IANA 时区名，例如 Asia/Shanghai。 */
+            displayTimezone?: string;
+            displayFormat?: string;
+        };
         Source: {
             id: components["schemas"]["SourceId"];
             libraryId: components["schemas"]["LibraryId"];
@@ -2352,6 +2393,8 @@ export interface components {
             coverMediaId?: components["schemas"]["CanonicalMediaId"] | null;
             /** @description coverMediaId 所属的快照；没有可用快照时为 null。 */
             queryPublicationId?: components["schemas"]["QueryPublicationId"] | null;
+            /** @description 该来源生效规则声明的平台呈现配置。客户端据此渲染平台名、图标、作者称谓与默认排序， **不得再按平台名硬编码任何差异**。尚未绑定规则或绑定存在冲突时为 null， 客户端回退到自身默认呈现。 */
+            presentation?: components["schemas"]["SourcePresentation"] | null;
             readOnly: boolean;
             available: boolean;
             /** Format: date-time */
