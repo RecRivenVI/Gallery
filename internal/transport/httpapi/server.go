@@ -1257,7 +1257,10 @@ func (s *Server) createSource(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err := s.authorizeSession(r, session, "library.write", auth.ResourceScope{Kind: "library", ID: request.LibraryId}); err != nil {
-		s.writeRequestError(w, err)
+		// 与 createScanJob 同类：libraryId 由调用方提供，存在且被 deny 时得到 403，不存在时
+		// deny 不匹配、global allow 生效并在 CreateSource 的 GetLibrary 处落到 404。资源 ID
+		// 来自请求体而不是路径不改变它是存在性预言机的事实，两者必须收敛为同一个 404。
+		s.writeRequestError(w, concealForbidden(err))
 		return
 	}
 	result, err := s.data.CreateSource(r.Context(), request.LibraryId, request.DisplayName, request.RootPath)
@@ -1439,7 +1442,10 @@ func (s *Server) getSourceRuleBinding(w http.ResponseWriter, r *http.Request) {
 func (s *Server) createScanJob(w http.ResponseWriter, r *http.Request) {
 	session, err := s.requireCapabilityForScope(r, "scan.run", auth.ResourceScope{Kind: "source", ID: r.PathValue("sourceId")})
 	if err != nil {
-		s.writeRequestError(w, err)
+		// 裸 403 在这里是资源存在性预言机：sourceId 存在且属于被 deny 的 library 时
+		// Library→Source 查表命中 deny 得到 403，sourceId 不存在时查表 ErrNoRows、deny
+		// 不匹配、global allow 生效并在业务层落到 404。两者必须收敛为同一个 404。
+		s.writeRequestError(w, concealForbidden(err))
 		return
 	}
 	if err := s.validateMutation(r, session); err != nil {

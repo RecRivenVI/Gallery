@@ -21,7 +21,12 @@ const (
 	loginWindow        = 15 * time.Minute
 	loginBlockDuration = 15 * time.Minute
 	loginFailureLimit  = 8
-	UsernameMaxRunes   = 128
+	// loginPeerFailureLimit 是只按对端的失败上限。按 (用户名, 对端) 计数的桶只能挡住针对
+	// 单个账户的爆破：攻击者换一个用户名就换一个全新的桶，因此同一个对端可以无限量地喷洒
+	// 用户名，每一次都触发完整的 Argon2 验证。这个桶补上喷洒方向的上限，取值明显宽于单
+	// 账户上限，避免正常多账户设备被一两次输错锁死。PRE_FREEZE。
+	loginPeerFailureLimit = 64
+	UsernameMaxRunes      = 128
 )
 
 type User struct {
@@ -72,7 +77,7 @@ func (p *Personal) LANInitialized(ctx context.Context) (bool, error) {
 
 func (p *Personal) InitializeLANOwner(ctx context.Context, input CreateUserInput) (User, error) {
 	input.Roles = []string{"owner"}
-	passwordHash, usernameNormalized, err := p.prepareUser(input)
+	passwordHash, usernameNormalized, err := p.prepareUser(ctx, input)
 	if err != nil {
 		return User{}, err
 	}
@@ -113,7 +118,7 @@ func (p *Personal) CreateUser(ctx context.Context, actor string, input CreateUse
 	if err := p.requirePrincipalCapability(ctx, actor, "users.manage"); err != nil {
 		return User{}, err
 	}
-	passwordHash, usernameNormalized, err := p.prepareUser(input)
+	passwordHash, usernameNormalized, err := p.prepareUser(ctx, input)
 	if err != nil {
 		return User{}, err
 	}
@@ -140,7 +145,7 @@ func (p *Personal) CreateUser(ctx context.Context, actor string, input CreateUse
 	return user, nil
 }
 
-func (p *Personal) prepareUser(input CreateUserInput) (string, string, error) {
+func (p *Personal) prepareUser(ctx context.Context, input CreateUserInput) (string, string, error) {
 	usernameNormalized, err := NormalizeUsername(input.Username)
 	if err != nil {
 		return "", "", err
@@ -148,9 +153,11 @@ func (p *Personal) prepareUser(input CreateUserInput) (string, string, error) {
 	if strings.TrimSpace(input.DisplayName) == "" || utf8.RuneCountInString(input.DisplayName) > 256 {
 		return "", "", fault.WithField(fault.CodeValidation, "displayName", nil)
 	}
-	passwordHash, err := HashPassword(input.Password, p.random)
+	// InitializeLANOwner 同样经过这里，而 POST /api/v1/lan/owner 是未认证端点：即使 LAN
+	// Owner 已经初始化，散列也发生在冲突检查之前，因此这次调用必须同样受闸门约束。
+	passwordHash, err := p.hashPassword(ctx, input.Password, "password")
 	if err != nil {
-		return "", "", fault.WithField(fault.CodeValidation, "password", err)
+		return "", "", err
 	}
 	roles := normalizeCapabilities(input.Roles)
 	if len(roles) == 0 {
@@ -198,8 +205,9 @@ func (p *Personal) Login(ctx context.Context, username, password, clientLabel, r
 		return Session{}, "", fault.New(fault.CodeInvalidCredentials, false, nil)
 	}
 	now := p.clock.Now().UTC()
-	rateKey := hashToken(normalized + "\x00" + rateSubject)
-	blocked, err := p.loginBlocked(ctx, rateKey, now)
+	accountKey := loginAccountRateKey(normalized, rateSubject)
+	peerKey := loginPeerRateKey(rateSubject)
+	blocked, err := p.loginBlocked(ctx, now, accountKey, peerKey)
 	if err != nil {
 		return Session{}, "", fault.New(fault.CodeInternal, true, err)
 	}
@@ -213,25 +221,42 @@ FROM local_users u JOIN security_principals p ON p.principal_id=u.user_id
 WHERE u.username_normalized=?`, normalized).Scan(&userID, &encoded, &status, &securityVersion)
 	known := err == nil
 	if errors.Is(err, sql.ErrNoRows) {
+		// 不存在的用户也要跑完整验证，否则响应时间就是用户名枚举预言机。这条路径必须保留，
+		// 它同时意味着未认证请求可以无条件触发 Argon2，因此散列本身必须在闸门之内。
 		encoded = p.dummyPasswordHash
 	} else if err != nil {
 		return Session{}, "", fault.New(fault.CodeInternal, true, err)
 	}
-	valid, needsRehash, verifyErr := VerifyPassword(encoded, password)
-	if verifyErr != nil {
-		valid = false
+	valid, needsRehash, gateErr := p.verifyPassword(ctx, encoded, password)
+	if gateErr != nil {
+		return Session{}, "", gateErr
 	}
 	if !known || !valid || status != "active" {
-		_ = p.recordLoginFailure(ctx, rateKey, now)
+		_ = p.recordLoginFailure(ctx, now, accountKey, peerKey)
 		return Session{}, "", fault.New(fault.CodeInvalidCredentials, false, nil)
 	}
 	if needsRehash {
-		if upgraded, hashErr := HashPassword(password, p.random); hashErr == nil {
+		// 参数升级是尽力而为：名额耗尽时跳过本次重算，下次登录再升级。
+		if upgraded, hashErr := p.hashPassword(ctx, password, "password"); hashErr == nil {
 			_, _ = p.db.ExecContext(ctx, `UPDATE local_users SET password_hash=?, password_parameters_version=?, updated_at=? WHERE user_id=?`, upgraded, PasswordParametersVersion, now.Unix(), userID)
 		}
 	}
-	_, _ = p.db.ExecContext(ctx, "DELETE FROM login_rate_limits WHERE subject_hash=?", rateKey)
+	// 只清除 (用户名, 对端) 桶。按对端的喷洒计数不能被「攻击者自己持有的某个有效账户登录
+	// 成功」重置，否则整条按对端的限流一行代码就能绕开。
+	_, _ = p.db.ExecContext(ctx, "DELETE FROM login_rate_limits WHERE subject_hash=?", accountKey)
 	return p.createSession(ctx, userID, securityVersion, "password", clientLabel)
+}
+
+// loginAccountRateKey 是「同一账户 + 同一对端」的失败计数键，挡单账户爆破。
+func loginAccountRateKey(normalizedUsername, subject string) string {
+	return hashToken(normalizedUsername + "\x00" + subject)
+}
+
+// loginPeerRateKey 是只按对端的失败计数键，挡换用户名就换桶的喷洒。NormalizeUsername
+// 拒绝所有控制字符，因此以 \x00 开头的前缀不可能与任何账户键的原像相撞；login_rate_limits
+// 的主键本来就是不透明的 subject_hash，两类桶共用同一张表不需要改 schema。
+func loginPeerRateKey(subject string) string {
+	return hashToken("\x00gallery-login-peer-v1\x00" + subject)
 }
 
 func (p *Personal) createSession(ctx context.Context, principalID string, securityVersion int64, method, clientLabel string) (Session, string, error) {
@@ -330,13 +355,16 @@ func (p *Personal) ChangePassword(ctx context.Context, actor Session, currentPas
 		}
 		return fault.New(fault.CodeInternal, true, err)
 	}
-	valid, _, err := VerifyPassword(encoded, currentPassword)
-	if err != nil || !valid {
+	valid, _, gateErr := p.verifyPassword(ctx, encoded, currentPassword)
+	if gateErr != nil {
+		return gateErr
+	}
+	if !valid {
 		return fault.New(fault.CodeInvalidCredentials, false, nil)
 	}
-	newHash, err := HashPassword(newPassword, p.random)
+	newHash, err := p.hashPassword(ctx, newPassword, "newPassword")
 	if err != nil {
-		return fault.WithField(fault.CodeValidation, "newPassword", err)
+		return err
 	}
 	now := p.clock.Now().UTC()
 	tx, err := p.db.BeginTx(ctx, nil)
@@ -583,16 +611,32 @@ func nullableActor(value string) any {
 	return value
 }
 
-func (p *Personal) loginBlocked(ctx context.Context, key string, now time.Time) (bool, error) {
-	var blocked sql.NullInt64
-	err := p.db.QueryRowContext(ctx, "SELECT blocked_until FROM login_rate_limits WHERE subject_hash=?", key).Scan(&blocked)
-	if errors.Is(err, sql.ErrNoRows) {
-		return false, nil
+// loginBlocked 只要有一个桶处于封禁期就判定为封禁：按账户的桶挡爆破，按对端的桶挡喷洒。
+func (p *Personal) loginBlocked(ctx context.Context, now time.Time, keys ...string) (bool, error) {
+	for _, key := range keys {
+		var blocked sql.NullInt64
+		err := p.db.QueryRowContext(ctx, "SELECT blocked_until FROM login_rate_limits WHERE subject_hash=?", key).Scan(&blocked)
+		if errors.Is(err, sql.ErrNoRows) {
+			continue
+		}
+		if err != nil {
+			return false, err
+		}
+		if blocked.Valid && now.Unix() < blocked.Int64 {
+			return true, nil
+		}
 	}
-	return blocked.Valid && now.Unix() < blocked.Int64, err
+	return false, nil
 }
 
-func (p *Personal) recordLoginFailure(ctx context.Context, key string, now time.Time) error {
+func (p *Personal) recordLoginFailure(ctx context.Context, now time.Time, accountKey, peerKey string) error {
+	if err := p.recordLoginFailureFor(ctx, accountKey, loginFailureLimit, now); err != nil {
+		return err
+	}
+	return p.recordLoginFailureFor(ctx, peerKey, loginPeerFailureLimit, now)
+}
+
+func (p *Personal) recordLoginFailureFor(ctx context.Context, key string, limit int, now time.Time) error {
 	windowStart := now.Add(-loginWindow).Unix()
 	_, err := p.db.ExecContext(ctx, `INSERT INTO login_rate_limits
 (subject_hash, window_started_at, failure_count, blocked_until) VALUES (?, ?, 1, NULL)
@@ -602,7 +646,7 @@ ON CONFLICT(subject_hash) DO UPDATE SET
  blocked_until=CASE
    WHEN (CASE WHEN login_rate_limits.window_started_at < ? THEN 1 ELSE login_rate_limits.failure_count+1 END) >= ?
    THEN ? ELSE login_rate_limits.blocked_until END`, key, now.Unix(), windowStart, windowStart, windowStart,
-		loginFailureLimit, now.Add(loginBlockDuration).Unix())
+		limit, now.Add(loginBlockDuration).Unix())
 	return err
 }
 

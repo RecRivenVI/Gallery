@@ -82,27 +82,77 @@ type Personal struct {
 	random            io.Reader
 	bootstrapCSRF     string
 	dummyPasswordHash string
+	passwordGate      *PasswordGate
 }
 
-func NewPersonal(db *sql.DB, clock ports.Clock, ids ports.IDGenerator, random io.Reader) (*Personal, error) {
+// SecurityOptions 只在需要偏离默认安全参数时提供，零值等价于默认值。
+type SecurityOptions struct {
+	// PasswordConcurrency 与 PasswordGateWait 控制 Argon2 并发闸门；为非正值时使用
+	// DefaultPasswordConcurrency 与 defaultPasswordGateWait。只在测试中显式收窄，用于
+	// 确定性地触发名额耗尽。
+	PasswordConcurrency int
+	PasswordGateWait    time.Duration
+}
+
+func NewPersonal(db *sql.DB, clock ports.Clock, ids ports.IDGenerator, random io.Reader, options ...SecurityOptions) (*Personal, error) {
 	if db == nil || clock == nil || ids == nil {
 		return nil, fmt.Errorf("Personal auth 缺少依赖")
 	}
 	if random == nil {
 		random = rand.Reader
 	}
+	var option SecurityOptions
+	if len(options) > 0 {
+		option = options[0]
+	}
 	csrf, err := randomToken(random, sessionTokenBytes)
 	if err != nil {
 		return nil, err
 	}
+	// 这次散列发生在进程启动、任何请求可达之前，是全过程唯一不经闸门的 Argon2 调用。
 	dummyPasswordHash, err := HashPassword("gallery-dummy-password-never-used", random)
 	if err != nil {
 		return nil, err
 	}
-	return &Personal{db: db, clock: clock, ids: ids, random: random, bootstrapCSRF: csrf, dummyPasswordHash: dummyPasswordHash}, nil
+	return &Personal{db: db, clock: clock, ids: ids, random: random, bootstrapCSRF: csrf,
+		dummyPasswordHash: dummyPasswordHash,
+		passwordGate:      NewPasswordGate(option.PasswordConcurrency, option.PasswordGateWait)}, nil
 }
 
 func (p *Personal) BootstrapCSRF() string { return p.bootstrapCSRF }
+
+// PasswordGate 暴露 Argon2 并发闸门，供门禁与回归测试观测实际并发散列数。
+func (p *Personal) PasswordGate() *PasswordGate { return p.passwordGate }
+
+// hashPassword 在持有 Argon2 名额的前提下计算口令散列。名额耗尽或请求取消时返回闸门的
+// 结构化错误，不与「口令不合法」混同。
+func (p *Personal) hashPassword(ctx context.Context, password, field string) (string, error) {
+	release, gateErr := p.passwordGate.Acquire(ctx)
+	if gateErr != nil {
+		return "", gateErr
+	}
+	defer release()
+	encoded, err := HashPassword(password, p.random)
+	if err != nil {
+		return "", fault.WithField(fault.CodeValidation, field, err)
+	}
+	return encoded, nil
+}
+
+// verifyPassword 在持有 Argon2 名额的前提下验证口令。散列格式非法等价于验证失败；只有
+// 闸门错误（名额耗尽、请求取消）才作为错误返回，因此调用方不会把限流当成凭据错误。
+func (p *Personal) verifyPassword(ctx context.Context, encoded, password string) (valid, needsRehash bool, gateErr error) {
+	release, gateErr := p.passwordGate.Acquire(ctx)
+	if gateErr != nil {
+		return false, false, gateErr
+	}
+	defer release()
+	valid, needsRehash, verifyErr := VerifyPassword(encoded, password)
+	if verifyErr != nil {
+		return false, false, nil
+	}
+	return valid, needsRehash, nil
+}
 
 func (p *Personal) AvailableCapabilities() []string {
 	return append([]string(nil), PersonalOwnerCapabilities...)
