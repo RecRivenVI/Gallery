@@ -2846,6 +2846,9 @@ type PublishedWork struct {
 	CoverMediaId *CanonicalMediaId `json:"coverMediaId"`
 	Creator      string            `json:"creator"`
 
+	// Description 来源自述的作品描述，由规则的字段映射产出；没有时为空串。
+	Description *string `json:"description,omitempty"`
+
 	// Favorite 本次查询所在 publication 冻结的 snapshot 值，用于解释本次结果的过滤/排序 判据；不是 control.db 当前 live 值。真正的 live 值见 GET /works/{workId}/overlay（也见响应 liveUserStateFields）。
 	Favorite bool            `json:"favorite"`
 	Id       CanonicalWorkId `json:"id"`
@@ -2855,10 +2858,16 @@ type PublishedWork struct {
 	MediaCount int           `json:"mediaCount"`
 
 	// Progress 语义同 favorite：本字段是 snapshot 值，不是 live 值。
-	Progress           float32            `json:"progress"`
+	Progress float32 `json:"progress"`
+
+	// PublishedAt 规则解析出的作品发布时间（UTC）。它由专用的时间原语按「元数据回退链 → 受限路径模式」 解析，朴素时间戳按规则声明的 IANA 时区解释。为 null 表示该作品没有可用发布时间， 这是常态而非错误；客户端不得据此推断时间为 Unix 纪元。
+	PublishedAt        *time.Time         `json:"publishedAt,omitempty"`
 	QueryPublicationId QueryPublicationId `json:"queryPublicationId"`
-	Tags               []string           `json:"tags"`
-	Title              string             `json:"title"`
+
+	// SourceUrl 来源自述的原始链接，由规则的字段映射产出；没有时为空串。
+	SourceUrl *string  `json:"sourceUrl,omitempty"`
+	Tags      []string `json:"tags"`
+	Title     string   `json:"title"`
 }
 
 // QueryPublication defines model for QueryPublication.

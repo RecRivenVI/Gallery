@@ -93,6 +93,86 @@ func TestBadgeAndRuleHiddenSurviveOverlayRepublish(t *testing.T) {
 	assertRuleHidden(t, store, republished, map[string]bool{"media-a1": false, "media-a2": true, "media-b1": false})
 }
 
+// TestWorkScalarFactsSurviveOverlayRepublishAndSingleSourceRescan 覆盖投影加列时最容易静默出错的
+// 两条路径：Overlay 重发布的 work_projections clone，以及单 Source 重扫时对**其它** Source 的
+// clone。这两处都是显式列 `INSERT … SELECT`——漏列不会报错，只会让被 clone 的行丢掉新事实。
+func TestWorkScalarFactsSurviveOverlayRepublishAndSingleSourceRescan(t *testing.T) {
+	ctx := context.Background()
+	catalogStore, _ := newCandidateTestStore(t)
+
+	const publishedNanos = int64(1709618828000000000)
+	stage := func(jobID, sourceID, workID, sourceKey string, watermark int64) catalog.Publication {
+		t.Helper()
+		candidate, err := catalogStore.BeginCandidate(ctx, jobID, sourceID, watermark)
+		if err != nil {
+			t.Fatal(err)
+		}
+		works := []catalog.WorkFact{{
+			SourceID: sourceID, LibraryID: "library-a", SourceKey: sourceKey, Title: workID, WorkID: workID,
+			RuleCoverMediaSourceKey: sourceKey + "/01.jpg", RuleCoverMediaID: workID + "-m1",
+			Description: "描述-" + workID, SourceURL: "https://example.invalid/" + workID,
+			PublishedAtNanos: publishedNanos, PublishedAtRaw: "2024-03-05T06:07:08Z",
+			PublishedAtParser: "gallery-work-date-v1",
+		}}
+		media := []catalog.MediaFact{
+			coverMediaFact(sourceID, workID, sourceKey+"/01.jpg", workID+"-m1", 0, candidateDigestA),
+		}
+		if err := catalogStore.Stage(ctx, candidate, works, media); err != nil {
+			t.Fatal(err)
+		}
+		if err := catalogStore.ValidateCandidate(ctx, candidate); err != nil {
+			t.Fatal(err)
+		}
+		return publishCandidate(t, catalogStore, candidate)
+	}
+
+	assertFacts := func(publication catalog.Publication, workID string) {
+		t.Helper()
+		_, work, err := catalogStore.GetWorkAt(ctx, publication.ID, workID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if work.Description != "描述-"+workID {
+			t.Fatalf("%s 的描述在投影传递中丢失: %q", workID, work.Description)
+		}
+		if work.SourceURL != "https://example.invalid/"+workID {
+			t.Fatalf("%s 的来源链接丢失: %q", workID, work.SourceURL)
+		}
+		if work.PublishedAtNanos != publishedNanos || work.PublishedAtRaw != "2024-03-05T06:07:08Z" ||
+			work.PublishedAtParser != "gallery-work-date-v1" {
+			t.Fatalf("%s 的发布时间三元组不完整: ns=%d raw=%q parser=%q",
+				workID, work.PublishedAtNanos, work.PublishedAtRaw, work.PublishedAtParser)
+		}
+	}
+
+	base := stage("job-scalar-a", "source-a", "work-a", "work-a", 1)
+	assertFacts(base, "work-a")
+
+	// 路径一：Overlay 重发布。规则派生事实必须原样继承。
+	overlay, err := catalogStore.BeginOverlayCandidate(ctx, "job-scalar-overlay", base.CatalogRevisionID, 2)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := catalogStore.ApplyOverlayFacts(ctx, overlay, map[string]catalog.OverlayFact{
+		"work-a": {Favorite: true},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := catalogStore.ValidateOverlayCandidate(ctx, overlay); err != nil {
+		t.Fatal(err)
+	}
+	republished, err := catalogStore.PublishOverlay(ctx, overlay)
+	if err != nil {
+		t.Fatal(err)
+	}
+	assertFacts(republished, "work-a")
+
+	// 路径二：重扫另一个 Source。未被重扫的 source-a 的事实要从 active publication 继承过来。
+	rescanned := stage("job-scalar-b", "source-b", "work-b", "work-b", 3)
+	assertFacts(rescanned, "work-b")
+	assertFacts(rescanned, "work-a")
+}
+
 // assertRuleHidden 直接读投影列，确认规则隐藏与 Overlay 的 hidden 是两列独立事实：
 // rule_hidden 按规则结论，hidden 只由用户 Overlay 决定，规则隐藏不得渗进后者。
 func assertRuleHidden(t *testing.T, store *storage.Store, publication catalog.Publication, want map[string]bool) {

@@ -59,6 +59,15 @@ type WorkFact struct {
 	Tags              []string
 	Filenames         []string
 	Hidden            bool
+	// Description 与 SourceURL 是来源自述的作品描述与原始链接，由规则的字段映射产出。
+	Description string
+	SourceURL   string
+	// PublishedAt 三元组是作品发布时间：Nanos 供排序与聚合，Raw 保留来源原文使解析结果可被
+	// 人工复核，Parser 标识产生该时刻的解析规则版本。三者要么同时有值，要么同时为空。
+	// Nanos 为 0 表示该作品没有可用发布时间。
+	PublishedAtNanos  int64
+	PublishedAtRaw    string
+	PublishedAtParser string
 	// RuleCoverMediaSourceKey 是规则选中的 SourceMedia 稳定键；RuleCoverMediaID 是
 	// 解析 Binding 后对应的 CanonicalMedia。用户 CustomCover 不属于 Source-derived
 	// WorkFact，由 ApplyOverlayFacts 从 control.db 快照单独重放。
@@ -158,6 +167,12 @@ type Work struct {
 	CoverMediaID string
 	// Badges 是该 publication 冻结的规则派生角标，顺序即展示顺序。
 	Badges []Badge
+	// Description、SourceURL 与 PublishedAt 三元组是规则派生的作品标量事实，随快照冻结。
+	Description       string
+	SourceURL         string
+	PublishedAtNanos  int64
+	PublishedAtRaw    string
+	PublishedAtParser string
 }
 
 type Media struct {
@@ -566,12 +581,14 @@ VALUES (?, ?, ?, 'staging', ?, ?)`, candidate.OverlayRevisionID, candidate.Catal
  tags_json, filenames_text, normalized_original_text, cjk_bigram_token_text,
  latin_trigram_token_text, sort_title_key, hidden, favorite, progress,
  search_title_norm, search_creator_norm, search_tags_norm, search_filenames_norm,
- rule_cover_media_id, cover_media_id, badges_json)
+ rule_cover_media_id, cover_media_id, badges_json,
+ description, source_url, published_at_ns, published_at_raw, published_at_parser)
 SELECT catalog_revision_id, ?, work_id, source_id, source_key, library_id, title, creator,
 tags_json, filenames_text, normalized_original_text, cjk_bigram_token_text,
 latin_trigram_token_text, sort_title_key, hidden, favorite, progress,
 search_title_norm, search_creator_norm, search_tags_norm, search_filenames_norm,
-rule_cover_media_id, rule_cover_media_id, badges_json
+rule_cover_media_id, rule_cover_media_id, badges_json,
+description, source_url, published_at_ns, published_at_raw, published_at_parser
 FROM work_projections WHERE catalog_revision_id=? AND overlay_revision_id=?`,
 		candidate.OverlayRevisionID, candidate.CatalogRevisionID, candidate.BaseOverlayRevisionID); err != nil {
 		return OverlayCandidate{}, fault.New(fault.CodeInternal, true, err)
@@ -897,11 +914,13 @@ func (s *Store) ListWorks(ctx context.Context) (Publication, []Work, error) {
 		return Publication{}, nil, err
 	}
 	rows, err := s.db.QueryContext(ctx, `SELECT w.work_id, w.title, w.creator, w.tags_json,
-w.cover_media_id, w.favorite, w.progress, count(m.media_id)
+w.cover_media_id, w.favorite, w.progress,
+w.description, w.source_url, w.published_at_ns, w.published_at_raw, w.published_at_parser, count(m.media_id)
 FROM work_projections w LEFT JOIN media_projections m
  ON m.catalog_revision_id = w.catalog_revision_id AND m.overlay_revision_id = w.overlay_revision_id AND m.work_id = w.work_id
 WHERE w.catalog_revision_id = ? AND w.overlay_revision_id = ?
-GROUP BY w.work_id, w.title, w.creator, w.tags_json, w.cover_media_id, w.favorite, w.progress
+GROUP BY w.work_id, w.title, w.creator, w.tags_json, w.cover_media_id, w.favorite, w.progress,
+ w.description, w.source_url, w.published_at_ns, w.published_at_raw, w.published_at_parser
 ORDER BY w.sort_title_key, w.work_id`, publication.CatalogRevisionID, publication.OverlayRevisionID)
 	if err != nil {
 		return Publication{}, nil, fault.New(fault.CodeInternal, true, err)
@@ -913,7 +932,9 @@ ORDER BY w.sort_title_key, w.work_id`, publication.CatalogRevisionID, publicatio
 		var tags string
 		var favorite int
 		if err := rows.Scan(&work.ID, &work.Title, &work.Creator, &tags, &work.CoverMediaID,
-			&favorite, &work.Progress, &work.MediaCount); err != nil {
+			&favorite, &work.Progress,
+			&work.Description, &work.SourceURL, &work.PublishedAtNanos, &work.PublishedAtRaw, &work.PublishedAtParser,
+			&work.MediaCount); err != nil {
 			return Publication{}, nil, fault.New(fault.CodeInternal, true, err)
 		}
 		work.Favorite = favorite != 0
@@ -973,14 +994,18 @@ func (s *Store) GetWorkAt(ctx context.Context, publicationID, id string) (Public
 	var favorite int
 	var badges string
 	err = s.db.QueryRowContext(ctx, `SELECT w.work_id, w.source_id, w.library_id, w.title, w.creator, w.tags_json,
-w.cover_media_id, w.badges_json, w.favorite, w.progress, count(m.media_id)
+w.cover_media_id, w.badges_json, w.favorite, w.progress,
+w.description, w.source_url, w.published_at_ns, w.published_at_raw, w.published_at_parser, count(m.media_id)
 FROM work_projections w LEFT JOIN media_projections m
  ON m.catalog_revision_id = w.catalog_revision_id AND m.overlay_revision_id = w.overlay_revision_id AND m.work_id = w.work_id
 WHERE w.catalog_revision_id = ? AND w.overlay_revision_id = ? AND w.work_id = ?
 GROUP BY w.work_id, w.source_id, w.library_id, w.title, w.creator, w.tags_json,
- w.cover_media_id, w.badges_json, w.favorite, w.progress`, publication.CatalogRevisionID, publication.OverlayRevisionID, id).Scan(
+ w.cover_media_id, w.badges_json, w.favorite, w.progress,
+ w.description, w.source_url, w.published_at_ns, w.published_at_raw, w.published_at_parser`, publication.CatalogRevisionID, publication.OverlayRevisionID, id).Scan(
 		&work.ID, &work.SourceID, &work.LibraryID, &work.Title, &work.Creator, &tags,
-		&work.CoverMediaID, &badges, &favorite, &work.Progress, &work.MediaCount)
+		&work.CoverMediaID, &badges, &favorite, &work.Progress,
+		&work.Description, &work.SourceURL, &work.PublishedAtNanos, &work.PublishedAtRaw, &work.PublishedAtParser,
+		&work.MediaCount)
 	if errors.Is(err, sql.ErrNoRows) {
 		return Publication{}, Work{}, fault.New(fault.CodeNotFound, false, nil)
 	}
@@ -1399,20 +1424,24 @@ WHERE catalog_revision_id=? AND source_id=?`, candidate.CatalogRevisionID, sourc
 		}
 		if _, err := tx.ExecContext(ctx, `INSERT INTO source_works
 (catalog_revision_id, source_id, source_key, title, creator, tags_json, filenames_text, provider_id, external_id,
- rule_cover_media_source_key)
-VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`, candidate.CatalogRevisionID, work.SourceID, work.SourceKey,
+ rule_cover_media_source_key, description, source_url, published_at_ns, published_at_raw, published_at_parser)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`, candidate.CatalogRevisionID, work.SourceID, work.SourceKey,
 			sourceTitle, work.Creator, string(sourceTagsJSON), string(filenamesJSON), work.ProviderID, work.ExternalID,
-			work.RuleCoverMediaSourceKey); err != nil {
+			work.RuleCoverMediaSourceKey, work.Description, work.SourceURL,
+			work.PublishedAtNanos, work.PublishedAtRaw, work.PublishedAtParser); err != nil {
 			return fault.New(fault.CodeInternal, true, err)
 		}
 		if _, err := tx.ExecContext(ctx, `INSERT INTO work_projections
 (catalog_revision_id, overlay_revision_id, work_id, source_id, source_key, library_id, title, creator, tags_json, filenames_text,
  normalized_original_text, cjk_bigram_token_text, latin_trigram_token_text, sort_title_key, hidden,
  search_title_norm, search_creator_norm, search_tags_norm, search_filenames_norm,
- rule_cover_media_id, cover_media_id, badges_json)
-VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`, candidate.CatalogRevisionID, candidate.OverlayRevisionID, work.WorkID, work.SourceID, work.SourceKey, work.LibraryID, work.Title, work.Creator, string(tagsJSON), string(filenamesJSON), document.NormalizedOriginal, document.CJKTokens, document.LatinTokens, document.SortTitleKey, hidden,
+ rule_cover_media_id, cover_media_id, badges_json,
+ description, source_url, published_at_ns, published_at_raw, published_at_parser)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`, candidate.CatalogRevisionID, candidate.OverlayRevisionID, work.WorkID, work.SourceID, work.SourceKey, work.LibraryID, work.Title, work.Creator, string(tagsJSON), string(filenamesJSON), document.NormalizedOriginal, document.CJKTokens, document.LatinTokens, document.SortTitleKey, hidden,
 			document.TitleNorm, document.CreatorNorm, document.TagsNorm, document.FilenamesNorm,
-			work.RuleCoverMediaID, work.RuleCoverMediaID, encodeBadges(work.Badges)); err != nil {
+			work.RuleCoverMediaID, work.RuleCoverMediaID, encodeBadges(work.Badges),
+			work.Description, work.SourceURL,
+			work.PublishedAtNanos, work.PublishedAtRaw, work.PublishedAtParser); err != nil {
 			return fault.New(fault.CodeInternal, true, err)
 		}
 		if work.CreatorID != "" {
@@ -1688,8 +1717,10 @@ SELECT ?, s.source_id, s.library_id FROM catalog_revision_sources s
 JOIN active_query_publication a ON a.singleton=1 JOIN query_publications q ON q.query_publication_id=a.query_publication_id
 WHERE s.catalog_revision_id=q.catalog_revision_id AND s.source_id<>?`, []any{candidate.CatalogRevisionID, candidate.SourceID}},
 		{`INSERT INTO source_works
-(catalog_revision_id, source_id, source_key, title, creator, tags_json, filenames_text, provider_id, external_id, rule_cover_media_source_key)
-SELECT ?, w.source_id, w.source_key, w.title, w.creator, w.tags_json, w.filenames_text, w.provider_id, w.external_id, w.rule_cover_media_source_key FROM source_works w
+(catalog_revision_id, source_id, source_key, title, creator, tags_json, filenames_text, provider_id, external_id, rule_cover_media_source_key,
+ description, source_url, published_at_ns, published_at_raw, published_at_parser)
+SELECT ?, w.source_id, w.source_key, w.title, w.creator, w.tags_json, w.filenames_text, w.provider_id, w.external_id, w.rule_cover_media_source_key,
+w.description, w.source_url, w.published_at_ns, w.published_at_raw, w.published_at_parser FROM source_works w
 JOIN active_query_publication a ON a.singleton=1 JOIN query_publications q ON q.query_publication_id=a.query_publication_id
 WHERE w.catalog_revision_id=q.catalog_revision_id AND w.source_id<>?`, []any{candidate.CatalogRevisionID, candidate.SourceID}},
 		{`INSERT INTO source_media SELECT ?, m.source_id, m.source_key, m.work_source_key, m.relative_path, m.media_kind, m.mime_type, m.size_bytes, m.rule_key,
@@ -1710,10 +1741,12 @@ WHERE f.catalog_revision_id=q.catalog_revision_id AND f.source_id<>?`, []any{can
 		{`INSERT INTO work_projections
 (catalog_revision_id, overlay_revision_id, work_id, source_id, source_key, library_id, title, creator, tags_json, filenames_text,
  normalized_original_text, cjk_bigram_token_text, latin_trigram_token_text, sort_title_key, hidden, favorite, progress,
- search_title_norm, search_creator_norm, search_tags_norm, search_filenames_norm, rule_cover_media_id, cover_media_id, badges_json)
+ search_title_norm, search_creator_norm, search_tags_norm, search_filenames_norm, rule_cover_media_id, cover_media_id, badges_json,
+ description, source_url, published_at_ns, published_at_raw, published_at_parser)
 SELECT ?, ?, w.work_id, w.source_id, w.source_key, w.library_id, w.title, w.creator, w.tags_json, w.filenames_text,
 w.normalized_original_text, w.cjk_bigram_token_text, w.latin_trigram_token_text, w.sort_title_key, w.hidden, w.favorite, w.progress,
-w.search_title_norm, w.search_creator_norm, w.search_tags_norm, w.search_filenames_norm, w.rule_cover_media_id, w.rule_cover_media_id, w.badges_json FROM work_projections w
+w.search_title_norm, w.search_creator_norm, w.search_tags_norm, w.search_filenames_norm, w.rule_cover_media_id, w.rule_cover_media_id, w.badges_json,
+w.description, w.source_url, w.published_at_ns, w.published_at_raw, w.published_at_parser FROM work_projections w
 JOIN active_query_publication a ON a.singleton=1 JOIN query_publications q ON q.query_publication_id=a.query_publication_id
 WHERE w.catalog_revision_id=q.catalog_revision_id AND w.overlay_revision_id=q.overlay_revision_id AND w.source_id<>?`, []any{candidate.CatalogRevisionID, candidate.OverlayRevisionID, candidate.SourceID}},
 		{`INSERT OR IGNORE INTO creator_projections SELECT ?, ?, c.creator_id, c.name, c.sort_name_key FROM creator_projections c

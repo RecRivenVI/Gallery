@@ -17,6 +17,17 @@ import (
 	"github.com/RecRivenVI/gallery/internal/platform/filesystem"
 )
 
+// latestCatalogVersion 返回程序内嵌的最高 catalog migration 版本。升级测试用它断言「升级到最新」，
+// 而不是写死一个每加一次迁移就要手改一次的数字。
+func latestCatalogVersion(t *testing.T) int64 {
+	t.Helper()
+	embedded, err := EmbeddedSchemaState(RoleCatalog)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return embedded.Version
+}
+
 func openTestStore(t *testing.T) (*Store, appdirs.Dirs) {
 	t.Helper()
 	dirs := appdirs.UnderRoot(t.TempDir())
@@ -33,14 +44,20 @@ func openTestStore(t *testing.T) (*Store, appdirs.Dirs) {
 
 func TestIndependentWALMigrationsAndBackup(t *testing.T) {
 	store, dirs := openTestStore(t)
-	wantVersions := map[Role]int{RoleControl: 20, RoleCatalog: 14}
+	// 期望版本从内嵌 migration 集合推导，而不是写死数字：断言的是「打开后 user_version 等于程序
+	// 内嵌的最高 migration 版本」这条不变量，新增迁移不需要同步改测试。写死数字只会让每次加迁移
+	// 都产生一次与被测语义无关的机械改动，并掩盖真正的版本漂移。
 	for _, database := range []*Database{store.Control, store.Catalog} {
-		var version int
+		embedded, err := EmbeddedSchemaState(database.role)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var version int64
 		if err := database.db.QueryRow("PRAGMA user_version").Scan(&version); err != nil {
 			t.Fatal(err)
 		}
-		if version != wantVersions[database.role] {
-			t.Fatalf("%s user_version = %d", database.role, version)
+		if version != embedded.Version {
+			t.Fatalf("%s user_version = %d，内嵌最高 migration 版本 = %d", database.role, version, embedded.Version)
 		}
 	}
 
@@ -211,7 +228,7 @@ VALUES
 		if err := upgraded.db.QueryRow(`SELECT count(*) FROM catalog_revision_sources`).Scan(&count); err != nil {
 			t.Fatal(err)
 		}
-		if version != 14 || count != 2 {
+		if int64(version) != latestCatalogVersion(t) || count != 2 {
 			t.Fatalf("v11 升级结果: version=%d membership=%d", version, count)
 		}
 		var libraryID string
@@ -239,6 +256,82 @@ VALUES
 			t.Fatalf("有歧义 membership 升级错误 = %v", err)
 		}
 	})
+}
+
+// TestWorkScalarFactsMigrationLeavesHistoricalRevisionsUnbackfilled 验证 00015 的**不回填**决策：
+// 规则派生的标量事实（描述、来源链接、发布时间三元组）只能由重扫精确恢复，凭旧投影猜测会产生与规则
+// 不一致的事实。历史行必须保持默认空值，而不是被推断出一个看似合理的值。
+func TestWorkScalarFactsMigrationLeavesHistoricalRevisionsUnbackfilled(t *testing.T) {
+	ctx := context.Background()
+	path := filepath.Join(t.TempDir(), "catalog.db")
+	db, err := sql.Open("sqlite", "file:"+filepath.ToSlash(path)+"?_pragma=foreign_keys(ON)")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.ExecContext(ctx, `CREATE TABLE gallery_schema_migrations (
+version INTEGER PRIMARY KEY NOT NULL, name TEXT NOT NULL, sha256 TEXT NOT NULL,
+applied_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))) STRICT`); err != nil {
+		db.Close()
+		t.Fatal(err)
+	}
+	sub, err := fs.Sub(migrationFiles, "migrations/catalog")
+	if err != nil {
+		db.Close()
+		t.Fatal(err)
+	}
+	migrations, err := readMigrations(sub)
+	if err != nil {
+		db.Close()
+		t.Fatal(err)
+	}
+	for _, item := range migrations[:14] {
+		if err := applyMigration(ctx, db, item); err != nil {
+			db.Close()
+			t.Fatal(err)
+		}
+	}
+	if _, err := db.ExecContext(ctx, `
+INSERT INTO catalog_revisions VALUES ('cat_old', 'job_old', 'src_a', 'published', 1, 2);
+INSERT INTO overlay_projection_revisions
+(overlay_revision_id, catalog_revision_id, control_watermark, status, created_at, published_at)
+VALUES ('ovr_old', 'cat_old', 0, 'published', 1, 2);
+INSERT INTO source_works (catalog_revision_id, source_id, source_key, title)
+VALUES ('cat_old', 'src_a', 'work-a', 'A');
+INSERT INTO work_projections
+(catalog_revision_id, overlay_revision_id, work_id, source_id, source_key, library_id, title, creator,
+ tags_json, filenames_text, normalized_original_text, cjk_bigram_token_text, latin_trigram_token_text,
+ sort_title_key, hidden)
+VALUES ('cat_old', 'ovr_old', 'work-a', 'src_a', 'work-a', 'lib_a', 'A', '', '[]', '', 'a', '', '', 'a', 0);`); err != nil {
+		db.Close()
+		t.Fatal(err)
+	}
+	if err := db.Close(); err != nil {
+		t.Fatal(err)
+	}
+	upgraded, err := openDatabase(ctx, RoleCatalog, path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer upgraded.Close()
+	var version int64
+	if err := upgraded.db.QueryRow("PRAGMA user_version").Scan(&version); err != nil {
+		t.Fatal(err)
+	}
+	if version != latestCatalogVersion(t) {
+		t.Fatalf("v14 升级后 user_version = %d", version)
+	}
+	for _, table := range []string{"source_works", "work_projections"} {
+		var description, sourceURL, raw, parser string
+		var publishedAt int64
+		if err := upgraded.db.QueryRow(`SELECT description, source_url, published_at_ns, published_at_raw, published_at_parser
+FROM `+table+` WHERE source_key='work-a'`).Scan(&description, &sourceURL, &publishedAt, &raw, &parser); err != nil {
+			t.Fatalf("%s: %v", table, err)
+		}
+		if description != "" || sourceURL != "" || publishedAt != 0 || raw != "" || parser != "" {
+			t.Fatalf("%s 的历史行被回填了推断值: description=%q sourceUrl=%q publishedAt=%d raw=%q parser=%q",
+				table, description, sourceURL, publishedAt, raw, parser)
+		}
+	}
 }
 
 // TestMediaProjectionMTimeMigrationUpgradesPopulatedV12Catalog 验证 00013 迁移把发布时刻
@@ -306,7 +399,7 @@ VALUES
 	if err := upgraded.db.QueryRow("PRAGMA user_version").Scan(&version); err != nil {
 		t.Fatal(err)
 	}
-	if version != 14 {
+	if int64(version) != latestCatalogVersion(t) {
 		t.Fatalf("v12 升级后 user_version = %d", version)
 	}
 	var backfilled, orphan int64

@@ -595,7 +595,10 @@ func (s *Service) Execute(ctx context.Context, jobID string) error {
 			SourceTitle: canonicalWork.Title, SourceTags: work.Tags,
 			Title: canonicalWork.Title, Creator: work.Creator, Tags: work.Tags,
 			Filenames: filenames, RuleCoverMediaSourceKey: work.RuleCoverMediaSourceKey,
-			RuleCoverMediaID: coverMedia.ID, Badges: work.Badges, WorkID: canonicalWork.ID}
+			RuleCoverMediaID: coverMedia.ID, Badges: work.Badges,
+			Description: work.Description, SourceURL: work.SourceURL,
+			PublishedAtNanos: work.PublishedAtNanos, PublishedAtRaw: work.PublishedAtRaw,
+			PublishedAtParser: work.PublishedAtParser, WorkID: canonicalWork.ID}
 		if len(canonicalWork.Creators) > 0 {
 			creator := creatorReference(work)
 			workFact.Creator = canonicalWork.Creators[0].Name
@@ -842,6 +845,11 @@ type discoveredWork struct {
 	SourceKey, ProviderID, ExternalID, Title, Creator string
 	CreatorStableKey                                  string
 	RuleCoverMediaSourceKey                           string
+	Description                                       string
+	SourceURL                                         string
+	PublishedAtNanos                                  int64
+	PublishedAtRaw                                    string
+	PublishedAtParser                                 string
 	Tags                                              []string
 	Badges                                            []catalog.Badge
 	Media                                             []discoveredMedia
@@ -973,7 +981,19 @@ func discover(ctx context.Context, root string, ir rules.RuleIR, parameters []by
 		}
 		work := discoveredWork{SourceKey: evaluated.Work.StableKey, ProviderID: evaluated.Work.ProviderID, ExternalID: evaluated.Work.ExternalID,
 			Title: evaluated.Work.Title, Creator: evaluated.Work.Creator, CreatorStableKey: evaluated.Work.CreatorStableKey,
+			Description: evaluated.Work.Description, SourceURL: evaluated.Work.SourceURL,
 			Tags: evaluated.Work.Tags, Badges: badgeFacts(evaluated.Work.Badges)}
+		// 发布时间三元组要么整体存在要么整体缺失：规则层保证不会出现「有原始串但没有 instant」，
+		// 因此这里不做二次解析，只做结构搬运。
+		if evaluated.Work.Date != nil {
+			instant, err := time.Parse(time.RFC3339Nano, evaluated.Work.Date.Instant)
+			if err != nil {
+				return fmt.Errorf("规则产出的发布时间不是合法 RFC3339: %w", err)
+			}
+			work.PublishedAtNanos = instant.UTC().UnixNano()
+			work.PublishedAtRaw = evaluated.Work.Date.RawValue
+			work.PublishedAtParser = evaluated.Work.Date.ParserVersion
+		}
 		for _, item := range evaluated.Work.Media {
 			mediaRelative := path.Join(relative, item.Path)
 			if _, err := media.ValidateRelativePath(mediaRelative); err != nil {

@@ -2496,6 +2496,8 @@ func (s *Server) listWorks(w http.ResponseWriter, r *http.Request) {
 			Id: work.ID, Title: work.Title, Creator: work.Creator, Tags: work.Tags,
 			MediaCount: work.MediaCount, Favorite: work.Favorite, Progress: float32(work.Progress),
 			Badges: badgeDTOs(work.Badges), QueryPublicationId: result.QueryPublicationID,
+			Description: optionalString(work.Description), SourceUrl: optionalString(work.SourceURL),
+			PublishedAt: work.PublishedAt,
 		}
 		if work.CoverMediaID != "" {
 			coverMediaID := api.CanonicalMediaId(work.CoverMediaID)
@@ -3527,6 +3529,12 @@ func workDTO(publication catalog.Publication, value catalog.Work) api.PublishedW
 		Id: value.ID, Title: value.Title, Creator: value.Creator, Tags: value.Tags,
 		MediaCount: value.MediaCount, Favorite: value.Favorite, Progress: float32(value.Progress),
 		Badges: badgeDTOs(value.Badges), QueryPublicationId: publication.ID,
+		Description: optionalString(value.Description), SourceUrl: optionalString(value.SourceURL),
+	}
+	// 0 纳秒表示没有可用发布时间，对外必须是 null 而不是 Unix 纪元。
+	if value.PublishedAtNanos != 0 {
+		instant := time.Unix(0, value.PublishedAtNanos).UTC()
+		result.PublishedAt = &instant
 	}
 	if value.CoverMediaID != "" {
 		coverMediaID := api.CanonicalMediaId(value.CoverMediaID)

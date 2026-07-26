@@ -143,6 +143,11 @@ type Work struct {
 	// Badges 是该 publication 冻结的规则派生角标，顺序即展示顺序。客户端按 position
 	// 渲染，不得自行推导出现条件或配色。
 	Badges []domain.Badge `json:"badges,omitempty"`
+	// Description、SourceURL 与 PublishedAt 是规则派生的作品标量事实，随快照冻结。
+	// PublishedAt 为 nil 表示该作品没有可用发布时间——这是常态而非错误。
+	Description string     `json:"description,omitempty"`
+	SourceURL   string     `json:"sourceUrl,omitempty"`
+	PublishedAt *time.Time `json:"publishedAt,omitempty"`
 	// Favorite/Progress 是本次查询所在 publication 冻结的 snapshot 值（用于解释本次
 	// 结果的过滤/排序判据），不是 control.db 当前 live 值；真正的 live 值通过
 	// GET /works/{workId}/overlay 读取，见 LiveUserStateFields。
@@ -553,7 +558,7 @@ func (s *Service) query(ctx context.Context, pub publication, authorization sour
 		tagTierSQL := multiFieldTierSQL("w.search_tags_norm")
 		filenameTierSQL := multiFieldTierSQL("w.search_filenames_norm")
 		cte = fmt.Sprintf(`WITH tiers AS (
-SELECT w.work_id, w.title, w.creator, w.tags_json, w.filenames_text, w.sort_title_key, w.favorite, w.progress, w.cover_media_id, w.badges_json,
+SELECT w.work_id, w.title, w.creator, w.tags_json, w.filenames_text, w.sort_title_key, w.favorite, w.progress, w.cover_media_id, w.badges_json, w.description, w.source_url, w.published_at_ns,
 %s AS media_count,
 (%s) AS title_tier, (%s) AS creator_tier, (%s) AS tag_tier, (%s) AS filename_tier
 FROM work_projections w%s WHERE %s
@@ -571,7 +576,7 @@ SELECT *, max(%s, %s, %s, %s) AS rank_tier FROM tiers
 		}
 	} else {
 		cte = fmt.Sprintf(`WITH scored AS (
-SELECT w.work_id, w.title, w.creator, w.tags_json, w.filenames_text, w.sort_title_key, w.favorite, w.progress, w.cover_media_id, w.badges_json,
+SELECT w.work_id, w.title, w.creator, w.tags_json, w.filenames_text, w.sort_title_key, w.favorite, w.progress, w.cover_media_id, w.badges_json, w.description, w.source_url, w.published_at_ns,
 %s AS media_count, 0 AS rank_tier
 FROM work_projections w%s WHERE %s
 )`, mediaCountExpr, join, strings.Join(where, " AND "))
@@ -600,7 +605,7 @@ FROM work_projections w%s WHERE %s
 	}
 
 	statement := cte + `
-SELECT work_id, title, creator, tags_json, filenames_text, sort_title_key, favorite, progress, cover_media_id, badges_json, media_count, rank_tier FROM scored`
+SELECT work_id, title, creator, tags_json, filenames_text, sort_title_key, favorite, progress, cover_media_id, badges_json, description, source_url, published_at_ns, media_count, rank_tier FROM scored`
 
 	args := append(append([]any{}, selectArgs...), fromArgs...)
 	if len(outerWhere) > 0 {
@@ -624,11 +629,20 @@ SELECT work_id, title, creator, tags_json, filenames_text, sort_title_key, favor
 		var work Work
 		var tags, filenames, badges string
 		var favorite int
+		var publishedAtNanos int64
 		if err := rows.Scan(&work.ID, &work.Title, &work.Creator, &tags, &filenames, &work.SortKey,
-			&favorite, &work.Progress, &work.CoverMediaID, &badges, &work.MediaCount, &work.RankTier); err != nil {
+			&favorite, &work.Progress, &work.CoverMediaID, &badges,
+			&work.Description, &work.SourceURL, &publishedAtNanos,
+			&work.MediaCount, &work.RankTier); err != nil {
 			return nil, false, fault.New(fault.CodeInternal, true, err)
 		}
 		work.Favorite = favorite != 0
+		// 0 表示该作品没有可用发布时间；不把它表达成 Unix 纪元，否则客户端无法区分
+		// 「没有日期」与「日期恰好是 1970」。
+		if publishedAtNanos != 0 {
+			instant := time.Unix(0, publishedAtNanos).UTC()
+			work.PublishedAt = &instant
+		}
 		// 角标随 publication 冻结，直接按快照内容下发；损坏内容按无角标处理，不让可重建的
 		// 展示事实使整个查询失败。
 		_ = json.Unmarshal([]byte(badges), &work.Badges)

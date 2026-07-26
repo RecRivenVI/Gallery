@@ -2094,6 +2094,15 @@ export interface components {
             id: components["schemas"]["CanonicalWorkId"];
             /** @description publication 冻结的规则派生角标；顺序即展示顺序，没有角标时为空数组。 */
             badges: components["schemas"]["Badge"][];
+            /** @description 来源自述的作品描述，由规则的字段映射产出；没有时为空串。 */
+            description?: string;
+            /** @description 来源自述的原始链接，由规则的字段映射产出；没有时为空串。 */
+            sourceUrl?: string;
+            /**
+             * Format: date-time
+             * @description 规则解析出的作品发布时间（UTC）。它由专用的时间原语按「元数据回退链 → 受限路径模式」 解析，朴素时间戳按规则声明的 IANA 时区解释。为 null 表示该作品没有可用发布时间， 这是常态而非错误；客户端不得据此推断时间为 Unix 纪元。
+             */
+            publishedAt?: string | null;
             title: string;
             creator: string;
             tags: string[];
