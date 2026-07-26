@@ -387,12 +387,56 @@ func (l *Lifecycle) evaluate(ctx context.Context, ir RuleIR, params map[string]a
 	for index := range result.Work.Media {
 		result.Work.Media[index].Ordinal = index
 	}
-	for _, media := range result.Work.Media {
-		if result.Work.CoverPath == "" || media.CoverScore > coverScore(result.Work.Media, result.Work.CoverPath) {
-			result.Work.CoverPath = media.Path
+	result.Work.CoverPath = selectCoverPath(ir, sample, result.Work.Media)
+	return result, nil
+}
+
+// selectCoverPath 按下列顺序决定作品封面，与真实规则的 cover 语义一一对应：
+//
+//  1. 作品目录存在 cover_disable_marker 声明的标记文件（`.nocover`）时**没有封面**。
+//     这是终态：既不选显式候选，也不回退到第一张自然序媒体；
+//  2. 否则取 CoverScore 最高的候选（cover_candidate 的 priority/score）。同分时取自然序
+//     靠前者，因为 media 已按 media_order 排好序，遍历顺序即自然序；
+//  3. 没有任何候选时回退到第一张**可见**媒体（leaf_fallback: first_natural_media）。
+//     隐藏媒体不参与回退——`.*` 这类隐藏项不应成为作品封面——但仍可通过显式候选被选中。
+func selectCoverPath(ir RuleIR, sample DryRunInput, media []DryRunMedia) string {
+	if ir.CoverDisableMarker != "" {
+		for _, file := range sample.Files {
+			if path.Base(file.Path) == ir.CoverDisableMarker {
+				return ""
+			}
 		}
 	}
-	return result, nil
+	best, bestScore := "", 0
+	for _, item := range media {
+		if item.CoverScore > bestScore {
+			best, bestScore = item.Path, item.CoverScore
+		}
+	}
+	if best != "" {
+		return best
+	}
+	for _, item := range media {
+		if !item.Hidden {
+			return item.Path
+		}
+	}
+	return ""
+}
+
+// mediaTypeMatches 把 cover_candidate 的 media_type 约束解释为对已分类媒体的判定。
+// static_image 明确排除 GIF/APNG 这类动图与视频，因为需要静态封面的场景不接受它们。
+func mediaTypeMatches(wanted, kind, mimeType string) bool {
+	switch wanted {
+	case "static_image":
+		return kind == "image" && mimeType != "image/gif" && mimeType != "image/apng"
+	case "image":
+		return kind == "image"
+	case "video":
+		return kind == "video"
+	default:
+		return wanted == kind
+	}
 }
 
 func applyIdentityExtensions(ir RuleIR, result *DryRunResult) {
@@ -443,13 +487,35 @@ func (l *Lifecycle) classifyFile(ctx context.Context, ir RuleIR, expressions map
 	if !matched {
 		return DryRunMedia{}, false, nil
 	}
+	// 名称 glob 隐藏在 CEL 条件之前应用：它只看文件名，成本恒定且可静态分析。隐藏只影响
+	// 展示，媒体仍然进入身份与内容确认，也仍可被 cover_candidate 选为封面——真实规则里
+	// `cover.*` 同时出现在隐藏与显式封面两张表中，正是这个意图。
+	for _, glob := range ir.HiddenNameGlobs {
+		if ok, _ := path.Match(glob, path.Base(file.Path)); ok {
+			media.Hidden = true
+			break
+		}
+	}
 	for _, primitive := range ir.Primitives {
 		config := rawConfig(primitive.Config)
 		switch primitive.Kind {
 		case "cover_candidate":
 			ok, _ := path.Match(stringConfig(config, "glob"), path.Base(file.Path))
-			if ok {
-				media.CoverScore = intConfig(config, "score")
+			if !ok {
+				continue
+			}
+			// media_type 限定候选必须是该类媒体：真实规则用它把「解压预览的第一张图」限定
+			// 为静态图片，避免把视频选成需要静态缩略图的封面。
+			if wanted := stringConfig(config, "media_type"); wanted != "" && !mediaTypeMatches(wanted, media.Kind, media.MIME) {
+				continue
+			}
+			// priority 与 score 是同一维度的两种写法，取较大者，使同一作品的多条候选按
+			// 优先级择一，且缺省值不会压过显式声明。
+			if score := intConfig(config, "priority"); score > media.CoverScore {
+				media.CoverScore = score
+			}
+			if score := intConfig(config, "score"); score > media.CoverScore {
+				media.CoverScore = score
 			}
 		case "condition":
 			scope, effect := stringConfig(config, "scope"), stringConfig(config, "effect")

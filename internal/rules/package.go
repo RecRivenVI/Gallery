@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"math/big"
 	"mime"
+	"path"
 	"regexp"
 	"sort"
 	"strconv"
@@ -16,7 +17,10 @@ import (
 	contractschema "github.com/RecRivenVI/gallery/internal/contract/schema"
 )
 
-const PrimitiveRegistryVersion = "gallery-primitives-v1"
+// PrimitiveRegistryVersion 参与 rule_ir_hash，因此新增或改变原语语义必须递增它：v2 增加
+// media_hidden（按名称 glob 隐藏媒体）与 cover_disable_marker（`.nocover` 禁用封面），并
+// 让 cover_candidate 支持 priority 与 media_type。
+const PrimitiveRegistryVersion = "gallery-primitives-v2"
 
 var jsonNumberPattern = regexp.MustCompile(`^(-?)(0|[1-9][0-9]*)(?:\.([0-9]+))?(?:[eE]([+-]?[0-9]+))?$`)
 
@@ -44,6 +48,8 @@ type RuleIR struct {
 	MediaGlob                string                `json:"mediaGlob"`
 	MediaKind                string                `json:"mediaKind"`
 	MediaMIME                string                `json:"mediaMime"`
+	HiddenNameGlobs          []string              `json:"hiddenNameGlobs,omitempty"`
+	CoverDisableMarker       string                `json:"coverDisableMarker,omitempty"`
 	Primitives               []IRPrimitive         `json:"primitives"`
 	CELExpressions           []IRExpression        `json:"celExpressions"`
 	Extensions               []IRCompiledExtension `json:"extensions,omitempty"`
@@ -95,6 +101,23 @@ type mediaClassifyConfig struct {
 	Kind      string `json:"kind"`
 	MIME      string `json:"mime"`
 	Condition string `json:"condition,omitempty"`
+}
+
+// mediaHiddenConfig 用文件名 glob 声明「已识别但默认不展示」的媒体，对应真实规则中的
+// hidden_name_globs（例如 `.*`、`cover.*`、`.cover.*`）。它与 condition{effect:hide}
+// 互补：后者需要 CEL 且按 metadata 判定，前者只按名称，既便宜又可静态分析。
+//
+// 隐藏只影响展示，不影响身份：隐藏媒体仍然进入 SourceMedia 与内容确认，也仍然可以被
+// cover_candidate 选为封面——真实规则里 `cover.*` 同时出现在隐藏与显式封面两张表中，
+// 正是「不出现在图片列表里、但作为封面」这一意图。
+type mediaHiddenConfig struct {
+	Globs []string `json:"globs"`
+}
+
+// coverDisableMarkerConfig 声明一个「存在即禁用该作品封面」的标记文件名（`.nocover`）。
+// 禁用是终态：既不选显式候选，也不回退到第一张自然序媒体。
+type coverDisableMarkerConfig struct {
+	Filename string `json:"filename"`
 }
 
 func CompilePackage(input []byte) (CompiledPackage, error) {
@@ -271,6 +294,32 @@ func compilePrimitives(primitives []rawPrimitive, expressions []IRExpression) (R
 				return RuleIR{}, withField(fmt.Sprintf("/primitives/%d/config/mime", index), fmt.Errorf("media_classify %s MIME 无效: %w", primitive.ID, err))
 			}
 			ir.MediaGlob, ir.MediaKind, ir.MediaMIME = config.Glob, config.Kind, config.MIME
+		case "media_hidden":
+			var config mediaHiddenConfig
+			if err := strictDecode(primitive.Config, &config); err != nil {
+				return RuleIR{}, withField(fmt.Sprintf("/primitives/%d/config", index), fmt.Errorf("media_hidden %s: %w", primitive.ID, err))
+			}
+			if len(config.Globs) == 0 {
+				return RuleIR{}, withField(fmt.Sprintf("/primitives/%d/config/globs", index), fmt.Errorf("media_hidden %s 缺少 globs", primitive.ID))
+			}
+			for globIndex, glob := range config.Globs {
+				if glob == "" {
+					return RuleIR{}, withField(fmt.Sprintf("/primitives/%d/config/globs/%d", index, globIndex), fmt.Errorf("media_hidden %s glob 为空", primitive.ID))
+				}
+				if _, err := path.Match(glob, "probe"); err != nil {
+					return RuleIR{}, withField(fmt.Sprintf("/primitives/%d/config/globs/%d", index, globIndex), fmt.Errorf("media_hidden %s glob 无效: %w", primitive.ID, err))
+				}
+			}
+			ir.HiddenNameGlobs = append(ir.HiddenNameGlobs, config.Globs...)
+		case "cover_disable_marker":
+			var config coverDisableMarkerConfig
+			if err := strictDecode(primitive.Config, &config); err != nil {
+				return RuleIR{}, withField(fmt.Sprintf("/primitives/%d/config", index), fmt.Errorf("cover_disable_marker %s: %w", primitive.ID, err))
+			}
+			if config.Filename == "" || strings.ContainsAny(config.Filename, `/\`) || config.Filename == "." || config.Filename == ".." {
+				return RuleIR{}, withField(fmt.Sprintf("/primitives/%d/config/filename", index), fmt.Errorf("cover_disable_marker %s filename 无效", primitive.ID))
+			}
+			ir.CoverDisableMarker = config.Filename
 		case "selector", "fallback", "stable_key", "media_order", "cover_candidate", "metadata_map", "condition":
 			if err := validateExtendedPrimitive(primitive); err != nil {
 				return RuleIR{}, withField(fmt.Sprintf("/primitives/%d/config", index), err)
@@ -373,6 +422,22 @@ func validateExtendedPrimitive(primitive rawPrimitive) error {
 	case "cover_candidate":
 		if err := requireString("glob"); err != nil {
 			return err
+		}
+		// priority 与 score 是同一维度的两种写法：priority 让真实规则里「同一作品多条候选
+		// 按优先级择一」可以直接表达，score 保留既有包的兼容性。两者都缺省时候选按出现
+		// 顺序竞争，仍然确定。media_type 限定候选必须是某类媒体（例如静态图片），避免把
+		// 视频或动图选成需要静态缩略图的封面。
+		if raw, ok := config["priority"]; ok {
+			var priority int
+			if json.Unmarshal(raw, &priority) != nil || priority < 0 {
+				return fmt.Errorf("cover_candidate %s priority 无效", primitive.ID)
+			}
+		}
+		if raw, ok := config["media_type"]; ok {
+			var mediaType string
+			if json.Unmarshal(raw, &mediaType) != nil || mediaType == "" {
+				return fmt.Errorf("cover_candidate %s media_type 无效", primitive.ID)
+			}
 		}
 	case "metadata_map":
 		if _, ok := config["fields"]; !ok {
