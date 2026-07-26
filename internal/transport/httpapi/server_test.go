@@ -380,6 +380,29 @@ func TestPersonalPairingIsSingleUseAndRevocationInvalidatesREST(t *testing.T) {
 	if err != nil || ifRangeStale.StatusCode() != http.StatusOK || !bytes.Equal(ifRangeStale.Body, mediaContent) {
 		t.Fatalf("If-Range 不匹配应退回完整 200: %v status=%d body=%q", err, ifRangeStale.StatusCode(), ifRangeStale.Body)
 	}
+	// 正文与 /api/v1 同源，因此每个正文响应都必须携带 sandbox CSP：即使某个类型被误加入
+	// 内联白名单，也不会在 Gallery 自己的源上取得脚本执行上下文。
+	if policy := fullResponse.HTTPResponse.Header.Get("Content-Security-Policy"); !strings.HasPrefix(policy, "sandbox") {
+		t.Fatalf("媒体正文缺少 sandbox CSP: %q", policy)
+	}
+	// 该媒体不在内联白名单内，因此必须以不可嗅探的 application/octet-stream 附件交付。
+	if got := fullResponse.HTTPResponse.Header.Get("Content-Type"); got != "application/octet-stream" {
+		t.Fatalf("白名单外媒体 Content-Type = %q", got)
+	}
+	if got := fullResponse.HTTPResponse.Header.Get("Content-Disposition"); !strings.HasPrefix(got, "attachment") {
+		t.Fatalf("白名单外媒体未以附件交付: %q", got)
+	}
+	downloadTrue := true
+	downloaded, err := client.GetMediaContentWithResponse(context.Background(), mediaID, &api.GetMediaContentParams{Download: &downloadTrue})
+	if err != nil || downloaded.StatusCode() != http.StatusOK || !bytes.Equal(downloaded.Body, mediaContent) {
+		t.Fatalf("download=true 读取失败: %v status=%d", err, downloaded.StatusCode())
+	}
+	if got := downloaded.HTTPResponse.Header.Get("Content-Disposition"); !strings.HasPrefix(got, "attachment") {
+		t.Fatalf("download=true 未发送 attachment: %q", got)
+	}
+	if got := downloaded.HTTPResponse.Header.Get("Content-Type"); got != "application/octet-stream" {
+		t.Fatalf("download=true Content-Type = %q", got)
+	}
 	if mediaResponse.JSON200.Media[0].Blob == nil {
 		t.Fatal("已确认媒体缺少 Blob，无法验证固定分享")
 	}
@@ -419,6 +442,17 @@ func TestPersonalPairingIsSingleUseAndRevocationInvalidatesREST(t *testing.T) {
 	}
 	if body := readAndClose(t, sharedRange); sharedRange.StatusCode != http.StatusPartialContent || string(body) != "gallery" {
 		t.Fatalf("Work Share Range 内容错误: status=%d body=%q", sharedRange.StatusCode, body)
+	}
+	// 匿名分享正文同样与 /api/v1 同源，因此适用同一条呈现策略：sandbox CSP、白名单外
+	// 降级为 application/octet-stream 附件。这是未认证路径，不得比认证路径宽松。
+	if policy := sharedRange.Header.Get("Content-Security-Policy"); !strings.HasPrefix(policy, "sandbox") {
+		t.Fatalf("匿名分享正文缺少 sandbox CSP: %q", policy)
+	}
+	if got := sharedRange.Header.Get("Content-Type"); got != "application/octet-stream" {
+		t.Fatalf("匿名分享正文 Content-Type = %q", got)
+	}
+	if got := sharedRange.Header.Get("Content-Disposition"); !strings.HasPrefix(got, "attachment") {
+		t.Fatalf("匿名分享的白名单外正文未以附件交付: %q", got)
 	}
 	downloadDenied, err := http.Get(server.URL + "/api/v1/public/shares/" + workCredential + "/media/" + string(mediaID) + "/content?download=true")
 	if err != nil {

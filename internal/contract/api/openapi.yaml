@@ -2033,6 +2033,15 @@ paths:
           该快照下的 ContentBlob，语义同 listWorkMedia。
         schema:
           $ref: "#/components/schemas/QueryPublicationId"
+      - name: download
+        in: query
+        required: false
+        description: >-
+          为 true 时强制以 attachment 交付并使用 application/octet-stream，不在同源上下文
+          渲染。省略或 false 时仅内联白名单内的图片/视频类型，白名单外同样降级为 attachment。
+        schema:
+          type: boolean
+          default: false
       - name: Range
         in: header
         required: false

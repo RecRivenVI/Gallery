@@ -3737,8 +3737,11 @@ type GetMediaParams struct {
 type GetMediaContentParams struct {
 	// QueryPublicationId 省略为 current 模式；显式提供为 snapshot 模式，只从该 publication 解析并读取 该快照下的 ContentBlob，语义同 listWorkMedia。
 	QueryPublicationId *QueryPublicationId `form:"queryPublicationId,omitempty" json:"queryPublicationId,omitempty"`
-	Range              *string             `json:"Range,omitempty"`
-	IfNoneMatch        *string             `json:"If-None-Match,omitempty"`
+
+	// Download 为 true 时强制以 attachment 交付并使用 application/octet-stream，不在同源上下文 渲染。省略或 false 时仅内联白名单内的图片/视频类型，白名单外同样降级为 attachment。
+	Download    *bool   `form:"download,omitempty" json:"download,omitempty"`
+	Range       *string `json:"Range,omitempty"`
+	IfNoneMatch *string `json:"If-None-Match,omitempty"`
 
 	// IfRange 与当前 ETag 不一致时忽略 Range，退回完整 200 响应，避免拼接不同内容版本的字节。
 	IfRange *string `json:"If-Range,omitempty"`
@@ -3748,8 +3751,11 @@ type GetMediaContentParams struct {
 type HeadMediaContentParams struct {
 	// QueryPublicationId 省略为 current 模式；显式提供为 snapshot 模式，只从该 publication 解析并读取 该快照下的 ContentBlob，语义同 listWorkMedia。
 	QueryPublicationId *QueryPublicationId `form:"queryPublicationId,omitempty" json:"queryPublicationId,omitempty"`
-	Range              *string             `json:"Range,omitempty"`
-	IfNoneMatch        *string             `json:"If-None-Match,omitempty"`
+
+	// Download 为 true 时强制以 attachment 交付并使用 application/octet-stream，不在同源上下文 渲染。省略或 false 时仅内联白名单内的图片/视频类型，白名单外同样降级为 attachment。
+	Download    *bool   `form:"download,omitempty" json:"download,omitempty"`
+	Range       *string `json:"Range,omitempty"`
+	IfNoneMatch *string `json:"If-None-Match,omitempty"`
 
 	// IfRange 与当前 ETag 不一致时忽略 Range，退回完整 200 响应，避免拼接不同内容版本的字节。
 	IfRange *string `json:"If-Range,omitempty"`
@@ -9046,6 +9052,18 @@ func NewGetMediaContentRequest(server string, mediaId CanonicalMediaId, params *
 
 		}
 
+		if params.Download != nil {
+
+			if queryFrag, err := runtime.StyleParamWithOptions("form", true, "download", *params.Download, runtime.StyleParamOptions{ParamLocation: runtime.ParamLocationQuery, Type: "boolean", Format: ""}); err != nil {
+				return nil, err
+			} else {
+				for _, qp := range strings.Split(queryFrag, "&") {
+					rawQueryFragments = append(rawQueryFragments, qp)
+				}
+			}
+
+		}
+
 		if encoded := queryValues.Encode(); encoded != "" {
 			rawQueryFragments = append(rawQueryFragments, encoded)
 		}
@@ -9135,6 +9153,18 @@ func NewHeadMediaContentRequest(server string, mediaId CanonicalMediaId, params 
 		if params.QueryPublicationId != nil {
 
 			if queryFrag, err := runtime.StyleParamWithOptions("form", true, "queryPublicationId", *params.QueryPublicationId, runtime.StyleParamOptions{ParamLocation: runtime.ParamLocationQuery, Type: "string", Format: ""}); err != nil {
+				return nil, err
+			} else {
+				for _, qp := range strings.Split(queryFrag, "&") {
+					rawQueryFragments = append(rawQueryFragments, qp)
+				}
+			}
+
+		}
+
+		if params.Download != nil {
+
+			if queryFrag, err := runtime.StyleParamWithOptions("form", true, "download", *params.Download, runtime.StyleParamOptions{ParamLocation: runtime.ParamLocationQuery, Type: "boolean", Format: ""}); err != nil {
 				return nil, err
 			} else {
 				for _, qp := range strings.Split(queryFrag, "&") {

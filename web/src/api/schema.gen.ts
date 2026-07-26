@@ -1370,6 +1370,8 @@ export interface paths {
             query?: {
                 /** @description 省略为 current 模式；显式提供为 snapshot 模式，只从该 publication 解析并读取 该快照下的 ContentBlob，语义同 listWorkMedia。 */
                 queryPublicationId?: components["schemas"]["QueryPublicationId"];
+                /** @description 为 true 时强制以 attachment 交付并使用 application/octet-stream，不在同源上下文 渲染。省略或 false 时仅内联白名单内的图片/视频类型，白名单外同样降级为 attachment。 */
+                download?: boolean;
             };
             header?: {
                 Range?: string;
@@ -5617,6 +5619,8 @@ export interface operations {
             query?: {
                 /** @description 省略为 current 模式；显式提供为 snapshot 模式，只从该 publication 解析并读取 该快照下的 ContentBlob，语义同 listWorkMedia。 */
                 queryPublicationId?: components["schemas"]["QueryPublicationId"];
+                /** @description 为 true 时强制以 attachment 交付并使用 application/octet-stream，不在同源上下文 渲染。省略或 false 时仅内联白名单内的图片/视频类型，白名单外同样降级为 attachment。 */
+                download?: boolean;
             };
             header?: {
                 Range?: string;
@@ -5676,6 +5680,8 @@ export interface operations {
             query?: {
                 /** @description 省略为 current 模式；显式提供为 snapshot 模式，只从该 publication 解析并读取 该快照下的 ContentBlob，语义同 listWorkMedia。 */
                 queryPublicationId?: components["schemas"]["QueryPublicationId"];
+                /** @description 为 true 时强制以 attachment 交付并使用 application/octet-stream，不在同源上下文 渲染。省略或 false 时仅内联白名单内的图片/视频类型，白名单外同样降级为 attachment。 */
+                download?: boolean;
             };
             header?: {
                 Range?: string;

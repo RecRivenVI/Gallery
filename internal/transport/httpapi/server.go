@@ -2711,7 +2711,9 @@ func (s *Server) mediaContent(w http.ResponseWriter, r *http.Request) {
 		s.writeRequestError(w, concealForbidden(err))
 		return
 	}
-	s.serveMediaItem(w, r, item, false)
+	// download=true 强制附件交付。`media.download` 与在线读取的 capability 分离仍延后
+	// （见规范 08），因此这里不额外求 capability，只改变呈现方式。
+	s.serveMediaItem(w, r, item, r.URL.Query().Get("download") == "true")
 }
 
 func (s *Server) serveMediaItem(w http.ResponseWriter, r *http.Request, item catalog.Media, download bool) {
@@ -2838,13 +2840,21 @@ func (s *Server) writeMediaContent(w http.ResponseWriter, r *http.Request, handl
 	etag := `"gallery-` + algorithm + `-` + digest + `"`
 	w.Header().Set("Accept-Ranges", "bytes")
 	w.Header().Set("ETag", etag)
+	// 规则包可以为任意文件声明任意 MIME，而正文与 /api/v1 同源。呈现方式因此不信任规则
+	// 声明，只信任 media.ResolvePresentation 的白名单：白名单外一律降级为不可嗅探的
+	// application/octet-stream 附件，SVG 与 HTML 无法在 Gallery 自己的源上取得脚本执行
+	// 上下文。sandbox CSP 是第二道防线，即使某个类型被误加入白名单也不建立同源特权。
+	presentation := media.ResolvePresentation(mimeType, download)
+	w.Header().Set("Content-Security-Policy", "sandbox; default-src 'none'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'")
 	// 媒体正文既可能是认证主体的私密内容，也可能是匿名分享内容：`private` 阻止共享
 	// 缓存存储，`no-cache` 要求每次重新向服务端校验，从而让吊销与过期即时生效，同时
 	// 保留基于强 ETag 的条件请求，不像 `no-store` 那样彻底放弃浏览器缓存。
 	w.Header().Set("Cache-Control", "private, no-cache")
-	w.Header().Set("Content-Type", mimeType)
+	w.Header().Set("Content-Type", presentation.ContentType)
 	w.Header().Set("X-Content-Type-Options", "nosniff")
-	if download {
+	if presentation.Attachment {
+		// filename 固定为不含来源信息的占位名：Content-Disposition 会出现在下载对话框、
+		// 代理日志和浏览器历史中，不得携带 Source 相对路径或原始文件名。
 		w.Header().Set("Content-Disposition", `attachment; filename="gallery-media"`)
 	}
 	if etagMatches(r.Header.Get("If-None-Match"), etag) {
@@ -3089,7 +3099,15 @@ func (s *Server) derivedAssetContent(w http.ResponseWriter, r *http.Request) {
 	etag := `"gallery-derived-` + lease.Asset.OutputDigest + `"`
 	w.Header().Set("ETag", etag)
 	w.Header().Set("Cache-Control", "private, no-cache")
-	w.Header().Set("Content-Type", lease.Asset.OutputMIME)
+	// DerivedAsset 的 OutputMIME 来自磁盘上的 manifest。即使 manifest 被篡改成
+	// text/html，也不得在同源上下文渲染：与媒体正文适用同一条内联白名单与 sandbox CSP。
+	// 正常缩略图是 image/jpeg，在白名单内，行为不变。
+	presentation := media.ResolvePresentation(lease.Asset.OutputMIME, false)
+	w.Header().Set("Content-Type", presentation.ContentType)
+	w.Header().Set("Content-Security-Policy", "sandbox; default-src 'none'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'")
+	if presentation.Attachment {
+		w.Header().Set("Content-Disposition", `attachment; filename="gallery-derived-asset"`)
+	}
 	w.Header().Set("X-Content-Type-Options", "nosniff")
 	if etagMatches(r.Header.Get("If-None-Match"), etag) {
 		w.WriteHeader(http.StatusNotModified)
