@@ -1206,6 +1206,7 @@ func (s *Server) listLibraries(w http.ResponseWriter, r *http.Request) {
 		s.writeRequestError(w, err)
 		return
 	}
+	publicationID, covers := s.aggregateCoversForScope(r.Context(), catalog.AggregateScopeLibrary)
 	result := make([]api.Library, 0, len(items))
 	for _, item := range items {
 		allowed, authorizeErr := s.auth.AuthorizeSession(r.Context(), session, "library.read", auth.ResourceScope{Kind: "library", ID: item.ID})
@@ -1214,7 +1215,7 @@ func (s *Server) listLibraries(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		if allowed {
-			result = append(result, libraryDTO(item))
+			result = append(result, withLibraryCover(libraryDTO(item), publicationID, covers))
 		}
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"libraries": result})
@@ -1230,7 +1231,8 @@ func (s *Server) getLibrary(w http.ResponseWriter, r *http.Request) {
 		s.writeRequestError(w, err)
 		return
 	}
-	writeJSON(w, http.StatusOK, libraryDTO(result))
+	publicationID, covers := s.aggregateCoversForScope(r.Context(), catalog.AggregateScopeLibrary)
+	writeJSON(w, http.StatusOK, withLibraryCover(libraryDTO(result), publicationID, covers))
 }
 
 func (s *Server) createSource(w http.ResponseWriter, r *http.Request) {
@@ -1271,6 +1273,7 @@ func (s *Server) listSources(w http.ResponseWriter, r *http.Request) {
 		s.writeRequestError(w, err)
 		return
 	}
+	publicationID, covers := s.aggregateCoversForScope(r.Context(), catalog.AggregateScopeSource)
 	result := make([]api.Source, 0, len(items))
 	for _, item := range items {
 		allowed, authorizeErr := s.auth.AuthorizeSession(r.Context(), session, "library.read", auth.ResourceScope{Kind: "source", ID: item.ID})
@@ -1279,7 +1282,7 @@ func (s *Server) listSources(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		if allowed {
-			result = append(result, sourceDTO(item, s.data.SourceAvailable(item)))
+			result = append(result, withSourceCover(sourceDTO(item, s.data.SourceAvailable(item)), publicationID, covers))
 		}
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"sources": result})
@@ -1295,7 +1298,8 @@ func (s *Server) getSource(w http.ResponseWriter, r *http.Request) {
 		s.writeRequestError(w, err)
 		return
 	}
-	writeJSON(w, http.StatusOK, sourceDTO(result, s.data.SourceAvailable(result)))
+	publicationID, covers := s.aggregateCoversForScope(r.Context(), catalog.AggregateScopeSource)
+	writeJSON(w, http.StatusOK, withSourceCover(sourceDTO(result, s.data.SourceAvailable(result)), publicationID, covers))
 }
 
 func (s *Server) createRuleVersion(w http.ResponseWriter, r *http.Request) {
@@ -1721,6 +1725,8 @@ func (s *Server) listCreators(w http.ResponseWriter, r *http.Request) {
 		s.writeRequestError(w, err)
 		return
 	}
+	// 一次取全部聚合封面，避免逐个作者查询产生 N+1。
+	publicationID, covers := s.aggregateCoversForScope(r.Context(), catalog.AggregateScopeCreator)
 	items := make([]api.Creator, 0, len(list))
 	for _, creator := range list {
 		_, bindings, getErr := s.creators.Get(r.Context(), creator.ID)
@@ -1736,7 +1742,7 @@ func (s *Server) listCreators(w http.ResponseWriter, r *http.Request) {
 		if !visible {
 			continue
 		}
-		items = append(items, creatorDTO(creator))
+		items = append(items, creatorDTO(creator, publicationID, covers))
 	}
 	writeJSON(w, http.StatusOK, api.CreatorListResponse{Creators: items})
 }
@@ -1765,6 +1771,7 @@ func (s *Server) getCreator(w http.ResponseWriter, r *http.Request) {
 		s.writeRequestError(w, fault.New(fault.CodeNotFound, false, nil))
 		return
 	}
+	publicationID, covers := s.aggregateCoversForScope(r.Context(), catalog.AggregateScopeCreator)
 	items := make([]api.CreatorSourceBinding, 0, len(allowed))
 	for _, binding := range allowed {
 		items = append(items, api.CreatorSourceBinding{
@@ -1773,7 +1780,7 @@ func (s *Server) getCreator(w http.ResponseWriter, r *http.Request) {
 			Status: api.CreatorSourceBindingStatus(binding.Status),
 		})
 	}
-	writeJSON(w, http.StatusOK, api.CreatorDetail{Creator: creatorDTO(creator), SourceBindings: items})
+	writeJSON(w, http.StatusOK, api.CreatorDetail{Creator: creatorDTO(creator, publicationID, covers), SourceBindings: items})
 }
 
 func (s *Server) creatorBindingsAllowed(r *http.Request, session auth.Session, bindings []creators.SourceBinding) ([]creators.SourceBinding, bool, error) {
@@ -3164,6 +3171,30 @@ func sourceDTO(value application.Source, available bool) api.Source {
 	return api.Source{Id: value.ID, LibraryId: value.LibraryID, DisplayName: value.DisplayName, ReadOnly: true, Available: available, CreatedAt: value.CreatedAt}
 }
 
+// withLibraryCover 与 withSourceCover 把 publication 快照里的聚合封面附加到 control.db 的身份
+// DTO 上。身份与封面来自不同生命周期的两个库，因此封面必须与其所属的 queryPublicationId 成对出现，
+// 客户端才能判断这个封面属于哪个快照。
+//
+// 只在列表与详情端点装饰：新建 Library/Source 时其下必然还没有作品，封面为 null 是正确结果，
+// 不需要为此多做一次快照查询。
+func withLibraryCover(dto api.Library, publicationID string, covers map[string]catalog.AggregateCover) api.Library {
+	if cover, ok := covers[dto.Id]; ok && cover.CoverMediaID != "" {
+		coverID := api.CanonicalMediaId(cover.CoverMediaID)
+		snapshot := api.QueryPublicationId(publicationID)
+		dto.CoverMediaId, dto.QueryPublicationId = &coverID, &snapshot
+	}
+	return dto
+}
+
+func withSourceCover(dto api.Source, publicationID string, covers map[string]catalog.AggregateCover) api.Source {
+	if cover, ok := covers[dto.Id]; ok && cover.CoverMediaID != "" {
+		coverID := api.CanonicalMediaId(cover.CoverMediaID)
+		snapshot := api.QueryPublicationId(publicationID)
+		dto.CoverMediaId, dto.QueryPublicationId = &coverID, &snapshot
+	}
+	return dto
+}
+
 func ruleVersionDTO(value application.RuleVersion) api.RuleVersion {
 	result := api.RuleVersion{RuleSetId: value.RuleSetID, Version: value.Version, PackageHash: value.PackageHash, SemanticHash: value.SemanticHash, RuleIrHash: value.RuleIRHash, CreatedAt: value.CreatedAt}
 	if value.ID != "" {
@@ -3469,7 +3500,12 @@ func bindingIssueDTO(value application.BindingIssue) api.BindingIssue {
 	return result
 }
 
-func creatorDTO(value creators.Creator) api.Creator {
+// creatorDTO 把 control.db 的 Canonical 身份与 Catalog 快照的聚合封面合并为公开 DTO。
+//
+// 身份来自 control.db（不可重建的用户事实），封面来自 publication 快照（可重建的 Source-derived
+// 事实）——两者生命周期不同，因此封面必须携带其所属的 queryPublicationId，客户端才能判断这个封面
+// 属于哪个快照。covers 为 nil（没有任何可用 publication）时封面与快照 ID 一并为 null。
+func creatorDTO(value creators.Creator, publicationID string, covers map[string]catalog.AggregateCover) api.Creator {
 	result := api.Creator{
 		Id: value.ID, Name: value.Name, EffectiveId: value.EffectiveID,
 		SourceCount: value.SourceCount, CreatedAt: value.CreatedAt,
@@ -3478,7 +3514,36 @@ func creatorDTO(value creators.Creator) api.Creator {
 		merged := api.CanonicalCreatorId(value.MergedInto)
 		result.MergedInto = &merged
 	}
+	if covers != nil {
+		if cover, ok := covers[value.EffectiveID]; ok && cover.CoverMediaID != "" {
+			coverID := api.CanonicalMediaId(cover.CoverMediaID)
+			result.CoverMediaId = &coverID
+			snapshot := api.QueryPublicationId(publicationID)
+			result.QueryPublicationId = &snapshot
+		}
+	}
 	return result
+}
+
+// aggregateCoversForScope 取当前 active publication 下某类作用域的全部聚合封面。
+//
+// 没有任何 publication 是正常状态（尚未完成首次扫描），此时返回空 publication ID 与 nil map，
+// 让调用方把封面表达为 null，而不是让整个列表端点失败。
+func (s *Server) aggregateCoversForScope(ctx context.Context, scopeKind string) (string, map[string]catalog.AggregateCover) {
+	// Catalog 未注入时（仅装配部分依赖的服务器）同样按「没有可用快照」处理：聚合封面是展示增强，
+	// 不能让身份端点因为它不可用而失败。
+	if s.catalog == nil {
+		return "", nil
+	}
+	publication, err := s.catalog.Current(ctx)
+	if err != nil {
+		return "", nil
+	}
+	covers, err := s.catalog.AggregateCoversAt(ctx, publication.ID, scopeKind)
+	if err != nil {
+		return "", nil
+	}
+	return publication.ID, covers
 }
 
 func creatorMergeDTO(value creators.MergeRecord, projectionJobID string) api.CreatorMerge {

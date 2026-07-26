@@ -2159,6 +2159,10 @@ export interface components {
             name: string;
             mergedInto?: components["schemas"]["CanonicalCreatorId"] | null;
             effectiveId: components["schemas"]["CanonicalCreatorId"];
+            /** @description 规则声明的聚合策略（作者取其最新日期作品）由 Catalog 投影计算出的作者封面， 取自 queryPublicationId 所指快照。为 null 表示该作者名下没有带封面的作品。 */
+            coverMediaId?: components["schemas"]["CanonicalMediaId"] | null;
+            /** @description coverMediaId 所属的快照；没有可用快照时为 null。 */
+            queryPublicationId?: components["schemas"]["QueryPublicationId"] | null;
             sourceCount: number;
             /** Format: date-time */
             createdAt: string;
@@ -2325,6 +2329,10 @@ export interface components {
         Library: {
             id: components["schemas"]["LibraryId"];
             name: string;
+            /** @description 规则声明的聚合策略由 Catalog 投影计算出的封面，取自 queryPublicationId 所指快照。 为 null 表示该范围内没有带封面的作品。 */
+            coverMediaId?: components["schemas"]["CanonicalMediaId"] | null;
+            /** @description coverMediaId 所属的快照；没有可用快照时为 null。 */
+            queryPublicationId?: components["schemas"]["QueryPublicationId"] | null;
             /** Format: date-time */
             createdAt: string;
         };
@@ -2340,6 +2348,10 @@ export interface components {
             id: components["schemas"]["SourceId"];
             libraryId: components["schemas"]["LibraryId"];
             displayName: string;
+            /** @description 规则声明的聚合策略（平台取其最新日期作者）由 Catalog 投影计算出的封面，取自 queryPublicationId 所指快照。为 null 表示该来源下没有带封面的作品。 */
+            coverMediaId?: components["schemas"]["CanonicalMediaId"] | null;
+            /** @description coverMediaId 所属的快照；没有可用快照时为 null。 */
+            queryPublicationId?: components["schemas"]["QueryPublicationId"] | null;
             readOnly: boolean;
             available: boolean;
             /** Format: date-time */

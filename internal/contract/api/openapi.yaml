@@ -3681,6 +3681,18 @@ components:
           nullable: true
         effectiveId:
           $ref: "#/components/schemas/CanonicalCreatorId"
+        coverMediaId:
+          description: >-
+            规则声明的聚合策略（作者取其最新日期作品）由 Catalog 投影计算出的作者封面，
+            取自 queryPublicationId 所指快照。为 null 表示该作者名下没有带封面的作品。
+          allOf:
+            - $ref: "#/components/schemas/CanonicalMediaId"
+          nullable: true
+        queryPublicationId:
+          description: coverMediaId 所属的快照；没有可用快照时为 null。
+          allOf:
+            - $ref: "#/components/schemas/QueryPublicationId"
+          nullable: true
         sourceCount:
           type: integer
           minimum: 0
@@ -4052,6 +4064,18 @@ components:
           $ref: "#/components/schemas/LibraryId"
         name:
           type: string
+        coverMediaId:
+          description: >-
+            规则声明的聚合策略由 Catalog 投影计算出的封面，取自 queryPublicationId 所指快照。
+            为 null 表示该范围内没有带封面的作品。
+          allOf:
+            - $ref: "#/components/schemas/CanonicalMediaId"
+          nullable: true
+        queryPublicationId:
+          description: coverMediaId 所属的快照；没有可用快照时为 null。
+          allOf:
+            - $ref: "#/components/schemas/QueryPublicationId"
+          nullable: true
         createdAt:
           type: string
           format: date-time
@@ -4089,6 +4113,18 @@ components:
           $ref: "#/components/schemas/LibraryId"
         displayName:
           type: string
+        coverMediaId:
+          description: >-
+            规则声明的聚合策略（平台取其最新日期作者）由 Catalog 投影计算出的封面，取自
+            queryPublicationId 所指快照。为 null 表示该来源下没有带封面的作品。
+          allOf:
+            - $ref: "#/components/schemas/CanonicalMediaId"
+          nullable: true
+        queryPublicationId:
+          description: coverMediaId 所属的快照；没有可用快照时为 null。
+          allOf:
+            - $ref: "#/components/schemas/QueryPublicationId"
+          nullable: true
         readOnly:
           type: boolean
         available:

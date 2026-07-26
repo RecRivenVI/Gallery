@@ -2401,12 +2401,17 @@ type ControlRestoreRequestResponse struct {
 
 // Creator defines model for Creator.
 type Creator struct {
-	CreatedAt   time.Time           `json:"createdAt"`
-	EffectiveId CanonicalCreatorId  `json:"effectiveId"`
-	Id          CanonicalCreatorId  `json:"id"`
-	MergedInto  *CanonicalCreatorId `json:"mergedInto,omitempty"`
-	Name        string              `json:"name"`
-	SourceCount int                 `json:"sourceCount"`
+	// CoverMediaId 规则声明的聚合策略（作者取其最新日期作品）由 Catalog 投影计算出的作者封面， 取自 queryPublicationId 所指快照。为 null 表示该作者名下没有带封面的作品。
+	CoverMediaId *CanonicalMediaId   `json:"coverMediaId,omitempty"`
+	CreatedAt    time.Time           `json:"createdAt"`
+	EffectiveId  CanonicalCreatorId  `json:"effectiveId"`
+	Id           CanonicalCreatorId  `json:"id"`
+	MergedInto   *CanonicalCreatorId `json:"mergedInto,omitempty"`
+	Name         string              `json:"name"`
+
+	// QueryPublicationId coverMediaId 所属的快照；没有可用快照时为 null。
+	QueryPublicationId *QueryPublicationId `json:"queryPublicationId,omitempty"`
+	SourceCount        int                 `json:"sourceCount"`
 }
 
 // CreatorDetail defines model for CreatorDetail.
@@ -2634,9 +2639,14 @@ type LANOwnerInitializeRequest struct {
 
 // Library defines model for Library.
 type Library struct {
-	CreatedAt time.Time `json:"createdAt"`
-	Id        LibraryId `json:"id"`
-	Name      string    `json:"name"`
+	// CoverMediaId 规则声明的聚合策略由 Catalog 投影计算出的封面，取自 queryPublicationId 所指快照。 为 null 表示该范围内没有带封面的作品。
+	CoverMediaId *CanonicalMediaId `json:"coverMediaId,omitempty"`
+	CreatedAt    time.Time         `json:"createdAt"`
+	Id           LibraryId         `json:"id"`
+	Name         string            `json:"name"`
+
+	// QueryPublicationId coverMediaId 所属的快照；没有可用快照时为 null。
+	QueryPublicationId *QueryPublicationId `json:"queryPublicationId,omitempty"`
 }
 
 // LibraryCreateRequest defines model for LibraryCreateRequest.
@@ -3368,12 +3378,18 @@ type ShareListResponse struct {
 
 // Source defines model for Source.
 type Source struct {
-	Available   bool      `json:"available"`
-	CreatedAt   time.Time `json:"createdAt"`
-	DisplayName string    `json:"displayName"`
-	Id          SourceId  `json:"id"`
-	LibraryId   LibraryId `json:"libraryId"`
-	ReadOnly    bool      `json:"readOnly"`
+	Available bool `json:"available"`
+
+	// CoverMediaId 规则声明的聚合策略（平台取其最新日期作者）由 Catalog 投影计算出的封面，取自 queryPublicationId 所指快照。为 null 表示该来源下没有带封面的作品。
+	CoverMediaId *CanonicalMediaId `json:"coverMediaId,omitempty"`
+	CreatedAt    time.Time         `json:"createdAt"`
+	DisplayName  string            `json:"displayName"`
+	Id           SourceId          `json:"id"`
+	LibraryId    LibraryId         `json:"libraryId"`
+
+	// QueryPublicationId coverMediaId 所属的快照；没有可用快照时为 null。
+	QueryPublicationId *QueryPublicationId `json:"queryPublicationId,omitempty"`
+	ReadOnly           bool                `json:"readOnly"`
 }
 
 // SourceCreateRequest defines model for SourceCreateRequest.

@@ -526,6 +526,12 @@ WHERE c.catalog_revision_id = ? AND o.overlay_revision_id = ?`, candidate.Catalo
 	if err := validateSourceMembership(ctx, tx, candidate.CatalogRevisionID, candidate.OverlayRevisionID); err != nil {
 		return Publication{}, err
 	}
+	// 聚合封面在这里整体重算：此刻投影已完全就位（本 Source 的 Stage、其它 Source 的继承、
+	// Overlay 事实重放都已完成），而 publication 尚未可见。放在 publish 事务内保证聚合结果与
+	// 快照严格同代次，不存在「已发布但聚合还没算完」的中间态。
+	if err := computeAggregateCovers(ctx, tx, candidate.CatalogRevisionID, candidate.OverlayRevisionID); err != nil {
+		return Publication{}, err
+	}
 	if _, err := tx.ExecContext(ctx, `INSERT INTO query_publications
 (query_publication_id, catalog_revision_id, overlay_revision_id, job_id, control_watermark, created_at)
 VALUES (?, ?, ?, ?, ?, ?)`, publication.ID, publication.CatalogRevisionID, publication.OverlayRevisionID, publication.JobID, publication.ControlWatermark, publication.CreatedAt.Unix()); err != nil {
@@ -847,6 +853,11 @@ WHERE a.singleton=1`, candidate.OverlayRevisionID).Scan(&activeCatalog, &activeO
 		return Publication{}, fault.New(fault.CodeConflict, true, nil)
 	}
 	if err := validateSourceMembership(ctx, tx, candidate.CatalogRevisionID, candidate.OverlayRevisionID); err != nil {
+		return Publication{}, err
+	}
+	// Overlay 重新发布同样必须重算聚合封面：用户设置的 CustomCover 会改变作品的有效封面，
+	// 而聚合取的正是有效封面，因此这条路径不能只继承旧聚合行。
+	if err := computeAggregateCovers(ctx, tx, candidate.CatalogRevisionID, candidate.OverlayRevisionID); err != nil {
 		return Publication{}, err
 	}
 	if _, err := tx.ExecContext(ctx, `INSERT INTO query_publications
