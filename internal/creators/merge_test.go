@@ -159,7 +159,7 @@ func (f *fixture) creatorByName(t *testing.T, name string) creators.Creator {
 
 func (f *fixture) displayedCreator(t *testing.T, title string) string {
 	t.Helper()
-	result, err := f.query.Search(f.ctx, galleryquery.Request{Limit: 50, AuthorizationScope: mergeScope})
+	result, err := f.query.Search(f.ctx, galleryquery.Request{Limit: 50, AuthorizationScope: mergeScope, AuthorizeSources: allowAllQuerySources})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -174,11 +174,15 @@ func (f *fixture) displayedCreator(t *testing.T, title string) string {
 
 func (f *fixture) searchCount(t *testing.T, term string) int {
 	t.Helper()
-	result, err := f.query.Search(f.ctx, galleryquery.Request{Search: term, Limit: 50, AuthorizationScope: mergeScope})
+	result, err := f.query.Search(f.ctx, galleryquery.Request{Search: term, Limit: 50, AuthorizationScope: mergeScope, AuthorizeSources: allowAllQuerySources})
 	if err != nil {
 		t.Fatal(err)
 	}
 	return len(result.Items)
+}
+
+func allowAllQuerySources(_ context.Context, _ []string, candidateSourceIDs []string) ([]string, error) {
+	return append([]string(nil), candidateSourceIDs...), nil
 }
 
 func (f *fixture) mergeAndWait(t *testing.T, target string, absorbed ...string) creators.MergeResult {

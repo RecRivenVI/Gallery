@@ -3,6 +3,7 @@ package query_test
 import (
 	"context"
 	"fmt"
+	"reflect"
 	"testing"
 	"time"
 
@@ -53,6 +54,8 @@ func richFixture(t *testing.T) (*storage.Store, string) {
 (overlay_revision_id, catalog_revision_id, control_watermark, status, created_at, published_at)
 VALUES (?, ?, 1, 'published', 1, 1)`, ov, cat)
 	exec("INSERT INTO query_publications VALUES (?, ?, ?, ?, 1, 1)", pub, cat, ov, job)
+	exec(`INSERT INTO catalog_revision_sources (catalog_revision_id, source_id, library_id)
+VALUES (?, 'src_test', 'lib_test'), (?, 'src_other', 'lib_test')`, cat, cat)
 
 	type workSpec struct {
 		id, sourceID, sourceKey, title, providerID, creatorID, creatorRole, mediaKind, location, verification string
@@ -133,7 +136,7 @@ func newFixtureService(t *testing.T, store *storage.Store) *galleryquery.Service
 func searchFilter(t *testing.T, service *galleryquery.Service, filterJSON string) []string {
 	t.Helper()
 	scope := galleryquery.AuthorizationScope("owner", []string{"library.read"})
-	result, err := service.Search(context.Background(), galleryquery.Request{Filter: filterJSON, Limit: 20, AuthorizationScope: scope})
+	result, err := service.Search(context.Background(), authorizedRequest(galleryquery.Request{Filter: filterJSON, Limit: 20, AuthorizationScope: scope}))
 	if err != nil {
 		t.Fatalf("过滤查询失败: %v (filter=%s)", err, filterJSON)
 	}
@@ -234,7 +237,7 @@ func TestFilterRejectsUnknownFieldOpAndShape(t *testing.T) {
 		`{"field":"tag","op":"eq","value":"a"}}`,
 		`{"field":"tag","op":"eq","value":"a"}]`,
 	} {
-		_, err := service.Search(context.Background(), galleryquery.Request{Filter: filter, Limit: 20, AuthorizationScope: scope})
+		_, err := service.Search(context.Background(), authorizedRequest(galleryquery.Request{Filter: filter, Limit: 20, AuthorizationScope: scope}))
 		assertCode(t, err, fault.CodeValidation)
 	}
 }
@@ -284,6 +287,8 @@ func TestOverlayHiddenExplicitFilterRequiresLibraryWriteCapability(t *testing.T)
 (overlay_revision_id, catalog_revision_id, control_watermark, status, created_at, published_at)
 VALUES (?, ?, 1, 'published', 1, 1)`, ov, cat)
 	exec("INSERT INTO query_publications VALUES (?, ?, ?, ?, 1, 1)", pub, cat, ov, job)
+	exec(`INSERT INTO catalog_revision_sources (catalog_revision_id, source_id, library_id)
+VALUES (?, 'src_test', 'lib_test')`, cat)
 	seedHiddenWork := func(id, title string, hidden int) {
 		document := querytext.BuildDocument(title, "", nil, nil)
 		exec(`INSERT INTO work_projections
@@ -299,8 +304,8 @@ VALUES (?, ?, ?, 'src_test', ?, 'lib_test', ?, '', '[]', '', ?, ?, ?, ?, ?, 0, 0
 
 	service := newFixtureService(t, store)
 
-	defaultResult, err := service.Search(ctx, galleryquery.Request{Limit: 20,
-		AuthorizationScope: galleryquery.AuthorizationScope("owner", []string{"library.read"}), Capabilities: []string{"library.read"}})
+	defaultResult, err := service.Search(ctx, authorizedRequest(galleryquery.Request{Limit: 20,
+		AuthorizationScope: galleryquery.AuthorizationScope("owner", []string{"library.read"})}))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -308,12 +313,20 @@ VALUES (?, ?, ?, 'src_test', ?, 'lib_test', ?, '', '[]', '', ?, ?, ?, ?, ?, 0, 0
 		t.Fatalf("默认查询应隐式隐藏 Hidden Work: %v", titles)
 	}
 
-	_, err = service.Search(ctx, galleryquery.Request{Limit: 20, Filter: `{"field":"overlay.hidden","op":"eq","value":true}`,
-		AuthorizationScope: galleryquery.AuthorizationScope("owner", []string{"library.read"}), Capabilities: []string{"library.read"}})
-	assertCode(t, err, fault.CodeForbidden)
+	readOnlyHidden, err := service.Search(ctx, galleryquery.Request{Limit: 20, Filter: `{"field":"overlay.hidden","op":"eq","value":true}`,
+		AuthorizationScope: galleryquery.AuthorizationScope("owner", []string{"library.read"}),
+		AuthorizeSources: func(_ context.Context, capabilities, _ []string) ([]string, error) {
+			if reflect.DeepEqual(capabilities, []string{"library.read"}) {
+				return []string{"src_test"}, nil
+			}
+			return nil, nil
+		}})
+	if err != nil || len(readOnlyHidden.Items) != 0 {
+		t.Fatalf("Source 级 library.write deny 应只移除该 Source，而非全局拒绝: %+v err=%v", readOnlyHidden, err)
+	}
 
-	hiddenResult, err := service.Search(ctx, galleryquery.Request{Limit: 20, Filter: `{"field":"overlay.hidden","op":"eq","value":true}`,
-		AuthorizationScope: galleryquery.AuthorizationScope("owner", []string{"library.read", "library.write"}), Capabilities: []string{"library.read", "library.write"}})
+	hiddenResult, err := service.Search(ctx, authorizedRequest(galleryquery.Request{Limit: 20, Filter: `{"field":"overlay.hidden","op":"eq","value":true}`,
+		AuthorizationScope: galleryquery.AuthorizationScope("owner", []string{"library.read", "library.write"})}))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -325,12 +338,20 @@ VALUES (?, ?, ?, 'src_test', ?, 'lib_test', ?, '', '[]', '', ?, ?, ?, ?, ?, 0, 0
 	// "NOT hidden=true"与默认隐式条件产生不可解释的双重语义的一般情形（对任意深度
 	// 的 all/any/not 组合判断"最终是否只暴露非 Hidden 作品"等价于布尔可满足性问题），
 	// 用统一门槛换取简单、无歧义、可审计的规则。
-	_, err = service.Search(ctx, galleryquery.Request{Limit: 20, Filter: `{"field":"overlay.hidden","op":"eq","value":false}`,
-		AuthorizationScope: galleryquery.AuthorizationScope("owner", []string{"library.read"}), Capabilities: []string{"library.read"}})
-	assertCode(t, err, fault.CodeForbidden)
+	readOnlyVisible, err := service.Search(ctx, galleryquery.Request{Limit: 20, Filter: `{"field":"overlay.hidden","op":"eq","value":false}`,
+		AuthorizationScope: galleryquery.AuthorizationScope("owner", []string{"library.read"}),
+		AuthorizeSources: func(_ context.Context, capabilities, _ []string) ([]string, error) {
+			if reflect.DeepEqual(capabilities, []string{"library.read"}) {
+				return []string{"src_test"}, nil
+			}
+			return nil, nil
+		}})
+	if err != nil || len(readOnlyVisible.Items) != 0 {
+		t.Fatalf("显式 hidden=false 同样要求逐 Source write，deny 只过滤该 Source: %+v err=%v", readOnlyVisible, err)
+	}
 
-	visibleResult, err := service.Search(ctx, galleryquery.Request{Limit: 20, Filter: `{"field":"overlay.hidden","op":"eq","value":false}`,
-		AuthorizationScope: galleryquery.AuthorizationScope("owner", []string{"library.read", "library.write"}), Capabilities: []string{"library.read", "library.write"}})
+	visibleResult, err := service.Search(ctx, authorizedRequest(galleryquery.Request{Limit: 20, Filter: `{"field":"overlay.hidden","op":"eq","value":false}`,
+		AuthorizationScope: galleryquery.AuthorizationScope("owner", []string{"library.read", "library.write"})}))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -354,7 +375,7 @@ func TestDependencySetReflectsActualRequest(t *testing.T) {
 	service := newFixtureService(t, store)
 	scope := galleryquery.AuthorizationScope("owner", []string{"library.read"})
 
-	plain, err := service.Search(context.Background(), galleryquery.Request{Limit: 20, AuthorizationScope: scope})
+	plain, err := service.Search(context.Background(), authorizedRequest(galleryquery.Request{Limit: 20, AuthorizationScope: scope}))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -377,8 +398,8 @@ func TestDependencySetReflectsActualRequest(t *testing.T) {
 		t.Fatalf("查询结果应读取 publication 冻结的 cover_media_id: %+v", plain.Items)
 	}
 
-	filtered, err := service.Search(context.Background(), galleryquery.Request{Limit: 20, AuthorizationScope: scope,
-		Filter: `{"field":"overlay.favorite","op":"eq","value":true}`})
+	filtered, err := service.Search(context.Background(), authorizedRequest(galleryquery.Request{Limit: 20, AuthorizationScope: scope,
+		Filter: `{"field":"overlay.favorite","op":"eq","value":true}`}))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -386,7 +407,7 @@ func TestDependencySetReflectsActualRequest(t *testing.T) {
 		t.Fatalf("显式过滤 favorite 应把 overlay.favorite 记为 predicate 依赖: %+v", filtered.DependencySet)
 	}
 
-	searched, err := service.Search(context.Background(), galleryquery.Request{Limit: 20, AuthorizationScope: scope, Search: "alpha"})
+	searched, err := service.Search(context.Background(), authorizedRequest(galleryquery.Request{Limit: 20, AuthorizationScope: scope, Search: "alpha"}))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -452,7 +473,7 @@ func TestRankingTierOrdersExactPrefixInfixFirst(t *testing.T) {
 		t.Fatal(err)
 	}
 	scope := galleryquery.AuthorizationScope("owner", []string{"library.read"})
-	result, err := service.Search(ctx, galleryquery.Request{Search: "apple", Limit: 20, AuthorizationScope: scope})
+	result, err := service.Search(ctx, authorizedRequest(galleryquery.Request{Search: "apple", Limit: 20, AuthorizationScope: scope}))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -513,7 +534,7 @@ func TestRankingProtocolVersionInvalidatesOldCursor(t *testing.T) {
 		t.Fatal(err)
 	}
 	scope := galleryquery.AuthorizationScope("owner", []string{"library.read"})
-	page, err := service.Search(ctx, galleryquery.Request{Limit: 1, AuthorizationScope: scope})
+	page, err := service.Search(ctx, authorizedRequest(galleryquery.Request{Limit: 1, AuthorizationScope: scope}))
 	if err != nil || page.RankProtocolVersion == 0 {
 		t.Fatalf("响应缺少 rankProtocolVersion: %+v err=%v", page, err)
 	}
@@ -524,7 +545,7 @@ func TestTotalModes(t *testing.T) {
 	service := newFixtureService(t, store)
 	scope := galleryquery.AuthorizationScope("owner", []string{"library.read"})
 
-	exact, err := service.Search(context.Background(), galleryquery.Request{Limit: 1, AuthorizationScope: scope})
+	exact, err := service.Search(context.Background(), authorizedRequest(galleryquery.Request{Limit: 1, AuthorizationScope: scope}))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -532,7 +553,7 @@ func TestTotalModes(t *testing.T) {
 		t.Fatalf("exact total = %+v", exact.Total)
 	}
 
-	omitted, err := service.Search(context.Background(), galleryquery.Request{Limit: 1, OmitTotal: true, AuthorizationScope: scope})
+	omitted, err := service.Search(context.Background(), authorizedRequest(galleryquery.Request{Limit: 1, OmitTotal: true, AuthorizationScope: scope}))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -543,7 +564,7 @@ func TestTotalModes(t *testing.T) {
 	original := galleryquery.TotalBudget
 	galleryquery.TotalBudget = 1
 	defer func() { galleryquery.TotalBudget = original }()
-	lowerBound, err := service.Search(context.Background(), galleryquery.Request{Limit: 1, AuthorizationScope: scope})
+	lowerBound, err := service.Search(context.Background(), authorizedRequest(galleryquery.Request{Limit: 1, AuthorizationScope: scope}))
 	if err != nil {
 		t.Fatal(err)
 	}

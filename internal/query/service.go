@@ -97,6 +97,12 @@ const (
 // LiveUserState 能力位，两处必须保持一致，由 dependency_test.go 锁定）。
 var LiveUserStateFields = []string{"favorite", "progress"}
 
+// SourceSetAuthorizer 在同一个授权快照中判定 publication 的完整候选 Source 集合。
+// requiredCapabilities 使用 all-of 语义；返回值只包含同时满足全部 capability 的 Source。
+// 调用方必须提供与当前 Session/API Token 绑定的实现，Query Service 不信任扁平
+// capability 列表，也不把某个 Source 的 deny 扩大成整个列表的 deny。
+type SourceSetAuthorizer func(ctx context.Context, requiredCapabilities, candidateSourceIDs []string) ([]string, error)
+
 type Request struct {
 	Search             string
 	Tag                string
@@ -108,11 +114,10 @@ type Request struct {
 	Cursor             string
 	QueryPublicationID string
 	AuthorizationScope string
-	// Capabilities 是调用方当前 effective capability 列表，用于判定是否允许显式查询
-	// overlay.hidden=true（见 requireHiddenCapability）。与 AuthorizationScope 分开
-	// 传递：后者只是不透明的游标/缓存身份熵输入，不应被反解析出 capability 列表。
-	Capabilities []string
-	OmitTotal    bool
+	// AuthorizeSources 必须 fail-closed：nil 会拒绝查询，返回 error 会使整次查询失败；
+	// 返回的允许集合只影响对应 Source，不得把局部 deny 解释为全局 deny。
+	AuthorizeSources SourceSetAuthorizer
+	OmitTotal        bool
 }
 
 type Result struct {
@@ -146,6 +151,13 @@ type Work struct {
 }
 
 type publication struct{ ID, CatalogRevision, OverlayRevision string }
+
+type sourceAuthorization struct {
+	CandidateSourceIDs   []string
+	AllowedSourceIDs     []string
+	DeniedSourceIDs      []string
+	RequiredCapabilities []string
+}
 
 type Service struct {
 	control *sql.DB
@@ -195,12 +207,10 @@ func (s *Service) Search(ctx context.Context, request Request) (Result, error) {
 		return Result{}, err
 	}
 	// 显式查询 overlay.hidden 接管该字段的可见性语义，取代默认隐式 hidden=0 条件；
-	// 因为这会让原本默认隐藏的 Work 可能出现在结果中，要求 library.write capability，
-	// 避免只读账户绕过默认隐藏可见性。hidden=false 与默认行为等价，但同样按"显式接管"
-	// 统一要求，不制造"值不同、门槛不同"的隐性特例。
-	if filterReferencesField(filterNode, "overlay.hidden") && !hasCapability(request.Capabilities, "library.write") {
-		return Result{}, fault.New(fault.CodeForbidden, false, nil)
-	}
+	// 因为这会让原本默认隐藏的 Work 可能出现在结果中，后续对每个 publication
+	// candidate Source 除 library.read 外再要求 library.write。这里不能信任 transport
+	// 已计算的扁平能力列表，否则会绕过资源 grant、deny 与 API Token scope。
+	requiresHiddenWrite := filterReferencesField(filterNode, "overlay.hidden")
 	dependencySet := buildDependencySet(request, plan, filterNode)
 	var filterCanonical string
 	if filterNode != nil {
@@ -215,7 +225,6 @@ func (s *Service) Search(ctx context.Context, request Request) (Result, error) {
 		"filter": filterCanonical, "sort": "title", "direction": request.SortDirection, "limit": request.Limit,
 		"rankProtocolVersion": contractquery.RankProtocolVersion, "dependencySet": dependencyFingerprint,
 	})
-	authHash := fingerprint(strings.Split(request.AuthorizationScope, "\x00"))
 	var claims contractquery.CursorClaims
 	var pub publication
 	var leaseID string
@@ -227,17 +236,13 @@ func (s *Service) Search(ctx context.Context, request Request) (Result, error) {
 		if request.QueryPublicationID != "" && request.QueryPublicationID != claims.QueryPublicationID {
 			return Result{}, fault.New(fault.CodeCursorExpired, true, nil)
 		}
-		if claims.QueryFingerprint != queryFingerprint || claims.AuthorizationScopeHash != authHash {
+		if claims.QueryFingerprint != queryFingerprint {
 			return Result{}, fault.New(fault.CodeCursorExpired, true, nil)
 		}
 		pub, err = s.publication(ctx, claims.QueryPublicationID)
 		if err != nil {
 			return Result{}, asExpired(err)
 		}
-		if err := s.verifyLease(ctx, claims.LeaseID, pub.ID, authHash); err != nil {
-			return Result{}, err
-		}
-		leaseID = claims.LeaseID
 	} else {
 		if request.QueryPublicationID != "" {
 			pub, err = s.publication(ctx, request.QueryPublicationID)
@@ -247,16 +252,31 @@ func (s *Service) Search(ctx context.Context, request Request) (Result, error) {
 		if err != nil {
 			return Result{}, err
 		}
+	}
+	authorization, err := s.authorizePublicationSources(ctx, pub, request, requiresHiddenWrite)
+	if err != nil {
+		return Result{}, err
+	}
+	authHash := authorizationHash(request.AuthorizationScope, authorization)
+	if request.Cursor != "" {
+		if claims.AuthorizationScopeHash != authHash {
+			return Result{}, fault.New(fault.CodeCursorExpired, true, nil)
+		}
+		if err := s.verifyLease(ctx, claims.LeaseID, pub.ID, authHash); err != nil {
+			return Result{}, err
+		}
+		leaseID = claims.LeaseID
+	} else {
 		leaseID, err = s.createLease(ctx, pub.ID, authHash)
 		if err != nil {
 			return Result{}, err
 		}
 	}
-	items, more, err := s.query(ctx, pub, request, plan, filterNode, claims)
+	items, more, err := s.query(ctx, pub, authorization, request, plan, filterNode, claims)
 	if err != nil {
 		return Result{}, err
 	}
-	total, err := s.computeTotal(ctx, pub, request, plan, filterNode)
+	total, err := s.computeTotal(ctx, pub, authorization, request, plan, filterNode)
 	if err != nil {
 		return Result{}, err
 	}
@@ -317,18 +337,166 @@ func combinedFieldScoreSQL(tierColumn string, priority int) string {
 	return fmt.Sprintf("CASE WHEN %s = 0 THEN 0 ELSE %s * 10 + %d END", tierColumn, tierColumn, priority)
 }
 
+// authorizePublicationSources 在一次授权快照中计算本次请求涉及的有效 Source 集合。
+// 回调缺失或执行失败时无法证明任何结果可见，必须 fail-closed。候选集合来自已经确定
+// 的 publication；显式 Source/Library 请求只枚举自身范围，避免无关资源权限变化使窄
+// 查询的 cursor 失效。
+func (s *Service) authorizePublicationSources(ctx context.Context, pub publication, request Request, requireWrite bool) (sourceAuthorization, error) {
+	required := []string{"library.read"}
+	if requireWrite {
+		required = append(required, "library.write")
+	}
+	if request.AuthorizeSources == nil {
+		return sourceAuthorization{}, fault.New(fault.CodeForbidden, false, nil)
+	}
+
+	candidates, err := s.publicationSourceIDs(ctx, pub, request)
+	if err != nil {
+		return sourceAuthorization{}, err
+	}
+	allowedRaw, err := request.AuthorizeSources(ctx,
+		append([]string(nil), required...), append([]string(nil), candidates...))
+	if err != nil {
+		return sourceAuthorization{}, fault.New(fault.CodeInternal, true, err)
+	}
+
+	// 回调输出不是信任边界：只接受 publication 候选集合的交集，重复项与未知 Source
+	// 均不能扩大结果。排序使 SQL 参数与 authorization hash 都具有 canonical 表达。
+	candidateSet := make(map[string]struct{}, len(candidates))
+	for _, sourceID := range candidates {
+		candidateSet[sourceID] = struct{}{}
+	}
+	allowedSet := make(map[string]struct{}, len(allowedRaw))
+	for _, sourceID := range allowedRaw {
+		if _, candidate := candidateSet[sourceID]; candidate {
+			allowedSet[sourceID] = struct{}{}
+		}
+	}
+	allowed := make([]string, 0, len(allowedSet))
+	denied := make([]string, 0, len(candidates)-len(allowedSet))
+	for _, sourceID := range candidates {
+		if _, ok := allowedSet[sourceID]; ok {
+			allowed = append(allowed, sourceID)
+		} else {
+			denied = append(denied, sourceID)
+		}
+	}
+	return sourceAuthorization{
+		CandidateSourceIDs: candidates, AllowedSourceIDs: allowed,
+		DeniedSourceIDs: denied, RequiredCapabilities: required,
+	}, nil
+}
+
+// publicationSourceIDs 读取 Catalog revision 发布时冻结的 Source/Library 成员小表，
+// 成本只随 Source 数增长。不能改回从 work_projections 做 DISTINCT；后者会扫描
+// publication 的全部 Work，并在普通分页请求上反复建立去重结果。
+func (s *Service) publicationSourceIDs(ctx context.Context, pub publication, request Request) ([]string, error) {
+	if request.SourceID != "" {
+		return []string{request.SourceID}, nil
+	}
+
+	query := `SELECT source_id FROM catalog_revision_sources
+WHERE catalog_revision_id=?`
+	args := []any{pub.CatalogRevision}
+	if request.LibraryID != "" {
+		query += " AND library_id=?"
+		args = append(args, request.LibraryID)
+	}
+	query += " ORDER BY source_id"
+	rows, err := s.catalog.QueryContext(ctx, query, args...)
+	if err != nil {
+		return nil, fault.New(fault.CodeInternal, true, err)
+	}
+	defer rows.Close()
+	result := []string{}
+	for rows.Next() {
+		var sourceID string
+		if err := rows.Scan(&sourceID); err != nil {
+			return nil, fault.New(fault.CodeInternal, true, err)
+		}
+		result = append(result, sourceID)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fault.New(fault.CodeInternal, true, err)
+	}
+	return result, nil
+}
+
+// authorizationHash 把调用方的不透明 Principal/Session/Token 身份熵、这次查询实际要求
+// 的 capability，以及在目标 publication 上逐资源计算出的允许 Source 集合共同绑定进
+// cursor/lease。Grant 或 Token scope 变化导致集合变化时，旧游标立即过期。
+func authorizationHash(scope string, authorization sourceAuthorization) string {
+	return fingerprint(map[string]any{
+		"scope":                strings.Split(scope, "\x00"),
+		"requiredCapabilities": authorization.RequiredCapabilities,
+		"allowedSourceIds":     authorization.AllowedSourceIDs,
+	})
+}
+
 // baseFilter 构建结构化过滤、图书馆/来源/标签快捷参数与搜索召回共用的 WHERE 片段，
 // 供分页查询与 total 统计复用同一语义，避免两处判据分叉。
-func (s *Service) baseFilter(ctx context.Context, pub publication, request Request, plan querytext.SearchPlan, filterNode *FilterNode) ([]string, string, []any, error) {
+func (s *Service) baseFilter(ctx context.Context, pub publication, authorization sourceAuthorization, request Request, plan querytext.SearchPlan, filterNode *FilterNode, forTotal bool) ([]string, string, []any, error) {
 	args := []any{pub.CatalogRevision, pub.OverlayRevision}
 	where := []string{"w.catalog_revision_id = ?", "w.overlay_revision_id = ?"}
+	positiveAllowedFilter := false
+	negativeDeniedFilter := false
+	// 全允许必须完全省略授权谓词，保留原查询索引快路径；全拒绝直接短路。部分允许
+	// 选择较小的 allowed/denied 集合：单元素直接使用等值/不等值，多元素才以单个 JSON
+	// 参数物化为 LIST SUBQUERY。这样既避免 SQLite host parameter 上限，也避免
+	// correlated json_each 对外层每行重复扫描。
+	switch {
+	case len(authorization.CandidateSourceIDs) == 0:
+		// 缺失或空 membership 不能被误判为“全部允许”；即使 Catalog 数据损坏，
+		// 也必须在 SQL 层 fail-closed，不能把未授权 Work 暴露给调用方。
+		where = append(where, "1=0")
+	case len(authorization.AllowedSourceIDs) == len(authorization.CandidateSourceIDs):
+		// 无授权 SQL 谓词。
+	case len(authorization.AllowedSourceIDs) == 0:
+		where = append(where, "1=0")
+	case len(authorization.DeniedSourceIDs) < len(authorization.AllowedSourceIDs):
+		negativeDeniedFilter = true
+		if len(authorization.DeniedSourceIDs) == 1 {
+			where = append(where, "w.source_id <> ?")
+			args = append(args, authorization.DeniedSourceIDs[0])
+		} else {
+			deniedSourcesJSON, _ := json.Marshal(authorization.DeniedSourceIDs)
+			where = append(where, "w.source_id NOT IN (SELECT value FROM json_each(?))")
+			args = append(args, string(deniedSourcesJSON))
+		}
+	default:
+		if len(authorization.AllowedSourceIDs) == 1 {
+			where = append(where, "w.source_id = ?")
+			args = append(args, authorization.AllowedSourceIDs[0])
+		} else {
+			allowedSourcesJSON, _ := json.Marshal(authorization.AllowedSourceIDs)
+			where = append(where, "w.source_id IN (SELECT value FROM json_each(?))")
+			args = append(args, string(allowedSourcesJSON))
+		}
+		positiveAllowedFilter = true
+	}
 	// 客户端显式过滤 overlay.hidden 时由该谓词完全接管可见性语义（buildOverlayHidden
 	// 编译进 filterNode 的 SQL 片段），不再叠加默认隐式条件；未显式过滤时保持默认
 	// 隐藏 Hidden Work 的既有行为。二者不会同时生效，不产生双重语义。
 	if !filterReferencesField(filterNode, "overlay.hidden") {
 		where = append(where, "w.hidden = 0")
 	}
-	join := ""
+	fromSuffix := ""
+	// 无搜索 browse 按实际收窄维度选择能同时服务过滤与稳定排序的索引。FTS 路径由
+	// SQLite 根据 work_search 驱动关系自行规划，不在这里强制 WorkProjection 索引。
+	if plan.NormalizedQuery == "" {
+		switch {
+		case request.SourceID != "":
+			fromSuffix = " INDEXED BY work_projections_source_query_idx"
+		case positiveAllowedFilter && (forTotal || len(authorization.AllowedSourceIDs) == 1):
+			fromSuffix = " INDEXED BY work_projections_source_query_idx"
+		case request.LibraryID != "":
+			fromSuffix = " INDEXED BY work_projections_library_query_idx"
+		case forTotal && negativeDeniedFilter:
+			fromSuffix = " INDEXED BY work_projections_source_query_idx"
+		default:
+			fromSuffix = " INDEXED BY work_projections_query_idx"
+		}
+	}
 	if request.LibraryID != "" {
 		where = append(where, "w.library_id = ?")
 		args = append(args, request.LibraryID)
@@ -353,16 +521,16 @@ func (s *Service) baseFilter(ctx context.Context, pub publication, request Reque
 		where = append(where, "instr(w.normalized_original_text, ?) > 0")
 		args = append(args, plan.NormalizedQuery)
 		if plan.FTSQuery != "" {
-			join = " JOIN work_search ON work_search.catalog_revision_id=w.catalog_revision_id AND work_search.overlay_revision_id=w.overlay_revision_id AND work_search.work_id=w.work_id"
+			fromSuffix += " JOIN work_search ON work_search.catalog_revision_id=w.catalog_revision_id AND work_search.overlay_revision_id=w.overlay_revision_id AND work_search.work_id=w.work_id"
 			where = append(where, "work_search MATCH ?")
 			args = append(args, plan.FTSQuery)
 		}
 	}
-	return where, join, args, nil
+	return where, fromSuffix, args, nil
 }
 
-func (s *Service) query(ctx context.Context, pub publication, request Request, plan querytext.SearchPlan, filterNode *FilterNode, claims contractquery.CursorClaims) ([]Work, bool, error) {
-	where, join, fromArgs, err := s.baseFilter(ctx, pub, request, plan, filterNode)
+func (s *Service) query(ctx context.Context, pub publication, authorization sourceAuthorization, request Request, plan querytext.SearchPlan, filterNode *FilterNode, claims contractquery.CursorClaims) ([]Work, bool, error) {
+	where, join, fromArgs, err := s.baseFilter(ctx, pub, authorization, request, plan, filterNode, false)
 	if err != nil {
 		return nil, false, err
 	}
@@ -414,10 +582,18 @@ FROM work_projections w%s WHERE %s
 	var outerWhere []string
 	var outerArgs []any
 	if claims.LastSortKey != "" {
-		outerWhere = append(outerWhere, fmt.Sprintf(
-			"(rank_tier < ? OR (rank_tier = ? AND (sort_title_key %s ? OR (sort_title_key = ? AND work_id %s ?))))",
-			operator, operator))
-		outerArgs = append(outerArgs, claims.LastRankTier, claims.LastRankTier, claims.LastSortKey, claims.LastSortKey, claims.LastCanonicalWorkID)
+		if plan.NormalizedQuery == "" {
+			// 无搜索时 rank_tier 恒为 0；把它保留在 keyset 谓词会阻止 SQLite
+			// 直接利用 sort_title_key/work_id 的索引顺序，并诱发整批排序。
+			outerWhere = append(outerWhere, fmt.Sprintf(
+				"(sort_title_key %s ? OR (sort_title_key = ? AND work_id %s ?))", operator, operator))
+			outerArgs = append(outerArgs, claims.LastSortKey, claims.LastSortKey, claims.LastCanonicalWorkID)
+		} else {
+			outerWhere = append(outerWhere, fmt.Sprintf(
+				"(rank_tier < ? OR (rank_tier = ? AND (sort_title_key %s ? OR (sort_title_key = ? AND work_id %s ?))))",
+				operator, operator))
+			outerArgs = append(outerArgs, claims.LastRankTier, claims.LastRankTier, claims.LastSortKey, claims.LastSortKey, claims.LastCanonicalWorkID)
+		}
 	}
 
 	statement := cte + `
@@ -428,7 +604,11 @@ SELECT work_id, title, creator, tags_json, filenames_text, sort_title_key, favor
 		statement += " WHERE " + strings.Join(outerWhere, " AND ")
 		args = append(args, outerArgs...)
 	}
-	statement += fmt.Sprintf(" ORDER BY rank_tier DESC, sort_title_key %s, work_id %s LIMIT ?", direction, direction)
+	if plan.NormalizedQuery == "" {
+		statement += fmt.Sprintf(" ORDER BY sort_title_key %s, work_id %s LIMIT ?", direction, direction)
+	} else {
+		statement += fmt.Sprintf(" ORDER BY rank_tier DESC, sort_title_key %s, work_id %s LIMIT ?", direction, direction)
+	}
 	args = append(args, request.Limit+1)
 
 	rows, err := s.catalog.QueryContext(ctx, statement, args...)
@@ -528,11 +708,11 @@ func truncateRunes(value string, limit int) string {
 
 // computeTotal 复用 baseFilter 的相同判据，只在命中行数超过 TotalBudget 时退化为
 // lower_bound，避免普通列表路径执行无上限全库 COUNT。
-func (s *Service) computeTotal(ctx context.Context, pub publication, request Request, plan querytext.SearchPlan, filterNode *FilterNode) (TotalInfo, error) {
+func (s *Service) computeTotal(ctx context.Context, pub publication, authorization sourceAuthorization, request Request, plan querytext.SearchPlan, filterNode *FilterNode) (TotalInfo, error) {
 	if request.OmitTotal {
 		return TotalInfo{Mode: TotalModeOmitted, ProtocolVersion: TotalProtocolVersion}, nil
 	}
-	where, join, args, err := s.baseFilter(ctx, pub, request, plan, filterNode)
+	where, join, args, err := s.baseFilter(ctx, pub, authorization, request, plan, filterNode, true)
 	if err != nil {
 		return TotalInfo{}, err
 	}
@@ -632,15 +812,6 @@ func asExpired(err error) error {
 		return fault.New(fault.CodeCursorExpired, true, nil)
 	}
 	return err
-}
-
-func hasCapability(capabilities []string, capability string) bool {
-	for _, value := range capabilities {
-		if value == capability {
-			return true
-		}
-	}
-	return false
 }
 
 // buildDependencySet 是查询 planner 的核心：根据本次实际请求（而不是字段的静态能力表）

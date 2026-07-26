@@ -71,7 +71,7 @@ VALUES (?, '', '[]', 0, NULL, 1, 0.7, 1, 1, 1, 'published', NULL, ?, NULL, 1)`,
 	}
 
 	favoriteFilter := `{"field":"overlay.favorite","op":"eq","value":true}`
-	before, err := queryService.Search(ctx, galleryquery.Request{Filter: favoriteFilter, Limit: 20, AuthorizationScope: "owner"})
+	before, err := queryService.Search(ctx, galleryquery.Request{Filter: favoriteFilter, Limit: 20, AuthorizationScope: "owner", AuthorizeSources: allowAllQuerySources})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -90,7 +90,7 @@ VALUES (?, '', '[]', 0, NULL, 1, 0.7, 1, 1, 1, 'published', NULL, ?, NULL, 1)`,
 		t.Fatal(err)
 	}
 
-	after, err := queryService.Search(ctx, galleryquery.Request{Filter: favoriteFilter, Limit: 20, AuthorizationScope: "owner"})
+	after, err := queryService.Search(ctx, galleryquery.Request{Filter: favoriteFilter, Limit: 20, AuthorizationScope: "owner", AuthorizeSources: allowAllQuerySources})
 	if err != nil {
 		t.Fatal(err)
 	}

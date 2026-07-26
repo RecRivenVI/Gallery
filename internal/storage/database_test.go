@@ -33,7 +33,7 @@ func openTestStore(t *testing.T) (*Store, appdirs.Dirs) {
 
 func TestIndependentWALMigrationsAndBackup(t *testing.T) {
 	store, dirs := openTestStore(t)
-	wantVersions := map[Role]int{RoleControl: 20, RoleCatalog: 11}
+	wantVersions := map[Role]int{RoleControl: 20, RoleCatalog: 12}
 	for _, database := range []*Database{store.Control, store.Catalog} {
 		var version int
 		if err := database.db.QueryRow("PRAGMA user_version").Scan(&version); err != nil {
@@ -142,6 +142,103 @@ VALUES ('ovr_new', 'cat_new', 0, 'published', 3, 4);
 INSERT INTO query_publications VALUES ('qpub_bad', 'cat_old', 'ovr_new', 'job_bad', 0, 4)`); err == nil {
 		t.Fatal("schema 接受了不合法的 catalog/overlay revision 组合")
 	}
+}
+
+func TestCatalogRevisionSourcesMigrationUpgradesPopulatedV11Catalog(t *testing.T) {
+	prepareV11 := func(t *testing.T, projections string) string {
+		t.Helper()
+		ctx := context.Background()
+		path := filepath.Join(t.TempDir(), "catalog.db")
+		db, err := sql.Open("sqlite", "file:"+filepath.ToSlash(path)+"?_pragma=foreign_keys(ON)")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := db.ExecContext(ctx, `CREATE TABLE gallery_schema_migrations (
+version INTEGER PRIMARY KEY NOT NULL, name TEXT NOT NULL, sha256 TEXT NOT NULL,
+applied_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))) STRICT`); err != nil {
+			db.Close()
+			t.Fatal(err)
+		}
+		sub, err := fs.Sub(migrationFiles, "migrations/catalog")
+		if err != nil {
+			db.Close()
+			t.Fatal(err)
+		}
+		migrations, err := readMigrations(sub)
+		if err != nil {
+			db.Close()
+			t.Fatal(err)
+		}
+		for _, item := range migrations[:11] {
+			if err := applyMigration(ctx, db, item); err != nil {
+				db.Close()
+				t.Fatal(err)
+			}
+		}
+		if _, err := db.ExecContext(ctx, `
+INSERT INTO catalog_revisions VALUES ('cat_old', 'job_old', 'src_a', 'published', 1, 2);
+INSERT INTO overlay_projection_revisions
+(overlay_revision_id, catalog_revision_id, control_watermark, status, created_at, published_at)
+VALUES ('ovr_old', 'cat_old', 0, 'published', 1, 2);`+projections); err != nil {
+			db.Close()
+			t.Fatal(err)
+		}
+		if err := db.Close(); err != nil {
+			t.Fatal(err)
+		}
+		return path
+	}
+
+	t.Run("backfills-exact-source-library-membership", func(t *testing.T) {
+		path := prepareV11(t, `
+INSERT INTO work_projections
+(catalog_revision_id, overlay_revision_id, work_id, source_id, source_key, library_id, title, creator,
+ tags_json, filenames_text, normalized_original_text, cjk_bigram_token_text, latin_trigram_token_text,
+ sort_title_key, hidden)
+VALUES
+('cat_old', 'ovr_old', 'work-a1', 'src_a', 'a1', 'lib_a', 'A1', '', '[]', '', 'a1', '', '', 'a1', 0),
+('cat_old', 'ovr_old', 'work-a2', 'src_a', 'a2', 'lib_a', 'A2', '', '[]', '', 'a2', '', '', 'a2', 0),
+('cat_old', 'ovr_old', 'work-b1', 'src_b', 'b1', 'lib_b', 'B1', '', '[]', '', 'b1', '', '', 'b1', 0);`)
+		upgraded, err := openDatabase(context.Background(), RoleCatalog, path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer upgraded.Close()
+		var version, count int
+		if err := upgraded.db.QueryRow("PRAGMA user_version").Scan(&version); err != nil {
+			t.Fatal(err)
+		}
+		if err := upgraded.db.QueryRow(`SELECT count(*) FROM catalog_revision_sources`).Scan(&count); err != nil {
+			t.Fatal(err)
+		}
+		if version != 12 || count != 2 {
+			t.Fatalf("v11 升级结果: version=%d membership=%d", version, count)
+		}
+		var libraryID string
+		if err := upgraded.db.QueryRow(`SELECT library_id FROM catalog_revision_sources
+WHERE catalog_revision_id='cat_old' AND source_id='src_b'`).Scan(&libraryID); err != nil {
+			t.Fatal(err)
+		}
+		if libraryID != "lib_b" {
+			t.Fatalf("src_b library=%q", libraryID)
+		}
+	})
+
+	t.Run("rejects-ambiguous-historical-library", func(t *testing.T) {
+		path := prepareV11(t, `
+INSERT INTO work_projections
+(catalog_revision_id, overlay_revision_id, work_id, source_id, source_key, library_id, title, creator,
+ tags_json, filenames_text, normalized_original_text, cjk_bigram_token_text, latin_trigram_token_text,
+ sort_title_key, hidden)
+VALUES
+('cat_old', 'ovr_old', 'work-a1', 'src_a', 'a1', 'lib_a', 'A1', '', '[]', '', 'a1', '', '', 'a1', 0),
+('cat_old', 'ovr_old', 'work-a2', 'src_a', 'a2', 'lib_other', 'A2', '', '[]', '', 'a2', '', '', 'a2', 0);`)
+		_, err := openDatabase(context.Background(), RoleCatalog, path)
+		var structured *fault.Error
+		if !errors.As(err, &structured) || structured.Code != fault.CodeMigrationFailed {
+			t.Fatalf("有歧义 membership 升级错误 = %v", err)
+		}
+	})
 }
 
 // TestMediaVerificationMigrationUpgradesPopulatedV8Catalog 验证 00009 迁移把历史上借用

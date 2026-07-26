@@ -2,6 +2,7 @@ package query_test
 
 import (
 	"context"
+	"database/sql"
 	"fmt"
 	"os"
 	"sort"
@@ -9,9 +10,11 @@ import (
 	"testing"
 	"time"
 
+	"github.com/RecRivenVI/gallery/internal/catalog"
 	"github.com/RecRivenVI/gallery/internal/platform/appdirs"
 	"github.com/RecRivenVI/gallery/internal/platform/clock"
 	"github.com/RecRivenVI/gallery/internal/platform/filesystem"
+	"github.com/RecRivenVI/gallery/internal/platform/identity"
 	galleryquery "github.com/RecRivenVI/gallery/internal/query"
 	"github.com/RecRivenVI/gallery/internal/querytext"
 	"github.com/RecRivenVI/gallery/internal/storage"
@@ -31,6 +34,14 @@ func TestReferenceQueryPerformance(t *testing.T) {
 		}
 		sampleSize = parsed
 	}
+	sourceCount := 1
+	if raw := os.Getenv("GALLERY_REFERENCE_SOURCES"); raw != "" {
+		parsed, err := strconv.Atoi(raw)
+		if err != nil || parsed < 1 || parsed > 10_000 || parsed > sampleSize {
+			t.Fatalf("GALLERY_REFERENCE_SOURCES 必须在 1..min(10000, works): %q", raw)
+		}
+		sourceCount = parsed
+	}
 
 	ctx := context.Background()
 	dirs := appdirs.UnderRoot(t.TempDir())
@@ -43,7 +54,7 @@ func TestReferenceQueryPerformance(t *testing.T) {
 	}
 	defer store.Close()
 
-	buildDuration, publicationDuration := seedReferenceProjection(t, store, sampleSize)
+	buildDuration, publicationDuration := seedReferenceProjection(t, store, sampleSize, sourceCount)
 	now := time.Date(2026, 7, 16, 8, 0, 0, 0, time.UTC)
 	service, err := galleryquery.NewService(ctx, store.Control.SQL(), store.Catalog.SQL(), clock.Fixed{Time: now}, nil)
 	if err != nil {
@@ -51,9 +62,10 @@ func TestReferenceQueryPerformance(t *testing.T) {
 	}
 	scope := galleryquery.AuthorizationScope("reference", []string{"library.read"})
 
-	measure := func(name string, request galleryquery.Request) (time.Duration, time.Duration) {
+	measure := func(name string, request galleryquery.Request, authorize galleryquery.SourceSetAuthorizer) (time.Duration, time.Duration) {
 		t.Helper()
 		request.AuthorizationScope = scope
+		request.AuthorizeSources = authorize
 		if _, err := service.Search(ctx, request); err != nil {
 			t.Fatalf("%s warmup: %v", name, err)
 		}
@@ -70,36 +82,58 @@ func TestReferenceQueryPerformance(t *testing.T) {
 		return durations[len(durations)/2], durations[(len(durations)*95+99)/100-1]
 	}
 
-	browseP50, browseP95 := measure("browse", galleryquery.Request{Limit: 100})
-	selectiveP50, selectiveP95 := measure("selective-cjk", galleryquery.Request{Search: "特别作品", Limit: 100})
-	filenameP50, filenameP95 := measure("filename-infix", galleryquery.Request{Search: "middle-0001", Limit: 100})
+	membershipP50, membershipP95 := measureReferenceMembership(t, store.Catalog.SQL(), sourceCount)
+	browseP50, browseP95 := measure("browse", galleryquery.Request{Limit: 100}, allowAllSources)
+	browseNoTotalP50, browseNoTotalP95 := measure("browse-no-total", galleryquery.Request{Limit: 100, OmitTotal: true}, allowAllSources)
+	selectiveP50, selectiveP95 := measure("selective-cjk", galleryquery.Request{Search: "特别作品", Limit: 100}, allowAllSources)
+	filenameP50, filenameP95 := measure("filename-infix", galleryquery.Request{Search: "middle-0001", Limit: 100}, allowAllSources)
+	partialMetrics := ""
+	if sourceCount > 1 {
+		denyOne := func(_ context.Context, _ []string, sourceIDs []string) ([]string, error) {
+			return append([]string(nil), sourceIDs[1:]...), nil
+		}
+		allowOne := func(_ context.Context, _ []string, sourceIDs []string) ([]string, error) {
+			return append([]string(nil), sourceIDs[:1]...), nil
+		}
+		denyP50, denyP95 := measure("browse-deny-one", galleryquery.Request{Limit: 100}, denyOne)
+		allowP50, allowP95 := measure("browse-allow-one", galleryquery.Request{Limit: 100}, allowOne)
+		partialMetrics = fmt.Sprintf(" browse_deny_one_p50=%s browse_deny_one_p95=%s browse_allow_one_p50=%s browse_allow_one_p95=%s",
+			denyP50, denyP95, allowP50, allowP95)
+	}
 	var sqliteVersion string
 	if err := store.Catalog.SQL().QueryRowContext(ctx, "SELECT sqlite_version()").Scan(&sqliteVersion); err != nil {
 		t.Fatal(err)
 	}
-	t.Logf("REFERENCE_PERFORMANCE sample=%d sqlite=%s cache=warm concurrency=1 runs=31 build=%s publication=%s browse_p50=%s browse_p95=%s selective_cjk_p50=%s selective_cjk_p95=%s filename_p50=%s filename_p95=%s",
-		sampleSize, sqliteVersion, buildDuration, publicationDuration, browseP50, browseP95,
-		selectiveP50, selectiveP95, filenameP50, filenameP95)
+	t.Logf("REFERENCE_PERFORMANCE sample=%d sources=%d sqlite=%s cache=warm concurrency=1 runs=31 build=%s store_publish=%s membership_p50=%s membership_p95=%s browse_p50=%s browse_p95=%s browse_no_total_p50=%s browse_no_total_p95=%s selective_cjk_p50=%s selective_cjk_p95=%s filename_p50=%s filename_p95=%s%s",
+		sampleSize, sourceCount, sqliteVersion, buildDuration, publicationDuration, membershipP50, membershipP95,
+		browseP50, browseP95, browseNoTotalP50, browseNoTotalP95, selectiveP50, selectiveP95,
+		filenameP50, filenameP95, partialMetrics)
 }
 
-func seedReferenceProjection(t *testing.T, store *storage.Store, sampleSize int) (time.Duration, time.Duration) {
+func seedReferenceProjection(t *testing.T, store *storage.Store, sampleSize, sourceCount int) (time.Duration, time.Duration) {
 	t.Helper()
 	ctx := context.Background()
 	db := store.Catalog.SQL()
 	const (
-		catalogID     = "cat_018f47d2-5c16-7a44-a8a0-900000000000"
-		overlayID     = "ovr_018f47d2-5c16-7a44-a8a0-900000000000"
-		jobID         = "job_018f47d2-5c16-7a44-a8a0-900000000000"
-		publicationID = "qpub_018f47d2-5c16-7a44-a8a0-900000000000"
+		catalogID = "cat_018f47d2-5c16-7a44-a8a0-900000000000"
+		overlayID = "ovr_018f47d2-5c16-7a44-a8a0-900000000000"
+		jobID     = "job_018f47d2-5c16-7a44-a8a0-900000000000"
 	)
 	if _, err := db.ExecContext(ctx,
-		"INSERT INTO catalog_revisions VALUES (?, ?, 'src_reference', 'staging', 1, NULL)", catalogID, jobID); err != nil {
+		"INSERT INTO catalog_revisions VALUES (?, ?, ?, 'staging', 1, NULL)", catalogID, jobID, referenceSourceID(0)); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := db.ExecContext(ctx, `INSERT INTO overlay_projection_revisions
 (overlay_revision_id, catalog_revision_id, control_watermark, status, created_at)
 VALUES (?, ?, 0, 'staging', 1)`, overlayID, catalogID); err != nil {
 		t.Fatal(err)
+	}
+	for sourceIndex := 0; sourceIndex < sourceCount; sourceIndex++ {
+		if _, err := db.ExecContext(ctx, `INSERT INTO catalog_revision_sources
+(catalog_revision_id, source_id, library_id) VALUES (?, ?, ?)`, catalogID,
+			referenceSourceID(sourceIndex), referenceLibraryID(sourceIndex)); err != nil {
+			t.Fatal(err)
+		}
 	}
 
 	started := time.Now()
@@ -111,7 +145,7 @@ VALUES (?, ?, 0, 'staging', 1)`, overlayID, catalogID); err != nil {
 (catalog_revision_id, overlay_revision_id, work_id, source_id, source_key, library_id, title, creator,
  tags_json, filenames_text, normalized_original_text, cjk_bigram_token_text, latin_trigram_token_text,
  sort_title_key, hidden)
-VALUES (?, ?, ?, 'src_reference', ?, 'lib_reference', ?, ?, '["reference"]', ?, ?, ?, ?, ?, 0)`)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, '["reference"]', ?, ?, ?, ?, ?, 0)`)
 	if err != nil {
 		tx.Rollback()
 		t.Fatal(err)
@@ -123,6 +157,7 @@ VALUES (?, ?, ?, 'src_reference', ?, 'lib_reference', ?, ?, '["reference"]', ?, 
 		t.Fatal(err)
 	}
 	for index := 0; index < sampleSize; index++ {
+		sourceIndex := index % sourceCount
 		titlePrefix := "普通作品"
 		if index%1000 == 0 {
 			titlePrefix = "特别作品"
@@ -131,7 +166,8 @@ VALUES (?, ?, ?, 'src_reference', ?, 'lib_reference', ?, ?, '["reference"]', ?, 
 		filename := fmt.Sprintf("gallery-middle-%06d.jpg", index)
 		workID := fmt.Sprintf("wrk_018f47d2-5c16-7a44-a8a0-%012d", index)
 		document := querytext.BuildDocument(title, "Creator", []string{"reference"}, []string{filename})
-		if _, err := projection.ExecContext(ctx, catalogID, overlayID, workID, title, title, "Creator",
+		if _, err := projection.ExecContext(ctx, catalogID, overlayID, workID,
+			referenceSourceID(sourceIndex), title, referenceLibraryID(sourceIndex), title, "Creator",
 			filename, document.NormalizedOriginal, document.CJKTokens, document.LatinTokens,
 			document.SortTitleKey); err != nil {
 			projection.Close()
@@ -154,32 +190,59 @@ VALUES (?, ?, ?, 'src_reference', ?, 'lib_reference', ?, ?, '["reference"]', ?, 
 	}
 	buildDuration := time.Since(started)
 
-	started = time.Now()
-	tx, err = db.BeginTx(ctx, nil)
+	fixed := clock.Fixed{Time: time.Date(2026, 7, 16, 8, 0, 0, 0, time.UTC)}
+	catalogStore, err := catalog.NewStore(db, fixed, identity.NewGenerator(fixed))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := tx.ExecContext(ctx,
-		"UPDATE catalog_revisions SET status='published', published_at=2 WHERE catalog_revision_id=?", catalogID); err != nil {
-		tx.Rollback()
-		t.Fatal(err)
-	}
-	if _, err := tx.ExecContext(ctx,
-		"UPDATE overlay_projection_revisions SET status='published', published_at=2 WHERE overlay_revision_id=?", overlayID); err != nil {
-		tx.Rollback()
-		t.Fatal(err)
-	}
-	if _, err := tx.ExecContext(ctx,
-		"INSERT INTO query_publications VALUES (?, ?, ?, ?, 0, 2)", publicationID, catalogID, overlayID, jobID); err != nil {
-		tx.Rollback()
-		t.Fatal(err)
-	}
-	if _, err := tx.ExecContext(ctx, "INSERT INTO active_query_publication VALUES (1, ?)", publicationID); err != nil {
-		tx.Rollback()
-		t.Fatal(err)
-	}
-	if err := tx.Commit(); err != nil {
+	started = time.Now()
+	if _, err := catalogStore.Publish(ctx, catalog.Candidate{
+		CatalogRevisionID: catalogID,
+		OverlayRevisionID: overlayID,
+		JobID:             jobID,
+		SourceID:          referenceSourceID(0),
+		ControlWatermark:  0,
+	}); err != nil {
 		t.Fatal(err)
 	}
 	return buildDuration, time.Since(started)
+}
+
+func referenceSourceID(index int) string { return fmt.Sprintf("src_reference_%05d", index) }
+
+func referenceLibraryID(index int) string { return fmt.Sprintf("lib_reference_%03d", index%16) }
+
+func measureReferenceMembership(t *testing.T, db *sql.DB, wantSources int) (time.Duration, time.Duration) {
+	t.Helper()
+	durations := make([]time.Duration, 31)
+	for run := range durations {
+		started := time.Now()
+		rows, err := db.Query(`SELECT source_id FROM catalog_revision_sources
+WHERE catalog_revision_id='cat_018f47d2-5c16-7a44-a8a0-900000000000' ORDER BY source_id`)
+		if err != nil {
+			t.Fatal(err)
+		}
+		count := 0
+		for rows.Next() {
+			var sourceID string
+			if err := rows.Scan(&sourceID); err != nil {
+				rows.Close()
+				t.Fatal(err)
+			}
+			count++
+		}
+		if err := rows.Err(); err != nil {
+			rows.Close()
+			t.Fatal(err)
+		}
+		if err := rows.Close(); err != nil {
+			t.Fatal(err)
+		}
+		if count != wantSources {
+			t.Fatalf("membership rows=%d want=%d", count, wantSources)
+		}
+		durations[run] = time.Since(started)
+	}
+	sort.Slice(durations, func(i, j int) bool { return durations[i] < durations[j] })
+	return durations[len(durations)/2], durations[(len(durations)*95+99)/100-1]
 }

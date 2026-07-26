@@ -150,6 +150,9 @@ func TestBeginCandidateResetsPartialStagingCandidate(t *testing.T) {
 	if got := countRows(t, store, `SELECT count(*) FROM source_works WHERE catalog_revision_id=?`, first.CatalogRevisionID); got != 0 {
 		t.Fatalf("旧 partial staging 数据未被清理: %d", got)
 	}
+	if got := countRows(t, store, `SELECT count(*) FROM catalog_revision_sources WHERE catalog_revision_id=?`, first.CatalogRevisionID); got != 0 {
+		t.Fatalf("旧 partial staging membership 未被清理: %d", got)
+	}
 	works, mediaFacts := minimalCandidateFacts("source-a", "work-1", "media-1", candidateDigestA)
 	if err := catalogStore.Stage(ctx, second, works, mediaFacts); err != nil {
 		t.Fatal(err)
@@ -281,15 +284,10 @@ func TestBeginCandidateResetDoesNotAffectActivePublication(t *testing.T) {
 func TestBeginCandidateResetStillClonesOtherSources(t *testing.T) {
 	catalogStore, store := newCandidateTestStore(t)
 	ctx := context.Background()
-	first := stageValidCandidate(t, catalogStore, "job-multi-source", "source-a", "work-1", "media-1", candidateDigestA, false)
-	works, mediaFacts := minimalCandidateFacts("source-b", "work-2", "media-2", candidateDigestB)
-	if err := catalogStore.Stage(ctx, first, works, mediaFacts); err != nil {
-		t.Fatal(err)
-	}
-	if err := catalogStore.ValidateCandidate(ctx, first); err != nil {
-		t.Fatal(err)
-	}
+	first := stageValidCandidate(t, catalogStore, "job-source-a", "source-a", "work-1", "media-1", candidateDigestA, true)
 	publishCandidate(t, catalogStore, first)
+	secondSource := stageValidCandidate(t, catalogStore, "job-source-b", "source-b", "work-2", "media-2", candidateDigestB, true)
+	publishCandidate(t, catalogStore, secondSource)
 
 	stageValidCandidate(t, catalogStore, "job-retry-source-a", "source-a", "work-1", "media-1", candidateDigestA, false)
 	second, err := catalogStore.BeginCandidate(ctx, "job-retry-source-a", "source-a", 2)
@@ -299,6 +297,104 @@ func TestBeginCandidateResetStillClonesOtherSources(t *testing.T) {
 	if got := countRows(t, store, `SELECT count(*) FROM source_works WHERE catalog_revision_id=? AND source_id='source-b'`, second.CatalogRevisionID); got != 1 {
 		t.Fatalf("重建后未从活动 publication 克隆其他 Source 数据: %d", got)
 	}
+	if got := countRows(t, store, `SELECT count(*) FROM catalog_revision_sources
+WHERE catalog_revision_id=? AND source_id='source-b' AND library_id='lib-source-b'`, second.CatalogRevisionID); got != 1 {
+		t.Fatalf("重建后未克隆其他 Source membership: %d", got)
+	}
+}
+
+func TestPublishRejectsInexactCatalogRevisionSourceMembership(t *testing.T) {
+	for _, test := range []struct {
+		name   string
+		mutate func(t *testing.T, store *storage.Store, candidate catalog.Candidate)
+	}{
+		{
+			name: "missing",
+			mutate: func(t *testing.T, store *storage.Store, candidate catalog.Candidate) {
+				if _, err := store.Catalog.SQL().Exec(`DELETE FROM catalog_revision_sources
+WHERE catalog_revision_id=? AND source_id=?`, candidate.CatalogRevisionID, candidate.SourceID); err != nil {
+					t.Fatal(err)
+				}
+			},
+		},
+		{
+			name: "library-mismatch",
+			mutate: func(t *testing.T, store *storage.Store, candidate catalog.Candidate) {
+				if _, err := store.Catalog.SQL().Exec(`UPDATE catalog_revision_sources SET library_id='wrong-library'
+WHERE catalog_revision_id=? AND source_id=?`, candidate.CatalogRevisionID, candidate.SourceID); err != nil {
+					t.Fatal(err)
+				}
+			},
+		},
+		{
+			name: "surplus",
+			mutate: func(t *testing.T, store *storage.Store, candidate catalog.Candidate) {
+				if _, err := store.Catalog.SQL().Exec(`INSERT INTO catalog_revision_sources
+(catalog_revision_id, source_id, library_id) VALUES (?, 'source-extra', 'lib-extra')`, candidate.CatalogRevisionID); err != nil {
+					t.Fatal(err)
+				}
+			},
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			catalogStore, store := newCandidateTestStore(t)
+			candidate := stageValidCandidate(t, catalogStore, "job-membership-"+test.name,
+				"source-a", "work-1", "media-1", candidateDigestA, false)
+			test.mutate(t, store, candidate)
+			if err := catalogStore.ValidateCandidate(context.Background(), candidate); !hasFaultCode(err, fault.CodeCatalogCandidateInvalid) {
+				t.Fatalf("ValidateCandidate 未拒绝 %s membership: %v", test.name, err)
+			}
+			if _, err := catalogStore.Publish(context.Background(), candidate); !hasFaultCode(err, fault.CodeCatalogCandidateInvalid) {
+				t.Fatalf("Publish 绕过 Validate 时未拒绝 %s membership: %v", test.name, err)
+			}
+		})
+	}
+}
+
+func TestStageRejectsCrossChunkLibraryMismatch(t *testing.T) {
+	catalogStore, store := newCandidateTestStore(t)
+	ctx := context.Background()
+	candidate := stageValidCandidate(t, catalogStore, "job-library-mismatch", "source-a",
+		"work-1", "media-1", candidateDigestA, false)
+	works, _ := minimalCandidateFacts("source-a", "work-2", "media-2", candidateDigestB)
+	works[0].LibraryID = "lib-other"
+	if err := catalogStore.Stage(ctx, candidate, works, nil); !hasFaultCode(err, fault.CodeCatalogCandidateInvalid) {
+		t.Fatalf("跨 chunk Library 不一致未被拒绝: %v", err)
+	}
+	if got := countRows(t, store, `SELECT count(*) FROM catalog_revision_sources
+WHERE catalog_revision_id=? AND source_id='source-a' AND library_id='lib-source-a'`, candidate.CatalogRevisionID); got != 1 {
+		t.Fatalf("失败 Stage 改写了既有 membership: %d", got)
+	}
+}
+
+func TestPublishOverlayRejectsMissingCatalogRevisionSourceMembership(t *testing.T) {
+	catalogStore, store := newCandidateTestStore(t)
+	ctx := context.Background()
+	baseCandidate := stageValidCandidate(t, catalogStore, "job-overlay-base", "source-a",
+		"work-1", "media-1", candidateDigestA, true)
+	base := publishCandidate(t, catalogStore, baseCandidate)
+	overlayCandidate, err := catalogStore.BeginOverlayCandidate(ctx, "job-overlay-membership", base.CatalogRevisionID, 2)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := catalogStore.ApplyOverlayFacts(ctx, overlayCandidate, map[string]catalog.OverlayFact{}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.Catalog.SQL().Exec(`DELETE FROM catalog_revision_sources
+WHERE catalog_revision_id=?`, base.CatalogRevisionID); err != nil {
+		t.Fatal(err)
+	}
+	if err := catalogStore.ValidateOverlayCandidate(ctx, overlayCandidate); !hasFaultCode(err, fault.CodeCatalogCandidateInvalid) {
+		t.Fatalf("ValidateOverlayCandidate 未拒绝缺失 membership: %v", err)
+	}
+	if _, err := catalogStore.PublishOverlay(ctx, overlayCandidate); !hasFaultCode(err, fault.CodeCatalogCandidateInvalid) {
+		t.Fatalf("PublishOverlay 绕过 Validate 时未拒绝缺失 membership: %v", err)
+	}
+}
+
+func hasFaultCode(err error, code fault.Code) bool {
+	var structured *fault.Error
+	return errors.As(err, &structured) && structured.Code == code
 }
 
 // 11. Attempt 2 再次中断后 Attempt 3 仍可恢复：连续多次 BeginCandidate 均保持幂等。

@@ -42,7 +42,7 @@ func TestGoldenFieldLevelRankingAndHighlight(t *testing.T) {
 	scope := galleryquery.AuthorizationScope("owner", []string{"library.read"})
 
 	// Creator 命中：CJK Creator 名，无标题命中。
-	creatorHit, err := service.Search(ctx, galleryquery.Request{Search: "写真家", Limit: 20, AuthorizationScope: scope})
+	creatorHit, err := service.Search(ctx, authorizedRequest(galleryquery.Request{Search: "写真家", Limit: 20, AuthorizationScope: scope}))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -54,7 +54,7 @@ func TestGoldenFieldLevelRankingAndHighlight(t *testing.T) {
 	}
 
 	// 全角/半角折叠：查询半角 "tokyo" 命中标题里的全角 "ＴＯＫＹＯ"。
-	fullwidthHit, err := service.Search(ctx, galleryquery.Request{Search: "tokyo", Limit: 20, AuthorizationScope: scope})
+	fullwidthHit, err := service.Search(ctx, authorizedRequest(galleryquery.Request{Search: "tokyo", Limit: 20, AuthorizationScope: scope}))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -72,7 +72,7 @@ func TestGoldenFieldLevelRankingAndHighlight(t *testing.T) {
 	}
 
 	// Tag 多值命中：查询命中具体某个 tag 取值，matches 携带该取值本身。
-	tagHit, err := service.Search(ctx, galleryquery.Request{Search: "sunset collection", Limit: 20, AuthorizationScope: scope})
+	tagHit, err := service.Search(ctx, authorizedRequest(galleryquery.Request{Search: "sunset collection", Limit: 20, AuthorizationScope: scope}))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -84,7 +84,7 @@ func TestGoldenFieldLevelRankingAndHighlight(t *testing.T) {
 	}
 
 	// 文件名中缀命中：查询命中文件名中段，且不泄露任何路径分隔符或绝对路径。
-	filenameHit, err := service.Search(ctx, galleryquery.Request{Search: "sunset_0099", Limit: 20, AuthorizationScope: scope})
+	filenameHit, err := service.Search(ctx, authorizedRequest(galleryquery.Request{Search: "sunset_0099", Limit: 20, AuthorizationScope: scope}))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -110,7 +110,7 @@ func TestGoldenFieldLevelRankingAndHighlight(t *testing.T) {
 
 	// 同一 Work 多字段命中：标题、Creator、Tag、文件名都含 "multi field"/"multi-field"，
 	// 应同时产生多条不同 field 的 matches。
-	multiHit, err := service.Search(ctx, galleryquery.Request{Search: "multi field", Limit: 20, AuthorizationScope: scope})
+	multiHit, err := service.Search(ctx, authorizedRequest(galleryquery.Request{Search: "multi field", Limit: 20, AuthorizationScope: scope}))
 	if err != nil {
 		t.Fatal(err)
 	}

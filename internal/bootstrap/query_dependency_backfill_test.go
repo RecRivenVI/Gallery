@@ -70,6 +70,9 @@ func seedLegacyPreBackfillRevision(t *testing.T, dirs appdirs.Dirs) {
 	}{
 		{"control", `INSERT INTO canonical_works (work_id, title, created_at) VALUES (?, 'legacy title', 1)`, []any{backfillTestWorkID}},
 		{"catalog", `INSERT INTO catalog_revisions VALUES ('cat_018f47d2-5c16-7a44-a8a0-00000000ba0f', 'job_018f47d2-5c16-7a44-a8a0-00000000ba0f', 'src_legacy', 'published', 1, 1)`, nil},
+		{"catalog", `INSERT INTO catalog_revision_sources
+(catalog_revision_id, source_id, library_id) VALUES
+('cat_018f47d2-5c16-7a44-a8a0-00000000ba0f', 'src_legacy', 'lib_legacy')`, nil},
 		{"catalog", `INSERT INTO overlay_projection_revisions
 (overlay_revision_id, catalog_revision_id, control_watermark, status, created_at, published_at)
 VALUES ('ovr_018f47d2-5c16-7a44-a8a0-00000000ba0f', 'cat_018f47d2-5c16-7a44-a8a0-00000000ba0f', 0, 'published', 1, 1)`, nil},

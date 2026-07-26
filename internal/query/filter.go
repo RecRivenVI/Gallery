@@ -181,6 +181,13 @@ func filterReferencesField(node *FilterNode, field string) bool {
 	}
 }
 
+// FilterReferencesField 把已校验 filter AST 的字段引用检查暴露给 transport 预授权。
+// transport 只据此决定是否需要额外的根范围 capability；Query Service 仍会独立解析、
+// 校验并按 publication 成员逐 Source 授权，不能把该预检当成结果授权。
+func FilterReferencesField(node *FilterNode, field string) bool {
+	return filterReferencesField(node, field)
+}
+
 // collectFilterFields 收集 filter AST 中出现的全部叶子字段名（去重），用于构建本次
 // 查询实际使用的 dependency set，不需要遍历内部 SQL 片段。
 func collectFilterFields(node *FilterNode) []string {

@@ -355,8 +355,49 @@ WHERE r.catalog_revision_id=? AND (w.work_id IS NULL OR c.creator_id IS NULL)`,
 	if orphanCreator != 0 {
 		return fault.New(fault.CodeCatalogCandidateInvalid, false, nil)
 	}
+	if err := validateSourceMembership(ctx, s.db, candidate.CatalogRevisionID, candidate.OverlayRevisionID); err != nil {
+		return err
+	}
 	if err := s.validateProjectionCovers(ctx, candidate.CatalogRevisionID, candidate.OverlayRevisionID); err != nil {
 		return err
+	}
+	return nil
+}
+
+// validateSourceMembership 锁定 Catalog revision 的精确 Source/Library 成员集合。查询
+// 授权在全部候选 Source 都允许时会省略行级授权谓词，因此 publication 只有在每条 Work
+// 都命中成员行且成员表没有多余 Source 时才可发布；不能用不完整集合进入 all 快路径。
+// projection_sources 先沿 Source covering index 把 Work 压缩为每个 Source 一行；min/max
+// 同时拒绝同一 Source 混入多个 Library，随后只对 Source 量级的小集合做双向比较，避免
+// 对每个 Work 重复探测成员表。
+type queryRower interface {
+	QueryRowContext(context.Context, string, ...any) *sql.Row
+}
+
+const validateSourceMembershipSQL = `WITH projection_sources AS MATERIALIZED (
+  SELECT source_id, min(library_id) AS library_id, max(library_id) AS max_library_id
+  FROM work_projections INDEXED BY work_projections_source_query_idx
+  WHERE catalog_revision_id=? AND overlay_revision_id=?
+  GROUP BY source_id
+)
+SELECT
+(SELECT count(*) FROM projection_sources p
+ LEFT JOIN catalog_revision_sources s
+   ON s.catalog_revision_id=? AND s.source_id=p.source_id AND s.library_id=p.library_id
+ WHERE p.library_id<>p.max_library_id OR s.source_id IS NULL),
+(SELECT count(*) FROM catalog_revision_sources s
+ LEFT JOIN projection_sources p ON p.source_id=s.source_id AND p.library_id=s.library_id
+ WHERE s.catalog_revision_id=? AND p.source_id IS NULL)`
+
+func validateSourceMembership(ctx context.Context, queryer queryRower, catalogRevisionID, overlayRevisionID string) error {
+	var missingOrMismatched, surplus int
+	err := queryer.QueryRowContext(ctx, validateSourceMembershipSQL,
+		catalogRevisionID, overlayRevisionID, catalogRevisionID, catalogRevisionID).Scan(&missingOrMismatched, &surplus)
+	if err != nil {
+		return fault.New(fault.CodeInternal, true, err)
+	}
+	if missingOrMismatched != 0 || surplus != 0 {
+		return fault.New(fault.CodeCatalogCandidateInvalid, false, nil)
 	}
 	return nil
 }
@@ -424,6 +465,9 @@ WHERE c.catalog_revision_id = ? AND o.overlay_revision_id = ?`, candidate.Catalo
 	}
 	if catalogStatus != "staging" || overlayStatus != "staging" {
 		return Publication{}, fault.New(fault.CodeCatalogCandidateInvalid, false, nil)
+	}
+	if err := validateSourceMembership(ctx, tx, candidate.CatalogRevisionID, candidate.OverlayRevisionID); err != nil {
+		return Publication{}, err
 	}
 	if _, err := tx.ExecContext(ctx, `INSERT INTO query_publications
 (query_publication_id, catalog_revision_id, overlay_revision_id, job_id, control_watermark, created_at)
@@ -707,6 +751,9 @@ func (s *Store) ValidateOverlayCandidate(ctx context.Context, candidate OverlayC
 	if works != baseWorks || media != baseMedia || creators != baseCreators || relations != baseRelations || search != works {
 		return fault.New(fault.CodeCatalogCandidateInvalid, false, nil)
 	}
+	if err := validateSourceMembership(ctx, s.db, candidate.CatalogRevisionID, candidate.OverlayRevisionID); err != nil {
+		return err
+	}
 	if err := s.validateProjectionCovers(ctx, candidate.CatalogRevisionID, candidate.OverlayRevisionID); err != nil {
 		return err
 	}
@@ -739,6 +786,9 @@ WHERE a.singleton=1`, candidate.OverlayRevisionID).Scan(&activeCatalog, &activeO
 	if activeCatalog != candidate.CatalogRevisionID || activeOverlay != candidate.BaseOverlayRevisionID ||
 		activeWatermark >= candidate.ControlWatermark || candidateStatus != "staging" || catalogStatus != "published" {
 		return Publication{}, fault.New(fault.CodeConflict, true, nil)
+	}
+	if err := validateSourceMembership(ctx, tx, candidate.CatalogRevisionID, candidate.OverlayRevisionID); err != nil {
+		return Publication{}, err
 	}
 	if _, err := tx.ExecContext(ctx, `INSERT INTO query_publications
 (query_publication_id, catalog_revision_id, overlay_revision_id, job_id, control_watermark, created_at)
@@ -1260,6 +1310,36 @@ func (s *Store) stageWorks(ctx context.Context, candidate Candidate, works []Wor
 		return fault.New(fault.CodeInternal, true, err)
 	}
 	defer tx.Rollback()
+	members := make(map[string]string)
+	for _, work := range works {
+		if work.SourceID != candidate.SourceID {
+			return fault.New(fault.CodeCatalogCandidateInvalid, false, nil)
+		}
+		if libraryID, exists := members[work.SourceID]; exists && libraryID != work.LibraryID {
+			return fault.New(fault.CodeCatalogCandidateInvalid, false, nil)
+		}
+		members[work.SourceID] = work.LibraryID
+	}
+	memberSourceIDs := make([]string, 0, len(members))
+	for sourceID := range members {
+		memberSourceIDs = append(memberSourceIDs, sourceID)
+	}
+	sort.Strings(memberSourceIDs)
+	for _, sourceID := range memberSourceIDs {
+		libraryID := members[sourceID]
+		if _, err := tx.ExecContext(ctx, `INSERT OR IGNORE INTO catalog_revision_sources
+(catalog_revision_id, source_id, library_id) VALUES (?, ?, ?)`, candidate.CatalogRevisionID, sourceID, libraryID); err != nil {
+			return fault.New(fault.CodeInternal, true, err)
+		}
+		var storedLibraryID string
+		if err := tx.QueryRowContext(ctx, `SELECT library_id FROM catalog_revision_sources
+WHERE catalog_revision_id=? AND source_id=?`, candidate.CatalogRevisionID, sourceID).Scan(&storedLibraryID); err != nil {
+			return fault.New(fault.CodeInternal, true, err)
+		}
+		if storedLibraryID != libraryID {
+			return fault.New(fault.CodeCatalogCandidateInvalid, false, nil)
+		}
+	}
 	for _, work := range works {
 		tagsJSON, _ := json.Marshal(work.Tags)
 		sourceTitle, sourceTags := work.Title, work.Tags
@@ -1555,6 +1635,10 @@ func cloneUnchangedSources(ctx context.Context, tx *sql.Tx, candidate Candidate)
 		query string
 		args  []any
 	}{
+		{`INSERT INTO catalog_revision_sources (catalog_revision_id, source_id, library_id)
+SELECT ?, s.source_id, s.library_id FROM catalog_revision_sources s
+JOIN active_query_publication a ON a.singleton=1 JOIN query_publications q ON q.query_publication_id=a.query_publication_id
+WHERE s.catalog_revision_id=q.catalog_revision_id AND s.source_id<>?`, []any{candidate.CatalogRevisionID, candidate.SourceID}},
 		{`INSERT INTO source_works
 (catalog_revision_id, source_id, source_key, title, creator, tags_json, filenames_text, provider_id, external_id, rule_cover_media_source_key)
 SELECT ?, w.source_id, w.source_key, w.title, w.creator, w.tags_json, w.filenames_text, w.provider_id, w.external_id, w.rule_cover_media_source_key FROM source_works w

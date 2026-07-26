@@ -122,7 +122,7 @@ SET heartbeat_at=?, lease_expires_at=? WHERE status='running'`,
 				t.Fatal(err)
 			}
 			oldSnapshot, err := queryService.Search(context.Background(), galleryquery.Request{
-				QueryPublicationID: oldPublication.ID, Limit: 20, AuthorizationScope: "recovery",
+				QueryPublicationID: oldPublication.ID, Limit: 20, AuthorizationScope: "recovery", AuthorizeSources: allowAllQuerySources,
 			})
 			if err != nil || len(oldSnapshot.Items) != 1 {
 				t.Fatalf("恢复后旧 publication 不可读: %+v %v", oldSnapshot, err)
@@ -206,6 +206,10 @@ SET heartbeat_at=?, lease_expires_at=? WHERE status='running'`,
 			}
 		})
 	}
+}
+
+func allowAllQuerySources(_ context.Context, _ []string, candidateSourceIDs []string) ([]string, error) {
+	return append([]string(nil), candidateSourceIDs...), nil
 }
 
 func TestKillpointHelperProcess(t *testing.T) {

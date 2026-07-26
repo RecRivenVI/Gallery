@@ -44,7 +44,7 @@ func TestGarbageCollectHonorsCursorAndBlobReadLeases(t *testing.T) {
 		t.Fatal(err)
 	}
 	scope := galleryquery.AuthorizationScope("owner", []string{"library.read"})
-	page, err := queryService.Search(ctx, galleryquery.Request{Limit: 1, AuthorizationScope: scope})
+	page, err := queryService.Search(ctx, galleryquery.Request{Limit: 1, AuthorizationScope: scope, AuthorizeSources: allowAllQuerySources})
 	if err != nil || page.NextCursor == "" {
 		t.Fatalf("未签发旧 publication 游标: %+v %v", page, err)
 	}
@@ -94,11 +94,19 @@ func TestGarbageCollectHonorsCursorAndBlobReadLeases(t *testing.T) {
 		t.Fatalf("旧 Catalog revision 残留: count=%d err=%v", count, err)
 	}
 	if err := store.Catalog.SQL().QueryRowContext(ctx,
+		"SELECT count(*) FROM catalog_revision_sources WHERE catalog_revision_id=?", oldCatalog).Scan(&count); err != nil || count != 0 {
+		t.Fatalf("旧 Catalog membership 残留: count=%d err=%v", count, err)
+	}
+	if err := store.Catalog.SQL().QueryRowContext(ctx,
 		"SELECT count(*) FROM work_search WHERE catalog_revision_id=?", oldCatalog).Scan(&count); err != nil || count != 0 {
 		t.Fatalf("旧 FTS 行残留: count=%d err=%v", count, err)
 	}
-	_, err = queryService.Search(ctx, galleryquery.Request{Limit: 1, Cursor: page.NextCursor, AuthorizationScope: scope})
+	_, err = queryService.Search(ctx, galleryquery.Request{Limit: 1, Cursor: page.NextCursor, AuthorizationScope: scope, AuthorizeSources: allowAllQuerySources})
 	assertFaultCode(t, err, fault.CodeCursorExpired)
+}
+
+func allowAllQuerySources(_ context.Context, _ []string, candidateSourceIDs []string) ([]string, error) {
+	return append([]string(nil), candidateSourceIDs...), nil
 }
 
 func seedGCPublication(t *testing.T, store *storage.Store, sequence int, twoWorks bool) (string, string, string) {
@@ -122,6 +130,10 @@ VALUES (?, ?, ?, 'published', ?, ?)`, overlayID, catalogID, sequence, sequence, 
 	if _, err := store.Catalog.SQL().ExecContext(ctx,
 		"INSERT INTO query_publications VALUES (?, ?, ?, ?, ?, ?)",
 		publicationID, catalogID, overlayID, jobID, sequence, sequence); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.Catalog.SQL().ExecContext(ctx, `INSERT INTO catalog_revision_sources
+(catalog_revision_id, source_id, library_id) VALUES (?, 'src_gc', 'lib_gc')`, catalogID); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := store.Catalog.SQL().ExecContext(ctx,

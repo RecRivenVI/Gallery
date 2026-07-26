@@ -40,7 +40,7 @@ func TestOverlayFactProjectionAndLiveState(t *testing.T) {
 	if err != nil || !created.StartJob || created.ProjectionStatus != "pending" || created.ProjectionJobID == "" {
 		t.Fatalf("同步写入未产生 pending projection: %+v %v", created, err)
 	}
-	before, err := queryService.Search(ctx, galleryquery.Request{Limit: 20, AuthorizationScope: "owner"})
+	before, err := queryService.Search(ctx, galleryquery.Request{Limit: 20, AuthorizationScope: "owner", AuthorizeSources: allowAllQuerySources})
 	if err != nil || len(before.Items) != 1 || before.Items[0].Title != "源标题" || before.QueryPublicationID != testPubID {
 		t.Fatalf("异步发布前污染旧 publication: %+v %v", before, err)
 	}
@@ -51,11 +51,11 @@ func TestOverlayFactProjectionAndLiveState(t *testing.T) {
 	if err != nil || after.ProjectionStatus != "published" || after.PublishedQueryPublicationID == testPubID || after.ProjectedWatermark != after.QueryWatermark {
 		t.Fatalf("projection 状态错误: %+v %v", after, err)
 	}
-	current, err := queryService.Search(ctx, galleryquery.Request{Search: "覆盖", Tag: "手工", Limit: 20, AuthorizationScope: "owner"})
+	current, err := queryService.Search(ctx, galleryquery.Request{Search: "覆盖", Tag: "手工", Limit: 20, AuthorizationScope: "owner", AuthorizeSources: allowAllQuerySources})
 	if err != nil || len(current.Items) != 1 || current.Items[0].Title != "覆盖标题" || current.CatalogRevision != testCatalogID || current.OverlayProjectionRevision == testOverlayID {
 		t.Fatalf("新双 revision 查询未切换: %+v %v", current, err)
 	}
-	old, err := queryService.Search(ctx, galleryquery.Request{QueryPublicationID: testPubID, Limit: 20, AuthorizationScope: "owner"})
+	old, err := queryService.Search(ctx, galleryquery.Request{QueryPublicationID: testPubID, Limit: 20, AuthorizationScope: "owner", AuthorizeSources: allowAllQuerySources})
 	if err != nil || len(old.Items) != 1 || old.Items[0].Title != "源标题" {
 		t.Fatalf("旧 publication 不再可读: %+v %v", old, err)
 	}
@@ -121,7 +121,7 @@ WHERE catalog_revision_id=? AND overlay_revision_id=? AND work_id=?`,
 	if err := service.Execute(ctx, cleared.ProjectionJobID); err != nil {
 		t.Fatal(err)
 	}
-	restored, err := queryService.Search(ctx, galleryquery.Request{Tag: "source", Limit: 20, AuthorizationScope: "owner"})
+	restored, err := queryService.Search(ctx, galleryquery.Request{Tag: "source", Limit: 20, AuthorizationScope: "owner", AuthorizeSources: allowAllQuerySources})
 	if err != nil || len(restored.Items) != 1 || restored.Items[0].Title != "源标题" {
 		t.Fatalf("清除覆盖未恢复 Source 基线: %+v %v", restored, err)
 	}
@@ -218,7 +218,7 @@ func TestContinuousChangesCoalesceAndSupersedeCandidate(t *testing.T) {
 	if err := service.Execute(ctx, first.ProjectionJobID); err != nil {
 		t.Fatal(err)
 	}
-	result, err := queryService.Search(ctx, galleryquery.Request{Search: "第二版", Limit: 20, AuthorizationScope: "owner"})
+	result, err := queryService.Search(ctx, galleryquery.Request{Search: "第二版", Limit: 20, AuthorizationScope: "owner", AuthorizeSources: allowAllQuerySources})
 	if err != nil || len(result.Items) != 1 {
 		t.Fatalf("最终 watermark 未发布: %+v %v", result, err)
 	}
@@ -248,7 +248,7 @@ func TestProjectionFailurePreservesOldPublicationAndCanRetry(t *testing.T) {
 	}
 	publication, _ := catalogStore.Current(ctx)
 	state, _ := service.Get(ctx, testWorkID)
-	old, _ := queryService.Search(ctx, galleryquery.Request{Limit: 20, AuthorizationScope: "owner"})
+	old, _ := queryService.Search(ctx, galleryquery.Request{Limit: 20, AuthorizationScope: "owner", AuthorizeSources: allowAllQuerySources})
 	if publication.ID != testPubID || state.ProjectionStatus != "failed" || len(old.Items) != 1 || old.Items[0].Title != "源标题" {
 		t.Fatalf("失败污染了旧 publication: pub=%+v state=%+v query=%+v", publication, state, old)
 	}
@@ -260,6 +260,10 @@ func TestProjectionFailurePreservesOldPublicationAndCanRetry(t *testing.T) {
 	if err := service.Execute(ctx, retry.ProjectionJobID); err != nil {
 		t.Fatal(err)
 	}
+}
+
+func allowAllQuerySources(_ context.Context, _ []string, candidateSourceIDs []string) ([]string, error) {
+	return append([]string(nil), candidateSourceIDs...), nil
 }
 
 func TestReconcileQueuedAndPublicationControlGap(t *testing.T) {
@@ -362,6 +366,8 @@ func newFixture(t *testing.T) (context.Context, *storage.Store, *Service, *catal
 		args  []any
 	}{
 		{`INSERT INTO catalog_revisions VALUES (?, ?, 'src_test', 'published', 1, 2)`, []any{testCatalogID, testScanJobID}},
+		{`INSERT INTO catalog_revision_sources
+(catalog_revision_id, source_id, library_id) VALUES (?, 'src_test', 'lib_test')`, []any{testCatalogID}},
 		{`INSERT INTO overlay_projection_revisions
 (overlay_revision_id, catalog_revision_id, control_watermark, status, created_at, published_at)
 VALUES (?, ?, 0, 'published', 1, 2)`, []any{testOverlayID, testCatalogID}},

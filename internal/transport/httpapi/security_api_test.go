@@ -26,6 +26,7 @@ import (
 	"github.com/RecRivenVI/gallery/internal/platform/identity"
 	"github.com/RecRivenVI/gallery/internal/storage"
 	"github.com/RecRivenVI/gallery/internal/transport/httpapi"
+	api "github.com/RecRivenVI/gallery/pkg/galleryapi"
 )
 
 func TestLANInitializationAndSessionAuthentication(t *testing.T) {
@@ -334,6 +335,27 @@ func TestSecurityAuditAccessControl(t *testing.T) {
 		t.Fatalf("缺少 audit.read 未拒绝: %d body=%s", denied.StatusCode, readAndClose(t, denied))
 	}
 	_ = denied.Body.Close()
+}
+
+func TestSecurityAuditEmptyListIsJSONArray(t *testing.T) {
+	server, store := newLANSecurityServer(t, false)
+	client, _ := establishLANOwner(t, server)
+	if _, err := store.Control.SQL().Exec("DELETE FROM security_audits"); err != nil {
+		t.Fatal(err)
+	}
+
+	response := requestJSON(t, client, http.MethodGet, server.URL+"/api/v1/admin/security-audits", "", "", nil)
+	body := readAndClose(t, response)
+	if response.StatusCode != http.StatusOK {
+		t.Fatalf("空安全审计列表 status=%d body=%s", response.StatusCode, body)
+	}
+	var payload api.SecurityAuditListResponse
+	if err := json.Unmarshal(body, &payload); err != nil {
+		t.Fatalf("空安全审计响应不符合 typed DTO: %v body=%s", err, body)
+	}
+	if payload.Audits == nil || len(payload.Audits) != 0 {
+		t.Fatalf("空安全审计必须编码为 []，不能是 null: body=%s", body)
+	}
 }
 
 func TestAPITokenLifecycleAndBearerAuthentication(t *testing.T) {

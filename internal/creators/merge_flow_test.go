@@ -141,7 +141,7 @@ func TestCreatorMergeSurvivesRescanAndRestart(t *testing.T) {
 		t.Fatalf("重启后合并事实丢失: %+v", merged)
 	}
 	queryService, _ := galleryquery.NewService(f.ctx, reopened.Control.SQL(), reopened.Catalog.SQL(), f.clock, nil)
-	result, err := queryService.Search(f.ctx, galleryquery.Request{Search: "作者甲", Limit: 50, AuthorizationScope: mergeScope})
+	result, err := queryService.Search(f.ctx, galleryquery.Request{Search: "作者甲", Limit: 50, AuthorizationScope: mergeScope, AuthorizeSources: allowAllQuerySources})
 	if err != nil || len(result.Items) != 2 {
 		t.Fatalf("重启后合并查询结果漂移: %+v %v", result.Items, err)
 	}

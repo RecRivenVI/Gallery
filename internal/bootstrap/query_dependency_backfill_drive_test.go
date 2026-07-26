@@ -53,6 +53,8 @@ func newDriveFixture(t *testing.T) (context.Context, *sql.DB, *jobs.Store, *over
 		args  []any
 	}{
 		{`INSERT INTO catalog_revisions VALUES (?, ?, 'src_test', 'published', 1, 2)`, []any{driveTestCatalogID, driveTestScanJobID}},
+		{`INSERT INTO catalog_revision_sources
+(catalog_revision_id, source_id, library_id) VALUES (?, 'src_test', 'lib_test')`, []any{driveTestCatalogID}},
 		{`INSERT INTO overlay_projection_revisions
 (overlay_revision_id, catalog_revision_id, control_watermark, status, created_at, published_at)
 VALUES (?, ?, 0, 'published', 1, 2)`, []any{driveTestOverlayID, driveTestCatalogID}},

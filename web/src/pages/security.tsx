@@ -2,6 +2,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Button, Form, Input, Label, TextField } from 'react-aria-components';
 import { useState } from 'react';
 import { api, csrfHeaders, errorMessage, expectData, expectNoContent } from '../api/client';
+import type { components } from '../api/schema.gen';
 import { useSession } from '../auth/session';
 import {
   ConfirmAction,
@@ -366,32 +367,42 @@ export function SecurityPage() {
           ))}
         </div>
       )}
-      {audits.data && (
-        <>
-          <h2>安全审计</h2>
-          <div className="table-wrap">
-            <table className="data-grid">
-              <thead>
-                <tr>
-                  <th>时间</th>
-                  <th>动作</th>
-                  <th>对象</th>
-                  <th>结果</th>
+      {audits.data && <SecurityAuditSection audits={audits.data.audits} />}
+    </>
+  );
+}
+
+type SecurityAudit = components['schemas']['SecurityAudit'];
+
+export function SecurityAuditSection({ audits }: { audits: SecurityAudit[] }) {
+  return (
+    <>
+      <h2>安全审计</h2>
+      {audits.length === 0 ? (
+        <EmptyState title="没有安全审计" detail="尚未记录可显示的安全事件。" />
+      ) : (
+        <div className="table-wrap">
+          <table className="data-grid">
+            <thead>
+              <tr>
+                <th>时间</th>
+                <th>动作</th>
+                <th>对象</th>
+                <th>结果</th>
+              </tr>
+            </thead>
+            <tbody>
+              {audits.slice(0, 100).map((audit) => (
+                <tr key={audit.id}>
+                  <td>{formatDate(audit.createdAt)}</td>
+                  <td>{audit.action}</td>
+                  <td>{audit.targetKind}</td>
+                  <td>{audit.outcome}</td>
                 </tr>
-              </thead>
-              <tbody>
-                {audits.data.audits.slice(0, 100).map((audit) => (
-                  <tr key={audit.id}>
-                    <td>{formatDate(audit.createdAt)}</td>
-                    <td>{audit.action}</td>
-                    <td>{audit.targetKind}</td>
-                    <td>{audit.outcome}</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        </>
+              ))}
+            </tbody>
+          </table>
+        </div>
       )}
     </>
   );

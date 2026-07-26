@@ -1064,7 +1064,14 @@ func (s *Server) listSecurityAudits(w http.ResponseWriter, r *http.Request) {
 		s.writeRequestError(w, err)
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"audits": items})
+	audits := make([]api.SecurityAudit, 0, len(items))
+	for _, item := range items {
+		audits = append(audits, api.SecurityAudit{
+			Id: item.ID, Action: item.Action, ActorId: item.ActorID, TargetKind: item.TargetKind,
+			TargetId: item.TargetID, Outcome: item.Outcome, Detail: item.Detail, CreatedAt: item.CreatedAt,
+		})
+	}
+	writeJSON(w, http.StatusOK, api.SecurityAuditListResponse{Audits: audits})
 }
 
 func (s *Server) setSessionCookie(w http.ResponseWriter, r *http.Request, session auth.Session, value string) {
@@ -2418,6 +2425,18 @@ func (s *Server) listWorks(w http.ResponseWriter, r *http.Request) {
 		s.writeRequestError(w, err)
 		return
 	}
+	filter := r.URL.Query().Get("filter")
+	filterNode, err := queryservice.ParseFilter(filter)
+	if err != nil {
+		s.writeRequestError(w, err)
+		return
+	}
+	if queryservice.FilterReferencesField(filterNode, "overlay.hidden") {
+		if err := s.authorizeSession(r, session, "library.write", scope); err != nil {
+			s.writeRequestError(w, err)
+			return
+		}
+	}
 	limit := 0
 	if raw := r.URL.Query().Get("limit"); raw != "" {
 		limit, err = strconv.Atoi(raw)
@@ -2437,11 +2456,13 @@ func (s *Server) listWorks(w http.ResponseWriter, r *http.Request) {
 	result, err := s.query.Search(r.Context(), queryservice.Request{
 		Search: r.URL.Query().Get("q"), Tag: r.URL.Query().Get("tag"),
 		LibraryID: r.URL.Query().Get("libraryId"), SourceID: r.URL.Query().Get("sourceId"),
-		Filter:        r.URL.Query().Get("filter"),
+		Filter:        filter,
 		SortDirection: r.URL.Query().Get("sortDirection"), Limit: limit, Cursor: r.URL.Query().Get("cursor"),
 		QueryPublicationID: r.URL.Query().Get("queryPublicationId"), OmitTotal: omitTotal,
 		AuthorizationScope: queryservice.AuthorizationScope(fmt.Sprintf("%s:%d:%v", session.PrincipalID, session.SecurityVersion, session.TokenScopes), session.Capabilities),
-		Capabilities:       session.Capabilities,
+		AuthorizeSources: func(ctx context.Context, capabilities, sourceIDs []string) ([]string, error) {
+			return s.auth.AuthorizeSessionSources(ctx, session, capabilities, sourceIDs)
+		},
 	})
 	if err != nil {
 		s.writeRequestError(w, err)
