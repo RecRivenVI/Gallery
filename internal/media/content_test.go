@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/RecRivenVI/gallery/internal/contract/fault"
 	"github.com/RecRivenVI/gallery/internal/media"
@@ -115,10 +116,21 @@ func TestOpenContentRejectsStaleIdentityBeforeSendingBytes(t *testing.T) {
 	})
 	t.Run("mtime 变化", func(t *testing.T) {
 		root, published := contentFixture(t, []byte("original"))
-		if err := os.WriteFile(filepath.Join(root, "media.bin"), []byte("replaced"), 0o600); err != nil {
+		path := filepath.Join(root, "media.bin")
+		if err := os.WriteFile(path, []byte("replaced"), 0o600); err != nil {
 			t.Fatal(err)
 		}
-		_, err := media.OpenContent(root, "media.bin", published)
+		// 显式改写 mtime 而不是依赖「重写文件必然改变 mtime」：文件时间戳的时钟粒度在
+		// Windows 上约 15 毫秒，同一刻内的两次写入会得到相同 mtime，使断言变成对时钟
+		// 粒度的测试。这里要断言的是「发布 mtime 与当前 mtime 不一致即拒绝」。
+		changed := time.Unix(0, published.MTimeNanos).Add(time.Hour)
+		if err := os.Chtimes(path, changed, changed); err != nil {
+			t.Fatal(err)
+		}
+		handle, err := media.OpenContent(root, "media.bin", published)
+		if handle != nil {
+			handle.Close()
+		}
 		if faultCode(t, err) != fault.CodeContentChanged {
 			t.Fatalf("mtime 变化错误 = %v", err)
 		}
