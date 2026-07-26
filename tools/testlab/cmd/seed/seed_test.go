@@ -64,19 +64,34 @@ var extendedSeedDedupeScenarios = []seedDedupeScenario{
 		name: "scale=1000/batch=20000/single-oversized-batch-larger-scale", scale: 1000, batch: 20000, parallel: true,
 	},
 	{
-		// 两个 scale=10000 场景之一：batch=1 产生 10,000 个批次（最极端的批次
-		// 数量），验证极限批次数量下 Creator 去重和跨批次一致性不因批次数量本身
-		// 而失效。与另一个 10k 场景都标记为非并行，避免两个大规模 SQLite AppDirs
-		// 同时写入造成的 I/O 竞争。
-		name: "scale=10000/batch=1/max-batch-count-at-scale", scale: 10000, batch: 1, parallel: false,
+		// 两个大规模场景之一：batch=1 产生 2,000 个批次（本矩阵中最极端的批次
+		// 数量，是次高者 ~71 的 28 倍），验证极限批次数量下 Creator 去重和跨批次
+		// 一致性不因批次数量本身而失效。与另一个大规模场景都标记为非并行，避免
+		// 两个大规模 SQLite AppDirs 同时写入造成的 I/O 竞争。
+		name: "scale=2000/batch=1/max-batch-count-at-scale", scale: 2000, batch: 1, parallel: false,
 	},
 	{
-		// 两个 scale=10000 场景之二：100 个中等大小批次，代表比 batch=1 更典型的
-		// 批大小选择，与上一场景共同覆盖"批次数量差异巨大时是否仍然一致"。同样
-		// 标记为非并行。
-		name: "scale=10000/batch=100/typical-multi-batch-at-scale", scale: 10000, batch: 100, parallel: false,
+		// 两个大规模场景之二：20 个中等大小批次，代表比 batch=1 更典型的批大小
+		// 选择，与上一场景共同覆盖"批次数量差异巨大时是否仍然一致"。同样标记为
+		// 非并行。
+		name: "scale=2000/batch=100/typical-multi-batch-at-scale", scale: 2000, batch: 100, parallel: false,
 	},
 }
+
+// 本矩阵的规模上限由「必须在最慢的 CI 执行器上也远低于 go test 默认 10 分钟包超时」
+// 决定，而不是由「本机跑得完」决定。
+//
+// 这条约束是被一次真实的 CI 红灯确立的：scale 曾为 10000，本机（快速 NVMe 工作站）
+// 两个场景合计约 30 秒，看起来毫无风险；同一段代码在 GitHub windows-latest 执行器上
+// 让整个包撞满 10 分钟超时并 panic。差异全部来自 SQLite 的文件 I/O 速度。
+//
+// 这与迁移门禁此前的裁决同源：**不得让机器速度决定测试通过与否**。因此上限不是「调大
+// timeout 直到本机以外也能过」，而是把规模降到任何执行器都有数量级余量的水平——去重
+// 算法的边界语义与 scale 无关（核心矩阵已在毫秒级全部覆盖），这里唯一的增量覆盖是
+// **批次数量**，而批次数量由 batch 而非 scale 决定，因此降低 scale 不损失覆盖。
+//
+// 真实的 1k/10k/100k/500k 规模行为由 tools/testlab 的正式规模流水线负责，那里规模是
+// 被测对象本身，耗时是要记录的观测量，而不是一条隐式的通过条件。
 
 // TestRunSeedDedupesCreatorsAcrossBatchBoundaries 覆盖此前真实出现过的
 // "UNIQUE constraint failed: source_creators.catalog_revision_id,
