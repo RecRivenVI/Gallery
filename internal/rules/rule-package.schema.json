@@ -43,7 +43,7 @@
           "id": {"type": "string", "pattern": "^[A-Za-z][A-Za-z0-9_.-]{0,127}$"},
           "kind": {
             "type": "string",
-            "enum": ["path_match", "selector", "fallback", "stable_key", "media_classify", "media_hidden", "media_order", "cover_candidate", "cover_disable_marker", "metadata_map", "condition"]
+            "enum": ["path_match", "selector", "fallback", "stable_key", "media_classify", "media_hidden", "media_order", "cover_candidate", "cover_disable_marker", "badge", "metadata_map", "condition"]
           },
           "config": {"type": "object"}
         }

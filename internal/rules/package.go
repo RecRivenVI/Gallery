@@ -18,8 +18,8 @@ import (
 )
 
 // PrimitiveRegistryVersion 参与 rule_ir_hash，因此新增或改变原语语义必须递增它：v2 增加
-// media_hidden（按名称 glob 隐藏媒体）与 cover_disable_marker（`.nocover` 禁用封面），并
-// 让 cover_candidate 支持 priority 与 media_type。
+// media_hidden（按名称 glob 隐藏媒体）、cover_disable_marker（`.nocover` 禁用封面）与
+// badge（规则派生的作品角标），并让 cover_candidate 支持 priority 与 media_type。
 const PrimitiveRegistryVersion = "gallery-primitives-v2"
 
 var jsonNumberPattern = regexp.MustCompile(`^(-?)(0|[1-9][0-9]*)(?:\.([0-9]+))?(?:[eE]([+-]?[0-9]+))?$`)
@@ -50,6 +50,7 @@ type RuleIR struct {
 	MediaMIME                string                `json:"mediaMime"`
 	HiddenNameGlobs          []string              `json:"hiddenNameGlobs,omitempty"`
 	CoverDisableMarker       string                `json:"coverDisableMarker,omitempty"`
+	Badges                   []IRBadge             `json:"badges,omitempty"`
 	Primitives               []IRPrimitive         `json:"primitives"`
 	CELExpressions           []IRExpression        `json:"celExpressions"`
 	Extensions               []IRCompiledExtension `json:"extensions,omitempty"`
@@ -65,6 +66,26 @@ type IRPrimitive struct {
 	ID     string          `json:"id"`
 	Kind   string          `json:"kind"`
 	Config json.RawMessage `json:"config"`
+}
+
+// IRBadge 是编译后的角标执行计划。它把「什么条件下出现」与「怎么显示」放在一起，
+// 因为角标是完整的 Source-derived 展示事实，客户端不得再自行推导条件。
+type IRBadge struct {
+	BadgeID         string            `json:"badgeId"`
+	Order           int               `json:"order"`
+	Position        string            `json:"position"`
+	Label           string            `json:"label"`
+	Color           string            `json:"color,omitempty"`
+	Background      string            `json:"background,omitempty"`
+	Border          string            `json:"border,omitempty"`
+	ColorLight      string            `json:"colorLight,omitempty"`
+	BackgroundLight string            `json:"backgroundLight,omitempty"`
+	BorderLight     string            `json:"borderLight,omitempty"`
+	Tags            []string          `json:"tags,omitempty"`
+	MetadataPointer string            `json:"metadataPointer,omitempty"`
+	MetadataValues  []json.RawMessage `json:"metadataValues,omitempty"`
+	MediaSuffix     []string          `json:"mediaSuffix,omitempty"`
+	CaseInsensitive bool              `json:"caseInsensitive,omitempty"`
 }
 
 type IRExpression struct {
@@ -118,6 +139,50 @@ type mediaHiddenConfig struct {
 // 禁用是终态：既不选显式候选，也不回退到第一张自然序媒体。
 type coverDisableMarkerConfig struct {
 	Filename string `json:"filename"`
+}
+
+// badgeConfig 声明一个由规则派生的作品角标（R-18、AI 生成、图片、视频等）。
+//
+// 角标是 **Source-derived 事实**，不是用户 Overlay：它完全由规则和该作品的 metadata /
+// 媒体构成决定，因此随重扫重新计算，不进 control.db。平台差异由「哪个规则包声明了哪些
+// 角标」表达，业务代码里不得再出现按平台名分支。
+//
+// 三类条件覆盖真实规则中出现的全部形态，同时出现时取交集：
+//   - Tags：作品标签命中任意一项；
+//   - MetadataPointer + MetadataValues：metadata 指定位置等于任意一个给定值；
+//   - MediaSuffix：作品中存在该后缀的媒体。
+type badgeConfig struct {
+	BadgeID  string          `json:"badge_id"`
+	Order    int             `json:"order"`
+	Position string          `json:"position"`
+	Label    string          `json:"label"`
+	Style    badgeStyleValue `json:"style"`
+	When     badgeWhenValue  `json:"when"`
+}
+
+type badgeStyleValue struct {
+	Color           string `json:"color,omitempty"`
+	Background      string `json:"background,omitempty"`
+	Border          string `json:"border,omitempty"`
+	ColorLight      string `json:"color_light,omitempty"`
+	BackgroundLight string `json:"background_light,omitempty"`
+	BorderLight     string `json:"border_light,omitempty"`
+}
+
+type badgeWhenValue struct {
+	Tags            []string          `json:"tags,omitempty"`
+	MetadataPointer string            `json:"metadata_pointer,omitempty"`
+	MetadataValues  []json.RawMessage `json:"metadata_values,omitempty"`
+	MediaSuffix     []string          `json:"media_suffix,omitempty"`
+	CaseInsensitive bool              `json:"case_insensitive,omitempty"`
+}
+
+// badgePositions 是角标可出现的位置。位置是契约的一部分：前端按位置决定渲染槽位，
+// 不得接受未知位置后各自猜测。
+var badgePositions = map[string]struct{}{
+	"cover_top_left":  {},
+	"cover_top_right": {},
+	"tag_leading":     {},
 }
 
 func CompilePackage(input []byte) (CompiledPackage, error) {
@@ -320,6 +385,37 @@ func compilePrimitives(primitives []rawPrimitive, expressions []IRExpression) (R
 				return RuleIR{}, withField(fmt.Sprintf("/primitives/%d/config/filename", index), fmt.Errorf("cover_disable_marker %s filename 无效", primitive.ID))
 			}
 			ir.CoverDisableMarker = config.Filename
+		case "badge":
+			var config badgeConfig
+			if err := strictDecode(primitive.Config, &config); err != nil {
+				return RuleIR{}, withField(fmt.Sprintf("/primitives/%d/config", index), fmt.Errorf("badge %s: %w", primitive.ID, err))
+			}
+			if config.BadgeID == "" || config.Label == "" {
+				return RuleIR{}, withField(fmt.Sprintf("/primitives/%d/config", index), fmt.Errorf("badge %s 缺少 badge_id/label", primitive.ID))
+			}
+			if _, ok := badgePositions[config.Position]; !ok {
+				return RuleIR{}, withField(fmt.Sprintf("/primitives/%d/config/position", index), fmt.Errorf("badge %s position %q 不受支持", primitive.ID, config.Position))
+			}
+			if len(config.When.Tags) == 0 && config.When.MetadataPointer == "" && len(config.When.MediaSuffix) == 0 {
+				return RuleIR{}, withField(fmt.Sprintf("/primitives/%d/config/when", index), fmt.Errorf("badge %s 缺少任何触发条件", primitive.ID))
+			}
+			if config.When.MetadataPointer != "" && len(config.When.MetadataValues) == 0 {
+				return RuleIR{}, withField(fmt.Sprintf("/primitives/%d/config/when", index), fmt.Errorf("badge %s 声明了 metadata_pointer 但没有 metadata_values", primitive.ID))
+			}
+			for badgeIndex, existing := range ir.Badges {
+				if existing.BadgeID == config.BadgeID {
+					return RuleIR{}, withField(fmt.Sprintf("/primitives/%d/config/badge_id", index),
+						fmt.Errorf("badge %s 的 badge_id %q 与第 %d 个角标重复", primitive.ID, config.BadgeID, badgeIndex))
+				}
+			}
+			ir.Badges = append(ir.Badges, IRBadge{
+				BadgeID: config.BadgeID, Order: config.Order, Position: config.Position, Label: config.Label,
+				Color: config.Style.Color, Background: config.Style.Background, Border: config.Style.Border,
+				ColorLight: config.Style.ColorLight, BackgroundLight: config.Style.BackgroundLight, BorderLight: config.Style.BorderLight,
+				Tags: config.When.Tags, MetadataPointer: config.When.MetadataPointer,
+				MetadataValues: config.When.MetadataValues, MediaSuffix: config.When.MediaSuffix,
+				CaseInsensitive: config.When.CaseInsensitive,
+			})
 		case "selector", "fallback", "stable_key", "media_order", "cover_candidate", "metadata_map", "condition":
 			if err := validateExtendedPrimitive(primitive); err != nil {
 				return RuleIR{}, withField(fmt.Sprintf("/primitives/%d/config", index), err)

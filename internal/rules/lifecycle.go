@@ -68,6 +68,22 @@ type DryRunWork struct {
 	Ignored          bool          `json:"ignored"`
 	Media            []DryRunMedia `json:"media"`
 	CoverPath        string        `json:"coverPath,omitempty"`
+	Badges           []DryRunBadge `json:"badges,omitempty"`
+}
+
+// DryRunBadge 是规则为该作品派生的角标。它是 Source-derived 展示事实：随重扫重新计算，
+// 不进 control.db，也不由客户端自行推导条件。
+type DryRunBadge struct {
+	ID              string `json:"id"`
+	Order           int    `json:"order"`
+	Position        string `json:"position"`
+	Label           string `json:"label"`
+	Color           string `json:"color,omitempty"`
+	Background      string `json:"background,omitempty"`
+	Border          string `json:"border,omitempty"`
+	ColorLight      string `json:"colorLight,omitempty"`
+	BackgroundLight string `json:"backgroundLight,omitempty"`
+	BorderLight     string `json:"borderLight,omitempty"`
 }
 
 type DryRunMedia struct {
@@ -388,7 +404,114 @@ func (l *Lifecycle) evaluate(ctx context.Context, ir RuleIR, params map[string]a
 		result.Work.Media[index].Ordinal = index
 	}
 	result.Work.CoverPath = selectCoverPath(ir, sample, result.Work.Media)
+	result.Work.Badges = evaluateBadges(ir, sample, result.Work)
 	return result, nil
+}
+
+// evaluateBadges 计算该作品命中的角标。结果按 order、再按 badgeId 稳定排序，使同一作品
+// 在任意一次扫描后得到逐字节相同的角标序列——角标进入 publication 快照，顺序不稳定会让
+// 相同事实产生不同的 Catalog 内容。
+func evaluateBadges(ir RuleIR, sample DryRunInput, work DryRunWork) []DryRunBadge {
+	var result []DryRunBadge
+	for _, badge := range ir.Badges {
+		if !badgeMatches(badge, sample, work) {
+			continue
+		}
+		result = append(result, DryRunBadge{
+			ID: badge.BadgeID, Order: badge.Order, Position: badge.Position, Label: badge.Label,
+			Color: badge.Color, Background: badge.Background, Border: badge.Border,
+			ColorLight: badge.ColorLight, BackgroundLight: badge.BackgroundLight, BorderLight: badge.BorderLight,
+		})
+	}
+	sort.SliceStable(result, func(i, j int) bool {
+		if result[i].Order != result[j].Order {
+			return result[i].Order < result[j].Order
+		}
+		return result[i].ID < result[j].ID
+	})
+	return result
+}
+
+// badgeMatches 对同时声明的多类条件取交集：真实规则中每个角标只用一类条件，交集语义
+// 因此既兼容又更严格，不会把「标签命中」误当成「后缀命中」。
+func badgeMatches(badge IRBadge, sample DryRunInput, work DryRunWork) bool {
+	if len(badge.Tags) > 0 && !anyTagMatches(badge, work.Tags) {
+		return false
+	}
+	if badge.MetadataPointer != "" && !metadataValueMatches(badge, sample.Metadata) {
+		return false
+	}
+	if len(badge.MediaSuffix) > 0 && !anyMediaSuffixMatches(badge, work.Media) {
+		return false
+	}
+	return true
+}
+
+func anyTagMatches(badge IRBadge, tags []string) bool {
+	for _, wanted := range badge.Tags {
+		for _, tag := range tags {
+			if badge.CaseInsensitive {
+				if strings.EqualFold(tag, wanted) {
+					return true
+				}
+				continue
+			}
+			if tag == wanted {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// metadataValueMatches 按 JSON Pointer 取值后与候选值逐一比较。比较在规范 JSON 层面进行，
+// 因此 `2` 与 `2.0` 视为同一个值，不受 metadata 书写形式影响。
+func metadataValueMatches(badge IRBadge, metadata any) bool {
+	value, ok := resolvePointer(metadata, badge.MetadataPointer)
+	if !ok {
+		return false
+	}
+	encoded, err := json.Marshal(value)
+	if err != nil {
+		return false
+	}
+	actual, err := CanonicalJSON(encoded)
+	if err != nil {
+		return false
+	}
+	for _, candidate := range badge.MetadataValues {
+		wanted, err := CanonicalJSON(candidate)
+		if err != nil {
+			continue
+		}
+		if bytes.Equal(actual, wanted) {
+			return true
+		}
+	}
+	return false
+}
+
+// anyMediaSuffixMatches 只看已被规则分类为媒体的文件，因此「图片/视频」角标描述的是
+// 该作品实际发布的媒体构成，而不是目录里碰巧存在的任意文件。
+func anyMediaSuffixMatches(badge IRBadge, media []DryRunMedia) bool {
+	for _, item := range media {
+		extension := strings.TrimPrefix(path.Ext(item.Path), ".")
+		if extension == "" {
+			continue
+		}
+		for _, wanted := range badge.MediaSuffix {
+			if badge.CaseInsensitive {
+				if strings.EqualFold(extension, wanted) {
+					return true
+				}
+				continue
+			}
+			if extension == wanted {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 // selectCoverPath 按下列顺序决定作品封面，与真实规则的 cover 语义一一对应：
