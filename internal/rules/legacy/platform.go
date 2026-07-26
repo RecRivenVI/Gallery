@@ -32,21 +32,26 @@ type primitive struct {
 }
 
 // pointerChain 把旧配置的 metadata 取值链（如 `["user.name", "$path.author"]`）转换为
-// JSON Pointer 链。
+// JSON Pointer 链，并对其中的 `$path.*` 虚拟取值逐项给出承接结论。
 //
-// `$path.*` 是旧工具的虚拟取值（从目录路径推断），不是 metadata 中的字段：作者与作品名的路径
-// 回退由 Gallery 的 `path_match` 原语本身承担（`author_pattern`/`work_pattern` 的命名捕获），
-// 因此这里把它们从 pointer 链中剔除并**逐项登记**，而不是生成一个永远解析不到的 pointer。
+// `$path.*` 是旧工具的虚拟取值（从目录路径推断），不是 metadata 中的字段，因此不能生成一个永远
+// 解析不到的 pointer。当前 Gallery 只有一处路径取值能力：
+//
+//   - `path_match` 的 `title: "directory_name"`——求值把作品标题**初始化**为作品目录名，
+//     metadata 链解析不出标题时该默认值保留下来。这正好等价于 `$path.work` 作为标题的回退。
+//   - `work_date` 的 `path_pattern`——由 convertPlatform 单独承接 `$path.datetime`。
+//
+// 除此之外没有别的路径取值：`path_match` 的配置是**封闭**集合（scope/glob/title/stable_key/
+// metadata_file），既没有 `author_pattern`/`work_pattern`，也没有任何命名捕获；`fallback` 与
+// `stable_key` 只接受 metadata JSON Pointer；CEL 虽然拿得到 `path`，但只能作布尔谓词，不能赋值。
+// 因此作者段取值与「用父目录名作标题」都无法表达，逐项登记而不是假装等价。
 func pointerChain(values []string, platformID, field string, notes *[]Note) []string {
 	result := make([]string, 0, len(values))
 	for _, value := range values {
 		if strings.HasPrefix(value, "$path.") {
-			// 日期的路径回退由 convertPlatform 单独登记（它需要说明「缺少目录命名模式」这一
-			// 更具体的原因），这里不重复登记同一件事。
-			if field != "date" {
+			if reason := pathFallbackNote(field, value); reason != "" {
 				*notes = append(*notes, Note{
-					Platform: platformID, Field: "metadata." + field + "." + value,
-					Reason: "路径回退由 path_match 的命名捕获承担，不进入 metadata pointer 链",
+					Platform: platformID, Field: "metadata." + field + "." + value, Reason: reason,
 				})
 			}
 			continue
@@ -54,6 +59,29 @@ func pointerChain(values []string, platformID, field string, notes *[]Note) []st
 		result = append(result, "/"+strings.ReplaceAll(value, ".", "/"))
 	}
 	return result
+}
+
+// pathFallbackNote 返回某个 `$path.*` 回退的未转换原因；返回空串表示该回退已被等价承接。
+func pathFallbackNote(field, token string) string {
+	switch {
+	case field == "date":
+		// `$path.datetime` 由 convertPlatform 的 work_date.path_pattern 承接，或在缺少目录命名
+		// 模式时由它给出更具体的原因，这里不重复登记同一件事。
+		return ""
+	case field == "title" && token == "$path.work":
+		// path_match 的 title=directory_name 已经把作品目录名作为标题默认值，等价承接。
+		// 这条等价成立的前提是 title 的 fallback 原语**不带** default——带了就会用 default
+		// 覆盖掉这个默认值，见 convertPlatform 中对 default 的说明。
+		return ""
+	case field == "title":
+		return "标题取自作品目录之外的路径段（作者段）；path_match 的 title 只支持作品目录名本身，" +
+			"当前原语没有路径命名捕获，无法表达"
+	case token == "$path.author":
+		return "作者段取值当前无法表达：path_match 配置是封闭集合且无命名捕获，fallback/stable_key " +
+			"只接受 metadata JSON Pointer，CEL 只能作布尔谓词。metadata 缺该字段时作品将没有创作者"
+	default:
+		return "路径虚拟取值 " + token + " 当前没有对应的规则原语"
+	}
 }
 
 // convertPlatform 产出一个平台的完整规则包。
@@ -68,30 +96,97 @@ func convertPlatform(config Config, platform Platform, ruleSetID string) (json.R
 			Reason: fmt.Sprintf("生产扫描器固定按含可见媒体的叶目录判定，旧配置声明 %q", platform.Structure.WorkDetection),
 		})
 	}
+	// 目录模式只有恰好是两级 `{作者}/{作品}` 时才与固定的 `*/*` glob 等价。声明成别的形状而
+	// 转换器照样发出 `*/*`，会让整个平台按错误的层级被识别，因此逐个核对而不是默认忽略。
+	if platform.Structure.AuthorPattern != "" && platform.Structure.AuthorPattern != "{author}" {
+		notes = append(notes, Note{
+			Platform: platform.ID, Field: "structure.author_pattern",
+			Reason: fmt.Sprintf("path_match 固定按两级目录识别，不支持作者模式 %q", platform.Structure.AuthorPattern),
+		})
+	}
+	if platform.Structure.WorkPattern != "" && platform.Structure.WorkPattern != "{author}/{work}" {
+		notes = append(notes, Note{
+			Platform: platform.ID, Field: "structure.work_pattern",
+			Reason: fmt.Sprintf("path_match 固定按两级目录识别，不支持作品模式 %q", platform.Structure.WorkPattern),
+		})
+	}
+	// 展示顺序与扫描顺序是旧工具自己的调度事实：Gallery 的列表顺序由 API 协议决定，扫描顺序由
+	// Job 调度决定，规则包里没有承接位置。它们在旧配置里有明确取值，因此必须登记而不是消失。
+	if platform.Order != 0 {
+		notes = append(notes, Note{
+			Platform: platform.ID, Field: "order",
+			Reason: "平台展示顺序由 Gallery 的 API 排序协议决定，规则包不表达列表顺序",
+		})
+	}
+	if platform.ScanOrder != 0 {
+		notes = append(notes, Note{
+			Platform: platform.ID, Field: "scan_order",
+			Reason: "扫描顺序由 Gallery 的 Job 调度决定，规则包不表达扫描次序",
+		})
+	}
+	notes = append(notes, structureNotes(platform)...)
+	notes = append(notes, transformNotes(platform)...)
+	if platform.Metadata.CategoryPaths != nil {
+		notes = append(notes, Note{
+			Platform: platform.ID, Field: "metadata.category_paths",
+			Reason: "与 metadata.categories 同属旧工具的来源判别，Gallery 由 Source 与规则绑定表达",
+		})
+	}
 	primitives := []primitive{}
 
 	// 目录结构：author_work 对应两级 glob。
-	primitives = append(primitives, primitive{
-		ID: "work", Kind: "path_match",
-		Config: map[string]any{
-			"scope": "work_directory", "glob": "*/*",
-			"title": "directory_name", "stable_key": "relative_path",
-			"metadata_file": config.Library.MetadataFile,
-		},
-	})
+	pathMatch := map[string]any{
+		"scope": "work_directory", "glob": "*/*",
+		"title": "directory_name", "stable_key": "relative_path",
+	}
+	// metadata 文件名只在「每个作品都必须有 metadata」时下发。
+	//
+	// 生产扫描器对 `path_match.metadata_file` 的语义是**强制**的：作品目录里缺少该文件，整次扫描
+	// 直接失败，而不是把该作品当作没有 metadata。因此把一个「可选的」metadata 文件名写进规则，
+	// 等于让任何一个没有 metadata 的作品目录炸掉整个 Source。旧配置显式声明 metadata 可选的平台
+	// 必须不下发文件名；它的 metadata 取值链（如果有）随之失效，这一点单独登记。
+	if optional := platform.Structure.Work.MetadataRequired; optional != nil && !*optional {
+		if hasMetadataChain(platform.Metadata) {
+			notes = append(notes, Note{
+				Platform: platform.ID, Field: "structure.work.metadata_required",
+				Reason: "旧配置声明 metadata 文件可选，但扫描器对 path_match.metadata_file 是强制语义（缺文件即整次扫描失败），" +
+					"因此不下发文件名；该平台所有 metadata 取值链随之失效",
+			})
+		} else {
+			notes = append(notes, Note{
+				Platform: platform.ID, Field: "structure.work.metadata_required",
+				Reason: "旧配置声明 metadata 文件可选，但扫描器对 path_match.metadata_file 是强制语义（缺文件即整次扫描失败），" +
+					"因此不下发文件名；该平台没有 metadata 取值链，无字段因此失效",
+			})
+		}
+	} else {
+		pathMatch["metadata_file"] = config.Library.MetadataFile
+	}
+	primitives = append(primitives, primitive{ID: "work", Kind: "path_match", Config: pathMatch})
 
-	// 标题：date_title 的平台用日期作标题，其余走 metadata 链。
+	// metadata 取值链一律**不带 default**。
+	//
+	// 旧实现给每条链补了 `"default": ""`，那不是「没取到就留空」而是「没取到就写入空串」：求值端
+	// 只在候选为 nil 时才跳过赋值，拿到空串会照样赋值。后果逐字段都是实际错误——
+	//   - 标题被空串覆盖，于是 path_match 的 directory_name 默认值失效，作品标题为空；
+	//     EnsureCanonical 对空标题返回校验错误，整个 Source 的扫描直接失败；
+	//   - 标签被写成 `[""]`，凭空多出一个空标签进入索引与角标判定；
+	//   - 创作者、描述、来源链接被空串而不是「缺失」表示，缺失事实不可辨。
+	// 去掉 default 后，取不到值会留下 `RULE_SELECTOR_MISSING`（非必需），既保留默认值也留下痕迹。
 	titlePointers := pointerChain(platform.Metadata.Title, platform.ID, "title", &notes)
 	if len(titlePointers) > 0 {
 		primitives = append(primitives, primitive{
 			ID: "title", Kind: "fallback",
-			Config: map[string]any{"target": "title", "pointers": titlePointers, "default": ""},
+			Config: map[string]any{"target": "title", "pointers": titlePointers},
 		})
 	}
 	if platform.Metadata.DateTitle {
 		notes = append(notes, Note{
 			Platform: platform.ID, Field: "metadata.date_title",
-			Reason: "标题取日期的展示语义由客户端按 publishedAt 呈现，规则仍产出原始标题",
+			Reason: "该标志只声明「本平台的标题就是日期」，标题链本身已取到 metadata 日期原值，" +
+				"因此它改变的是标题**如何渲染**（按显示时区与格式），不是服务端产出的标题；" +
+				"presentation 没有该标志位，故标题按原值展示。客户端不得改用 publishedAt 顶替标题：" +
+				"标题链与日期链互相独立，metadata 缺日期时二者会分叉",
 		})
 	}
 
@@ -100,7 +195,6 @@ func convertPlatform(config Config, platform Platform, ruleSetID string) (json.R
 		values     []string
 	}{
 		{"creator", "creator", platform.Metadata.Author},
-		{"creator-id", "external_id", platform.Metadata.AuthorID},
 		{"description", "description", platform.Metadata.Description},
 		{"source-url", "source_url", platform.Metadata.SourceURL},
 		{"tags", "tags", platform.Metadata.Tags},
@@ -111,7 +205,29 @@ func convertPlatform(config Config, platform Platform, ruleSetID string) (json.R
 		}
 		primitives = append(primitives, primitive{
 			ID: item.id, Kind: "fallback",
-			Config: map[string]any{"target": item.target, "pointers": pointers, "default": ""},
+			Config: map[string]any{"target": item.target, "pointers": pointers},
+		})
+	}
+
+	// 作者标识落到 **Creator 的稳定键**，不是作品的 external_id。
+	//
+	// 旧实现映射到 `external_id`，那是**作品**的外部身份：扫描把它作为 Work 的跨路径身份使用，
+	// 同一次扫描中两个作品拿到同一个 external_id 会被判定为 duplicate_external_id 并返回
+	// BINDING_REVIEW_REQUIRED——也就是说，只要某个作者有第二个作品，该 Source 的扫描就整体失败。
+	// 正确的承接点是 `stable_key{target: "creator"}`：它产出 CreatorStableKey，扫描据此让同一
+	// 作者的多个 occurrence 复用同一个 CanonicalCreator，这正是 author_id 的原意。
+	authorIDPointers := pointerChain(platform.Metadata.AuthorID, platform.ID, "creator-id", &notes)
+	switch {
+	case len(authorIDPointers) == 1:
+		primitives = append(primitives, primitive{
+			ID: "creator-id", Kind: "stable_key",
+			Config: map[string]any{"target": "creator", "pointer": authorIDPointers[0]},
+		})
+	case len(authorIDPointers) > 1:
+		notes = append(notes, Note{
+			Platform: platform.ID, Field: "metadata.author_id",
+			Reason: "stable_key 只接受单个 pointer，无法表达多级回退链；该平台的作者标识未转换，" +
+				"作者身份退化为逐作品 occurrence",
 		})
 	}
 
@@ -133,8 +249,11 @@ func convertPlatform(config Config, platform Platform, ruleSetID string) (json.R
 		}
 		if wantsPathDate {
 			item["path_pattern"] = PathDatetimePattern
-			// 平台级 metadata.time 没有对应的目录时区字段，因此目录时间只有库级声明可用。
-			item["path_timezone"] = firstNonEmpty(config.Time.DirectoryTimestampTimezone, "UTC")
+			// 目录时区与 metadata 时区一样是「平台级 → 库级 → 内置默认」三级回退。旧配置为每个
+			// 平台都声明了 `metadata.time.directory_timestamp_timezone`；只读库级取值会让平台级
+			// 声明静默失效，产出偏移若干小时却完全合法的发布时间。
+			item["path_timezone"] = firstNonEmpty(
+				platform.Metadata.Time.DirectoryTimestampTimezone, config.Time.DirectoryTimestampTimezone, "UTC")
 		}
 		primitives = append(primitives, primitive{ID: "work-date", Kind: "work_date", Config: item})
 	}
@@ -168,16 +287,32 @@ func convertPlatform(config Config, platform Platform, ruleSetID string) (json.R
 		})
 	}
 
-	// 平台专属的隐藏规则与封面候选：这两类依赖同目录兄弟文件与跨规则引用，当前原语无法表达。
-	if platform.Media != nil && len(platform.Media.Hide) > 0 {
-		notes = append(notes, Note{
-			Platform: platform.ID, Field: "media.hide",
-			Reason: "条件隐藏依赖同目录兄弟文件扩展名与 metadata 文本匹配，当前原语与 CEL 上下文不提供该输入",
-		})
+	// 平台专属的条件隐藏：逐条登记，因为两类条件的可实现性完全不同，笼统一条会掩盖差别。
+	if platform.Media != nil {
+		for _, rule := range platform.Media.Hide {
+			notes = append(notes, Note{
+				Platform: platform.ID, Field: "media.hide." + rule.ID, Reason: mediaHideReason(rule),
+			})
+		}
 	}
 	if platform.Cover != nil {
 		for _, candidate := range platform.Cover.Candidates {
 			if candidate.NameRegex == "" {
+				continue
+			}
+			// 条件无法表达时**整条候选不发出**，而不是保留候选、只登记条件。
+			//
+			// 保留候选等于把「满足某条件时才用它作封面」放宽成「永远用它作封面」。这不是一个
+			// 温和的近似：这类候选的 priority 显著高于库级显式封面 glob 的 priority，于是任何
+			// 作品里只要存在符合该 glob 的文件，它就会压过 `cover.*` 这类明确的封面声明——
+			// 旧行为里本不该被选中的文件成了封面。封面选错比没有封面严重得多（没有封面时还有
+			// 「第一张可见媒体」的确定性回退），因此宁可不选中。
+			if hasCandidateCondition(candidate.When) {
+				notes = append(notes, Note{
+					Platform: platform.ID, Field: "cover.candidates." + candidate.ID + ".when",
+					Reason: "候选条件引用另一条隐藏规则，当前原语无法表达；省略条件会让该候选无条件生效并" +
+						"以更高优先级压过显式封面 glob，因此整条候选不发出，封面回落到显式 glob 或第一张可见媒体",
+				})
 				continue
 			}
 			glob, ok := regexToGlob(candidate.NameRegex)
@@ -195,12 +330,6 @@ func convertPlatform(config Config, platform Platform, ruleSetID string) (json.R
 			primitives = append(primitives, primitive{
 				ID: "cover-" + candidate.ID, Kind: "cover_candidate", Config: item,
 			})
-			if len(candidate.When) > 0 && string(candidate.When) != "null" {
-				notes = append(notes, Note{
-					Platform: platform.ID, Field: "cover.candidates." + candidate.ID + ".when",
-					Reason: "候选的规则引用条件未转换；候选按 glob 与媒体类型生效，可能比旧行为宽",
-				})
-			}
 		}
 	}
 
@@ -254,6 +383,14 @@ func convertPlatform(config Config, platform Platform, ruleSetID string) (json.R
 		notes = append(notes, Note{
 			Platform: platform.ID, Field: "metadata.categories",
 			Reason: "category 校验属于旧工具的来源判别，Gallery 由 Source 与规则绑定表达",
+		})
+	}
+	// 输出时区：Gallery 的时刻一律以 UTC 存储，声明为 UTC 是等价承接；声明为其它时区则会改变
+	// 存储值本身，规则包没有对应表达位置，必须登记。
+	if timezone := platform.Metadata.Time.OutputTimezone; timezone != "" && timezone != "UTC" {
+		notes = append(notes, Note{
+			Platform: platform.ID, Field: "metadata.time.output_timezone",
+			Reason: fmt.Sprintf("Gallery 一律以 UTC 存储时刻，不支持按 %q 输出", timezone),
 		})
 	}
 
@@ -351,6 +488,128 @@ func convertBadge(badge Badge, platformID string) (*primitive, *Note) {
 			"label": badge.Label, "style": style, "when": when,
 		},
 	}, nil
+}
+
+// hasMetadataChain 报告该平台是否声明了任何从 metadata 取值的字段（`$path.*` 是路径取值，不算）。
+func hasMetadataChain(meta PlatformMeta) bool {
+	for _, chain := range [][]string{
+		meta.Title, meta.Author, meta.AuthorID, meta.Description, meta.Tags, meta.Date, meta.SourceURL,
+	} {
+		for _, value := range chain {
+			if !strings.HasPrefix(value, "$path.") {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// structureNotes 逐项核对目录结构声明中**改变识别行为**的开关。
+//
+// 每一项都只在取值与 Gallery 的等价行为不一致时登记：取值一致时它是等价承接而不是损失，
+// 无差别登记会让未转换清单变成噪声，真正的损失反而淹没其中。
+func structureNotes(platform Platform) []Note {
+	notes := []Note{}
+	if value := platform.Structure.UnknownDirectory; value != "" && value != "ignore" {
+		notes = append(notes, Note{
+			Platform: platform.ID, Field: "structure.unknown_directory",
+			// 扫描器对不匹配 work_directory glob 的目录不产生任何作品，等价于 ignore；
+			// 其它处理方式（例如登记为待归类）没有对应表达。
+			Reason: fmt.Sprintf("扫描器对不匹配作品 glob 的目录一律不产生作品，不支持 %q", value),
+		})
+	}
+	if platform.Structure.AllowMediaInWorkChildren {
+		notes = append(notes, Note{
+			Platform: platform.ID, Field: "structure.allow_media_in_work_children",
+			// 扫描器只读取作品目录的直接子项，子目录一律跳过，因此 false 是等价承接、true 不是。
+			Reason: "扫描器只把作品目录的直接子文件作为媒体，不下降到子目录，无法表达「子目录中的媒体也算」",
+		})
+	}
+	if platform.Structure.Author.KeySource == "path_only" {
+		notes = append(notes, Note{
+			Platform: platform.ID, Field: "structure.author.key_source",
+			Reason: "作者身份只能从路径段取；当前没有路径取值原语，该平台的作品将没有创作者",
+		})
+	}
+	return notes
+}
+
+// legacyTransforms 是旧配置的取值归一化方式与 Gallery 承接结论的对照表。
+// 值为空串表示 Gallery 有等价行为、无需登记；非空串是必须登记的原因。
+var legacyTransforms = map[string]map[string]string{
+	"title": {
+		"display_text": "Gallery 逐 code point 保留来源文本、不做展示型归一化，标题文本可能与旧工具不同",
+	},
+	"description": {
+		"display_text": "Gallery 逐 code point 保留来源文本、不做展示型归一化，描述文本可能与旧工具不同",
+	},
+	"tags": {
+		// 这一条与其它几条不同：它改变的是标签**数量**，不只是文本外观。
+		"array_or_brace_list": "Gallery 只把 JSON 数组形态识别为多个标签；花括号列表形态的字符串会成为**一个**标签，" +
+			"标签数量、按标签的搜索与按标签命中的角标都会因此不同",
+	},
+	"date": {
+		// work_date 原语本身就同时支持 metadata 时间戳与路径日期，等价承接。
+		"iso_or_path_datetime": "",
+	},
+}
+
+// transformNotes 逐字段登记无法承接的取值归一化。未知的归一化方式一律登记：把没见过的变换当作
+// 恒等映射，等于默认「它什么也没做」，而这恰恰是最可能产生静默差异的假设。
+func transformNotes(platform Platform) []Note {
+	notes := []Note{}
+	for _, item := range []struct{ field, value string }{
+		{"title", platform.Metadata.Transforms.Title},
+		{"description", platform.Metadata.Transforms.Description},
+		{"tags", platform.Metadata.Transforms.Tags},
+		{"date", platform.Metadata.Transforms.Date},
+	} {
+		if item.value == "" {
+			continue
+		}
+		reason, known := legacyTransforms[item.field][item.value]
+		if known && reason == "" {
+			continue
+		}
+		if !known {
+			reason = fmt.Sprintf("未知的取值归一化方式 %q，未转换", item.value)
+		}
+		notes = append(notes, Note{
+			Platform: platform.ID, Field: "metadata.transforms." + item.field, Reason: reason,
+		})
+	}
+	return notes
+}
+
+// mediaHideReason 给出一条条件隐藏规则未转换的**具体**原因。两类条件的差别是实质性的：
+//
+//   - 兄弟文件条件需要「同目录其它文件的扩展名集合」。求值时 CEL 的环境变量只有
+//     source/path/file/metadata/candidate/params，其中 file 只有当前文件的 path/size/metadata，
+//     没有任何形式的目录清单。这不是写法问题，是输入本身不存在，必须先扩展求值上下文。
+//   - metadata 文本条件只需要作品 metadata 与当前文件名，二者 CEL 都拿得到，
+//     `condition{scope: "media", effect: "hide"}` 加一条 CEL 谓词即可承接——它是可实现的。
+//     本轮没有实现，因为忠实移植需要知道被匹配取值的实际形态（字符串还是字符串数组）：CEL 谓词
+//     求值出错会中断整个 Source 的求值，而取值形态只能从真实来源的 metadata 观察得到，本轮不在
+//     允许触碰的范围内。凭猜测写一个可能在真实数据上抛错的谓词，比暂不实现更糟。
+func mediaHideReason(rule MediaHideRule) string {
+	switch {
+	case rule.When.Files != nil && len(rule.When.Files.Extensions) > 0:
+		return "条件依赖同目录兄弟文件的扩展名集合；CEL 上下文只提供当前文件的 path/size/metadata，" +
+			"没有目录清单这一输入，需要先扩展求值上下文或新增原语"
+	case rule.When.TextRegex != "":
+		return "条件只依赖作品 metadata 与文件名，CEL 上下文均已提供，可由 condition(scope=media, effect=hide) " +
+			"加一条 CEL 谓词承接；本轮未实现——忠实移植需要先观察被匹配取值的实际形态，否则谓词可能在" +
+			"真实数据上求值出错并中断整个 Source"
+	default:
+		return "未识别的条件隐藏形态，未转换"
+	}
+}
+
+// hasCandidateCondition 判断封面候选是否带有条件。保留原文判断而不是解析成结构体，是为了让
+// **任何**形态的条件（包括本转换器不认识的新形态）都落到「条件无法表达 → 候选不发出」这一侧。
+func hasCandidateCondition(when json.RawMessage) bool {
+	trimmed := strings.TrimSpace(string(when))
+	return trimmed != "" && trimmed != "null" && trimmed != "{}"
 }
 
 // regexToGlob 只处理旧配置中实际出现的一类简单锚定正则（如 `^1\.[^.]+$`）。

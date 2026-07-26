@@ -17,6 +17,12 @@ import (
 
 // Config 是旧配置中本转换器实际使用的部分。刻意不是全字段映射：未被使用的字段会在
 // Convert 中被显式登记为「未转换」，而不是静默忽略。
+//
+// 「显式登记」由两条互补的机制共同保证，缺一不可：
+//   - 本文件与 platform.go 中逐字段的手写登记，说明「这个语义我们理解、但当前无法表达」；
+//   - unknown.go 的 collectUnknownFields，把原文与本结构体的已声明字段集合做差集，说明
+//     「这个字段我们根本没看见」。没有它时，任何未在此声明的字段都会被 encoding/json 静默
+//     丢弃，且没有任何返回值、错误或日志能暴露它。
 type Config struct {
 	SchemaVersion int             `json:"schema_version"`
 	Library       LibraryConfig   `json:"library"`
@@ -109,29 +115,93 @@ type Structure struct {
 	AuthorPattern string `json:"author_pattern"`
 	WorkPattern   string `json:"work_pattern"`
 	WorkDetection string `json:"work_detection"`
+	// UnknownDirectory 声明不匹配目录模式的目录如何处理。
+	UnknownDirectory string `json:"unknown_directory"`
+	// AllowMediaInWorkChildren 声明作品子目录中的文件是否算作该作品的媒体。
+	AllowMediaInWorkChildren bool            `json:"allow_media_in_work_children"`
+	Author                   StructureAuthor `json:"author"`
+	Work                     StructureWork   `json:"work"`
+}
+
+type StructureAuthor struct {
+	// KeySource 声明作者身份取自 metadata 还是路径。
+	KeySource string `json:"key_source"`
+	// PathCapture 是作者段在目录模式中的命名捕获名。
+	PathCapture string `json:"path_capture"`
+}
+
+type StructureWork struct {
+	PathCapture string `json:"path_capture"`
+	// MetadataRequired 声明每个作品目录是否必须存在 metadata 文件。
+	//
+	// 用指针区分「未声明」与「显式声明为 false」：生产扫描器对 `path_match.metadata_file` 的语义
+	// 是**强制**的（缺文件即整个扫描失败），因此这两种情况不能混为一谈——未声明时保持既有行为，
+	// 显式声明为 false 时必须不下发文件名。
+	MetadataRequired *bool `json:"metadata_required"`
 }
 
 type PlatformMeta struct {
-	Categories  []string         `json:"categories"`
-	DateTitle   bool             `json:"date_title"`
-	Title       []string         `json:"title"`
-	Author      []string         `json:"author"`
-	AuthorID    []string         `json:"author_id"`
-	Description []string         `json:"description"`
-	Tags        []string         `json:"tags"`
-	Date        []string         `json:"date"`
-	SourceURL   []string         `json:"source_url"`
-	Time        PlatformMetaTime `json:"time"`
+	Categories []string `json:"categories"`
+	// CategoryPaths 是 metadata 中承载来源类别的取值路径，与 Categories 一起构成旧工具的来源判别。
+	CategoryPaths []string `json:"category_paths"`
+	DateTitle     bool     `json:"date_title"`
+	Title         []string `json:"title"`
+	Author        []string `json:"author"`
+	AuthorID      []string `json:"author_id"`
+	Description   []string `json:"description"`
+	Tags          []string `json:"tags"`
+	Date          []string `json:"date"`
+	SourceURL     []string `json:"source_url"`
+	// Transforms 声明每个字段取值后的归一化方式。它改变的是**取到的值本身**，因此必须显式声明：
+	// 漏掉时会静默丢失一个值变换步骤，产出的字段看起来完全正常，只是内容与旧工具不同。
+	Transforms PlatformTransforms `json:"transforms"`
+	Time       PlatformMetaTime   `json:"time"`
+}
+
+type PlatformTransforms struct {
+	Title       string `json:"title"`
+	Description string `json:"description"`
+	Tags        string `json:"tags"`
+	Date        string `json:"date"`
 }
 
 type PlatformMetaTime struct {
-	InputTimezone   string `json:"input_timezone"`
-	OutputTimezone  string `json:"output_timezone"`
-	DisplayTimezone string `json:"display_timezone"`
+	InputTimezone  string `json:"input_timezone"`
+	OutputTimezone string `json:"output_timezone"`
+	// DirectoryTimestampTimezone 是**平台级**的目录名日期时区，与库级 `time.directory_timestamp_timezone`
+	// 同名同义，平台级优先。真实旧配置为每个平台都声明了它。
+	//
+	// 它必须在此声明：漏掉时 encoding/json 会静默丢弃平台级取值，转换器只能读到库级取值，于是
+	// 「平台单独声明了另一个目录时区」这件事无声消失，产出的发布时间格式合法、排序正常、只是整体
+	// 偏移若干小时——与本轮修掉的「两类朴素时间戳共用一个时区」是同一类静默缺陷。
+	DirectoryTimestampTimezone string `json:"directory_timestamp_timezone"`
+	DisplayTimezone            string `json:"display_timezone"`
 }
 
 type PlatformMedia struct {
-	Hide []json.RawMessage `json:"hide"`
+	Hide []MediaHideRule `json:"hide"`
+}
+
+// MediaHideRule 是旧配置的平台专属条件隐藏规则。逐字段声明而不是保留原文，使规则内部的未识别
+// 字段也能进入差集登记，并使「哪一条隐藏规则因为什么原因未转换」可以逐条说明。
+type MediaHideRule struct {
+	ID        string        `json:"id"`
+	NameRegex string        `json:"name_regex"`
+	When      MediaHideWhen `json:"when"`
+}
+
+type MediaHideWhen struct {
+	// Files 声明「同目录兄弟文件的扩展名集合命中任意一项」。
+	Files *MediaHideFiles `json:"files,omitempty"`
+	// MetadataCategory 限定作品 metadata 的来源类别。
+	MetadataCategory []string `json:"metadata_category,omitempty"`
+	// MetadataAnyTextPaths 是若干 metadata 取值路径，其中任意一处文本命中 TextRegex 即成立。
+	MetadataAnyTextPaths []string `json:"metadata_any_text_paths,omitempty"`
+	TextRegex            string   `json:"text_regex,omitempty"`
+}
+
+type MediaHideFiles struct {
+	Extensions []string `json:"extensions"`
 }
 
 type PlatformCover struct {
@@ -202,6 +272,21 @@ func Convert(input []byte, ruleSetIDs map[string]string) (Result, error) {
 	result := Result{
 		Packages: map[string]json.RawMessage{}, SourceRoots: map[string]string{},
 		Unconverted: []Note{},
+	}
+	// 未识别字段的差集先于一切转换收集：它衡量的是「本转换器看见了旧配置的多少」，与转换是否
+	// 成功无关，也不因为后续任何一步失败而丢失。
+	unknown, err := collectUnknownFields(input)
+	if err != nil {
+		return Result{}, fmt.Errorf("比对旧配置字段集合: %w", err)
+	}
+	result.Unconverted = append(result.Unconverted, unknown...)
+	// Gallery 的时刻一律以 UTC 存储（`规范/06`），因此声明为 UTC 的存储时区是等价承接而不是
+	// 未转换；声明为其它时区则是真正无法承接的语义，必须登记。
+	if config.Time.StorageTimezone != "" && config.Time.StorageTimezone != "UTC" {
+		result.Unconverted = append(result.Unconverted, Note{
+			Field:  "time.storage_timezone",
+			Reason: fmt.Sprintf("Gallery 一律以 UTC 存储时刻，不支持按 %q 存储", config.Time.StorageTimezone),
+		})
 	}
 	if config.Library.PathCase != "" && config.Library.PathCase != "preserve" {
 		result.Unconverted = append(result.Unconverted, Note{

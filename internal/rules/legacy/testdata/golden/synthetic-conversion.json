@@ -1,0 +1,919 @@
+{
+  "packages": {
+    "alpha": {
+      "cel_expressions": [],
+      "cel_profile_version": "gallery-cel-v1",
+      "compiler_requirement": "gallery-rule-compiler-v1",
+      "extensions": {},
+      "normalization_algorithm_version": "gallery-canonical-json-v1",
+      "parameter_schema": {
+        "additionalProperties": false,
+        "type": "object"
+      },
+      "primitives": [
+        {
+          "id": "work",
+          "kind": "path_match",
+          "config": {
+            "glob": "*/*",
+            "metadata_file": "metadata.json",
+            "scope": "work_directory",
+            "stable_key": "relative_path",
+            "title": "directory_name"
+          }
+        },
+        {
+          "id": "title",
+          "kind": "fallback",
+          "config": {
+            "pointers": [
+              "/title/text",
+              "/title"
+            ],
+            "target": "title"
+          }
+        },
+        {
+          "id": "creator",
+          "kind": "fallback",
+          "config": {
+            "pointers": [
+              "/user/name"
+            ],
+            "target": "creator"
+          }
+        },
+        {
+          "id": "description",
+          "kind": "fallback",
+          "config": {
+            "pointers": [
+              "/caption",
+              "/text"
+            ],
+            "target": "description"
+          }
+        },
+        {
+          "id": "source-url",
+          "kind": "fallback",
+          "config": {
+            "pointers": [
+              "/postUrl",
+              "/url"
+            ],
+            "target": "source_url"
+          }
+        },
+        {
+          "id": "tags",
+          "kind": "fallback",
+          "config": {
+            "pointers": [
+              "/tags"
+            ],
+            "target": "tags"
+          }
+        },
+        {
+          "id": "creator-id",
+          "kind": "stable_key",
+          "config": {
+            "pointer": "/user/id",
+            "target": "creator"
+          }
+        },
+        {
+          "id": "work-date",
+          "kind": "work_date",
+          "config": {
+            "input_timezone": "UTC",
+            "path_pattern": "/(?P\u003cyear\u003e\\d{4})-(?P\u003cmonth\u003e\\d{2})-(?P\u003cday\u003e\\d{2})_(?P\u003chour\u003e\\d{2})-(?P\u003cminute\u003e\\d{2})-(?P\u003csecond\u003e\\d{2})_",
+            "path_timezone": "Asia/Tokyo",
+            "pointers": [
+              "/date"
+            ]
+          }
+        },
+        {
+          "id": "media-gif",
+          "kind": "media_classify",
+          "config": {
+            "glob": "*.gif",
+            "kind": "image",
+            "mime": "image/gif"
+          }
+        },
+        {
+          "id": "media-jpg",
+          "kind": "media_classify",
+          "config": {
+            "glob": "*.jpg",
+            "kind": "image",
+            "mime": "image/jpeg"
+          }
+        },
+        {
+          "id": "media-mp4",
+          "kind": "media_classify",
+          "config": {
+            "glob": "*.mp4",
+            "kind": "video",
+            "mime": "video/mp4"
+          }
+        },
+        {
+          "id": "media-png",
+          "kind": "media_classify",
+          "config": {
+            "glob": "*.png",
+            "kind": "image",
+            "mime": "image/png"
+          }
+        },
+        {
+          "id": "hidden",
+          "kind": "media_hidden",
+          "config": {
+            "globs": [
+              ".*",
+              "cover.*",
+              ".cover.*"
+            ]
+          }
+        },
+        {
+          "id": "nocover",
+          "kind": "cover_disable_marker",
+          "config": {
+            "filename": ".nocover"
+          }
+        },
+        {
+          "id": "cover-0",
+          "kind": "cover_candidate",
+          "config": {
+            "glob": "cover.*",
+            "priority": 100
+          }
+        },
+        {
+          "id": "cover-1",
+          "kind": "cover_candidate",
+          "config": {
+            "glob": ".cover.*",
+            "priority": 100
+          }
+        },
+        {
+          "id": "badge-r18",
+          "kind": "badge",
+          "config": {
+            "badge_id": "r18",
+            "label": "R-18",
+            "order": 1,
+            "position": "cover_top_left",
+            "style": {
+              "background": "#773333",
+              "border": "#9b4a4a",
+              "color": "#ffffff"
+            },
+            "when": {
+              "tags": [
+                "R-18"
+              ]
+            }
+          }
+        },
+        {
+          "id": "badge-ai",
+          "kind": "badge",
+          "config": {
+            "badge_id": "ai",
+            "label": "AI生成",
+            "order": 1,
+            "position": "tag_leading",
+            "style": {
+              "background": "#3a2020",
+              "background_light": "#fbeaea",
+              "color": "#f2e7e7",
+              "color_light": "#7a1a20"
+            },
+            "when": {
+              "metadata_pointer": "/illust_ai_type",
+              "metadata_values": [
+                2
+              ]
+            }
+          }
+        },
+        {
+          "id": "badge-image",
+          "kind": "badge",
+          "config": {
+            "badge_id": "image",
+            "label": "图片",
+            "order": 1,
+            "position": "cover_top_right",
+            "style": {
+              "background": "#121316",
+              "color": "#f1f1f1"
+            },
+            "when": {
+              "case_insensitive": true,
+              "media_suffix": [
+                "jpg",
+                "png",
+                "JPG",
+                "PNG"
+              ]
+            }
+          }
+        },
+        {
+          "id": "badge-video",
+          "kind": "badge",
+          "config": {
+            "badge_id": "video",
+            "label": "视频",
+            "order": 2,
+            "position": "cover_top_right",
+            "style": {
+              "background": "#1d4d49",
+              "color": "#d7fffb"
+            },
+            "when": {
+              "case_insensitive": true,
+              "media_suffix": [
+                "mp4",
+                "MP4"
+              ]
+            }
+          }
+        },
+        {
+          "id": "presentation",
+          "kind": "presentation",
+          "config": {
+            "author_label": "画师",
+            "description": "示例平台",
+            "icon": {
+              "background": "#1688f0",
+              "border": "transparent",
+              "color": "#ffffff",
+              "glyph": "A",
+              "kind": "glyph"
+            },
+            "name": "alpha",
+            "show_in_manager": true,
+            "show_in_sidebar": true,
+            "sort": {
+              "author_default": "name_asc",
+              "author_options": [
+                "name_asc",
+                "name_desc",
+                "latest_desc",
+                "latest_asc",
+                "posts_desc",
+                "posts_asc"
+              ],
+              "browse_default": "natural_asc",
+              "browse_options": [
+                "natural_asc",
+                "natural_desc"
+              ],
+              "collation": "zh-CN",
+              "work_default": "date_desc",
+              "work_options": [
+                "date_desc",
+                "date_asc",
+                "title_asc",
+                "title_desc",
+                "name_asc",
+                "name_desc"
+              ]
+            },
+            "time": {
+              "display_format": "YYYY-MM-DD HH:mm:ss",
+              "display_timezone": "Asia/Shanghai"
+            }
+          }
+        }
+      ],
+      "provider_namespaces": [],
+      "rule_set_id": "rset_018f47d2-5c16-7a44-a8a0-000000000001",
+      "schema_version": 1,
+      "tests": [
+        {
+          "id": "imported"
+        }
+      ],
+      "version": "1.0.0"
+    },
+    "beta": {
+      "cel_expressions": [],
+      "cel_profile_version": "gallery-cel-v1",
+      "compiler_requirement": "gallery-rule-compiler-v1",
+      "extensions": {},
+      "normalization_algorithm_version": "gallery-canonical-json-v1",
+      "parameter_schema": {
+        "additionalProperties": false,
+        "type": "object"
+      },
+      "primitives": [
+        {
+          "id": "work",
+          "kind": "path_match",
+          "config": {
+            "glob": "*/*",
+            "metadata_file": "metadata.json",
+            "scope": "work_directory",
+            "stable_key": "relative_path",
+            "title": "directory_name"
+          }
+        },
+        {
+          "id": "title",
+          "kind": "fallback",
+          "config": {
+            "pointers": [
+              "/date"
+            ],
+            "target": "title"
+          }
+        },
+        {
+          "id": "creator",
+          "kind": "fallback",
+          "config": {
+            "pointers": [
+              "/user/nick"
+            ],
+            "target": "creator"
+          }
+        },
+        {
+          "id": "description",
+          "kind": "fallback",
+          "config": {
+            "pointers": [
+              "/content"
+            ],
+            "target": "description"
+          }
+        },
+        {
+          "id": "source-url",
+          "kind": "fallback",
+          "config": {
+            "pointers": [
+              "/url"
+            ],
+            "target": "source_url"
+          }
+        },
+        {
+          "id": "tags",
+          "kind": "fallback",
+          "config": {
+            "pointers": [
+              "/tags"
+            ],
+            "target": "tags"
+          }
+        },
+        {
+          "id": "work-date",
+          "kind": "work_date",
+          "config": {
+            "input_timezone": "UTC",
+            "path_pattern": "/(?P\u003cyear\u003e\\d{4})-(?P\u003cmonth\u003e\\d{2})-(?P\u003cday\u003e\\d{2})_(?P\u003chour\u003e\\d{2})-(?P\u003cminute\u003e\\d{2})-(?P\u003csecond\u003e\\d{2})_",
+            "path_timezone": "UTC",
+            "pointers": [
+              "/date"
+            ]
+          }
+        },
+        {
+          "id": "media-gif",
+          "kind": "media_classify",
+          "config": {
+            "glob": "*.gif",
+            "kind": "image",
+            "mime": "image/gif"
+          }
+        },
+        {
+          "id": "media-jpg",
+          "kind": "media_classify",
+          "config": {
+            "glob": "*.jpg",
+            "kind": "image",
+            "mime": "image/jpeg"
+          }
+        },
+        {
+          "id": "media-mp4",
+          "kind": "media_classify",
+          "config": {
+            "glob": "*.mp4",
+            "kind": "video",
+            "mime": "video/mp4"
+          }
+        },
+        {
+          "id": "media-png",
+          "kind": "media_classify",
+          "config": {
+            "glob": "*.png",
+            "kind": "image",
+            "mime": "image/png"
+          }
+        },
+        {
+          "id": "hidden",
+          "kind": "media_hidden",
+          "config": {
+            "globs": [
+              ".*",
+              "cover.*",
+              ".cover.*"
+            ]
+          }
+        },
+        {
+          "id": "nocover",
+          "kind": "cover_disable_marker",
+          "config": {
+            "filename": ".nocover"
+          }
+        },
+        {
+          "id": "cover-0",
+          "kind": "cover_candidate",
+          "config": {
+            "glob": "cover.*",
+            "priority": 100
+          }
+        },
+        {
+          "id": "cover-1",
+          "kind": "cover_candidate",
+          "config": {
+            "glob": ".cover.*",
+            "priority": 100
+          }
+        },
+        {
+          "id": "badge-image",
+          "kind": "badge",
+          "config": {
+            "badge_id": "image",
+            "label": "图片",
+            "order": 1,
+            "position": "cover_top_right",
+            "style": {
+              "background": "#121316",
+              "color": "#f1f1f1"
+            },
+            "when": {
+              "case_insensitive": true,
+              "media_suffix": [
+                "jpg",
+                "png",
+                "JPG",
+                "PNG"
+              ]
+            }
+          }
+        },
+        {
+          "id": "badge-video",
+          "kind": "badge",
+          "config": {
+            "badge_id": "video",
+            "label": "视频",
+            "order": 2,
+            "position": "cover_top_right",
+            "style": {
+              "background": "#1d4d49",
+              "color": "#d7fffb"
+            },
+            "when": {
+              "case_insensitive": true,
+              "media_suffix": [
+                "mp4",
+                "MP4"
+              ]
+            }
+          }
+        },
+        {
+          "id": "presentation",
+          "kind": "presentation",
+          "config": {
+            "author_label": "用户",
+            "description": "另一个平台",
+            "icon": {
+              "background": "#050608",
+              "border": "#333842",
+              "color": "#ffffff",
+              "glyph": "B",
+              "kind": "glyph"
+            },
+            "name": "beta",
+            "show_in_manager": true,
+            "show_in_sidebar": true,
+            "sort": {
+              "author_default": "name_asc",
+              "author_options": [
+                "name_asc",
+                "name_desc",
+                "latest_desc",
+                "latest_asc",
+                "posts_desc",
+                "posts_asc"
+              ],
+              "browse_default": "natural_asc",
+              "browse_options": [
+                "natural_asc",
+                "natural_desc"
+              ],
+              "collation": "zh-CN",
+              "work_default": "date_desc",
+              "work_options": [
+                "date_desc",
+                "date_asc",
+                "title_asc",
+                "title_desc",
+                "name_asc",
+                "name_desc"
+              ]
+            },
+            "time": {
+              "display_format": "YYYY-MM-DD HH:mm:ss",
+              "display_timezone": "Asia/Shanghai"
+            }
+          }
+        }
+      ],
+      "provider_namespaces": [],
+      "rule_set_id": "rset_018f47d2-5c16-7a44-a8a0-000000000002",
+      "schema_version": 1,
+      "tests": [
+        {
+          "id": "imported"
+        }
+      ],
+      "version": "1.0.0"
+    },
+    "delta": {
+      "cel_expressions": [],
+      "cel_profile_version": "gallery-cel-v1",
+      "compiler_requirement": "gallery-rule-compiler-v1",
+      "extensions": {},
+      "normalization_algorithm_version": "gallery-canonical-json-v1",
+      "parameter_schema": {
+        "additionalProperties": false,
+        "type": "object"
+      },
+      "primitives": [
+        {
+          "id": "work",
+          "kind": "path_match",
+          "config": {
+            "glob": "*/*",
+            "scope": "work_directory",
+            "stable_key": "relative_path",
+            "title": "directory_name"
+          }
+        },
+        {
+          "id": "work-date",
+          "kind": "work_date",
+          "config": {
+            "input_timezone": "UTC",
+            "path_pattern": "/(?P\u003cyear\u003e\\d{4})-(?P\u003cmonth\u003e\\d{2})-(?P\u003cday\u003e\\d{2})_(?P\u003chour\u003e\\d{2})-(?P\u003cminute\u003e\\d{2})-(?P\u003csecond\u003e\\d{2})_",
+            "path_timezone": "UTC"
+          }
+        },
+        {
+          "id": "media-gif",
+          "kind": "media_classify",
+          "config": {
+            "glob": "*.gif",
+            "kind": "image",
+            "mime": "image/gif"
+          }
+        },
+        {
+          "id": "media-jpg",
+          "kind": "media_classify",
+          "config": {
+            "glob": "*.jpg",
+            "kind": "image",
+            "mime": "image/jpeg"
+          }
+        },
+        {
+          "id": "media-mp4",
+          "kind": "media_classify",
+          "config": {
+            "glob": "*.mp4",
+            "kind": "video",
+            "mime": "video/mp4"
+          }
+        },
+        {
+          "id": "media-png",
+          "kind": "media_classify",
+          "config": {
+            "glob": "*.png",
+            "kind": "image",
+            "mime": "image/png"
+          }
+        },
+        {
+          "id": "hidden",
+          "kind": "media_hidden",
+          "config": {
+            "globs": [
+              ".*",
+              "cover.*",
+              ".cover.*"
+            ]
+          }
+        },
+        {
+          "id": "nocover",
+          "kind": "cover_disable_marker",
+          "config": {
+            "filename": ".nocover"
+          }
+        },
+        {
+          "id": "cover-0",
+          "kind": "cover_candidate",
+          "config": {
+            "glob": "cover.*",
+            "priority": 100
+          }
+        },
+        {
+          "id": "cover-1",
+          "kind": "cover_candidate",
+          "config": {
+            "glob": ".cover.*",
+            "priority": 100
+          }
+        },
+        {
+          "id": "badge-image",
+          "kind": "badge",
+          "config": {
+            "badge_id": "image",
+            "label": "图片",
+            "order": 1,
+            "position": "cover_top_right",
+            "style": {
+              "background": "#121316",
+              "color": "#f1f1f1"
+            },
+            "when": {
+              "case_insensitive": true,
+              "media_suffix": [
+                "jpg",
+                "png",
+                "JPG",
+                "PNG"
+              ]
+            }
+          }
+        },
+        {
+          "id": "badge-video",
+          "kind": "badge",
+          "config": {
+            "badge_id": "video",
+            "label": "视频",
+            "order": 2,
+            "position": "cover_top_right",
+            "style": {
+              "background": "#1d4d49",
+              "color": "#d7fffb"
+            },
+            "when": {
+              "case_insensitive": true,
+              "media_suffix": [
+                "mp4",
+                "MP4"
+              ]
+            }
+          }
+        },
+        {
+          "id": "presentation",
+          "kind": "presentation",
+          "config": {
+            "author_label": "书名",
+            "description": "路径取值平台",
+            "icon": {
+              "background": "#202020",
+              "border": "#404040",
+              "color": "#ffffff",
+              "glyph": "D",
+              "kind": "glyph"
+            },
+            "name": "delta",
+            "show_in_manager": true,
+            "show_in_sidebar": true,
+            "sort": {
+              "author_default": "name_asc",
+              "author_options": [
+                "name_asc",
+                "name_desc",
+                "latest_desc",
+                "latest_asc",
+                "posts_desc",
+                "posts_asc"
+              ],
+              "browse_default": "natural_asc",
+              "browse_options": [
+                "natural_asc",
+                "natural_desc"
+              ],
+              "collation": "zh-CN",
+              "work_default": "date_desc",
+              "work_options": [
+                "date_desc",
+                "date_asc",
+                "title_asc",
+                "title_desc",
+                "name_asc",
+                "name_desc"
+              ]
+            },
+            "time": {
+              "display_format": "YYYY-MM-DD HH:mm:ss",
+              "display_timezone": "Asia/Shanghai"
+            }
+          }
+        }
+      ],
+      "provider_namespaces": [],
+      "rule_set_id": "rset_018f47d2-5c16-7a44-a8a0-000000000003",
+      "schema_version": 1,
+      "tests": [
+        {
+          "id": "imported"
+        }
+      ],
+      "version": "1.0.0"
+    }
+  },
+  "sourceRoots": {
+    "alpha": "合成根/alpha",
+    "beta": "合成根/beta",
+    "delta": "合成根/delta"
+  },
+  "fileRoots": [
+    {
+      "id": "files",
+      "name": "所有文件",
+      "path": "合成根/全部",
+      "order": 10
+    }
+  ],
+  "unconverted": [
+    {
+      "platform": "alpha",
+      "field": "metadata.categories",
+      "reason": "category 校验属于旧工具的来源判别，Gallery 由 Source 与规则绑定表达"
+    },
+    {
+      "platform": "alpha",
+      "field": "metadata.category_paths",
+      "reason": "与 metadata.categories 同属旧工具的来源判别，Gallery 由 Source 与规则绑定表达"
+    },
+    {
+      "platform": "alpha",
+      "field": "metadata.creator-id.$path.author",
+      "reason": "作者段取值当前无法表达：path_match 配置是封闭集合且无命名捕获，fallback/stable_key 只接受 metadata JSON Pointer，CEL 只能作布尔谓词。metadata 缺该字段时作品将没有创作者"
+    },
+    {
+      "platform": "alpha",
+      "field": "metadata.creator.$path.author",
+      "reason": "作者段取值当前无法表达：path_match 配置是封闭集合且无命名捕获，fallback/stable_key 只接受 metadata JSON Pointer，CEL 只能作布尔谓词。metadata 缺该字段时作品将没有创作者"
+    },
+    {
+      "platform": "alpha",
+      "field": "metadata.transforms.description",
+      "reason": "Gallery 逐 code point 保留来源文本、不做展示型归一化，描述文本可能与旧工具不同"
+    },
+    {
+      "platform": "alpha",
+      "field": "metadata.transforms.tags",
+      "reason": "Gallery 只把 JSON 数组形态识别为多个标签；花括号列表形态的字符串会成为**一个**标签，标签数量、按标签的搜索与按标签命中的角标都会因此不同"
+    },
+    {
+      "platform": "alpha",
+      "field": "metadata.transforms.title",
+      "reason": "Gallery 逐 code point 保留来源文本、不做展示型归一化，标题文本可能与旧工具不同"
+    },
+    {
+      "platform": "alpha",
+      "field": "order",
+      "reason": "平台展示顺序由 Gallery 的 API 排序协议决定，规则包不表达列表顺序"
+    },
+    {
+      "platform": "alpha",
+      "field": "scan_order",
+      "reason": "扫描顺序由 Gallery 的 Job 调度决定，规则包不表达扫描次序"
+    },
+    {
+      "platform": "beta",
+      "field": "cover.candidates.beta-first.when",
+      "reason": "候选条件引用另一条隐藏规则，当前原语无法表达；省略条件会让该候选无条件生效并以更高优先级压过显式封面 glob，因此整条候选不发出，封面回落到显式 glob 或第一张可见媒体"
+    },
+    {
+      "platform": "beta",
+      "field": "media.hide.beta-archive-preview",
+      "reason": "条件依赖同目录兄弟文件的扩展名集合；CEL 上下文只提供当前文件的 path/size/metadata，没有目录清单这一输入，需要先扩展求值上下文或新增原语"
+    },
+    {
+      "platform": "beta",
+      "field": "media.hide.beta-linked-preview",
+      "reason": "条件只依赖作品 metadata 与文件名，CEL 上下文均已提供，可由 condition(scope=media, effect=hide) 加一条 CEL 谓词承接；本轮未实现——忠实移植需要先观察被匹配取值的实际形态，否则谓词可能在真实数据上求值出错并中断整个 Source"
+    },
+    {
+      "platform": "beta",
+      "field": "metadata.author_id",
+      "reason": "stable_key 只接受单个 pointer，无法表达多级回退链；该平台的作者标识未转换，作者身份退化为逐作品 occurrence"
+    },
+    {
+      "platform": "beta",
+      "field": "metadata.categories",
+      "reason": "category 校验属于旧工具的来源判别，Gallery 由 Source 与规则绑定表达"
+    },
+    {
+      "platform": "beta",
+      "field": "metadata.creator-id.$path.author",
+      "reason": "作者段取值当前无法表达：path_match 配置是封闭集合且无命名捕获，fallback/stable_key 只接受 metadata JSON Pointer，CEL 只能作布尔谓词。metadata 缺该字段时作品将没有创作者"
+    },
+    {
+      "platform": "beta",
+      "field": "metadata.creator.$path.author",
+      "reason": "作者段取值当前无法表达：path_match 配置是封闭集合且无命名捕获，fallback/stable_key 只接受 metadata JSON Pointer，CEL 只能作布尔谓词。metadata 缺该字段时作品将没有创作者"
+    },
+    {
+      "platform": "beta",
+      "field": "metadata.date_title",
+      "reason": "该标志只声明「本平台的标题就是日期」，标题链本身已取到 metadata 日期原值，因此它改变的是标题**如何渲染**（按显示时区与格式），不是服务端产出的标题；presentation 没有该标志位，故标题按原值展示。客户端不得改用 publishedAt 顶替标题：标题链与日期链互相独立，metadata 缺日期时二者会分叉"
+    },
+    {
+      "platform": "beta",
+      "field": "order",
+      "reason": "平台展示顺序由 Gallery 的 API 排序协议决定，规则包不表达列表顺序"
+    },
+    {
+      "platform": "beta",
+      "field": "scan_order",
+      "reason": "扫描顺序由 Gallery 的 Job 调度决定，规则包不表达扫描次序"
+    },
+    {
+      "platform": "delta",
+      "field": "metadata.categories",
+      "reason": "category 校验属于旧工具的来源判别，Gallery 由 Source 与规则绑定表达"
+    },
+    {
+      "platform": "delta",
+      "field": "metadata.creator.$path.author",
+      "reason": "作者段取值当前无法表达：path_match 配置是封闭集合且无命名捕获，fallback/stable_key 只接受 metadata JSON Pointer，CEL 只能作布尔谓词。metadata 缺该字段时作品将没有创作者"
+    },
+    {
+      "platform": "delta",
+      "field": "metadata.title.$path.author",
+      "reason": "标题取自作品目录之外的路径段（作者段）；path_match 的 title 只支持作品目录名本身，当前原语没有路径命名捕获，无法表达"
+    },
+    {
+      "platform": "delta",
+      "field": "order",
+      "reason": "平台展示顺序由 Gallery 的 API 排序协议决定，规则包不表达列表顺序"
+    },
+    {
+      "platform": "delta",
+      "field": "scan_order",
+      "reason": "扫描顺序由 Gallery 的 Job 调度决定，规则包不表达扫描次序"
+    },
+    {
+      "platform": "delta",
+      "field": "structure.author.key_source",
+      "reason": "作者身份只能从路径段取；当前没有路径取值原语，该平台的作品将没有创作者"
+    },
+    {
+      "platform": "delta",
+      "field": "structure.work.metadata_required",
+      "reason": "旧配置声明 metadata 文件可选，但扫描器对 path_match.metadata_file 是强制语义（缺文件即整次扫描失败），因此不下发文件名；该平台没有 metadata 取值链，无字段因此失效"
+    }
+  ]
+}
