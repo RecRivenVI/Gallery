@@ -9,19 +9,24 @@
 ```text
 tools/testlab/
 ├── cmd/
-│   ├── seed/       构建并发布合成 Catalog（testlabseed，直接调用 internal/catalog.Store）
-│   ├── probe/      通过真实 galleryd + HTTP 驱动查询/媒体场景（testlabprobe）
-│   ├── guard/      独立零写入 guard 快照/校验（testlabguard）
-│   └── inventory/  列出两个测试根已有的 manifest/report（testlabinventory）
+│   ├── seed/        构建并发布合成 Catalog（testlabseed，直接调用 internal/catalog.Store）
+│   ├── probe/       通过真实 galleryd + HTTP 驱动查询/媒体/真实 Source 场景（testlabprobe）
+│   ├── rulesimport/ 把真实旧配置转换成逐平台规则包与产物索引（testlabrulesimport）
+│   ├── guard/       独立零写入 guard 快照/校验（testlabguard）
+│   └── inventory/   列出两个测试根已有的 manifest/report（testlabinventory）
 ├── internal/
+│   ├── bounds/       显式边界（目录数/文件数/墙钟）与「因边界停止」的如实结论
 │   ├── config/       加载 Documents/本地/testlab.local.json
 │   ├── corpus/       确定性合成语料生成规则（纯函数，不依赖 internal/*）
 │   ├── environment/  Session 建立（一次性配对）
+│   ├── legacyrules/  调用 internal/rules/legacy.Convert 的转换器（testlab 内唯一导入 internal/rules 的包）
 │   ├── process/      galleryd 子进程生命周期
 │   ├── report/       Finding/LatencySample/Report，脱敏与原子持久化
+│   ├── ruleindex/    转换产物索引的读写、平台脱敏代号与 rule_set_id 派生（纯标准库）
 │   ├── seeding/      生产式合成 publication 构建（CLI 与自动 smoke 共用）
-│   └── sourceguard/   真实 Source 只读清单与零写入校验
+│   └── sourceguard/  真实 Source 只读清单、有界枚举与零写入校验
 ├── stages/
+│   ├── sourcelab/     真实只读 Source 的 orchestrator：转换产物驱动、全程 guard、有界/全量/续跑模式
 │   ├── stage3/        生产契约 smoke：扫描档案、publication、Job/Attempt 恢复与 Source 零写入
 │   ├── stage4/
 │   │   ├── smoke_test.go 普通 go test 持续入口（1k、真实 bootstrap/loopback HTTP）
@@ -30,7 +35,7 @@ tools/testlab/
 │   └── stage5/
 │       └── security/  LAN Owner、Session、Grant、API Token、路径/metadata/媒体/恢复攻击输入与安全报告闭环
 ├── fixtures/
-│   ├── rules/       全部 10 个目标来源的规则包，见 fixtures/rules/README.md
+│   ├── rules/       手写规则包样例，已不是真实 Source 验证的规则来源，见 fixtures/rules/README.md
 │   └── synthetic/   小型合成目录夹具
 └── schemas/         （规则/结果 Schema 以 internal/rules、internal/report 为唯一权威，本目录只放跨阶段共用的补充 Schema，避免重复定义）
 ```
@@ -60,6 +65,74 @@ Cursor 与 20 项媒体/DerivedAsset finding。测试使用临时 AppDirs 和合
 & $env:GALLERY_GO run ./tools/testlab/cmd/seed -approot <root>/appdirs/query-nonrec -scale 2000000 -allow-nonrecommended-scale -tier nonrecommended -manifest-out <root>/manifests/query-nonrec.json
 ```
 
+## 真实 Source 验证（转换产物驱动）
+
+真实 Source 验证不使用 `fixtures/rules/` 下的手写规则包：手写夹具与用户真实配置之间没有任何同步
+机制，一旦漂移，「规则验证通过」证明的只是夹具自洽。正式路径是两步。
+
+**第一步：转换真实旧配置。** 旧配置路径必须显式给出，工具不猜测也不扫描磁盘；产物含真实平台根
+路径，因此输出目录必须在授权测试根内，写进任何 Git 工作树会被直接拒绝。
+
+```powershell
+& $env:GALLERY_GO run ./tools/testlab/cmd/rulesimport `
+  -legacy-config <旧配置 gallery-rules.json 的绝对路径> `
+  -out-dir <测试根>/rules-import
+```
+
+标准输出只有平台**代号**（`p-xxxxxxxx`，由平台 ID 稳定派生）、原语数与未转换字段聚合，不打印平台名、
+路径或配置内容。记下需要验证的那个代号。
+
+**第二步：按模式驱动真实 Source。** 每个模式都会在每次触碰 Source 的操作前后自动做 guard 快照与
+校验；任一阶段检出写入即整轮以非零退出码失败。`-approot` 与 `-log` 位于授权测试根，`-state` 是续跑
+状态文件（只含 ID、计数与折叠哈希）。
+
+```powershell
+$common = @(
+  "-go", $env:GALLERY_GO, "-repo", ".",
+  "-approot", "<测试根>/appdirs/<代号>",
+  "-log", "<测试根>/logs/<代号>.log",
+  "-rules-index", "<测试根>/rules-import",
+  "-platform-code", "<代号>",
+  "-state", "<测试根>/state/<代号>.json"
+)
+
+# 1) 有界模式：显式上限，超限即停并如实报告「因边界停止」
+& $env:GALLERY_GO run ./tools/testlab/cmd/probe @common -scenario source-bounded `
+  -max-dirs 200 -max-files 2000 -max-wall-clock 10m -max-media-items-bounded 12 `
+  -storage-class hdd -results-out <测试根>/reports/<代号>-bounded.json
+
+# 2) 全量 index：完整枚举 + metadata 解析 + publication；SSD 全量内容哈希
+& $env:GALLERY_GO run ./tools/testlab/cmd/probe @common -scenario source-index `
+  -storage-class ssd -results-out <测试根>/reports/<代号>-index.json
+
+#    HDD 平台改为只对有界子集哈希
+& $env:GALLERY_GO run ./tools/testlab/cmd/probe @common -scenario source-index `
+  -storage-class hdd -max-media-items-bounded 32 -results-out <测试根>/reports/<代号>-index.json
+
+# 3) 续跑证明：两次 incremental，确认时间折叠哈希不变即「没有重做已完成工作」
+& $env:GALLERY_GO run ./tools/testlab/cmd/probe @common -scenario source-incremental `
+  -storage-class ssd -results-out <测试根>/reports/<代号>-incremental.json
+
+# 4) 对照组：verify 必须真正推进确认时间，且内容身份不漂移
+& $env:GALLERY_GO run ./tools/testlab/cmd/probe @common -scenario source-verify `
+  -storage-class ssd -results-out <测试根>/reports/<代号>-verify.json
+```
+
+要点：
+
+- **`-storage-class` 决定内容哈希范围**：`ssd` → 全量（生产 `incremental` 档案对全部媒体建立
+  ContentBlob）；其它值 → 有界（只对前 `-max-media-items-bounded` 个媒体做按需确认）。可用
+  `-hash-scope full|bounded` 显式覆盖。
+- **`-max-wall-clock` 是硬边界**：超时会主动取消扫描 Job，并在报告里写明 `stoppedByBound`，不会把
+  被截断的运行说成跑完了。
+- **guard 内容哈希默认关闭**。`-guard-hash-content` 能发现「大小与 mtime 都不变的原地改写」，但必须
+  同时给出 `-guard-max-hash-files` 或 `-guard-max-hash-bytes`，否则拒绝启动；触顶时报告写明
+  `hashStoppedByBound`，不得当作已全量校验内容。
+- **`index` 档案只对首次扫描有效**。Source 已发布后再跑 `source-index` 会走「复用既有索引」分支并
+  如实报告，而不是失败或偷偷改跑 `incremental`。
+- 报告只含平台代号、计数、字节数、耗时、错误码分类与折叠哈希；不含绝对路径、目录名、metadata 原文
+  或完整 URL。转换产物索引本身含真实根路径，属本地制品，不得提交。
+
 ## 本地路径配置
 
 真实 Source 验证与两个测试根的物理路径不写入仓库，从 `Documents/本地/testlab.local.json`（已被
@@ -75,11 +148,40 @@ Cursor 与 20 项媒体/DerivedAsset finding。测试使用临时 AppDirs 和合
 - `testlabseed`/`testlabprobe` 新增 `-tier`/`-allow-nonrecommended-scale` 显式规模保护，默认拒绝
   `>=1,000,000`。
 
+### Source guard 的三处安全修复
+
+1. **链接根不再让 guard 空转。** `sourceguard.Walk` 此前用 `filepath.Walk`，其根判定走 `os.Lstat`；
+   Windows junction 在那里报告为 `fs.ModeIrregular` 且 `IsDir()=false`，于是遍历只产出根自身一条，
+   清单恒为 `fileCount=0/dirCount=0`。空清单与空清单自比必然相等，`testlabguard verify` 会打印
+   `PASS` 却什么都没有守护——数据量最大的两个 HDD 平台恰好都是 junction 根。现在根按 `os.Stat`
+   （跟随）判定并正常递归；子树内部的链接仍不跟随，但**作为独立条目计入清单**，使「链接被替换成
+   真实目录」这类改动改变 guard 摘要。
+2. **空清单一律判失败。** `Walk`/`SaveManifest`/`LoadManifest` 都拒绝 0 文件 + 0 目录 + 0 链接的
+   清单，防止本类缺陷再次静默复发。
+3. **落盘清单不再持久化真实目录名。** 逐条 `relativePath`（即真实作者名与作品目录名）换成其
+   SHA-256 摘要；这些名字对验证毫无作用（比较只用计数与 guard 摘要），却是纯粹的泄露面。摘要仍逐条
+   唯一，因此 `verify` 现在能回答「新增/删除/修改了多少条」——修复前这些条目根本读不回来。
+
+遍历改用 `os.Lstat` 而不是 `DirEntry.Info()` 还顺带修掉一处假阳性：Windows 上 ReadDir 返回的属性取自
+父目录的目录项缓存，子目录 mtime 在那里惰性刷新，同一棵未被修改的树连续两次遍历会得到不同的 guard
+摘要。
+
 ## 已知限制
 
 - `ApplyCatalogCandidateOverlays`（生产 `internal/catalog.Store` 方法）对整个 revision 一次性全量
   处理，不支持增量/分批调用；`testlabseed` 因此仍在内存中累积完整 Overlay facts 后一次性调用，
   500k 规模下约数十 MB，不构成实际内存压力，但不能声称"已分批应用 Overlay"。详见
   `cmd/seed/seed.go` 内的注释与 `Documents/证据/阶段3-4大规模测试归档.md`。
-- Gank 的 MEGA 链接/压缩包解压预览隐藏、pixiv/pixivFANBOX/Fantia 的 R-18 Badge、pixiv 的
-  `illust_ai_type` Badge 语义标记为 DEFERRED，见 `fixtures/rules/README.md`。
+- Gank 的 MEGA 链接/压缩包解压预览隐藏依赖同目录兄弟文件这一目录级事实，当前原语与 CEL 上下文
+  不提供该输入，转换器把它登记为未转换项而不是猜测，见 `fixtures/rules/README.md` 与
+  `fixtures/rules/Gank/README.md`。
+- 转换产物**不得**把旧配置的 `metadata.author_id` 喂给作品的 `external_id`：同一作者的多个作品共享
+  同一个 author_id，一旦它成为作品 external_id，扫描解析阶段就会命中 `duplicate_external_id` 并以
+  `BINDING_REVIEW_REQUIRED` 阻塞该 Source 的 publication，任何「一个作者有多个作品」的真实平台都会
+  在第一次扫描卡住。这条由 `internal/legacyrules` 的
+  `TestConvertNeverMapsAuthorIDToWorkExternalID` 与 `stages/sourcelab` 的端到端用例（合成树刻意让
+  同一作者拥有多个作品）里外两层保护。
+- `sourcelab` 的有界模式只能对**枚举**与**墙钟**设界。生产扫描器总是扫描整个 Source 根，规则的
+  `work_directory` glob 又固定为 `*/*`，无法只让它扫描根下的一部分作者目录；用链接做有界镜像也
+  不可行，因为扫描器按 `LINK-1` 裁决跳过链接、不跟随。因此「有界」的真实含义是：先做有界普查，再在
+  墙钟上限内跑扫描、超限主动取消，而不是让扫描只看一部分目录。
