@@ -7,35 +7,19 @@
  *     （见 internal/webapp/handler.go 的 appShells）；
  *   - 默认密度是 compact：管理端以表格、状态与诊断为中心，信息密度优先。
  *
- * 本文件只负责装配外壳；页面属于 web/src/manage/** 的其余文件，由管理工作线实现。
+ * 本文件只负责装配外壳；页面在 `web/src/manage/app.tsx` 及 `web/src/manage/pages/**`。
  */
 
 import { QueryClientProvider } from '@tanstack/react-query';
 import { StrictMode } from 'react';
 import { createRoot } from 'react-dom/client';
 import { BrowserRouter } from 'react-router-dom';
-import { EmptyState, SkipLink, ToastProvider } from '../design';
+import { SkipLink, ToastProvider } from '../design';
 import { createQueryClient } from '../shared/query';
 import { RealtimeProvider } from '../shared/realtime';
 import { SessionProvider } from '../shared/session';
 import { ThemeProvider } from '../shared/theme';
-
-/**
- * 管理页面接入点。
- *
- * 管理工作线请在 `web/src/manage/app.tsx` 导出根组件，然后把这里替换成
- * `import { ManageApp } from './app';` 并在下面渲染 `<ManageApp />`。
- */
-function ManagePlaceholder() {
-  return (
-    <main id="manage-main" style={{ padding: 'var(--space-5)' }}>
-      <EmptyState
-        title="管理界面尚未接入"
-        description="共享设计系统与双入口骨架已就绪，Source、规则、任务与安全页面由管理工作线实现。"
-      />
-    </main>
-  );
-}
+import { ManageApp } from './app';
 
 const root = document.getElementById('root');
 if (!root) throw new Error('管理入口缺少 #root 挂载点');
@@ -49,7 +33,7 @@ createRoot(root).render(
             <SessionProvider>
               <RealtimeProvider>
                 <SkipLink targetId="manage-main" />
-                <ManagePlaceholder />
+                <ManageApp />
               </RealtimeProvider>
             </SessionProvider>
           </BrowserRouter>

@@ -6,7 +6,7 @@
  * `/manage`（见 vite.config.ts）。
  *
  * 本文件只负责装配外壳：主题 → 通知 → 会话 → 实时事件。**页面属于 web/src/gallery/** 的其余
- * 文件**，由画廊工作线实现；接入方式见下方 GalleryPlaceholder 的说明。
+ * 文件**，根组件是 `./app` 的 GalleryApp。
  */
 
 import { QueryClientProvider } from '@tanstack/react-query';
@@ -14,11 +14,12 @@ import { StrictMode } from 'react';
 import { createRoot } from 'react-dom/client';
 import { BrowserRouter } from 'react-router-dom';
 import { useRegisterSW } from 'virtual:pwa-register/react';
-import { Button, EmptyState, SkipLink, ToastProvider, Toast } from '../design';
+import { Button, SkipLink, ToastProvider, Toast } from '../design';
 import { createQueryClient } from '../shared/query';
 import { RealtimeProvider } from '../shared/realtime';
 import { SessionProvider } from '../shared/session';
 import { ThemeProvider } from '../shared/theme';
+import { GalleryApp } from './app';
 
 /**
  * Service Worker 更新提示。
@@ -49,24 +50,6 @@ function ServiceWorkerUpdatePrompt() {
   );
 }
 
-/**
- * 画廊页面接入点。
- *
- * 画廊工作线请在 `web/src/gallery/app.tsx` 导出根组件，然后把这里替换成
- * `import { GalleryApp } from './app';` 并在下面渲染 `<GalleryApp />`。
- * 在此之前保留这个占位，使入口骨架自身可构建、可运行、可验证。
- */
-function GalleryPlaceholder() {
-  return (
-    <main id="gallery-main" style={{ padding: 'var(--space-6)' }}>
-      <EmptyState
-        title="画廊界面尚未接入"
-        description="共享设计系统与双入口骨架已就绪，浏览、作品与媒体页面由画廊工作线实现。"
-      />
-    </main>
-  );
-}
-
 const root = document.getElementById('root');
 if (!root) throw new Error('画廊入口缺少 #root 挂载点');
 
@@ -80,7 +63,7 @@ createRoot(root).render(
             <SessionProvider>
               <RealtimeProvider>
                 <SkipLink targetId="gallery-main" />
-                <GalleryPlaceholder />
+                <GalleryApp />
               </RealtimeProvider>
             </SessionProvider>
           </BrowserRouter>

@@ -218,18 +218,21 @@ test.beforeEach(async ({ page }) => mockGallery(page));
 // internal/webapp 的 TestManagementDeepLinkServesManagementShell 覆盖，并将在 M6f 对真实
 // galleryd 复验。
 test('双入口各自加载自己的外壳 @smoke', async ({ page }) => {
+  // 断言必须落在"应用真的渲染了"上：#root 存在与否分不出"外壳加载成功"与"路由没匹配、
+  // 渲染出空"——管理端曾因 basename 与字面路径 /manage.html 不匹配而恰好是后者，
+  // 而 toBeAttached 照样通过。
   await page.goto('/');
   await expect(page).toHaveTitle(/画廊/);
   await expect(page.locator('meta[name="robots"]')).toHaveCount(0);
-  await expect(page.locator('#root')).toBeAttached();
+  await expect(page.locator('#root > *')).not.toHaveCount(0);
 
-  await page.goto('/manage.html');
+  await page.goto('/manage');
   await expect(page).toHaveTitle(/管理/);
-  await expect(page.locator('#root')).toBeAttached();
+  await expect(page.locator('#root > *')).not.toHaveCount(0);
 });
 
 test('只有画廊进入 PWA scope @smoke', async ({ page }) => {
-  await page.goto('/manage.html');
+  await page.goto('/manage');
   // 管理端不是可分享内容，也不应出现"安装 Gallery"入口。
   await expect(page.locator('link[rel="manifest"]')).toHaveCount(0);
   await expect(page.locator('meta[name="robots"]')).toHaveAttribute('content', /noindex/);
@@ -244,12 +247,12 @@ test('主题选择跨两个入口共享 @smoke', async ({ page }) => {
   await page.reload();
   await expect(page.locator('html')).toHaveAttribute('data-theme', 'dark');
 
-  await page.goto('/manage.html');
+  await page.goto('/manage');
   await expect(page.locator('html')).toHaveAttribute('data-theme', 'dark');
 });
 
 test('两个入口都没有严重可访问性违规 @smoke', async ({ page }) => {
-  for (const path of ['/', '/manage.html']) {
+  for (const path of ['/', '/manage']) {
     await page.goto(path);
     // color-contrast 必须启用：旧基线把它 disableRules 掉了，等于放弃了对比度这一项。
     const results = await new AxeBuilder({ page }).withTags(['wcag2a', 'wcag2aa']).analyze();
