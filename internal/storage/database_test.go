@@ -620,77 +620,89 @@ rule_cover_media_source_key TEXT NOT NULL,
 PRIMARY KEY (catalog_revision_id, source_id, work_source_key)) WITHOUT ROWID`); err != nil {
 		t.Fatal(err)
 	}
-	const planBegin = "-- explain:rule-cover-source-map-begin"
-	const planEnd = "-- explain:rule-cover-source-map-end"
-	begin := strings.Index(migrations[10].sql, planBegin)
-	end := strings.Index(migrations[10].sql, planEnd)
-	if begin < 0 || end <= begin {
-		t.Fatal("00011 缺少可审计的规则封面映射 EXPLAIN 标记")
-	}
-	statement := strings.TrimSpace(migrations[10].sql[begin+len(planBegin) : end])
-	statement = strings.TrimSuffix(statement, ";")
-	rows, err := db.QueryContext(ctx, "EXPLAIN QUERY PLAN "+statement)
-	if err != nil {
-		t.Fatal(err)
-	}
-	var planLines []string
-	for rows.Next() {
-		var id, parent, unused int
-		var detail string
-		if err := rows.Scan(&id, &parent, &unused, &detail); err != nil {
-			rows.Close()
+	// queryPlan 取出被 explain 标记包围的那条语句的 EXPLAIN QUERY PLAN。标记写在 SQL 里，
+	// 使「哪条语句必须保持有界」这件事在迁移文件本身可审计，而不是靠测试里复制一份 SQL。
+	queryPlan := func(name string) string {
+		t.Helper()
+		planBegin, planEnd := "-- explain:"+name+"-begin", "-- explain:"+name+"-end"
+		begin := strings.Index(migrations[10].sql, planBegin)
+		end := strings.Index(migrations[10].sql, planEnd)
+		if begin < 0 || end <= begin {
+			t.Fatalf("00011 缺少可审计的 %s EXPLAIN 标记", name)
+		}
+		statement := strings.TrimSpace(migrations[10].sql[begin+len(planBegin) : end])
+		statement = strings.TrimSuffix(statement, ";")
+		rows, err := db.QueryContext(ctx, "EXPLAIN QUERY PLAN "+statement)
+		if err != nil {
+			t.Fatalf("%s 计划查询失败: %v", name, err)
+		}
+		var planLines []string
+		for rows.Next() {
+			var id, parent, unused int
+			var detail string
+			if err := rows.Scan(&id, &parent, &unused, &detail); err != nil {
+				rows.Close()
+				t.Fatal(err)
+			}
+			planLines = append(planLines, detail)
+		}
+		if err := rows.Close(); err != nil {
 			t.Fatal(err)
 		}
-		planLines = append(planLines, detail)
+		return strings.Join(planLines, "\n")
 	}
-	if err := rows.Close(); err != nil {
+
+	// 结构性断言是本测试的正式门禁：它与机器速度无关，且精确表达 00011 必须维持的性质
+	// ——每张放大表只被单侧扫描一次，另一侧走索引查找，任何一处退回逐 Work 的相关子查询
+	// 都会把行访问量从 3,600 推到 4,320,000 量级。
+	sourceMapPlan := queryPlan("rule-cover-source-map")
+	indexedMediaByWork := strings.Contains(sourceMapPlan, "media_projections_work_idx")
+	singleMediaScanWithWorkLookup := strings.Contains(sourceMapPlan, "SCAN m USING INDEX") && strings.Contains(sourceMapPlan, "SEARCH w USING INDEX")
+	if strings.Contains(strings.ToUpper(sourceMapPlan), "CORRELATED") || (!indexedMediaByWork && !singleMediaScanWithWorkLookup) {
+		t.Fatalf("00011 规则封面映射必须是单侧一次扫描加另一侧索引查找，不得退回相关子查询:\n%s", sourceMapPlan)
+	}
+
+	if _, err := db.ExecContext(ctx, `CREATE TEMP TABLE _gallery_rule_cover_work_map (
+catalog_revision_id TEXT NOT NULL, overlay_revision_id TEXT NOT NULL, work_id TEXT NOT NULL,
+rule_cover_media_id TEXT NOT NULL,
+PRIMARY KEY (catalog_revision_id, overlay_revision_id, work_id)) WITHOUT ROWID`); err != nil {
 		t.Fatal(err)
 	}
-	plan := strings.Join(planLines, "\n")
-	upperPlan := strings.ToUpper(plan)
-	indexedMediaByWork := strings.Contains(plan, "media_projections_work_idx")
-	singleMediaScanWithWorkLookup := strings.Contains(plan, "SCAN m USING INDEX") && strings.Contains(plan, "SEARCH w USING INDEX")
-	if strings.Contains(upperPlan, "CORRELATED") || (!indexedMediaByWork && !singleMediaScanWithWorkLookup) {
-		t.Fatalf("00011 规则封面映射必须是单侧一次扫描加另一侧索引查找，不得退回相关子查询:\n%s", plan)
+	// 第二条放大语句：三表 join 把每个 Work 的规则封面 SourceKey 解析回 MediaID。它同样
+	// 必须靠索引查找 media_projections，而不是为每个 Work 重扫一遍。
+	workMapPlan := queryPlan("rule-cover-work-map")
+	if strings.Contains(strings.ToUpper(workMapPlan), "CORRELATED") {
+		t.Fatalf("00011 规则封面 MediaID 解析退回相关子查询:\n%s", workMapPlan)
+	}
+	if !strings.Contains(workMapPlan, "SEARCH m USING INDEX") {
+		t.Fatalf("00011 规则封面 MediaID 解析未对 media_projections 使用索引查找:\n%s", workMapPlan)
+	}
+	if _, err := db.ExecContext(ctx, "DROP TABLE _gallery_rule_cover_work_map"); err != nil {
+		t.Fatal(err)
 	}
 	if _, err := db.ExecContext(ctx, "DROP TABLE _gallery_rule_cover_source_map"); err != nil {
 		t.Fatal(err)
 	}
-
-	// 同机校准：一次覆盖全部 MediaProjection 的整表改写，与 00011 中的整表 UPDATE 属于
-	// 同一类写放大与 fsync 行为，因此它能代表这台机器在这批数据上的单遍重写成本。
-	calibrationStarted := time.Now()
-	if _, err := db.ExecContext(ctx, `UPDATE media_projections SET size_bytes = size_bytes`); err != nil {
-		t.Fatal(err)
-	}
-	calibration := time.Since(calibrationStarted)
 
 	started := time.Now()
 	if err := applyMigration(ctx, db, migrations[10]); err != nil {
 		t.Fatal(err)
 	}
 	duration := time.Since(started)
-	// 绝对墙钟预算在共享 CI runner 上不成立：同一段迁移在本机 NVMe 上约 0.04 秒，在
-	// GitHub Windows runner 上实测过 22.95 秒（run 30206908399），差异来自 runner 磁盘
-	// 争用而不是算法变化，此前的 5 秒固定预算因此是间歇性假阳性，且与「性能结论必须
-	// 记录硬件与存储」这条门禁原则冲突。
+	// 这里只记录耗时，不作为通过条件。
 	//
-	// 预算改为相对同机校准，倍数按原有严格度等价换算：5 秒对本机 0.05 秒的迁移相当于
-	// 约 100 倍余量，因此这里取校准值的 100 倍——严格度不变，但不再依赖机器绝对速度。
-	// 该断言拦截的是数量级回归：退回逐 Work 相关子查询会把行访问量从 3,600 推到
-	// 4,320,000（约 1200 倍），远超 100 倍上限；整机变慢则不改变比值。
-	// 精确的结构性保证由上面的 EXPLAIN QUERY PLAN 断言承担。
-	const budgetFactor = 100
-	budget := budgetFactor * calibration
-	if floor := time.Second; budget < floor {
-		// 校准值过小时（计时器分辨率量级）退回一个固定下限，避免用噪声当分母。
-		budget = floor
-	}
-	t.Logf("00011 合成迁移: 同机校准整表改写 %s，迁移 %s，预算 %s", calibration, duration, budget)
-	if duration > budget {
-		t.Fatalf("%d Work/%d Media 的 00011 合成迁移超过同机有界预算: 迁移 %s 校准 %s 预算 %s",
-			workCount, workCount*mediaPerWork, duration, calibration, budget)
-	}
+	// 原实现用固定 5 秒墙钟作断言，在共享 CI runner 上连续两次假阳性：同一段迁移在本机
+	// NVMe 上约 0.04 秒，在 GitHub Windows runner 上实测 22.95 秒（run 30206908399）与
+	// 3.51 秒（run 30207590271）。改用同机整表改写作校准也不成立——runner 上校准值
+	// 4.48 毫秒与本机相当，而迁移仍要 3.51 秒：这段迁移的主要成本是窗口函数排序器的
+	// 临时文件 I/O，不是主库页写入，因此主库改写无法代表它。
+	//
+	// 更根本的问题是，把一个不记录硬件、存储、缓存状态的绝对秒数写进可移植单元测试，
+	// 本身就与《测试与发布门禁》「性能结论必须记录硬件、OS、存储、样本、缓存状态」
+	// 相冲突。因此本测试保留并强化与机器无关的 EXPLAIN 结构断言作为正式门禁，迁移耗时
+	// 的数值预算移交阶段 4 Reference Performance Gate 在登记环境上测定。
+	t.Logf("00011 合成迁移: %d Work/%d Media 耗时 %s（记录值，不构成通过条件）",
+		workCount, workCount*mediaPerWork, duration)
 	var sourceCovers, ruleCovers, customCovers, negativeOrdinals int
 	if err := db.QueryRowContext(ctx, `SELECT
 (SELECT count(*) FROM source_works WHERE rule_cover_media_source_key<>''),
@@ -704,8 +716,7 @@ PRIMARY KEY (catalog_revision_id, source_id, work_source_key)) WITHOUT ROWID`); 
 		t.Fatalf("规模迁移结果错误: source=%d rule=%d custom=%d negative=%d",
 			sourceCovers, ruleCovers, customCovers, negativeOrdinals)
 	}
-	t.Logf("00011 bounded plan migrated %d Work/%d Media in %s:\n%s",
-		workCount, workCount*mediaPerWork, duration, plan)
+	t.Logf("00011 有界计划:\n规则封面映射:\n%s\n规则封面 MediaID 解析:\n%s", sourceMapPlan, workMapPlan)
 }
 
 func TestOverlayMigrationUpgradesPopulatedV6Control(t *testing.T) {

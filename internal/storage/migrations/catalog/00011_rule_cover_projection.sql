@@ -56,6 +56,7 @@ CREATE TEMP TABLE _gallery_rule_cover_work_map (
     PRIMARY KEY (catalog_revision_id, overlay_revision_id, work_id)
 ) WITHOUT ROWID;
 
+-- explain:rule-cover-work-map-begin
 INSERT INTO _gallery_rule_cover_work_map
 (catalog_revision_id, overlay_revision_id, work_id, rule_cover_media_id)
 SELECT w.catalog_revision_id, w.overlay_revision_id, w.work_id, min(m.media_id)
@@ -71,6 +72,7 @@ JOIN media_projections AS m
  AND m.source_id = w.source_id
  AND m.source_key = r.rule_cover_media_source_key
 GROUP BY w.catalog_revision_id, w.overlay_revision_id, w.work_id;
+-- explain:rule-cover-work-map-end
 
 CREATE TEMP TABLE _gallery_custom_cover_map (
     catalog_revision_id TEXT NOT NULL,
