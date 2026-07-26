@@ -22,19 +22,25 @@
   无法表达这种"看到其它候选文件"的谓词，本轮未在 Provider 代码中新增特例分支来强行实现（这会违反
   "规则是 Source 差异的唯一解释入口"的产品边界），因此标记为 DEFERRED。
 
-- **MEGA 链接触发**（"当 metadata 中 `content`/`links` 包含 MEGA 链接时，同样隐藏"）理论上可以通过
-  `condition` 引用一个检查 `metadata.content`/`metadata.links` 是否包含 MEGA 域名字符串的 CEL 谓词
-  表达，但本轮未能在时间预算内确认 Gallery 受限 CEL Profile 是否注册了 `has()`（可选字段存在性）和
-  `matches()`（正则）宏/函数供这种字符串包含判断使用——`internal/rules/cel.go` 中存在对 `.matches("…")`
-  调用的正则提取（用于成本估算），暗示 `matches()` 很可能可用，但本轮未编写并实际运行编译/Dry Run
-  测试来确认，因此同样标记为 DEFERRED，而不是提交一段未经验证、可能编译失败或行为不符预期的 CEL
-  表达式。
+- **MEGA 链接触发**（"当 metadata 中 `content`/`links` 包含 MEGA 链接时，同样隐藏"）**技术上可以表达**。
+  此前这里写的理由是「未能确认受限 CEL Profile 是否注册了 `has()` 与 `matches()`」——该疑问已经解决：
+  `newCELRuntime` 是普通的 `cel.NewEnv` 加六个 dyn 变量（`source`/`path`/`file`/`metadata`/`candidate`/
+  `params`），标准宏库默认可用，`has()` 与 `matches()` 都能用；真正的约束是 AST 256 节点、正则 512
+  字符、成本 10000、执行 10 毫秒，本谓词远在其内。`metadata` 与 `file.path` 也都在求值上下文里，
+  `condition{scope: media, effect: hide}` 的求值路径同样已经实现。
+
+  因此本项**不再因「能力未知」而延期**，而是因为**取值形态未观察**：忠实移植需要知道被匹配的
+  `content`/`links` 在真实 metadata 里是字符串还是数组——`matches()` 作用于数组会在求值期报错，而
+  CEL 谓词求值出错会中断整个 Source 的扫描。取值形态只能从真实 metadata 观察，而那超出本轮允许的
+  只读观察范围（本轮只观察目录名形状，不读 metadata 内容）。**凭猜写谓词比不写更糟**：不写只是少一条
+  隐藏规则，写错则让整个平台扫不动。
 
 ## 后续验证建议
 
 下一轮应：
-1. 用最小合成夹具（一个含 `metadata.json{"content":"...mega.nz..."}` 与 `1.png`/`2.png` 的作品目录）
-   实际调用规则 Dry Run/Compile 接口，确认 `condition` + CEL `matches()`/`has()` 是否按预期工作；
-2. 若确认可行，把 MEGA 链接规则从 DEFERRED 提升为已表达并新增黄金夹具测试；
+1. 在允许读取 metadata 结构（只看类型形态，不看取值内容）的有界观察中，确认 `content`/`links` 是
+   字符串还是数组；
+2. 据此写出类型安全的谓词（必要时用 `type()` 或 `has()` 分支同时容纳两种形态），用最小合成夹具跑
+   Compile 与 Dry Run，再把本项从 DEFERRED 提升为已表达并新增黄金夹具测试；
 3. 压缩包触发规则若确需支持，应作为 `internal/rules` 规则原语的正式扩展提案（新增能访问同级候选文件
    的 primitive 或 condition scope），走产品规则系统演进流程，不在测试框架职责范围内。
