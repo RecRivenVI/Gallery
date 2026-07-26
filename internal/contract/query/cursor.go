@@ -59,6 +59,11 @@ func NewCursorSigner(key []byte, clock ports.Clock) (*CursorSigner, error) {
 }
 
 func (s *CursorSigner) Issue(claims CursorClaims) (string, error) {
+	// 签发端两类校验都按 CURSOR_INVALID 处理：签发一个协议版本与本服务不符的游标是**服务端缺陷**，
+	// 不是客户端可以通过重试恢复的情形。二者的区分只发生在 Verify 一侧。
+	if err := validateProtocolVersions(claims); err != nil {
+		return "", fault.New(fault.CodeCursorInvalid, false, err)
+	}
 	if err := validateClaims(claims); err != nil {
 		return "", fault.New(fault.CodeCursorInvalid, false, err)
 	}
@@ -89,6 +94,15 @@ func (s *CursorSigner) Verify(token string) (CursorClaims, error) {
 	if err := decoder.Decode(&claims); err != nil {
 		return CursorClaims{}, fault.New(fault.CodeCursorInvalid, false, err)
 	}
+	// 协议版本不匹配与结构非法是**两类不同的失败**，必须映射到不同的错误码。
+	//
+	// 协议升级后旧游标一定不匹配，但那不是客户端做错了什么——它拿着一个在签发时完全合法的游标。
+	// [查询、搜索与排序](../../../Documents/规范/06-查询-搜索与排序.md) 因此规定「排序协议升级」
+	// 返回可重试的 `CURSOR_EXPIRED`，客户端据此从第一页刷新即可恢复。若沿用不可重试的
+	// `CURSOR_INVALID`，一次协议升级会把「不可恢复」发给每一个正在分页的客户端。
+	if err := validateProtocolVersions(claims); err != nil {
+		return CursorClaims{}, fault.New(fault.CodeCursorExpired, true, err)
+	}
 	if err := validateClaims(claims); err != nil {
 		return CursorClaims{}, fault.New(fault.CodeCursorInvalid, false, err)
 	}
@@ -98,19 +112,25 @@ func (s *CursorSigner) Verify(token string) (CursorClaims, error) {
 	return claims, nil
 }
 
-func (s *CursorSigner) sign(payload []byte) []byte {
-	mac := hmac.New(sha256.New, s.key)
-	_, _ = mac.Write(payload)
-	return mac.Sum(nil)
-}
-
-func validateClaims(claims CursorClaims) error {
+// validateProtocolVersions 只判定协议版本，与结构合法性分开，使二者能映射到不同错误码。
+func validateProtocolVersions(claims CursorClaims) error {
 	if claims.SortProtocolVersion != SortProtocolVersion {
 		return fmt.Errorf("sort protocol version 不匹配")
 	}
 	if claims.RankProtocolVersion != RankProtocolVersion {
 		return fmt.Errorf("rank protocol version 不匹配")
 	}
+	return nil
+}
+
+func (s *CursorSigner) sign(payload []byte) []byte {
+	mac := hmac.New(sha256.New, s.key)
+	_, _ = mac.Write(payload)
+	return mac.Sum(nil)
+}
+
+// validateClaims 只判定结构合法性；协议版本由 validateProtocolVersions 先行判定。
+func validateClaims(claims CursorClaims) error {
 	if claims.LastRankTier < 0 || claims.LastRankTier > MaxRankTier {
 		return fmt.Errorf("rank tier 超出范围")
 	}
