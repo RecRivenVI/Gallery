@@ -10,6 +10,7 @@ import (
 	"hash"
 	"io"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/RecRivenVI/gallery/internal/contract/fault"
@@ -117,20 +118,28 @@ func (s *Service) Execute(ctx context.Context, jobID string) error {
 	if limit <= 0 {
 		limit = DefaultOutputLimit
 	}
-	stdout, stderr := &digestWriter{limit: limit, sum: sha256.New()}, &digestWriter{limit: limit, sum: sha256.New()}
+	killer := &killSwitch{}
+	stdout := &digestWriter{limit: limit, sum: sha256.New(), onOverflow: killer.trigger}
+	stderr := &digestWriter{limit: limit, sum: sha256.New(), onOverflow: killer.trigger}
 	command.Stdout, command.Stderr = stdout, stderr
 	runCtx, cancel := context.WithTimeout(ctx, time.Duration(request.TimeoutSeconds)*time.Second)
 	defer cancel()
+	killer.arm(cancel)
 	process, err := s.process.Start(runCtx, command)
 	if err != nil {
 		return s.fail(ctx, jobID, fault.New(fault.CodeExternalToolFailed, true, err))
 	}
+	// 输出可能在 Start 返回之前就已经写满，attach 负责补发那种情况下漏掉的强杀。
+	killer.attach(process)
 	waitErr := process.Wait()
-	if waitErr != nil || stdout.overflow || stderr.overflow {
+	if overflowed := stdout.overflowed() || stderr.overflowed(); waitErr != nil || overflowed {
+		if waitErr == nil {
+			waitErr = errOutputLimitExceeded
+		}
 		return s.fail(ctx, jobID, fault.New(fault.CodeExternalToolFailed, true, waitErr))
 	}
-	result, err := json.Marshal(Result{StdoutBytes: stdout.n, StderrBytes: stderr.n,
-		StdoutSHA256: hex.EncodeToString(stdout.sum.Sum(nil)), StderrSHA256: hex.EncodeToString(stderr.sum.Sum(nil))})
+	result, err := json.Marshal(Result{StdoutBytes: stdout.total(), StderrBytes: stderr.total(),
+		StdoutSHA256: stdout.digest(), StderrSHA256: stderr.digest()})
 	if err != nil {
 		return s.fail(ctx, jobID, fault.New(fault.CodeInternal, true, err))
 	}
@@ -138,21 +147,118 @@ func (s *Service) Execute(ctx context.Context, jobID string) error {
 	return err
 }
 
+var errOutputLimitExceeded = errors.New("外部工具输出超过上限")
+
+// digestWriter 只把数据喂给 sha256，从不缓冲，内存占用与输出体量无关（O(1)）。
+//
+// 超过上限时返回 io.ErrShortWrite，让 os/exec 的拷贝器停止并关闭读端；行为良好的子进程会
+// 因管道破裂退出。但忽略写错误、或干脆不再写只自旋的子进程不会退出，所以这里还必须在写入侧
+// 立即触发 onOverflow 强杀，而不是等 Wait 返回之后才发现溢出。
 type digestWriter struct {
-	limit    int64
+	limit      int64
+	onOverflow func()
+
+	mu       sync.Mutex
 	n        int64
 	sum      hash.Hash
 	overflow bool
 }
 
 func (w *digestWriter) Write(value []byte) (int, error) {
+	w.mu.Lock()
 	if w.n+int64(len(value)) > w.limit {
+		first := !w.overflow
 		w.overflow = true
+		w.mu.Unlock()
+		if first && w.onOverflow != nil {
+			w.onOverflow()
+		}
 		return 0, io.ErrShortWrite
 	}
 	n, err := w.sum.Write(value)
 	w.n += int64(n)
+	w.mu.Unlock()
 	return n, err
+}
+
+func (w *digestWriter) overflowed() bool {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	return w.overflow
+}
+
+func (w *digestWriter) total() int64 {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	return w.n
+}
+
+func (w *digestWriter) digest() string {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	return hex.EncodeToString(w.sum.Sum(nil))
+}
+
+// killSwitch 让输出上限在进程仍存活时就能生效，同时把 ports.Process.Kill 真正接进执行路径
+// （在此之前 toolrunner 从不调用 Kill，唯一的杀进程路径是 exec.CommandContext 的取消）。
+//
+// 第一次溢出时它做两件事：强杀进程树，并取消运行 context。取消是必要的第二手——它让 os/exec
+// 的 WaitDelay 开始计时，兜住「孙进程仍持有管道」导致 Wait 不返回的情况。
+//
+// 溢出可能发生在 Start 返回之前（进程一启动就写满输出），此时还拿不到 ports.Process，因此
+// fired 与 attach 之间必须能互相补发。
+type killSwitch struct {
+	mu      sync.Mutex
+	cancel  context.CancelFunc
+	process ports.Process
+	fired   bool
+	killed  bool
+}
+
+func (k *killSwitch) arm(cancel context.CancelFunc) {
+	k.mu.Lock()
+	k.cancel = cancel
+	k.mu.Unlock()
+}
+
+func (k *killSwitch) attach(process ports.Process) {
+	k.mu.Lock()
+	k.process = process
+	fired := k.fired
+	k.mu.Unlock()
+	if fired {
+		k.enforce()
+	}
+}
+
+func (k *killSwitch) trigger() {
+	k.mu.Lock()
+	if k.fired {
+		k.mu.Unlock()
+		return
+	}
+	k.fired = true
+	k.mu.Unlock()
+	k.enforce()
+}
+
+// enforce 保证 Kill 至多调用一次；进程尚未 attach 时只取消 context，由 attach 补发强杀。
+func (k *killSwitch) enforce() {
+	k.mu.Lock()
+	cancel := k.cancel
+	process := k.process
+	if process != nil && !k.killed {
+		k.killed = true
+	} else {
+		process = nil
+	}
+	k.mu.Unlock()
+	if process != nil {
+		_ = process.Kill()
+	}
+	if cancel != nil {
+		cancel()
+	}
 }
 
 func (s *Service) fail(ctx context.Context, jobID string, err error) error {
