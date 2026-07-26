@@ -3492,13 +3492,46 @@ components:
         protocolVersion:
           type: integer
           enum: [1]
+    Badge:
+      type: object
+      additionalProperties: false
+      description: >-
+        规则派生的作品角标。它是 Source-derived 展示事实：出现条件与配色都由规则裁决，
+        随重扫重新计算，不属于用户 Overlay。客户端按 position 渲染，不得自行推导条件或颜色。
+      required: [id, order, position, label]
+      properties:
+        id:
+          type: string
+          minLength: 1
+          maxLength: 128
+        order:
+          type: integer
+          description: 同一位置内的展示顺序；服务端已按 order 再按 id 排好，客户端不得重排。
+        position:
+          type: string
+          enum: [cover_top_left, cover_top_right, tag_leading]
+        label:
+          type: string
+          minLength: 1
+          maxLength: 64
+        color: {type: string, description: 深色主题前景色；缺省时由客户端设计系统决定。}
+        background: {type: string, description: 深色主题背景色。}
+        border: {type: string, description: 深色主题边框色。}
+        colorLight: {type: string, description: 浅色主题前景色。}
+        backgroundLight: {type: string, description: 浅色主题背景色。}
+        borderLight: {type: string, description: 浅色主题边框色。}
     PublishedWork:
       type: object
       additionalProperties: false
-      required: [id, title, creator, tags, mediaCount, coverMediaId, favorite, progress, queryPublicationId]
+      required: [id, title, creator, tags, mediaCount, coverMediaId, badges, favorite, progress, queryPublicationId]
       properties:
         id:
           $ref: "#/components/schemas/CanonicalWorkId"
+        badges:
+          type: array
+          description: publication 冻结的规则派生角标；顺序即展示顺序，没有角标时为空数组。
+          items:
+            $ref: "#/components/schemas/Badge"
         title:
           type: string
         creator:

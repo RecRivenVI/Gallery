@@ -33,7 +33,7 @@ func openTestStore(t *testing.T) (*Store, appdirs.Dirs) {
 
 func TestIndependentWALMigrationsAndBackup(t *testing.T) {
 	store, dirs := openTestStore(t)
-	wantVersions := map[Role]int{RoleControl: 20, RoleCatalog: 13}
+	wantVersions := map[Role]int{RoleControl: 20, RoleCatalog: 14}
 	for _, database := range []*Database{store.Control, store.Catalog} {
 		var version int
 		if err := database.db.QueryRow("PRAGMA user_version").Scan(&version); err != nil {
@@ -211,7 +211,7 @@ VALUES
 		if err := upgraded.db.QueryRow(`SELECT count(*) FROM catalog_revision_sources`).Scan(&count); err != nil {
 			t.Fatal(err)
 		}
-		if version != 13 || count != 2 {
+		if version != 14 || count != 2 {
 			t.Fatalf("v11 升级结果: version=%d membership=%d", version, count)
 		}
 		var libraryID string
@@ -306,7 +306,7 @@ VALUES
 	if err := upgraded.db.QueryRow("PRAGMA user_version").Scan(&version); err != nil {
 		t.Fatal(err)
 	}
-	if version != 13 {
+	if version != 14 {
 		t.Fatalf("v12 升级后 user_version = %d", version)
 	}
 	var backfilled, orphan int64

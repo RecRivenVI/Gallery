@@ -58,6 +58,27 @@ func (e AuthorizationGrantInputEffect) Valid() bool {
 	}
 }
 
+// Defines values for BadgePosition.
+const (
+	CoverTopLeft  BadgePosition = "cover_top_left"
+	CoverTopRight BadgePosition = "cover_top_right"
+	TagLeading    BadgePosition = "tag_leading"
+)
+
+// Valid indicates whether the value is a known member of the BadgePosition enum.
+func (e BadgePosition) Valid() bool {
+	switch e {
+	case CoverTopLeft:
+		return true
+	case CoverTopRight:
+		return true
+	case TagLeading:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for BindingActionResultEntityKind.
 const (
 	BindingActionResultEntityKindMedia BindingActionResultEntityKind = "media"
@@ -2153,6 +2174,36 @@ type AuthorizationGrantListResponse struct {
 	Grants []AuthorizationGrant `json:"grants"`
 }
 
+// Badge 规则派生的作品角标。它是 Source-derived 展示事实：出现条件与配色都由规则裁决， 随重扫重新计算，不属于用户 Overlay。客户端按 position 渲染，不得自行推导条件或颜色。
+type Badge struct {
+	// Background 深色主题背景色。
+	Background *string `json:"background,omitempty"`
+
+	// BackgroundLight 浅色主题背景色。
+	BackgroundLight *string `json:"backgroundLight,omitempty"`
+
+	// Border 深色主题边框色。
+	Border *string `json:"border,omitempty"`
+
+	// BorderLight 浅色主题边框色。
+	BorderLight *string `json:"borderLight,omitempty"`
+
+	// Color 深色主题前景色；缺省时由客户端设计系统决定。
+	Color *string `json:"color,omitempty"`
+
+	// ColorLight 浅色主题前景色。
+	ColorLight *string `json:"colorLight,omitempty"`
+	Id         string  `json:"id"`
+	Label      string  `json:"label"`
+
+	// Order 同一位置内的展示顺序；服务端已按 order 再按 id 排好，客户端不得重排。
+	Order    int           `json:"order"`
+	Position BadgePosition `json:"position"`
+}
+
+// BadgePosition defines model for Badge.Position.
+type BadgePosition string
+
 // BindingActionResult defines model for BindingActionResult.
 type BindingActionResult struct {
 	CanonicalId string                        `json:"canonicalId"`
@@ -2788,6 +2839,9 @@ type PublishedMediaContentVerificationState string
 
 // PublishedWork defines model for PublishedWork.
 type PublishedWork struct {
+	// Badges publication 冻结的规则派生角标；顺序即展示顺序，没有角标时为空数组。
+	Badges []Badge `json:"badges"`
+
 	// CoverMediaId publication 冻结的有效封面媒体；没有可用封面时为 null。
 	CoverMediaId *CanonicalMediaId `json:"coverMediaId"`
 	Creator      string            `json:"creator"`

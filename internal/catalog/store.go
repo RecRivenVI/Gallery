@@ -64,8 +64,40 @@ type WorkFact struct {
 	// WorkFact，由 ApplyOverlayFacts 从 control.db 快照单独重放。
 	RuleCoverMediaSourceKey string
 	RuleCoverMediaID        string
-	WorkID                  string
+	// Badges 是规则派生的角标序列，顺序即展示顺序。它是 Source-derived 事实，随重扫
+	// 重新计算，不进 control.db，也不与用户 Overlay 合并。
+	Badges []Badge
+	WorkID string
 }
+
+// encodeBadges 把角标序列编码为投影列内容。空序列固定编码为 `[]` 而不是 null，使该列
+// 的读取端不必区分「没有角标」与「历史 revision 未记录角标」两种空值形态。
+func encodeBadges(badges []Badge) string {
+	if len(badges) == 0 {
+		return "[]"
+	}
+	encoded, err := json.Marshal(badges)
+	if err != nil {
+		return "[]"
+	}
+	return string(encoded)
+}
+
+// decodeBadges 还原投影列内容。损坏或非数组内容一律按「无角标」处理：角标是可重建的
+// 展示事实，不值得为它让整个作品查询失败，重扫会重新写入正确内容。
+func decodeBadges(encoded string) []Badge {
+	if encoded == "" || encoded == "[]" {
+		return nil
+	}
+	var badges []Badge
+	if err := json.Unmarshal([]byte(encoded), &badges); err != nil {
+		return nil
+	}
+	return badges
+}
+
+// Badge 是随 publication 冻结的规则派生角标，定义见 domain.Badge。
+type Badge = domain.Badge
 
 type MediaFact struct {
 	SourceID      string
@@ -93,6 +125,9 @@ type MediaFact struct {
 	LastConfirmedAlgorithm   string
 	LastConfirmedDigest      string
 	LastConfirmedAt          time.Time
+	// RuleHidden 是规则判定的「默认不展示」。它与用户 Overlay 的 hidden 严格分离：
+	// 后者是不可被重扫覆盖的用户事实，两者合并会让重扫抹掉用户选择。
+	RuleHidden bool
 }
 
 const (
@@ -121,6 +156,8 @@ type Work struct {
 	Progress   float64
 	// CoverMediaID 是当前 query publication 中已经解析完 CustomCover 回退的有效封面。
 	CoverMediaID string
+	// Badges 是该 publication 冻结的规则派生角标，顺序即展示顺序。
+	Badges []Badge
 }
 
 type Media struct {
@@ -529,12 +566,12 @@ VALUES (?, ?, ?, 'staging', ?, ?)`, candidate.OverlayRevisionID, candidate.Catal
  tags_json, filenames_text, normalized_original_text, cjk_bigram_token_text,
  latin_trigram_token_text, sort_title_key, hidden, favorite, progress,
  search_title_norm, search_creator_norm, search_tags_norm, search_filenames_norm,
- rule_cover_media_id, cover_media_id)
+ rule_cover_media_id, cover_media_id, badges_json)
 SELECT catalog_revision_id, ?, work_id, source_id, source_key, library_id, title, creator,
 tags_json, filenames_text, normalized_original_text, cjk_bigram_token_text,
 latin_trigram_token_text, sort_title_key, hidden, favorite, progress,
 search_title_norm, search_creator_norm, search_tags_norm, search_filenames_norm,
-rule_cover_media_id, rule_cover_media_id
+rule_cover_media_id, rule_cover_media_id, badges_json
 FROM work_projections WHERE catalog_revision_id=? AND overlay_revision_id=?`,
 		candidate.OverlayRevisionID, candidate.CatalogRevisionID, candidate.BaseOverlayRevisionID); err != nil {
 		return OverlayCandidate{}, fault.New(fault.CodeInternal, true, err)
@@ -542,10 +579,10 @@ FROM work_projections WHERE catalog_revision_id=? AND overlay_revision_id=?`,
 	if _, err := tx.ExecContext(ctx, `INSERT INTO media_projections
 (catalog_revision_id, overlay_revision_id, media_id, work_id, source_id, source_key, relative_path,
  media_kind, mime_type, size_bytes, algorithm, digest, location_status, ordinal, hidden, base_ordinal,
- content_verification_state, verified_at, mtime_ns)
+ content_verification_state, verified_at, mtime_ns, rule_hidden)
 SELECT catalog_revision_id, ?, media_id, work_id, source_id, source_key, relative_path,
 media_kind, mime_type, size_bytes, algorithm, digest, location_status, base_ordinal,
-hidden, base_ordinal, content_verification_state, verified_at, mtime_ns
+hidden, base_ordinal, content_verification_state, verified_at, mtime_ns, rule_hidden
 FROM media_projections WHERE catalog_revision_id=? AND overlay_revision_id=?`,
 		candidate.OverlayRevisionID, candidate.CatalogRevisionID, candidate.BaseOverlayRevisionID); err != nil {
 		return OverlayCandidate{}, fault.New(fault.CodeInternal, true, err)
@@ -934,15 +971,16 @@ func (s *Store) GetWorkAt(ctx context.Context, publicationID, id string) (Public
 	var work Work
 	var tags string
 	var favorite int
+	var badges string
 	err = s.db.QueryRowContext(ctx, `SELECT w.work_id, w.source_id, w.library_id, w.title, w.creator, w.tags_json,
-w.cover_media_id, w.favorite, w.progress, count(m.media_id)
+w.cover_media_id, w.badges_json, w.favorite, w.progress, count(m.media_id)
 FROM work_projections w LEFT JOIN media_projections m
  ON m.catalog_revision_id = w.catalog_revision_id AND m.overlay_revision_id = w.overlay_revision_id AND m.work_id = w.work_id
 WHERE w.catalog_revision_id = ? AND w.overlay_revision_id = ? AND w.work_id = ?
 GROUP BY w.work_id, w.source_id, w.library_id, w.title, w.creator, w.tags_json,
- w.cover_media_id, w.favorite, w.progress`, publication.CatalogRevisionID, publication.OverlayRevisionID, id).Scan(
+ w.cover_media_id, w.badges_json, w.favorite, w.progress`, publication.CatalogRevisionID, publication.OverlayRevisionID, id).Scan(
 		&work.ID, &work.SourceID, &work.LibraryID, &work.Title, &work.Creator, &tags,
-		&work.CoverMediaID, &favorite, &work.Progress, &work.MediaCount)
+		&work.CoverMediaID, &badges, &favorite, &work.Progress, &work.MediaCount)
 	if errors.Is(err, sql.ErrNoRows) {
 		return Publication{}, Work{}, fault.New(fault.CodeNotFound, false, nil)
 	}
@@ -950,6 +988,7 @@ GROUP BY w.work_id, w.source_id, w.library_id, w.title, w.creator, w.tags_json,
 		return Publication{}, Work{}, fault.New(fault.CodeInternal, true, err)
 	}
 	work.Favorite = favorite != 0
+	work.Badges = decodeBadges(badges)
 	_ = json.Unmarshal([]byte(tags), &work.Tags)
 	return publication, work, nil
 }
@@ -1370,10 +1409,10 @@ VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`, candidate.CatalogRevisionID, work.Source
 (catalog_revision_id, overlay_revision_id, work_id, source_id, source_key, library_id, title, creator, tags_json, filenames_text,
  normalized_original_text, cjk_bigram_token_text, latin_trigram_token_text, sort_title_key, hidden,
  search_title_norm, search_creator_norm, search_tags_norm, search_filenames_norm,
- rule_cover_media_id, cover_media_id)
-VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`, candidate.CatalogRevisionID, candidate.OverlayRevisionID, work.WorkID, work.SourceID, work.SourceKey, work.LibraryID, work.Title, work.Creator, string(tagsJSON), string(filenamesJSON), document.NormalizedOriginal, document.CJKTokens, document.LatinTokens, document.SortTitleKey, hidden,
+ rule_cover_media_id, cover_media_id, badges_json)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`, candidate.CatalogRevisionID, candidate.OverlayRevisionID, work.WorkID, work.SourceID, work.SourceKey, work.LibraryID, work.Title, work.Creator, string(tagsJSON), string(filenamesJSON), document.NormalizedOriginal, document.CJKTokens, document.LatinTokens, document.SortTitleKey, hidden,
 			document.TitleNorm, document.CreatorNorm, document.TagsNorm, document.FilenamesNorm,
-			work.RuleCoverMediaID, work.RuleCoverMediaID); err != nil {
+			work.RuleCoverMediaID, work.RuleCoverMediaID, encodeBadges(work.Badges)); err != nil {
 			return fault.New(fault.CodeInternal, true, err)
 		}
 		if work.CreatorID != "" {
@@ -1458,10 +1497,14 @@ VALUES (?, ?, ?, ?, ?, ?, ?, 'present')`, candidate.CatalogRevisionID, item.Sour
 		if verified && !item.LastConfirmedAt.IsZero() {
 			verifiedAt = item.LastConfirmedAt.UTC().Unix()
 		}
+		ruleHidden := 0
+		if item.RuleHidden {
+			ruleHidden = 1
+		}
 		if _, err := tx.ExecContext(ctx, `INSERT INTO media_projections
 (catalog_revision_id, overlay_revision_id, media_id, work_id, source_id, source_key, relative_path,
- media_kind, mime_type, size_bytes, algorithm, digest, location_status, content_verification_state, verified_at, ordinal, base_ordinal, mtime_ns)
-VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`, candidate.CatalogRevisionID, candidate.OverlayRevisionID, item.MediaID, item.WorkID, item.SourceID, item.SourceKey, item.RelativePath, item.Kind, item.MIME, item.Size, item.Algorithm, item.Digest, locationStatus, state, verifiedAt, item.Ordinal, item.Ordinal, item.MTimeNanos); err != nil {
+ media_kind, mime_type, size_bytes, algorithm, digest, location_status, content_verification_state, verified_at, ordinal, base_ordinal, mtime_ns, rule_hidden)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`, candidate.CatalogRevisionID, candidate.OverlayRevisionID, item.MediaID, item.WorkID, item.SourceID, item.SourceKey, item.RelativePath, item.Kind, item.MIME, item.Size, item.Algorithm, item.Digest, locationStatus, state, verifiedAt, item.Ordinal, item.Ordinal, item.MTimeNanos, ruleHidden); err != nil {
 			return fault.New(fault.CodeInternal, true, err)
 		}
 	}
@@ -1667,10 +1710,10 @@ WHERE f.catalog_revision_id=q.catalog_revision_id AND f.source_id<>?`, []any{can
 		{`INSERT INTO work_projections
 (catalog_revision_id, overlay_revision_id, work_id, source_id, source_key, library_id, title, creator, tags_json, filenames_text,
  normalized_original_text, cjk_bigram_token_text, latin_trigram_token_text, sort_title_key, hidden, favorite, progress,
- search_title_norm, search_creator_norm, search_tags_norm, search_filenames_norm, rule_cover_media_id, cover_media_id)
+ search_title_norm, search_creator_norm, search_tags_norm, search_filenames_norm, rule_cover_media_id, cover_media_id, badges_json)
 SELECT ?, ?, w.work_id, w.source_id, w.source_key, w.library_id, w.title, w.creator, w.tags_json, w.filenames_text,
 w.normalized_original_text, w.cjk_bigram_token_text, w.latin_trigram_token_text, w.sort_title_key, w.hidden, w.favorite, w.progress,
-w.search_title_norm, w.search_creator_norm, w.search_tags_norm, w.search_filenames_norm, w.rule_cover_media_id, w.rule_cover_media_id FROM work_projections w
+w.search_title_norm, w.search_creator_norm, w.search_tags_norm, w.search_filenames_norm, w.rule_cover_media_id, w.rule_cover_media_id, w.badges_json FROM work_projections w
 JOIN active_query_publication a ON a.singleton=1 JOIN query_publications q ON q.query_publication_id=a.query_publication_id
 WHERE w.catalog_revision_id=q.catalog_revision_id AND w.overlay_revision_id=q.overlay_revision_id AND w.source_id<>?`, []any{candidate.CatalogRevisionID, candidate.OverlayRevisionID, candidate.SourceID}},
 		{`INSERT OR IGNORE INTO creator_projections SELECT ?, ?, c.creator_id, c.name, c.sort_name_key FROM creator_projections c
@@ -1681,8 +1724,8 @@ WHERE c.catalog_revision_id=q.catalog_revision_id AND c.overlay_revision_id=q.ov
 		{`INSERT INTO media_projections
 (catalog_revision_id, overlay_revision_id, media_id, work_id, source_id, source_key, relative_path,
  media_kind, mime_type, size_bytes, algorithm, digest, location_status, ordinal, hidden, base_ordinal,
- content_verification_state, verified_at, mtime_ns)
-SELECT ?, ?, m.media_id, m.work_id, m.source_id, m.source_key, m.relative_path, m.media_kind, m.mime_type, m.size_bytes, m.algorithm, m.digest, m.location_status, m.base_ordinal, m.hidden, m.base_ordinal, m.content_verification_state, m.verified_at, m.mtime_ns FROM media_projections m
+ content_verification_state, verified_at, mtime_ns, rule_hidden)
+SELECT ?, ?, m.media_id, m.work_id, m.source_id, m.source_key, m.relative_path, m.media_kind, m.mime_type, m.size_bytes, m.algorithm, m.digest, m.location_status, m.base_ordinal, m.hidden, m.base_ordinal, m.content_verification_state, m.verified_at, m.mtime_ns, m.rule_hidden FROM media_projections m
 JOIN active_query_publication a ON a.singleton=1 JOIN query_publications q ON q.query_publication_id=a.query_publication_id
 WHERE m.catalog_revision_id=q.catalog_revision_id AND m.overlay_revision_id=q.overlay_revision_id AND m.source_id<>?`, []any{candidate.CatalogRevisionID, candidate.OverlayRevisionID, candidate.SourceID}},
 		{`INSERT INTO work_search (catalog_revision_id, overlay_revision_id, work_id, normalized_original_text, cjk_bigram_token_text, latin_trigram_token_text)

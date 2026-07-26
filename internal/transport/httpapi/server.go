@@ -2495,7 +2495,7 @@ func (s *Server) listWorks(w http.ResponseWriter, r *http.Request) {
 		dto := api.PublishedWork{
 			Id: work.ID, Title: work.Title, Creator: work.Creator, Tags: work.Tags,
 			MediaCount: work.MediaCount, Favorite: work.Favorite, Progress: float32(work.Progress),
-			QueryPublicationId: result.QueryPublicationID,
+			Badges: badgeDTOs(work.Badges), QueryPublicationId: result.QueryPublicationID,
 		}
 		if work.CoverMediaID != "" {
 			coverMediaID := api.CanonicalMediaId(work.CoverMediaID)
@@ -3500,11 +3500,33 @@ func publicationDTO(value catalog.Publication) api.QueryPublication {
 	return api.QueryPublication{Id: value.ID, CatalogRevision: value.CatalogRevisionID, OverlayProjectionRevision: value.OverlayRevisionID, JobId: value.JobID, ControlWatermark: value.ControlWatermark, CreatedAt: value.CreatedAt}
 }
 
+// badgeDTOs 把冻结的角标事实转成公开 DTO。空序列固定映射为空数组而不是 null：角标是
+// required 字段，客户端不必区分「没有角标」与「字段缺失」。
+func badgeDTOs(badges []domain.Badge) []api.Badge {
+	result := make([]api.Badge, 0, len(badges))
+	for _, item := range badges {
+		result = append(result, api.Badge{
+			Id: item.ID, Order: item.Order, Position: api.BadgePosition(item.Position), Label: item.Label,
+			Color: optionalString(item.Color), Background: optionalString(item.Background), Border: optionalString(item.Border),
+			ColorLight: optionalString(item.ColorLight), BackgroundLight: optionalString(item.BackgroundLight),
+			BorderLight: optionalString(item.BorderLight),
+		})
+	}
+	return result
+}
+
+func optionalString(value string) *string {
+	if value == "" {
+		return nil
+	}
+	return &value
+}
+
 func workDTO(publication catalog.Publication, value catalog.Work) api.PublishedWork {
 	result := api.PublishedWork{
 		Id: value.ID, Title: value.Title, Creator: value.Creator, Tags: value.Tags,
 		MediaCount: value.MediaCount, Favorite: value.Favorite, Progress: float32(value.Progress),
-		QueryPublicationId: publication.ID,
+		Badges: badgeDTOs(value.Badges), QueryPublicationId: publication.ID,
 	}
 	if value.CoverMediaID != "" {
 		coverMediaID := api.CanonicalMediaId(value.CoverMediaID)

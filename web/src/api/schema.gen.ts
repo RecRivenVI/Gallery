@@ -2069,8 +2069,31 @@ export interface components {
             /** @enum {integer} */
             protocolVersion: 1;
         };
+        /** @description 规则派生的作品角标。它是 Source-derived 展示事实：出现条件与配色都由规则裁决， 随重扫重新计算，不属于用户 Overlay。客户端按 position 渲染，不得自行推导条件或颜色。 */
+        Badge: {
+            id: string;
+            /** @description 同一位置内的展示顺序；服务端已按 order 再按 id 排好，客户端不得重排。 */
+            order: number;
+            /** @enum {string} */
+            position: "cover_top_left" | "cover_top_right" | "tag_leading";
+            label: string;
+            /** @description 深色主题前景色；缺省时由客户端设计系统决定。 */
+            color?: string;
+            /** @description 深色主题背景色。 */
+            background?: string;
+            /** @description 深色主题边框色。 */
+            border?: string;
+            /** @description 浅色主题前景色。 */
+            colorLight?: string;
+            /** @description 浅色主题背景色。 */
+            backgroundLight?: string;
+            /** @description 浅色主题边框色。 */
+            borderLight?: string;
+        };
         PublishedWork: {
             id: components["schemas"]["CanonicalWorkId"];
+            /** @description publication 冻结的规则派生角标；顺序即展示顺序，没有角标时为空数组。 */
+            badges: components["schemas"]["Badge"][];
             title: string;
             creator: string;
             tags: string[];

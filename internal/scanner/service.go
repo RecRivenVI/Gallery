@@ -595,7 +595,7 @@ func (s *Service) Execute(ctx context.Context, jobID string) error {
 			SourceTitle: canonicalWork.Title, SourceTags: work.Tags,
 			Title: canonicalWork.Title, Creator: work.Creator, Tags: work.Tags,
 			Filenames: filenames, RuleCoverMediaSourceKey: work.RuleCoverMediaSourceKey,
-			RuleCoverMediaID: coverMedia.ID, WorkID: canonicalWork.ID}
+			RuleCoverMediaID: coverMedia.ID, Badges: work.Badges, WorkID: canonicalWork.ID}
 		if len(canonicalWork.Creators) > 0 {
 			creator := creatorReference(work)
 			workFact.Creator = canonicalWork.Creators[0].Name
@@ -618,6 +618,7 @@ func (s *Service) Execute(ctx context.Context, jobID string) error {
 				Algorithm: item.Hash.Blob.Algorithm, Digest: item.Hash.Blob.Digest, LocationKey: item.Hash.LocationKey,
 				MediaID: canonicalMedia.ID, WorkID: canonicalWork.ID, Ordinal: canonicalMedia.Ordinal,
 				ContentVerificationState: state, MTimeNanos: item.ExpectedModTimeNanos,
+				RuleHidden: item.RuleHidden,
 			}
 			if state == catalog.ContentVerificationStateContentVerified {
 				fact.LastConfirmedAlgorithm = item.Hash.Blob.Algorithm
@@ -842,14 +843,35 @@ type discoveredWork struct {
 	CreatorStableKey                                  string
 	RuleCoverMediaSourceKey                           string
 	Tags                                              []string
+	Badges                                            []catalog.Badge
 	Media                                             []discoveredMedia
 }
+
+// badgeFacts 把规则派生的角标转成 Catalog 事实。这里只做结构转换，不重新判定条件：
+// 出现条件与配色都已经在规则中裁决完毕，扫描器不得引入第二套判定。
+func badgeFacts(badges []rules.DryRunBadge) []catalog.Badge {
+	if len(badges) == 0 {
+		return nil
+	}
+	result := make([]catalog.Badge, 0, len(badges))
+	for _, item := range badges {
+		result = append(result, catalog.Badge{
+			ID: item.ID, Order: item.Order, Position: item.Position, Label: item.Label,
+			Color: item.Color, Background: item.Background, Border: item.Border,
+			ColorLight: item.ColorLight, BackgroundLight: item.BackgroundLight, BorderLight: item.BorderLight,
+		})
+	}
+	return result
+}
+
 type discoveredMedia struct {
 	SourceKey, RuleKey, RelativePath, Kind, MIME string
 	ExpectedSize                                 int64
 	ExpectedModTimeNanos                         int64
 	HasExpectedIdentity                          bool
-	Hash                                         media.HashResult
+	// RuleHidden 是规则判定的默认不展示，与用户 Overlay 的隐藏严格分离。
+	RuleHidden bool
+	Hash       media.HashResult
 }
 
 func creatorReference(work discoveredWork) application.DiscoveredCreator {
@@ -950,7 +972,8 @@ func discover(ctx context.Context, root string, ir rules.RuleIR, parameters []by
 			return filepath.SkipDir
 		}
 		work := discoveredWork{SourceKey: evaluated.Work.StableKey, ProviderID: evaluated.Work.ProviderID, ExternalID: evaluated.Work.ExternalID,
-			Title: evaluated.Work.Title, Creator: evaluated.Work.Creator, CreatorStableKey: evaluated.Work.CreatorStableKey, Tags: evaluated.Work.Tags}
+			Title: evaluated.Work.Title, Creator: evaluated.Work.Creator, CreatorStableKey: evaluated.Work.CreatorStableKey,
+			Tags: evaluated.Work.Tags, Badges: badgeFacts(evaluated.Work.Badges)}
 		for _, item := range evaluated.Work.Media {
 			mediaRelative := path.Join(relative, item.Path)
 			if _, err := media.ValidateRelativePath(mediaRelative); err != nil {
@@ -963,7 +986,8 @@ func discover(ctx context.Context, root string, ir rules.RuleIR, parameters []by
 			}
 			mediaSourceKey := path.Join(work.SourceKey, item.StableKey)
 			work.Media = append(work.Media, discoveredMedia{SourceKey: mediaSourceKey,
-				RuleKey: item.StableKey, RelativePath: mediaRelative, Kind: item.Kind, MIME: item.MIME})
+				RuleKey: item.StableKey, RelativePath: mediaRelative, Kind: item.Kind, MIME: item.MIME,
+				RuleHidden: item.Hidden})
 			if item.Path == evaluated.Work.CoverPath {
 				work.RuleCoverMediaSourceKey = mediaSourceKey
 			}
