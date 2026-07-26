@@ -19,10 +19,12 @@ tools/testlab/
 │   ├── environment/  Session 建立（一次性配对）
 │   ├── process/      galleryd 子进程生命周期
 │   ├── report/       Finding/LatencySample/Report，脱敏与原子持久化
+│   ├── seeding/      生产式合成 publication 构建（CLI 与自动 smoke 共用）
 │   └── sourceguard/   真实 Source 只读清单与零写入校验
 ├── stages/
 │   ├── stage3/        生产契约 smoke：扫描档案、publication、Job/Attempt 恢复与 Source 零写入
 │   ├── stage4/
+│   │   ├── smoke_test.go 普通 go test 持续入口（1k、真实 bootstrap/loopback HTTP）
 │   │   ├── query/     结构化过滤/搜索/排序/Ranking/Total/Cursor/性能矩阵
 │   │   └── media/     真实/合成 Source 建立、按需确认、Range/ETag、DerivedAsset
 │   └── stage5/
@@ -38,6 +40,11 @@ tools/testlab/
 SHA-256、publication 不可变性、同一 Job 多 Attempt 恢复与 Source guard。它是可重复的正确性 smoke，
 不替代 `Documents/证据/验证记录.md` 和 `Documents/证据/阶段3-4大规模测试归档.md` 中的真实规模证据，
 也不代表 HDD、SMB/NAS 或正式性能门禁已经完成。
+
+`stages/stage4/smoke_test.go` 通过 `go test ./tools/testlab/stages/stage4` 自动构建 1,000 Work 的确定性
+publication，启动生产 `bootstrap.RunWithReady`，并经真实 loopback HTTP/生成客户端执行 39 项查询、6 项
+Cursor 与 20 项媒体/DerivedAsset finding。测试使用临时 AppDirs 和合成 Source，锁定完整 finding 名集合、
+脱敏报告，以及首次 index scan 后至按需确认/Derived 完成期间的 Source 零写入；不运行性能矩阵，也不替代 500,000 Reference、HDD/SMB/NAS 或真实 Source 门禁。
 
 ## 规模分级
 

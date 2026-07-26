@@ -112,10 +112,10 @@ func RunStructuredFilterCorrectness(rep *report.Report, sess *environment.Sessio
 	check("filter/overlay.progress gte 0.5", leaf("overlay.progress", "gte", 0.5), countProgressGTEVisible(stats.N, 0.5), nil)
 	// creator.id 过滤已知限制：该过滤路径通过 internal/creators.ResolveEquivalenceGroup
 	// 解析合并等价组，依赖 control.db 中存在对应 CanonicalCreator 行；本工具的批量
-	// 数据生成路径只写 catalog.db（不创建 control.db 领域事实），因此对合成批量数据集
-	// 不测试 creator.id 过滤，留给 media 场景（通过真实 API 创建 Creator）覆盖。
+	// 数据生成路径即使为自动化 smoke 建立 Library/Source，也不创建 CanonicalCreator
+	// 领域事实，因此不测试 creator.id，留给 media 场景（通过真实 API 创建 Creator）覆盖。
 	if len(creatorIDs) > 0 {
-		rep.Limitations = append(rep.Limitations, "本次未测试 filter/creator.id：批量合成数据集只写 catalog.db，不建立 control.db CanonicalCreator 事实")
+		rep.Limitations = append(rep.Limitations, "本次未测试 filter/creator.id：批量合成数据集不建立 control.db CanonicalCreator 事实")
 	}
 
 	check("filter/AND(provider,tag)", all(leaf("provider.id", "eq", corpus.ProviderID(0)), leaf("tag", "eq", corpus.TagName(3))),
@@ -309,6 +309,10 @@ func RunTotalTriStateCorrectness(rep *report.Report, sess *environment.Session, 
 		rep.Add("total/lower_bound-mode-for-wide-browse", false, fmt.Sprintf("err=%v", err))
 	} else if stats.N > 10000 {
 		rep.Add("total/lower_bound-mode-for-wide-browse", string(browseResp.JSON200.Total.Mode) == "lower_bound", fmt.Sprintf("mode=%s n=%d", browseResp.JSON200.Total.Mode, stats.N))
+	} else {
+		// smoke/integration 的有界规模不会触发 lower_bound；仍必须把 browse total 的
+		// exact 分支记为显式 finding，避免该规模下静默少跑一项 Total 断言。
+		rep.Add("total/exact-mode-for-bounded-browse", string(browseResp.JSON200.Total.Mode) == "exact", fmt.Sprintf("mode=%s n=%d", browseResp.JSON200.Total.Mode, stats.N))
 	}
 
 	omitResp, err := listWorks(sess, api.ListWorksParams{Limit: ptr(20), OmitTotal: ptr(true)})

@@ -34,7 +34,7 @@ const testlabMinimalRulePackage = `{
   "primitives": [
     {"id": "work", "kind": "path_match", "config": {"scope": "work_directory", "glob": "*", "title": "directory_name", "stable_key": "relative_path", "metadata_file": "metadata.json"}},
     {"id": "creator", "kind": "metadata_map", "config": {"fields": {"creator": ["/creator/name"]}}},
-    {"id": "media", "kind": "media_classify", "config": {"glob": "*.bin", "kind": "image", "mime": "application/octet-stream"}}
+    {"id": "media", "kind": "media_classify", "config": {"glob": "*.jpg", "kind": "image", "mime": "image/jpeg"}}
   ],
   "cel_expressions": [],
   "tests": [{"id": "one-work-one-media"}],
@@ -97,7 +97,7 @@ func SetupMediaSource(rep *report.Report, sess *environment.Session, sourceRoot 
 		if err := os.MkdirAll(workDir, 0o700); err != nil {
 			return "", "", 0, err
 		}
-		if err := os.WriteFile(filepath.Join(workDir, "photo.bin"), encodeTestJPEG(i), 0o600); err != nil {
+		if err := os.WriteFile(filepath.Join(workDir, "photo.jpg"), encodeTestJPEG(i), 0o600); err != nil {
 			return "", "", 0, err
 		}
 		metadata := fmt.Sprintf(`{"creator":{"name":"TestlabCreator%02d"}}`, i%3)
