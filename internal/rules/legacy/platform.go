@@ -7,6 +7,21 @@ import (
 	"strings"
 )
 
+// PathDatetimePattern 是旧工具 `$path.datetime` 的目录命名约定，由对真实来源的**有界只读观察**
+// 得出（每平台最多 3 个作者目录 × 5 个作品目录，只统计字符形状，不记录目录名）。
+//
+// 观察结论：9 个平台的作品目录名一致形如 `YYYY-MM-DD_HH-MM-SS_<标识>`，其中标识部分在不同平台
+// 分别是纯数字或含字母与短横线。因此模式只锚定日期时间部分，不约束其后的标识。
+//
+// 前导 `/` 不可省略：`author_work` 结构的相对路径是 `{作者}/{作品}`，作品段是唯一带前导斜杠的段。
+// 没有它时，若某个作者目录名恰好以日期时间开头，就会先命中作者段而取到错误的时间。Go 的 RE2 没有
+// 后顾断言，靠这个前导字符定位是可用且精确的做法。
+//
+// **Venera 不遵循该约定**：它的作品目录是纯数字章节号，没有日期。模式对它自然匹配不到，该平台的
+// 作品因此没有发布时间——这是真实情况，规则会为每个作品留下 `RULE_WORK_DATE_MISSING`，不做掩盖，
+// 也不为它伪造一个时间。
+const PathDatetimePattern = `/(?P<year>\d{4})-(?P<month>\d{2})-(?P<day>\d{2})_(?P<hour>\d{2})-(?P<minute>\d{2})-(?P<second>\d{2})_`
+
 // primitive 是待编码的规则原语。
 type primitive struct {
 	ID     string `json:"id"`
@@ -98,9 +113,10 @@ func convertPlatform(config Config, platform Platform, ruleSetID string) (json.R
 		})
 	}
 
-	// 发布时间：metadata 链 + 输入时区。路径日期回退见下方登记。
+	// 发布时间：metadata 链 + 路径回退 + 输入时区。
 	datePointers := pointerChain(platform.Metadata.Date, platform.ID, "date", &notes)
-	if len(datePointers) > 0 {
+	wantsPathDate := hasPathDatetime(platform.Metadata.Date)
+	if len(datePointers) > 0 || wantsPathDate {
 		inputTimezone := platform.Metadata.Time.InputTimezone
 		if inputTimezone == "" {
 			inputTimezone = config.Time.NaiveTimestampTimezone
@@ -108,10 +124,14 @@ func convertPlatform(config Config, platform Platform, ruleSetID string) (json.R
 		if inputTimezone == "" {
 			inputTimezone = "UTC"
 		}
-		primitives = append(primitives, primitive{
-			ID: "work-date", Kind: "work_date",
-			Config: map[string]any{"pointers": datePointers, "input_timezone": inputTimezone},
-		})
+		item := map[string]any{"input_timezone": inputTimezone}
+		if len(datePointers) > 0 {
+			item["pointers"] = datePointers
+		}
+		if wantsPathDate {
+			item["path_pattern"] = PathDatetimePattern
+		}
+		primitives = append(primitives, primitive{ID: "work-date", Kind: "work_date", Config: item})
 	}
 
 	// 媒体分类：逐扩展名。旧配置按扩展名列表声明，Gallery 用 glob，因此逐项展开。
@@ -225,14 +245,6 @@ func convertPlatform(config Config, platform Platform, ruleSetID string) (json.R
 	}
 	primitives = append(primitives, primitive{ID: "presentation", Kind: "presentation", Config: presentation})
 
-	// `$path.datetime` 的路径日期回退需要目录命名模式，而旧配置并不声明它——那是旧工具代码里的
-	// 隐式约定。这里刻意不猜测一个模式：错误的模式会静默匹配不到，比没有模式更难发现。
-	if hasPathDatetime(platform.Metadata.Date) {
-		notes = append(notes, Note{
-			Platform: platform.ID, Field: "metadata.date.$path.datetime",
-			Reason: "路径日期模式未在旧配置中声明，需按真实目录命名补充 work_date.path_pattern 后再启用",
-		})
-	}
 	if platform.Metadata.Categories != nil {
 		notes = append(notes, Note{
 			Platform: platform.ID, Field: "metadata.categories",

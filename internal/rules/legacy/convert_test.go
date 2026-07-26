@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"regexp"
 	"sort"
 	"strings"
 	"testing"
@@ -136,6 +137,9 @@ func TestConvertProducesCompilablePackagesPerEnabledPlatform(t *testing.T) {
 		if ir.WorkDate == nil || len(ir.WorkDate.Pointers) != 1 || ir.WorkDate.Pointers[0] != "/date" {
 			t.Fatalf("平台 %s 的发布时间计划 = %+v", platformID, ir.WorkDate)
 		}
+		if ir.WorkDate.PathPattern != legacy.PathDatetimePattern {
+			t.Fatalf("平台 %s 未带上路径日期模式: %q", platformID, ir.WorkDate.PathPattern)
+		}
 		if ir.Presentation == nil || ir.Presentation.Sort == nil ||
 			ir.Presentation.Sort.WorkDefault != "date_desc" || ir.Presentation.Sort.Collation != "zh-CN" {
 			t.Fatalf("平台 %s 的呈现配置 = %+v", platformID, ir.Presentation)
@@ -197,7 +201,6 @@ func TestConvertRegistersUnconvertedSemantics(t *testing.T) {
 		}
 	}
 	for _, wanted := range []string{
-		"alpha|metadata.date.$path.datetime",
 		"beta|media.hide",
 		"beta|cover.candidates.beta-first.when",
 		"beta|metadata.date_title",
@@ -206,6 +209,43 @@ func TestConvertRegistersUnconvertedSemantics(t *testing.T) {
 		if !fields[wanted] {
 			t.Fatalf("缺少未转换登记 %q；已登记项: %+v", wanted, result.Unconverted)
 		}
+	}
+}
+
+// TestPathDatetimePatternMatchesObservedDirectoryConvention 锁定由真实来源有界观察得出的目录
+// 命名约定，并锁定它**不**匹配的两类情况。
+//
+// 用例中的路径是按观察到的字符形状构造的合成样本，不含任何真实目录名。
+func TestPathDatetimePatternMatchesObservedDirectoryConvention(t *testing.T) {
+	expression := regexp.MustCompile(legacy.PathDatetimePattern)
+	for _, item := range []struct {
+		name, path string
+		want       bool
+		year       string
+	}{
+		{"纯数字标识", "creator/2024-03-05_06-07-08_12345678", true, "2024"},
+		{"含字母与短横线的标识", "creator/2024-03-05_06-07-08_ab12c345-d1-2024-01", true, "2024"},
+		{"长数字标识", "creator/2019-11-30_01-02-03_1234567890123456", true, "2019"},
+		// Venera 的作品目录是纯数字章节号，没有日期：模式自然匹配不到，该平台的作品因此没有
+		// 发布时间。这是真实情况，不为它伪造时间。
+		{"Venera 式纯数字章节", "书名/12345", false, ""},
+		// 作者段若恰好以日期时间开头，不得被误当作作品时间——前导斜杠正是为此存在。
+		{"仅作者段带日期时间", "2024-03-05_06-07-08_x", false, ""},
+	} {
+		t.Run(item.name, func(t *testing.T) {
+			match := expression.FindStringSubmatch(item.path)
+			if (match != nil) != item.want {
+				t.Fatalf("匹配结果 = %v want %v", match != nil, item.want)
+			}
+			if !item.want {
+				return
+			}
+			for index, name := range expression.SubexpNames() {
+				if name == "year" && match[index] != item.year {
+					t.Fatalf("year = %q want %q", match[index], item.year)
+				}
+			}
+		})
 	}
 }
 
