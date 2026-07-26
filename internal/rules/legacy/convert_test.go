@@ -405,13 +405,13 @@ func TestConvertRegistersUnconvertedSemantics(t *testing.T) {
 		"beta|media.hide.beta-linked-preview",
 		"beta|cover.candidates.beta-first.when",
 		"beta|metadata.date_title",
-		// 作者段取值没有任何原语能承接，必须逐字段登记。
-		"alpha|metadata.creator.$path.author",
-		"alpha|metadata.creator-id.$path.author",
-		"delta|metadata.creator.$path.author",
-		// 「用作者段作标题」与「用作品目录名作标题」是两回事：后者已被 path_match 等价承接。
-		"delta|metadata.title.$path.author",
+		// 作者段取名字已由 path_capture 承接，因此 `metadata.creator.$path.author` 与
+		// `metadata.title.$path.author` **不再**出现在未转换登记里（见
+		// TestPathCaptureConvertsAuthorSegment）。但作者**身份**仍只能来自 metadata：
+		// stable_key 不接受路径段，这一项必须继续登记。
 		"delta|structure.author.key_source",
+		// 作者标识的多级回退链仍无法表达：stable_key 只接受单个 pointer。
+		"alpha|metadata.creator-id.$path.author",
 		"delta|structure.work.metadata_required",
 		// 取值归一化改变的是取到的值本身，尤其 tags 的花括号列表形态会改变标签数量。
 		"alpha|metadata.transforms.tags",
@@ -678,5 +678,38 @@ func TestConvertRealConfigurationWhenAvailable(t *testing.T) {
 		len(result.Packages), len(result.FileRoots), len(result.Unconverted))
 	for _, field := range names {
 		t.Logf("  未转换 %s ×%d", field, unconverted[field])
+	}
+}
+
+// TestPathCaptureConvertsAuthorSegment 锁定 `$path.author` 已被 path_capture 承接。
+//
+// 这条承接是真实数据驱动的：某个平台的作者只存在于目录名里，实测其全部作品**没有任何创作者**
+// （EV-47 之后的有界验证中 creator=0/58）。此前转换器只能把它登记为未转换。
+func TestPathCaptureConvertsAuthorSegment(t *testing.T) {
+	result, err := legacy.Convert([]byte(syntheticConfig), ruleSetIDs("alpha", "beta", "delta"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, platform := range []string{"alpha", "delta"} {
+		compiled, err := rules.CompilePackage(result.Packages[platform])
+		if err != nil {
+			t.Fatalf("平台 %s 的规则包无法编译: %v", platform, err)
+		}
+		if len(compiled.IR.PathCaptures) == 0 {
+			t.Fatalf("平台 %s 声明了 $path.author 却没有产出 path_capture", platform)
+		}
+		capture := compiled.IR.PathCaptures[0]
+		if capture.Pattern != legacy.AuthorWorkSegmentPattern {
+			t.Fatalf("平台 %s 的路径模式 = %q", platform, capture.Pattern)
+		}
+		if len(capture.Targets) == 0 {
+			t.Fatalf("平台 %s 的 path_capture 没有目标字段", platform)
+		}
+	}
+	// 未转换登记里不得再出现已被承接的那两项。
+	for _, note := range result.Unconverted {
+		if note.Field == "metadata.creator.$path.author" || note.Field == "metadata.title.$path.author" {
+			t.Fatalf("已承接的路径取值仍被登记为未转换: %+v", note)
+		}
 	}
 }

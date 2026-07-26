@@ -76,6 +76,16 @@
           }
         },
         {
+          "id": "path-segments",
+          "kind": "path_capture",
+          "config": {
+            "pattern": "^(?P\u003cauthor\u003e[^/]+)/(?P\u003cwork\u003e[^/]+)$",
+            "targets": {
+              "creator": "author"
+            }
+          }
+        },
+        {
           "id": "creator-id",
           "kind": "stable_key",
           "config": {
@@ -383,6 +393,16 @@
           }
         },
         {
+          "id": "path-segments",
+          "kind": "path_capture",
+          "config": {
+            "pattern": "^(?P\u003cauthor\u003e[^/]+)/(?P\u003cwork\u003e[^/]+)$",
+            "targets": {
+              "creator": "author"
+            }
+          }
+        },
+        {
           "id": "work-date",
           "kind": "work_date",
           "config": {
@@ -586,6 +606,17 @@
             "scope": "work_directory",
             "stable_key": "relative_path",
             "title": "directory_name"
+          }
+        },
+        {
+          "id": "path-segments",
+          "kind": "path_capture",
+          "config": {
+            "pattern": "^(?P\u003cauthor\u003e[^/]+)/(?P\u003cwork\u003e[^/]+)$",
+            "targets": {
+              "creator": "author",
+              "title": "author"
+            }
           }
         },
         {
@@ -798,12 +829,7 @@
     {
       "platform": "alpha",
       "field": "metadata.creator-id.$path.author",
-      "reason": "作者段取值当前无法表达：path_match 配置是封闭集合且无命名捕获，fallback/stable_key 只接受 metadata JSON Pointer，CEL 只能作布尔谓词。metadata 缺该字段时作品将没有创作者"
-    },
-    {
-      "platform": "alpha",
-      "field": "metadata.creator.$path.author",
-      "reason": "作者段取值当前无法表达：path_match 配置是封闭集合且无命名捕获，fallback/stable_key 只接受 metadata JSON Pointer，CEL 只能作布尔谓词。metadata 缺该字段时作品将没有创作者"
+      "reason": "作者标识只能来自 metadata：stable_key 不接受路径段。作者名字已由 path_capture 从作者段取到，但同名作者目录会归并、作者目录改名会被视作新作者"
     },
     {
       "platform": "alpha",
@@ -858,12 +884,7 @@
     {
       "platform": "beta",
       "field": "metadata.creator-id.$path.author",
-      "reason": "作者段取值当前无法表达：path_match 配置是封闭集合且无命名捕获，fallback/stable_key 只接受 metadata JSON Pointer，CEL 只能作布尔谓词。metadata 缺该字段时作品将没有创作者"
-    },
-    {
-      "platform": "beta",
-      "field": "metadata.creator.$path.author",
-      "reason": "作者段取值当前无法表达：path_match 配置是封闭集合且无命名捕获，fallback/stable_key 只接受 metadata JSON Pointer，CEL 只能作布尔谓词。metadata 缺该字段时作品将没有创作者"
+      "reason": "作者标识只能来自 metadata：stable_key 不接受路径段。作者名字已由 path_capture 从作者段取到，但同名作者目录会归并、作者目录改名会被视作新作者"
     },
     {
       "platform": "beta",
@@ -887,16 +908,6 @@
     },
     {
       "platform": "delta",
-      "field": "metadata.creator.$path.author",
-      "reason": "作者段取值当前无法表达：path_match 配置是封闭集合且无命名捕获，fallback/stable_key 只接受 metadata JSON Pointer，CEL 只能作布尔谓词。metadata 缺该字段时作品将没有创作者"
-    },
-    {
-      "platform": "delta",
-      "field": "metadata.title.$path.author",
-      "reason": "标题取自作品目录之外的路径段（作者段）；path_match 的 title 只支持作品目录名本身，当前原语没有路径命名捕获，无法表达"
-    },
-    {
-      "platform": "delta",
       "field": "order",
       "reason": "平台展示顺序由 Gallery 的 API 排序协议决定，规则包不表达列表顺序"
     },
@@ -908,7 +919,7 @@
     {
       "platform": "delta",
       "field": "structure.author.key_source",
-      "reason": "作者身份只能从路径段取；当前没有路径取值原语，该平台的作品将没有创作者"
+      "reason": "作者**名字**已由 path_capture 从作者段取到；但该声明还要求作者**身份**也只由路径段决定，而 stable_key 只接受 metadata JSON Pointer，无法用路径段作稳定键。因此同名作者目录会归并、改名的作者目录会被视作新作者"
     },
     {
       "platform": "delta",

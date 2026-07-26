@@ -73,12 +73,16 @@ func pathFallbackNote(field, token string) string {
 		// 这条等价成立的前提是 title 的 fallback 原语**不带** default——带了就会用 default
 		// 覆盖掉这个默认值，见 convertPlatform 中对 default 的说明。
 		return ""
-	case field == "title":
-		return "标题取自作品目录之外的路径段（作者段）；path_match 的 title 只支持作品目录名本身，" +
-			"当前原语没有路径命名捕获，无法表达"
-	case token == "$path.author":
-		return "作者段取值当前无法表达：path_match 配置是封闭集合且无命名捕获，fallback/stable_key " +
-			"只接受 metadata JSON Pointer，CEL 只能作布尔谓词。metadata 缺该字段时作品将没有创作者"
+	case field == "creator-id":
+		// 作者**标识**与作者**名字**必须分开判断：名字由 path_capture 承接（赋值给 creator），
+		// 而标识要落到 stable_key，后者只接受 metadata JSON Pointer——路径段无法作稳定键。
+		// 二者都写成 `$path.author`，但只有前者被承接。
+		return "作者标识只能来自 metadata：stable_key 不接受路径段。作者名字已由 path_capture 从" +
+			"作者段取到，但同名作者目录会归并、作者目录改名会被视作新作者"
+	case token == "$path.author" || token == "$path.work":
+		// 由 convertPlatform 的 path_capture 原语承接：作者段与作品段都能按命名捕获取值，
+		// 且只填充仍为空的字段，与 `$path.*` 位于回退链末位的语义一致。
+		return ""
 	default:
 		return "路径虚拟取值 " + token + " 当前没有对应的规则原语"
 	}
@@ -206,6 +210,32 @@ func convertPlatform(config Config, platform Platform, ruleSetID string) (json.R
 		primitives = append(primitives, primitive{
 			ID: item.id, Kind: "fallback",
 			Config: map[string]any{"target": item.target, "pointers": pointers},
+		})
+	}
+
+	// 路径取值：把 `$path.author` / `$path.work` 落到 path_capture。
+	//
+	// 全部平台都是 `author_work` 两级结构，相对路径形如 `{作者}/{作品}`，因此作者段是第一段、
+	// 作品段是第二段。path_capture 只填充仍为空的字段，与 `$path.*` 永远位于回退链末位的语义一致：
+	// metadata 有值时不覆盖，metadata 没值时补上。
+	//
+	// 这条承接是真实数据驱动的：某个平台的作者只存在于目录名里，实测其全部作品**没有任何创作者**。
+	// 映射方向是「字段 ← 捕获组」：一个字段只有一个来源，但同一个组可以喂多个字段——delta 形态的
+	// 平台同时把作者段用作创作者和标题（它的「作者」其实是书名）。反向建映射会让这两个目标共用
+	// 同一个键而互相覆盖。
+	captureTargets := map[string]string{}
+	if usesPathToken(platform.Metadata.Author, "$path.author") {
+		captureTargets["creator"] = "author"
+	}
+	// 只处理 `$path.author` 作标题的情形；`$path.work` 作标题已由 path_match 的
+	// title=directory_name 承接，不在这里重复声明。
+	if usesPathToken(platform.Metadata.Title, "$path.author") {
+		captureTargets["title"] = "author"
+	}
+	if len(captureTargets) > 0 {
+		primitives = append(primitives, primitive{
+			ID: "path-segments", Kind: "path_capture",
+			Config: map[string]any{"pattern": AuthorWorkSegmentPattern, "targets": captureTargets},
 		})
 	}
 
@@ -528,7 +558,9 @@ func structureNotes(platform Platform) []Note {
 	if platform.Structure.Author.KeySource == "path_only" {
 		notes = append(notes, Note{
 			Platform: platform.ID, Field: "structure.author.key_source",
-			Reason: "作者身份只能从路径段取；当前没有路径取值原语，该平台的作品将没有创作者",
+			Reason: "作者**名字**已由 path_capture 从作者段取到；但该声明还要求作者**身份**也只由路径段决定，" +
+				"而 stable_key 只接受 metadata JSON Pointer，无法用路径段作稳定键。因此同名作者目录会归并、" +
+				"改名的作者目录会被视作新作者",
 		})
 	}
 	return notes
@@ -624,6 +656,22 @@ func regexToGlob(expression string) (string, bool) {
 		return "", false
 	}
 	return stem + ".*", true
+}
+
+// AuthorWorkSegmentPattern 把 `author_work` 结构的相对路径拆成作者段与作品段。
+//
+// 全部启用平台都声明 `mode: author_work`、`work_pattern: {author}/{work}`，相对路径因此固定形如
+// `{作者}/{作品}`。两段都用 `[^/]+` 而不是贪婪匹配，保证作者段不会吃掉分隔符。
+const AuthorWorkSegmentPattern = `^(?P<author>[^/]+)/(?P<work>[^/]+)$`
+
+// usesPathToken 报告某个取值链里是否出现了指定的 `$path.*` 虚拟取值。
+func usesPathToken(values []string, token string) bool {
+	for _, value := range values {
+		if value == token {
+			return true
+		}
+	}
+	return false
 }
 
 // firstNonEmpty 返回第一个非空串，用于「平台级 → 库级 → 内置默认」的逐级回退。

@@ -26,7 +26,8 @@ import (
 //   - v4：presentation（平台呈现、排序集合与时间显示语义）。
 //   - v5：work_date 的 path_timezone —— 目录名日期与 metadata 时间戳分别声明各自的朴素时间时区。
 //   - v6：selector/fallback 的空串 default 在编译期被拒绝（它会静默覆盖已有默认值且不留缺失记录）。
-const PrimitiveRegistryVersion = "gallery-primitives-v6"
+//   - v7：path_capture（按路径段取值）—— 补上规则系统此前完全缺失的路径取值能力。
+const PrimitiveRegistryVersion = "gallery-primitives-v7"
 
 var jsonNumberPattern = regexp.MustCompile(`^(-?)(0|[1-9][0-9]*)(?:\.([0-9]+))?(?:[eE]([+-]?[0-9]+))?$`)
 
@@ -58,6 +59,7 @@ type RuleIR struct {
 	CoverDisableMarker       string                `json:"coverDisableMarker,omitempty"`
 	Badges                   []IRBadge             `json:"badges,omitempty"`
 	WorkDate                 *IRWorkDate           `json:"workDate,omitempty"`
+	PathCaptures             []IRPathCapture       `json:"pathCaptures,omitempty"`
 	Presentation             *Presentation         `json:"presentation,omitempty"`
 	Primitives               []IRPrimitive         `json:"primitives"`
 	CELExpressions           []IRExpression        `json:"celExpressions"`
@@ -94,6 +96,13 @@ type IRBadge struct {
 	MetadataValues  []json.RawMessage `json:"metadataValues,omitempty"`
 	MediaSuffix     []string          `json:"mediaSuffix,omitempty"`
 	CaseInsensitive bool              `json:"caseInsensitive,omitempty"`
+}
+
+// IRPathCapture 是一条按路径段取值的执行计划。允许多条：不同字段可以来自不同的路径模式。
+// 实际取值在 applyPathCapture 中执行，见 pathcapture.go。
+type IRPathCapture struct {
+	Pattern string            `json:"pattern"`
+	Targets map[string]string `json:"targets"`
 }
 
 // IRWorkDate 是编译后的作品发布时间解析计划。它只描述「去哪里取、怎么解释」，实际解析在
@@ -461,6 +470,16 @@ func compilePrimitives(primitives []rawPrimitive, expressions []IRExpression) (R
 				return RuleIR{}, withField(fmt.Sprintf("/primitives/%d/config", index), err)
 			}
 			ir.Presentation = &resolved
+		case "path_capture":
+			var config pathCaptureConfig
+			if err := strictDecode(primitive.Config, &config); err != nil {
+				return RuleIR{}, withField(fmt.Sprintf("/primitives/%d/config", index), fmt.Errorf("path_capture %s: %w", primitive.ID, err))
+			}
+			plan, err := compilePathCapture(config, primitive.ID)
+			if err != nil {
+				return RuleIR{}, withField(fmt.Sprintf("/primitives/%d/config", index), err)
+			}
+			ir.PathCaptures = append(ir.PathCaptures, plan)
 		case "selector", "fallback", "stable_key", "media_order", "cover_candidate", "metadata_map", "condition":
 			if err := validateExtendedPrimitive(primitive); err != nil {
 				return RuleIR{}, withField(fmt.Sprintf("/primitives/%d/config", index), err)

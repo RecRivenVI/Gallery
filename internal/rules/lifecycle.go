@@ -322,6 +322,16 @@ func (l *Lifecycle) Impact(before, after []byte) (ImpactResult, error) {
 		result.ReasonCodes = append(result.ReasonCodes, "work_date_rules_changed")
 		result.FullRescan = true
 	}
+	// 路径取值改变会改变创作者、标题等身份相关字段，且这些字段参与 Binding。因此不仅要重扫，
+	// 还要走 Binding 复核——把作者从「目录名」换成别的取法可能让既有 occurrence 归到别的
+	// CanonicalCreator 上，那不是可以静默完成的重投影。
+	if !bytes.Equal(mustJSON(left.IR.PathCaptures), mustJSON(right.IR.PathCaptures)) {
+		result.Fields = append(result.Fields, "path_capture")
+		result.EntityTypes = append(result.EntityTypes, "work", "creator")
+		result.ReasonCodes = append(result.ReasonCodes, "path_capture_rules_changed")
+		result.FullRescan = true
+		result.BindingReview = true
+	}
 	if len(result.Fields) == 0 {
 		result.Fields = append(result.Fields, "runtime_semantics")
 		result.FullRescan = true
@@ -438,6 +448,13 @@ func (l *Lifecycle) evaluate(ctx context.Context, ir RuleIR, params map[string]a
 			if err := l.applyCondition(ctx, primitive, expressions, params, sample, nil, &result); err != nil {
 				return DryRunResult{}, err
 			}
+		}
+	}
+	// 路径取值在全部 metadata 取值原语之后执行，且只填充仍为空的字段：metadata 是来源自己声明的
+	// 事实，路径只是回退推断，二者的优先级不能因为原语书写顺序而改变。
+	for _, capture := range ir.PathCaptures {
+		if err := applyPathCapture(capture, sample.Path, &result); err != nil {
+			return DryRunResult{}, err
 		}
 	}
 	applyIdentityExtensions(ir, &result)
