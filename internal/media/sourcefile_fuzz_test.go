@@ -9,7 +9,6 @@ import (
 	"errors"
 	"path"
 	"path/filepath"
-	"runtime"
 	"strings"
 	"testing"
 
@@ -67,6 +66,9 @@ func assertNormalizedPathInvariants(t *testing.T, relative, normalized string) {
 	if strings.Contains(normalized, `\`) {
 		t.Fatalf("规范化结果含反斜杠: %q", normalized)
 	}
+	if strings.Contains(normalized, ":") {
+		t.Fatalf("规范化结果含 Windows 备用数据流分隔符: %q", normalized)
+	}
 	if path.IsAbs(normalized) || filepath.IsAbs(normalized) {
 		t.Fatalf("规范化结果是绝对路径: %q", normalized)
 	}
@@ -105,14 +107,11 @@ func assertNormalizedPathInvariants(t *testing.T, relative, normalized string) {
 	assertNoReservedDeviceName(t, normalized)
 }
 
-// assertNoReservedDeviceName 复核 Windows 保留设备名。这里只断言实现当前确实覆盖
-// 的集合；已知未覆盖的形态（含冒号的段、CONIN$/CONOUT$）由
-// TestValidateRelativePathAcceptsAlternateDataStreams 记录，不在这里断言，
-// 以免把已知缺陷变成常红门禁。
+// assertNoReservedDeviceName 复核 Windows 保留设备名。
 func assertNoReservedDeviceName(t *testing.T, normalized string) {
 	t.Helper()
 	reserved := map[string]bool{
-		"CON": true, "PRN": true, "AUX": true, "NUL": true,
+		"CON": true, "PRN": true, "AUX": true, "NUL": true, "CONIN$": true, "CONOUT$": true,
 		"COM1": true, "COM2": true, "COM3": true, "COM4": true, "COM5": true,
 		"COM6": true, "COM7": true, "COM8": true, "COM9": true,
 		"LPT1": true, "LPT2": true, "LPT3": true, "LPT4": true, "LPT5": true,
@@ -126,18 +125,7 @@ func assertNoReservedDeviceName(t *testing.T, normalized string) {
 	}
 }
 
-// TestValidateRelativePathAcceptsAlternateDataStreams 把审计怀疑的 ADS 缺陷固定成
-// 一条**可执行的事实记录**：ValidateRelativePath 当前不检查段内冒号。
-//
-// 在 NTFS 上 `a/b:stream` 会被 Win32 解释成文件 `a\b` 的备用数据流，而不是名为
-// `b:stream` 的文件。它词法上仍在根内，因此 within() 与 filepath.Rel 都判定合法，
-// 但它读到的字节既不属于任何 CanonicalMedia，也不受媒体扩展名/类型判定约束。
-//
-// 本测试断言的是**当前行为**而不是期望行为，这样：
-//   - 现在不制造常红门禁（修生产代码不属于本工作线）；
-//   - 一旦 ValidateRelativePath 补上「任何段含 ':' 一律拒绝」，本测试立即失败，
-//     提示把它改写成 assertNormalizedPathInvariants 里的正向断言。
-func TestValidateRelativePathAcceptsAlternateDataStreams(t *testing.T) {
+func TestValidateRelativePathRejectsAlternateDataStreamsAndConsoleDevices(t *testing.T) {
 	streams := []string{
 		"a/b:stream",
 		"a/b:$DATA",
@@ -149,21 +137,15 @@ func TestValidateRelativePathAcceptsAlternateDataStreams(t *testing.T) {
 		"a/CONIN$",
 		"a/CONOUT$",
 	}
-	var accepted []string
 	for _, candidate := range streams {
 		normalized, err := media.ValidateRelativePath(candidate)
-		if err == nil {
-			accepted = append(accepted, normalized)
+		if err == nil || normalized != "" {
+			t.Fatalf("危险 Windows 路径未拒绝: %q -> %q, %v", candidate, normalized, err)
 		}
-	}
-	if len(accepted) == 0 {
-		t.Fatalf("段内冒号与 CONIN$/CONOUT$ 已被全部拒绝，请把本测试改写成正向断言")
-	}
-	t.Logf("已知缺陷：ValidateRelativePath 接受下列会被 Windows 解释为备用数据流或控制台设备的相对路径 %q", accepted)
-	if runtime.GOOS == "windows" {
-		// 记录一次真实拼接结果，确认它在词法上确实落在根内——这正是词法防线
-		// 无法察觉该问题的原因。
-		t.Logf("示例拼接结果 %q", filepath.Join(`C:\gallery\root`, filepath.FromSlash(accepted[0])))
+		var structured *fault.Error
+		if !errors.As(err, &structured) || structured.Code != fault.CodePathEscape {
+			t.Fatalf("危险 Windows 路径必须返回 PATH_ESCAPE: %q -> %v", candidate, err)
+		}
 	}
 }
 

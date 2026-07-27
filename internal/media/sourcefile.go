@@ -140,7 +140,7 @@ func ValidateRelativePath(relative string) (string, error) {
 		return "", fault.New(fault.CodePathEscape, false, nil)
 	}
 	for _, segment := range strings.Split(clean, "/") {
-		if segment == "" || segment == "." || segment == ".." || strings.HasSuffix(segment, ".") || strings.HasSuffix(segment, " ") || reservedWindowsName(segment) {
+		if segment == "" || segment == "." || segment == ".." || strings.Contains(segment, ":") || strings.HasSuffix(segment, ".") || strings.HasSuffix(segment, " ") || reservedWindowsName(segment) {
 			return "", fault.New(fault.CodePathEscape, false, nil)
 		}
 	}
@@ -197,7 +197,7 @@ func locationKey(relative string) string {
 func reservedWindowsName(segment string) bool {
 	base := strings.ToUpper(strings.SplitN(segment, ".", 2)[0])
 	switch base {
-	case "CON", "PRN", "AUX", "NUL", "COM1", "COM2", "COM3", "COM4", "COM5", "COM6", "COM7", "COM8", "COM9", "LPT1", "LPT2", "LPT3", "LPT4", "LPT5", "LPT6", "LPT7", "LPT8", "LPT9":
+	case "CON", "PRN", "AUX", "NUL", "CONIN$", "CONOUT$", "COM1", "COM2", "COM3", "COM4", "COM5", "COM6", "COM7", "COM8", "COM9", "LPT1", "LPT2", "LPT3", "LPT4", "LPT5", "LPT6", "LPT7", "LPT8", "LPT9":
 		return true
 	default:
 		return false
