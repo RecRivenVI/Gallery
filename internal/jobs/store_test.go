@@ -494,6 +494,491 @@ func TestRequeueDueFailuresSkipsSourceWithAnotherActiveScan(t *testing.T) {
 	}
 }
 
+func TestMaintenanceCancelWinsCompletionCAS(t *testing.T) {
+	ctx := context.Background()
+	dirs := appdirs.UnderRoot(filepath.Join(t.TempDir(), "app"))
+	if err := dirs.Ensure(filesystem.OS{}); err != nil {
+		t.Fatal(err)
+	}
+	store, err := storage.Open(ctx, dirs)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	clk := clock.Fixed{Time: time.Date(2026, 7, 27, 16, 0, 0, 0, time.UTC)}
+	jobStore, err := jobs.NewStore(store.Control.SQL(), clk, identity.NewGenerator(clk))
+	if err != nil {
+		t.Fatal(err)
+	}
+	job, err := jobStore.CreateMaintenance(ctx, "catalog_gc", "owner")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := jobStore.StartStage(ctx, job.ID, "maintenance"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := jobStore.RequestCancel(ctx, job.ID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := jobStore.CompleteMaintenance(ctx, job.ID); err == nil {
+		t.Fatal("取消请求先提交后，维护 Job 仍错误完成")
+	} else {
+		var structured *fault.Error
+		if !errors.As(err, &structured) || structured.Code != fault.CodeJobStateConflict {
+			t.Fatalf("维护完成 CAS 返回了错误 code: %v", err)
+		}
+	}
+	final, err := jobStore.FinalizeCancelled(ctx, job.ID)
+	if err != nil || final.Status != jobs.StatusCancelled {
+		t.Fatalf("维护 Job 未收敛 cancelled: %+v %v", final, err)
+	}
+	attempts, err := jobStore.ListAttempts(ctx, job.ID)
+	if err != nil || len(attempts) != 1 || attempts[0].Status != "cancelled" {
+		t.Fatalf("维护 Attempt 未收敛 cancelled: %+v %v", attempts, err)
+	}
+}
+
+func TestMaintenanceCompletionWinsLateCancel(t *testing.T) {
+	ctx := context.Background()
+	dirs := appdirs.UnderRoot(filepath.Join(t.TempDir(), "app"))
+	if err := dirs.Ensure(filesystem.OS{}); err != nil {
+		t.Fatal(err)
+	}
+	store, err := storage.Open(ctx, dirs)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	clk := clock.Fixed{Time: time.Date(2026, 7, 27, 16, 1, 0, 0, time.UTC)}
+	jobStore, err := jobs.NewStore(store.Control.SQL(), clk, identity.NewGenerator(clk))
+	if err != nil {
+		t.Fatal(err)
+	}
+	job, err := jobStore.CreateMaintenance(ctx, "catalog_gc", "owner")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := jobStore.StartStage(ctx, job.ID, "maintenance"); err != nil {
+		t.Fatal(err)
+	}
+	completed, err := jobStore.CompleteMaintenance(ctx, job.ID)
+	if err != nil || completed.Status != jobs.StatusCompleted {
+		t.Fatalf("维护 Job 未先完成: %+v %v", completed, err)
+	}
+	if _, err := jobStore.RequestCancel(ctx, job.ID); err == nil {
+		t.Fatal("已完成维护 Job 接受了迟到取消")
+	}
+	stored, err := jobStore.Get(ctx, job.ID)
+	if err != nil || stored.Status != jobs.StatusCompleted || stored.CancelRequested {
+		t.Fatalf("迟到取消改写了已完成 Job: %+v %v", stored, err)
+	}
+}
+
+func TestRequestCancelStopsRetryPendingJobWithoutRewritingFailedAttempt(t *testing.T) {
+	ctx := context.Background()
+	dirs := appdirs.UnderRoot(filepath.Join(t.TempDir(), "app"))
+	if err := dirs.Ensure(filesystem.OS{}); err != nil {
+		t.Fatal(err)
+	}
+	store, err := storage.Open(ctx, dirs)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	clk := &mutableClock{now: time.Date(2026, 7, 27, 16, 2, 0, 0, time.UTC)}
+	jobStore, err := jobs.NewStore(store.Control.SQL(), clk, identity.NewGenerator(clk))
+	if err != nil {
+		t.Fatal(err)
+	}
+	job, err := jobStore.CreateWithOptions(ctx, "hash", "", "owner", jobs.CreateOptions{
+		ResourceClass: jobs.ResourceHash, MaxRetries: 2,
+		RetryPolicyJSON: []byte(`{"kind":"fixed","baseMs":1,"maxMs":1}`),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := jobStore.StartStage(ctx, job.ID, "hashing"); err != nil {
+		t.Fatal(err)
+	}
+	failed, err := jobStore.FailWithRetryable(ctx, job.ID, "TRANSIENT_TEST", true)
+	if err != nil || failed.NextAttemptAt == nil {
+		t.Fatalf("测试 Job 未进入 retry backoff: %+v %v", failed, err)
+	}
+	cancelled, err := jobStore.RequestCancel(ctx, job.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cancelled.Status != jobs.StatusCancelled || !cancelled.CancelRequested || cancelled.NextAttemptAt != nil ||
+		cancelled.FailureRetryable || cancelled.IssueCode != "" {
+		t.Fatalf("retry-pending Job 未清除逻辑重试状态: %+v", cancelled)
+	}
+	attempts, err := jobStore.ListAttempts(ctx, job.ID)
+	if err != nil || len(attempts) != 1 || attempts[0].Status != "failed" || attempts[0].ErrorCode != "TRANSIENT_TEST" {
+		t.Fatalf("取消错误改写了已失败 Attempt 历史: %+v %v", attempts, err)
+	}
+	clk.Advance(time.Hour)
+	if requeued, err := jobStore.RequeueDueFailures(ctx); err != nil || len(requeued) != 0 {
+		t.Fatalf("已取消 retry-pending Job 仍被恢复: %+v %v", requeued, err)
+	}
+	repair, err := jobStore.CreateWithOptions(ctx, "derived_asset", "", "owner", jobs.CreateOptions{
+		ResourceClass: jobs.ResourceDerived, MaxRetries: 2,
+		RetryPolicyJSON: []byte(`{"kind":"fixed","baseMs":1,"maxMs":1}`),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := jobStore.StartStage(ctx, repair.ID, "deriving"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := jobStore.CompleteRunning(ctx, repair.ID, nil); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := jobStore.MarkNeedsRepair(ctx, repair.ID, "DERIVED_RESULT_MISSING"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.Control.SQL().ExecContext(ctx,
+		"UPDATE jobs SET failure_retryable=1, next_attempt_at=? WHERE job_id=?", clk.Now().Add(time.Minute).Unix(), repair.ID); err != nil {
+		t.Fatal(err)
+	}
+	repairCancelled, err := jobStore.RequestCancel(ctx, repair.ID)
+	if err != nil || repairCancelled.Status != jobs.StatusCancelled || repairCancelled.FailureRetryable ||
+		repairCancelled.NextAttemptAt != nil || repairCancelled.IssueCode != "" {
+		t.Fatalf("retry-pending needs_repair 未被取消: %+v %v", repairCancelled, err)
+	}
+	repairAttempts, err := jobStore.ListAttempts(ctx, repair.ID)
+	if err != nil || len(repairAttempts) != 1 || repairAttempts[0].Status != "completed" {
+		t.Fatalf("取消 needs_repair 改写了完成 Attempt 历史: %+v %v", repairAttempts, err)
+	}
+}
+
+func TestExplicitCancelWinsConcurrentFailureAndBeginPublishing(t *testing.T) {
+	ctx := context.Background()
+	dirs := appdirs.UnderRoot(filepath.Join(t.TempDir(), "app"))
+	if err := dirs.Ensure(filesystem.OS{}); err != nil {
+		t.Fatal(err)
+	}
+	store, err := storage.Open(ctx, dirs)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	clk := clock.Fixed{Time: time.Date(2026, 7, 27, 16, 3, 0, 0, time.UTC)}
+	jobStore, err := jobs.NewStore(store.Control.SQL(), clk, identity.NewGenerator(clk))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, operation := range []string{"fail", "publish"} {
+		t.Run(operation, func(t *testing.T) {
+			job, err := jobStore.CreateWithOptions(ctx, "hash-"+operation, "", "owner", jobs.CreateOptions{
+				ResourceClass: jobs.ResourceHash, MaxRetries: 2,
+				RetryPolicyJSON: []byte(`{"kind":"fixed","baseMs":1,"maxMs":1}`),
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if _, err := jobStore.StartStage(ctx, job.ID, "running"); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := jobStore.RequestCancel(ctx, job.ID); err != nil {
+				t.Fatal(err)
+			}
+			switch operation {
+			case "fail":
+				final, err := jobStore.FailWithRetryable(ctx, job.ID, "TRANSIENT_TEST", true)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if final.Status != jobs.StatusCancelled || final.FailureRetryable || final.NextAttemptAt != nil || final.IssueCode != "" {
+					t.Fatalf("失败写入覆盖了显式取消: %+v", final)
+				}
+			case "publish":
+				if _, err := jobStore.BeginPublishing(ctx, job.ID); err == nil {
+					t.Fatal("显式取消后仍进入 publishing")
+				} else {
+					var structured *fault.Error
+					if !errors.As(err, &structured) || structured.Code != fault.CodeJobStateConflict {
+						t.Fatalf("BeginPublishing 取消竞态返回错误 code: %v", err)
+					}
+				}
+				if _, err := jobStore.FinalizeCancelled(ctx, job.ID); err != nil {
+					t.Fatal(err)
+				}
+			}
+			stored, err := jobStore.Get(ctx, job.ID)
+			if err != nil || stored.Status != jobs.StatusCancelled {
+				t.Fatalf("显式取消未成为终态: %+v %v", stored, err)
+			}
+			attempts, err := jobStore.ListAttempts(ctx, job.ID)
+			if err != nil || len(attempts) != 1 || attempts[0].Status != "cancelled" {
+				t.Fatalf("显式取消未同步 Attempt: %+v %v", attempts, err)
+			}
+		})
+	}
+}
+
+func TestPublishingCommitBoundaryRejectsLateCancel(t *testing.T) {
+	ctx := context.Background()
+	dirs := appdirs.UnderRoot(filepath.Join(t.TempDir(), "app"))
+	if err := dirs.Ensure(filesystem.OS{}); err != nil {
+		t.Fatal(err)
+	}
+	store, err := storage.Open(ctx, dirs)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	clk := clock.Fixed{Time: time.Date(2026, 7, 27, 16, 4, 0, 0, time.UTC)}
+	ids := identity.NewGenerator(clk)
+	jobStore, err := jobs.NewStore(store.Control.SQL(), clk, ids)
+	if err != nil {
+		t.Fatal(err)
+	}
+	job, err := jobStore.CreateWithOptions(ctx, "scan", "", "owner", jobs.CreateOptions{ResourceClass: jobs.ResourceScan})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := jobStore.StartStage(ctx, job.ID, "building"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := jobStore.BeginPublishing(ctx, job.ID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := jobStore.RequestCancel(ctx, job.ID); err == nil {
+		t.Fatal("publishing 提交边界后仍接受迟到取消")
+	}
+	publicationID, err := ids.New(domain.IDQueryPublication)
+	if err != nil {
+		t.Fatal(err)
+	}
+	completed, err := jobStore.Complete(ctx, job.ID, publicationID.String())
+	if err != nil || completed.Status != jobs.StatusCompleted || completed.CancelRequested {
+		t.Fatalf("publishing 边界未稳定完成: %+v %v", completed, err)
+	}
+}
+
+func TestJobAndAttemptTerminalWritesRollbackTogether(t *testing.T) {
+	ctx := context.Background()
+	dirs := appdirs.UnderRoot(filepath.Join(t.TempDir(), "app"))
+	if err := dirs.Ensure(filesystem.OS{}); err != nil {
+		t.Fatal(err)
+	}
+	store, err := storage.Open(ctx, dirs)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	clk := clock.Fixed{Time: time.Date(2026, 7, 27, 16, 5, 0, 0, time.UTC)}
+	jobStore, err := jobs.NewStore(store.Control.SQL(), clk, identity.NewGenerator(clk))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, operation := range []string{"complete", "fail"} {
+		t.Run(operation, func(t *testing.T) {
+			job, err := jobStore.CreateMaintenance(ctx, "catalog_gc", "owner")
+			if err != nil {
+				t.Fatal(err)
+			}
+			if _, err := jobStore.StartStage(ctx, job.ID, "maintenance"); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := store.Control.SQL().ExecContext(ctx, `CREATE TRIGGER inject_attempt_terminal_failure
+BEFORE UPDATE OF status ON job_attempts
+WHEN NEW.status IN ('completed','failed','cancelled')
+BEGIN SELECT RAISE(ABORT, 'injected attempt failure'); END`); err != nil {
+				t.Fatal(err)
+			}
+			switch operation {
+			case "complete":
+				_, err = jobStore.CompleteMaintenance(ctx, job.ID)
+			case "fail":
+				_, err = jobStore.FailWithRetryable(ctx, job.ID, "TRANSIENT_TEST", true)
+			}
+			if err == nil {
+				t.Fatal("Attempt 写入故障未使终态事务失败")
+			}
+			if _, dropErr := store.Control.SQL().ExecContext(ctx, "DROP TRIGGER inject_attempt_terminal_failure"); dropErr != nil {
+				t.Fatal(dropErr)
+			}
+			stored, getErr := jobStore.Get(ctx, job.ID)
+			if getErr != nil || stored.Status != jobs.StatusRunning || stored.IssueCode != "" || stored.NextAttemptAt != nil {
+				t.Fatalf("Job 终态未随 Attempt 故障回滚: %+v %v", stored, getErr)
+			}
+			attempts, listErr := jobStore.ListAttempts(ctx, job.ID)
+			if listErr != nil || len(attempts) != 1 || attempts[0].Status != "running" {
+				t.Fatalf("Attempt 故障后的状态错误: %+v %v", attempts, listErr)
+			}
+			if _, err := jobStore.RequestCancel(ctx, job.ID); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := jobStore.FinalizeCancelled(ctx, job.ID); err != nil {
+				t.Fatal(err)
+			}
+		})
+	}
+}
+
+func TestParentCancelAndChildCompletionAreLinearized(t *testing.T) {
+	ctx := context.Background()
+	dirs := appdirs.UnderRoot(filepath.Join(t.TempDir(), "app"))
+	if err := dirs.Ensure(filesystem.OS{}); err != nil {
+		t.Fatal(err)
+	}
+	store, err := storage.Open(ctx, dirs)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	clk := clock.Fixed{Time: time.Date(2026, 7, 27, 16, 6, 0, 0, time.UTC)}
+	jobStore, err := jobs.NewStore(store.Control.SQL(), clk, identity.NewGenerator(clk))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for iteration := 0; iteration < 100; iteration++ {
+		parent, err := jobStore.CreateWithOptions(ctx, "scan_parent", "", "owner", jobs.CreateOptions{ResourceClass: jobs.ResourceScan})
+		if err != nil {
+			t.Fatal(err)
+		}
+		child, err := jobStore.CreateWithOptions(ctx, "hash", "", "owner", jobs.CreateOptions{ResourceClass: jobs.ResourceHash})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := jobStore.StartStage(ctx, child.ID, "hashing"); err != nil {
+			t.Fatal(err)
+		}
+		start := make(chan struct{})
+		cancelResult := make(chan error, 1)
+		completeResult := make(chan error, 1)
+		go func() {
+			<-start
+			_, err := jobStore.RequestCancel(ctx, parent.ID)
+			cancelResult <- err
+		}()
+		go func() {
+			<-start
+			_, err := jobStore.CompleteChildWithResult(ctx, child.ID, parent.ID, []byte(`{}`))
+			completeResult <- err
+		}()
+		close(start)
+		if err := <-cancelResult; err != nil {
+			t.Fatalf("第 %d 轮父取消失败: %v", iteration, err)
+		}
+		completeErr := <-completeResult
+		stored, err := jobStore.Get(ctx, child.ID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if completeErr == nil {
+			if stored.Status != jobs.StatusCompleted {
+				t.Fatalf("第 %d 轮子完成先提交但终态错误: %+v", iteration, stored)
+			}
+		} else {
+			var structured *fault.Error
+			if !errors.As(completeErr, &structured) || structured.Code != fault.CodeJobStateConflict {
+				t.Fatalf("第 %d 轮父取消先提交时子完成错误 code: %v", iteration, completeErr)
+			}
+			if _, err := jobStore.RequestCancel(ctx, child.ID); err != nil {
+				t.Fatal(err)
+			}
+			stored, err = jobStore.FinalizeCancelled(ctx, child.ID)
+			if err != nil || stored.Status != jobs.StatusCancelled {
+				t.Fatalf("第 %d 轮子 Job 未收敛 cancelled: %+v %v", iteration, stored, err)
+			}
+		}
+		attempts, err := jobStore.ListAttempts(ctx, child.ID)
+		if err != nil || len(attempts) != 1 ||
+			(attempts[0].Status != "completed" && attempts[0].Status != "cancelled") {
+			t.Fatalf("第 %d 轮子 Attempt 未与 Job 一致: %+v %v", iteration, attempts, err)
+		}
+	}
+}
+
+func TestPublicationReconciliationRunsBeforeLeaseRecovery(t *testing.T) {
+	ctx := context.Background()
+	dirs := appdirs.UnderRoot(filepath.Join(t.TempDir(), "app"))
+	if err := dirs.Ensure(filesystem.OS{}); err != nil {
+		t.Fatal(err)
+	}
+	store, err := storage.Open(ctx, dirs)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	clk := &mutableClock{now: time.Date(2026, 7, 27, 16, 7, 0, 0, time.UTC)}
+	jobStore, err := jobs.NewStore(store.Control.SQL(), clk, identity.NewGenerator(clk))
+	if err != nil {
+		t.Fatal(err)
+	}
+	job, err := jobStore.CreateWithOptions(ctx, "hash", "", "owner", jobs.CreateOptions{ResourceClass: jobs.ResourceHash})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := jobStore.StartStage(ctx, job.ID, "hashing"); err != nil {
+		t.Fatal(err)
+	}
+	clk.Advance(5 * time.Minute)
+	submitter := &recordingSubmitter{accept: true}
+	reconciler, err := recovery.New(jobStore, submitter, time.Hour, time.Minute)
+	if err != nil {
+		t.Fatal(err)
+	}
+	reconciler.SetPublicationReconciler(func(hookCtx context.Context) error {
+		_, err := jobStore.CompleteRunning(hookCtx, job.ID, []byte(`{}`))
+		return err
+	})
+	if err := reconciler.ReconcileOnce(ctx); err != nil {
+		t.Fatal(err)
+	}
+	stored, err := jobStore.Get(ctx, job.ID)
+	if err != nil || stored.Status != jobs.StatusCompleted || submitter.count() != 0 {
+		t.Fatalf("publication 对账未优先于租约回收: %+v submits=%d err=%v", stored, submitter.count(), err)
+	}
+	attempts, err := jobStore.ListAttempts(ctx, job.ID)
+	if err != nil || len(attempts) != 1 || attempts[0].Status != "completed" {
+		t.Fatalf("publication 对账后的 Attempt 错误: %+v %v", attempts, err)
+	}
+}
+
+func TestBeginPublishingRefreshesLeaseBeforeShortCommit(t *testing.T) {
+	ctx := context.Background()
+	dirs := appdirs.UnderRoot(filepath.Join(t.TempDir(), "app"))
+	if err := dirs.Ensure(filesystem.OS{}); err != nil {
+		t.Fatal(err)
+	}
+	store, err := storage.Open(ctx, dirs)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	clk := &mutableClock{now: time.Date(2026, 7, 27, 16, 8, 0, 0, time.UTC)}
+	jobStore, err := jobs.NewStore(store.Control.SQL(), clk, identity.NewGenerator(clk))
+	if err != nil {
+		t.Fatal(err)
+	}
+	job, err := jobStore.CreateWithOptions(ctx, "scan", "", "owner", jobs.CreateOptions{ResourceClass: jobs.ResourceScan})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := jobStore.StartStage(ctx, job.ID, "building"); err != nil {
+		t.Fatal(err)
+	}
+	clk.Advance(5 * time.Minute)
+	publishing, err := jobStore.BeginPublishing(ctx, job.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if publishing.HeartbeatAt == nil || !publishing.HeartbeatAt.Equal(clk.Now()) ||
+		publishing.LeaseExpiresAt == nil || !publishing.LeaseExpiresAt.Equal(clk.Now().Add(2*time.Minute)) {
+		t.Fatalf("BeginPublishing 未为短提交刷新租约: %+v", publishing)
+	}
+	if err := jobStore.ReconcileAttempts(ctx, time.Minute); err != nil {
+		t.Fatal(err)
+	}
+	stored, err := jobStore.Get(ctx, job.ID)
+	if err != nil || stored.Status != jobs.StatusPublishing {
+		t.Fatalf("新 publication lease 被错误回收: %+v %v", stored, err)
+	}
+}
+
 func createSourceForAttemptTest(t *testing.T, resources *application.Resources, libraryID string) (string, error) {
 	t.Helper()
 	root := filepath.Join(t.TempDir(), "source")

@@ -36,6 +36,7 @@ type Result struct {
 
 type Dispatcher interface {
 	Submit(jobID string) bool
+	Cancel(jobID string) bool
 }
 
 type Service struct {
@@ -44,6 +45,9 @@ type Service struct {
 	jobs              *jobs.Store
 	dispatcher        Dispatcher
 	wait              sync.WaitGroup
+	cancelMu          sync.Mutex
+	localCancels      map[string]context.CancelFunc
+	localStopping     bool
 	progressBytes     int64
 	progressInterval  time.Duration
 	heartbeatInterval time.Duration
@@ -54,7 +58,8 @@ func New(ctx context.Context, resources *application.Resources, jobStore *jobs.S
 		return nil, fmt.Errorf("Hash Job Service 缺少依赖")
 	}
 	return &Service{context: ctx, resources: resources, jobs: jobStore,
-		progressBytes: 16 << 20, progressInterval: time.Second, heartbeatInterval: 30 * time.Second}, nil
+		localCancels: make(map[string]context.CancelFunc), progressBytes: 16 << 20,
+		progressInterval: time.Second, heartbeatInterval: 30 * time.Second}, nil
 }
 
 func (s *Service) SetDispatcher(dispatcher Dispatcher) { s.dispatcher = dispatcher }
@@ -106,11 +111,82 @@ func (s *Service) Start(jobID string) {
 		s.dispatcher.Submit(jobID)
 		return
 	}
+	runCtx, cancel := context.WithCancel(s.context)
+	s.cancelMu.Lock()
+	if s.localStopping {
+		s.cancelMu.Unlock()
+		cancel()
+		_, _ = s.jobs.FailWithRetryable(context.Background(), jobID, string(fault.CodeProcessInterrupted), true)
+		return
+	}
+	if _, exists := s.localCancels[jobID]; exists {
+		s.cancelMu.Unlock()
+		cancel()
+		return
+	}
+	s.localCancels[jobID] = cancel
 	s.wait.Add(1)
-	go func() { defer s.wait.Done(); _ = s.Execute(s.context, jobID) }()
+	s.cancelMu.Unlock()
+	go func() {
+		defer s.wait.Done()
+		defer func() {
+			s.cancelMu.Lock()
+			delete(s.localCancels, jobID)
+			s.cancelMu.Unlock()
+			cancel()
+		}()
+		_ = s.Execute(runCtx, jobID)
+	}()
 }
 
-func (s *Service) Wait() { s.wait.Wait() }
+func (s *Service) Wait() {
+	s.cancelMu.Lock()
+	s.localStopping = true
+	s.cancelMu.Unlock()
+	s.wait.Wait()
+}
+
+// Cancel 把 Hash Job 的持久取消请求与实际执行 context 一起收敛。正式运行时 dispatcher
+// 取消中央资源池中的 queued/running item；无 dispatcher 的测试/嵌入路径则取消 Start
+// 建立的本地 per-job context。终态 Job 幂等返回，不会被改写。
+func (s *Service) Cancel(ctx context.Context, jobID string) (jobs.Job, error) {
+	current, err := s.jobs.Get(ctx, jobID)
+	if err != nil {
+		return jobs.Job{}, err
+	}
+	switch current.Status {
+	case jobs.StatusCompleted, jobs.StatusCancelled, jobs.StatusSuperseded:
+		return current, nil
+	case jobs.StatusFailed, jobs.StatusNeedsRepair:
+		if !current.FailureRetryable || current.NextAttemptAt == nil {
+			return current, nil
+		}
+	}
+	if !current.CancelRequested {
+		current, err = s.jobs.RequestCancel(ctx, jobID)
+		if err != nil {
+			latest, getErr := s.jobs.Get(context.Background(), jobID)
+			if getErr != nil {
+				return jobs.Job{}, errors.Join(err, getErr)
+			}
+			if cancelTerminal(latest) {
+				return latest, nil
+			}
+			return jobs.Job{}, err
+		}
+	}
+	if s.dispatcher != nil {
+		s.dispatcher.Cancel(jobID)
+	} else {
+		s.cancelMu.Lock()
+		cancel := s.localCancels[jobID]
+		s.cancelMu.Unlock()
+		if cancel != nil {
+			cancel()
+		}
+	}
+	return current, nil
+}
 
 func (s *Service) Reconcile(ctx context.Context) error {
 	// 所有资源类别统一由 jobs.Reconciler 提交；保留方法作为兼容调用点。
@@ -126,6 +202,9 @@ func (s *Service) Execute(ctx context.Context, jobID string) error {
 	if err := json.Unmarshal(job.RequestJSON, &request); err != nil {
 		return s.fail(ctx, jobID, fault.New(fault.CodeValidation, false, err))
 	}
+	if parentErr := s.parentCancellation(jobID, request.ParentJobID); parentErr != nil {
+		return s.fail(ctx, jobID, parentErr)
+	}
 	source, err := s.resources.GetSource(ctx, request.SourceID)
 	if err != nil {
 		return s.fail(ctx, jobID, err)
@@ -133,6 +212,9 @@ func (s *Service) Execute(ctx context.Context, jobID string) error {
 	var progressErr error
 	var latestBytes, persistedBytes int64
 	lastPersistedAt := time.Now()
+	lastParentCheckAt := lastPersistedAt
+	hashContext, cancelHash := context.WithCancel(ctx)
+	defer cancelHash()
 	heartbeatContext, stopHeartbeat := context.WithCancel(ctx)
 	var heartbeatWait sync.WaitGroup
 	heartbeatWait.Add(1)
@@ -150,7 +232,7 @@ func (s *Service) Execute(ctx context.Context, jobID string) error {
 		}
 	}()
 	hashed, hashErr := media.HashSourceFileWithOptions(source.RootPath, request.RelativePath, media.HashOptions{
-		Context: ctx, ExpectedSize: request.ExpectedSize, ExpectedModTimeNanos: request.ExpectedModTimeNanos,
+		Context: hashContext, ExpectedSize: request.ExpectedSize, ExpectedModTimeNanos: request.ExpectedModTimeNanos,
 		HasExpectedIdentity: request.HasExpectedIdentity,
 		Progress: func(bytes int64) {
 			latestBytes = bytes
@@ -159,6 +241,14 @@ func (s *Service) Execute(ctx context.Context, jobID string) error {
 			}
 			if bytes-persistedBytes < s.progressBytes && time.Since(lastPersistedAt) < s.progressInterval {
 				return
+			}
+			if request.ParentJobID != "" && time.Since(lastParentCheckAt) >= s.progressInterval {
+				lastParentCheckAt = time.Now()
+				if parentErr := s.parentCancellation(jobID, request.ParentJobID); parentErr != nil {
+					progressErr = parentErr
+					cancelHash()
+					return
+				}
 			}
 			_, progressErr = s.jobs.ProgressDetailed(ctx, jobID, jobs.ProgressUpdate{Stage: "hashing", Current: bytes,
 				Total: request.ExpectedSize, Bytes: bytes, Unit: "bytes", Estimated: request.ExpectedSize == 0})
@@ -182,22 +272,7 @@ func (s *Service) Execute(ctx context.Context, jobID string) error {
 		hashErr = progressErr
 	}
 	if hashErr != nil {
-		current, _ := s.jobs.Get(context.Background(), jobID)
-		if current.CancelRequested || errors.Is(ctx.Err(), context.Canceled) {
-			if _, finalizeErr := s.jobs.FinalizeCancelled(context.Background(), jobID); finalizeErr == nil {
-				return hashErr
-			}
-		}
-		code, retryable := faultCode(hashErr), true
-		if structured := new(fault.Error); errors.As(hashErr, &structured) {
-			retryable = structured.Retryable
-		}
-		if code == fault.CodeContentChangedDuringHash || code == fault.CodeContentDisappeared {
-			// 旧输入已失效，必须由 Scanner 重新发现，不能盲目重跑相同 stat 快照。
-			retryable = false
-		}
-		_, _ = s.jobs.FailWithRetryable(context.Background(), jobID, string(code), retryable)
-		return hashErr
+		return s.fail(ctx, jobID, hashErr)
 	}
 	result := Result{Blob: hashed.Blob.Algorithm + ":" + hashed.Blob.Digest, Algorithm: hashed.Blob.Algorithm,
 		Digest: hashed.Blob.Digest, Size: hashed.Size, LocationKey: hashed.LocationKey, RelativePath: hashed.RelativePath}
@@ -205,8 +280,44 @@ func (s *Service) Execute(ctx context.Context, jobID string) error {
 	if err != nil {
 		return s.fail(ctx, jobID, fault.New(fault.CodeInternal, true, err))
 	}
-	_, err = s.jobs.CompleteWithResult(ctx, jobID, payload)
-	return err
+	if request.ParentJobID != "" {
+		_, err = s.jobs.CompleteChildWithResult(ctx, jobID, request.ParentJobID, payload)
+	} else {
+		_, err = s.jobs.CompleteWithResult(ctx, jobID, payload)
+	}
+	if err != nil {
+		if parentErr := s.parentCancellation(jobID, request.ParentJobID); parentErr != nil {
+			return s.fail(ctx, jobID, errors.Join(err, parentErr))
+		}
+		return s.fail(ctx, jobID, err)
+	}
+	return nil
+}
+
+func (s *Service) parentCancellation(jobID, parentJobID string) error {
+	if parentJobID == "" {
+		return nil
+	}
+	parent, err := s.jobs.Get(context.Background(), parentJobID)
+	if err != nil {
+		return err
+	}
+	if !parent.CancelRequested && parent.Status != jobs.StatusCancelled && parent.Status != jobs.StatusSuperseded {
+		return nil
+	}
+	_, cancelErr := s.Cancel(context.Background(), jobID)
+	return fault.New(fault.CodeProcessInterrupted, true, cancelErr)
+}
+
+func cancelTerminal(job jobs.Job) bool {
+	switch job.Status {
+	case jobs.StatusCompleted, jobs.StatusCancelled, jobs.StatusSuperseded:
+		return true
+	case jobs.StatusFailed, jobs.StatusNeedsRepair:
+		return !job.FailureRetryable || job.NextAttemptAt == nil
+	default:
+		return false
+	}
 }
 
 func (s *Service) WaitResult(ctx context.Context, jobID string) (media.HashResult, error) {
@@ -249,12 +360,32 @@ func resultBlob(result Result) domain.ContentBlobRef {
 }
 
 func (s *Service) fail(ctx context.Context, jobID string, err error) error {
+	current, _ := s.jobs.Get(context.Background(), jobID)
+	if current.CancelRequested {
+		if current.Status == jobs.StatusCancelled {
+			return err
+		}
+		if _, finalizeErr := s.jobs.FinalizeCancelled(context.Background(), jobID); finalizeErr == nil {
+			return err
+		} else {
+			err = errors.Join(err, finalizeErr)
+		}
+	}
 	code, retryable := faultCode(err), true
 	var structured *fault.Error
 	if errors.As(err, &structured) {
 		retryable = structured.Retryable
 	}
-	_, _ = s.jobs.FailWithRetryable(ctx, jobID, string(code), retryable)
+	if code == fault.CodeContentChangedDuringHash || code == fault.CodeContentDisappeared {
+		// 旧输入已失效，必须由 Scanner 重新发现，不能盲目重跑相同 stat 快照。
+		retryable = false
+	}
+	if errors.Is(ctx.Err(), context.Canceled) || errors.Is(err, context.Canceled) {
+		code, retryable = fault.CodeProcessInterrupted, true
+	}
+	if _, failErr := s.jobs.FailWithRetryable(context.Background(), jobID, string(code), retryable); failErr != nil {
+		return errors.Join(err, failErr)
+	}
 	return err
 }
 

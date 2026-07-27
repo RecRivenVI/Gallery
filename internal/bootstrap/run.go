@@ -66,6 +66,7 @@ type classDispatcher struct {
 }
 
 func (d classDispatcher) Submit(jobID string) bool { return d.scheduler.Submit(d.class, jobID) }
+func (d classDispatcher) Cancel(jobID string) bool { return d.scheduler.Cancel(jobID) }
 
 // Run 启动 galleryd 并在服务退出后返回。外部进程使用 runtime descriptor 发现服务；测试或
 // 需要显式生命周期同步的内部调用方可使用 RunWithReady 获取同一份已发布 descriptor。
@@ -250,6 +251,12 @@ func run(ctx context.Context, cfg config.Config, logger *slog.Logger, ready chan
 	if err != nil {
 		return err
 	}
+	jobReconciler.SetPublicationReconciler(func(reconcileCtx context.Context) error {
+		if err := scannerService.ReconcileActive(reconcileCtx); err != nil {
+			return err
+		}
+		return overlayService.ReconcileActive(reconcileCtx)
+	})
 	recoveryContext, stopRecovery := context.WithCancel(ctx)
 	defer func() {
 		stopRecovery()

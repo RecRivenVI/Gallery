@@ -153,8 +153,13 @@ func (s *Service) Execute(ctx context.Context, jobID string) error {
 	default:
 		return s.fail(ctx, jobID, fault.New(fault.CodeValidation, false, nil))
 	}
-	_, err = s.jobs.CompleteMaintenance(ctx, jobID)
-	return err
+	if current, getErr := s.jobs.Get(context.Background(), jobID); getErr == nil && current.CancelRequested {
+		return s.fail(ctx, jobID, fault.New(fault.CodeProcessInterrupted, true, ctx.Err()))
+	}
+	if _, err = s.jobs.CompleteMaintenance(ctx, jobID); err != nil {
+		return s.fail(ctx, jobID, err)
+	}
+	return nil
 }
 
 func (s *Service) Reconcile(ctx context.Context, start func(string)) error {
@@ -357,12 +362,28 @@ func maintenanceFault(err error) error {
 }
 
 func (s *Service) fail(ctx context.Context, jobID string, err error) error {
+	current, _ := s.jobs.Get(context.Background(), jobID)
+	if current.CancelRequested {
+		if current.Status == jobs.StatusCancelled {
+			return err
+		}
+		if _, finalizeErr := s.jobs.FinalizeCancelled(context.Background(), jobID); finalizeErr == nil {
+			return err
+		} else {
+			err = errors.Join(err, finalizeErr)
+		}
+	}
 	code, retryable := faultCode(err), true
 	var structured *fault.Error
 	if errors.As(err, &structured) {
 		retryable = structured.Retryable
 	}
-	_, _ = s.jobs.FailWithRetryable(ctx, jobID, string(code), retryable)
+	if errors.Is(ctx.Err(), context.Canceled) || errors.Is(err, context.Canceled) {
+		code, retryable = fault.CodeProcessInterrupted, true
+	}
+	if _, failErr := s.jobs.FailWithRetryable(context.Background(), jobID, string(code), retryable); failErr != nil {
+		return errors.Join(err, failErr)
+	}
 	return err
 }
 

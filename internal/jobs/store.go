@@ -395,12 +395,32 @@ VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`, job.ID, job.Type, job.CreatedBy
 // query publication，因此不写 publication_id。
 func (s *Store) CompleteMaintenance(ctx context.Context, id string) (Job, error) {
 	now := s.clock.Now().UTC()
-	job, err := s.transition(ctx, id, StatusRunning, StatusCompleted, "completed", `finished_at = ?, heartbeat_at=NULL, lease_expires_at=NULL,`, []any{now.Unix()}, now)
-	if err == nil {
-		_, _ = s.db.ExecContext(ctx, `UPDATE job_attempts SET status='completed', finished_at=?, updated_at=?
-WHERE job_id=? AND status='running'`, now.Unix(), now.Unix(), id)
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return Job{}, fault.New(fault.CodeInternal, true, err)
 	}
-	return job, err
+	defer tx.Rollback()
+	result, err := tx.ExecContext(ctx, `UPDATE jobs SET status='completed', stage='completed', finished_at=?,
+heartbeat_at=NULL, lease_expires_at=NULL, progress_sequence=progress_sequence+1, updated_at=?
+WHERE job_id=? AND status='running' AND cancel_requested=0`, now.Unix(), now.Unix(), id)
+	if err != nil {
+		return Job{}, fault.New(fault.CodeInternal, true, err)
+	}
+	if err := requireOne(result); err != nil {
+		return Job{}, err
+	}
+	attemptResult, err := tx.ExecContext(ctx, `UPDATE job_attempts SET status='completed', finished_at=?, updated_at=?
+WHERE job_id=? AND status='running'`, now.Unix(), now.Unix(), id)
+	if err != nil {
+		return Job{}, fault.New(fault.CodeInternal, true, err)
+	}
+	if err := requireOne(attemptResult); err != nil {
+		return Job{}, err
+	}
+	if err := tx.Commit(); err != nil {
+		return Job{}, fault.New(fault.CodeInternal, true, err)
+	}
+	return s.Get(ctx, id)
 }
 
 func (s *Store) SetRequest(ctx context.Context, id string, payload []byte) (Job, error) {
@@ -586,7 +606,7 @@ func (s *Store) RequeueInterruptedOverlay(ctx context.Context, id string) (Job, 
 	now := s.clock.Now().UTC()
 	result, err := s.db.ExecContext(ctx, `UPDATE jobs SET status='queued', stage='recovery_queued',
 started_at=NULL, issue_code=NULL, progress_sequence=progress_sequence+1, updated_at=?
-WHERE job_id=? AND job_type='overlay_projection' AND status IN ('running', 'publishing')`, now.Unix(), id)
+WHERE job_id=? AND job_type='overlay_projection' AND status IN ('running', 'publishing') AND cancel_requested=0`, now.Unix(), id)
 	if err != nil {
 		return Job{}, fault.New(fault.CodeInternal, true, err)
 	}
@@ -598,7 +618,7 @@ WHERE job_id=? AND job_type='overlay_projection' AND status IN ('running', 'publ
 
 func (s *Store) ResumeOverlayProjection(ctx context.Context, id string) (Job, error) {
 	now := s.clock.Now().UTC()
-	return s.transition(ctx, id, StatusPublishing, StatusRunning, "reprojecting", "", nil, now)
+	return s.transitionUnlessCancelled(ctx, id, StatusPublishing, StatusRunning, "reprojecting", "", nil, now)
 }
 
 func (s *Store) RetargetOverlayProjection(ctx context.Context, id, catalogRevisionID, basePublicationID string) (Job, error) {
@@ -608,7 +628,7 @@ func (s *Store) RetargetOverlayProjection(ctx context.Context, id, catalogRevisi
 	now := s.clock.Now().UTC()
 	result, err := s.db.ExecContext(ctx, `UPDATE jobs SET target_catalog_revision_id=?,
 base_query_publication_id=?, stage='retargeting', progress_sequence=progress_sequence+1, updated_at=?
-WHERE job_id=? AND job_type='overlay_projection' AND status='running'`,
+WHERE job_id=? AND job_type='overlay_projection' AND status='running' AND cancel_requested=0`,
 		catalogRevisionID, basePublicationID, now.Unix(), id)
 	if err != nil {
 		return Job{}, fault.New(fault.CodeInternal, true, err)
@@ -706,18 +726,53 @@ WHERE job_id=? AND status='running'`, now.Unix(), now.Add(2*time.Minute).Unix(),
 }
 
 func (s *Store) CompleteRunning(ctx context.Context, id string, resultJSON []byte) (Job, error) {
+	return s.completeRunning(ctx, id, "", resultJSON)
+}
+
+// CompleteChildWithResult 在线性化提交子 Job 结果的同一个 IMMEDIATE 事务中确认父 Job
+// 尚未收到持久取消。父取消先提交时完成 CAS 失败；子完成先提交时其摘要是合法终态。
+func (s *Store) CompleteChildWithResult(ctx context.Context, id, parentID string, resultJSON []byte) (Job, error) {
+	if strings.TrimSpace(parentID) == "" {
+		return Job{}, fault.New(fault.CodeValidation, false, nil)
+	}
+	return s.completeRunning(ctx, id, parentID, resultJSON)
+}
+
+func (s *Store) completeRunning(ctx context.Context, id, parentID string, resultJSON []byte) (Job, error) {
 	now := s.clock.Now().UTC()
-	result, err := s.db.ExecContext(ctx, `UPDATE jobs SET status='completed', stage='completed', result_json=?,
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return Job{}, fault.New(fault.CodeInternal, true, err)
+	}
+	defer tx.Rollback()
+	query := `UPDATE jobs SET status='completed', stage='completed', result_json=?,
 finished_at=?, heartbeat_at=NULL, lease_expires_at=NULL, progress_sequence=progress_sequence+1, updated_at=?
-WHERE job_id=? AND status='running' AND cancel_requested=0`, nullableBytes(resultJSON), now.Unix(), now.Unix(), id)
+WHERE job_id=? AND status='running' AND cancel_requested=0`
+	args := []any{nullableBytes(resultJSON), now.Unix(), now.Unix(), id}
+	if parentID != "" {
+		query += ` AND EXISTS (
+SELECT 1 FROM jobs parent WHERE parent.job_id=? AND parent.cancel_requested=0
+  AND parent.status NOT IN ('cancelled','superseded'))`
+		args = append(args, parentID)
+	}
+	result, err := tx.ExecContext(ctx, query, args...)
 	if err != nil {
 		return Job{}, fault.New(fault.CodeInternal, true, err)
 	}
 	if err := requireOne(result); err != nil {
 		return Job{}, err
 	}
-	_, _ = s.db.ExecContext(ctx, `UPDATE job_attempts SET status='completed', finished_at=?, result_json=?, updated_at=?
+	attemptResult, err := tx.ExecContext(ctx, `UPDATE job_attempts SET status='completed', finished_at=?, result_json=?, updated_at=?
 WHERE job_id=? AND status='running'`, now.Unix(), nullableBytes(resultJSON), now.Unix(), id)
+	if err != nil {
+		return Job{}, fault.New(fault.CodeInternal, true, err)
+	}
+	if err := requireOne(attemptResult); err != nil {
+		return Job{}, err
+	}
+	if err := tx.Commit(); err != nil {
+		return Job{}, fault.New(fault.CodeInternal, true, err)
+	}
 	return s.Get(ctx, id)
 }
 
@@ -729,27 +784,54 @@ func (s *Store) CompleteWithResult(ctx context.Context, id string, resultJSON []
 // 调用 FinalizeCancelled；排队 Job 可以立即进入终态。
 func (s *Store) RequestCancel(ctx context.Context, id string) (Job, error) {
 	now := s.clock.Now().UTC()
-	result, err := s.db.ExecContext(ctx, `UPDATE jobs SET status=CASE WHEN status='queued' THEN 'cancelled' ELSE status END,
-stage=CASE WHEN status='queued' THEN 'cancelled' ELSE 'cancelling' END,
-cancel_requested=1, cancel_requested_at=?, finished_at=CASE WHEN status='queued' THEN ? ELSE finished_at END,
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return Job{}, fault.New(fault.CodeInternal, true, err)
+	}
+	defer tx.Rollback()
+	result, err := tx.ExecContext(ctx, `UPDATE jobs SET
+status=CASE WHEN status IN ('queued', 'failed', 'needs_repair') THEN 'cancelled' ELSE status END,
+stage=CASE WHEN status IN ('queued', 'failed', 'needs_repair') THEN 'cancelled' ELSE 'cancelling' END,
+cancel_requested=1, cancel_requested_at=?,
+finished_at=CASE WHEN status IN ('queued', 'failed', 'needs_repair') THEN ? ELSE finished_at END,
+issue_code=CASE WHEN status IN ('failed', 'needs_repair') THEN NULL ELSE issue_code END,
+failure_retryable=CASE WHEN status IN ('failed', 'needs_repair') THEN 0 ELSE failure_retryable END,
+next_attempt_at=CASE WHEN status IN ('failed', 'needs_repair') THEN NULL ELSE next_attempt_at END,
 progress_sequence=progress_sequence+1, updated_at=?
-WHERE job_id=? AND status IN ('queued', 'running', 'publishing')`, now.Unix(), now.Unix(), now.Unix(), id)
+WHERE job_id=? AND (
+  status IN ('queued', 'running') OR
+  (status IN ('failed', 'needs_repair') AND failure_retryable=1 AND next_attempt_at IS NOT NULL)
+)`, now.Unix(), now.Unix(), now.Unix(), id)
 	if err != nil {
 		return Job{}, fault.New(fault.CodeInternal, true, err)
 	}
 	if err := requireOne(result); err != nil {
 		return Job{}, err
 	}
-	if job, getErr := s.Get(ctx, id); getErr == nil && job.Status == StatusCancelled {
-		_, _ = s.db.ExecContext(ctx, `UPDATE job_attempts SET status='cancelled', finished_at=?, updated_at=?
-WHERE job_id=? AND status IN ('queued', 'running')`, now.Unix(), now.Unix(), id)
+	var status Status
+	if err := tx.QueryRowContext(ctx, "SELECT status FROM jobs WHERE job_id=?", id).Scan(&status); err != nil {
+		return Job{}, fault.New(fault.CodeInternal, true, err)
+	}
+	if status == StatusCancelled {
+		if _, err := tx.ExecContext(ctx, `UPDATE job_attempts SET status='cancelled', finished_at=?, updated_at=?
+WHERE job_id=? AND status IN ('queued', 'running')`, now.Unix(), now.Unix(), id); err != nil {
+			return Job{}, fault.New(fault.CodeInternal, true, err)
+		}
+	}
+	if err := tx.Commit(); err != nil {
+		return Job{}, fault.New(fault.CodeInternal, true, err)
 	}
 	return s.Get(ctx, id)
 }
 
 func (s *Store) FinalizeCancelled(ctx context.Context, id string) (Job, error) {
 	now := s.clock.Now().UTC()
-	result, err := s.db.ExecContext(ctx, `UPDATE jobs SET status='cancelled', stage='cancelled', finished_at=?,
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return Job{}, fault.New(fault.CodeInternal, true, err)
+	}
+	defer tx.Rollback()
+	result, err := tx.ExecContext(ctx, `UPDATE jobs SET status='cancelled', stage='cancelled', finished_at=?,
 heartbeat_at=NULL, lease_expires_at=NULL, progress_sequence=progress_sequence+1, updated_at=?
 WHERE job_id=? AND cancel_requested=1 AND status IN ('running', 'publishing')`, now.Unix(), now.Unix(), id)
 	if err != nil {
@@ -758,14 +840,49 @@ WHERE job_id=? AND cancel_requested=1 AND status IN ('running', 'publishing')`, 
 	if err := requireOne(result); err != nil {
 		return Job{}, err
 	}
-	_, _ = s.db.ExecContext(ctx, `UPDATE job_attempts SET status='cancelled', finished_at=?, updated_at=?
+	attemptResult, err := tx.ExecContext(ctx, `UPDATE job_attempts SET status='cancelled', finished_at=?, updated_at=?
 WHERE job_id=? AND status='running'`, now.Unix(), now.Unix(), id)
+	if err != nil {
+		return Job{}, fault.New(fault.CodeInternal, true, err)
+	}
+	if err := requireOne(attemptResult); err != nil {
+		return Job{}, err
+	}
+	if err := tx.Commit(); err != nil {
+		return Job{}, fault.New(fault.CodeInternal, true, err)
+	}
 	return s.Get(ctx, id)
 }
 
 func (s *Store) BeginPublishing(ctx context.Context, id string) (Job, error) {
 	now := s.clock.Now().UTC()
-	return s.transition(ctx, id, StatusRunning, StatusPublishing, "publishing", "", nil, now)
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return Job{}, fault.New(fault.CodeInternal, true, err)
+	}
+	defer tx.Rollback()
+	leaseExpiresAt := now.Add(2 * time.Minute).Unix()
+	result, err := tx.ExecContext(ctx, `UPDATE jobs SET status='publishing', stage='publishing',
+heartbeat_at=?, lease_expires_at=?, progress_sequence=progress_sequence+1, updated_at=?
+WHERE job_id=? AND status='running' AND cancel_requested=0`, now.Unix(), leaseExpiresAt, now.Unix(), id)
+	if err != nil {
+		return Job{}, fault.New(fault.CodeInternal, true, err)
+	}
+	if err := requireOne(result); err != nil {
+		return Job{}, err
+	}
+	attemptResult, err := tx.ExecContext(ctx, `UPDATE job_attempts SET heartbeat_at=?, lease_expires_at=?, updated_at=?
+WHERE job_id=? AND status='running'`, now.Unix(), leaseExpiresAt, now.Unix(), id)
+	if err != nil {
+		return Job{}, fault.New(fault.CodeInternal, true, err)
+	}
+	if err := requireOne(attemptResult); err != nil {
+		return Job{}, err
+	}
+	if err := tx.Commit(); err != nil {
+		return Job{}, fault.New(fault.CodeInternal, true, err)
+	}
+	return s.Get(ctx, id)
 }
 
 func (s *Store) Complete(ctx context.Context, id, publicationID string) (Job, error) {
@@ -773,14 +890,32 @@ func (s *Store) Complete(ctx context.Context, id, publicationID string) (Job, er
 		return Job{}, fault.New(fault.CodeValidation, false, nil)
 	}
 	now := s.clock.Now().UTC()
-	job, err := s.transition(ctx, id, StatusPublishing, StatusCompleted, "completed",
-		`publication_id = ?, finished_at = ?, heartbeat_at=NULL, lease_expires_at=NULL,`,
-		[]any{publicationID, now.Unix()}, now)
-	if err == nil {
-		_, _ = s.db.ExecContext(ctx, `UPDATE job_attempts SET status='completed', finished_at=?, updated_at=?
-WHERE job_id=? AND status='running'`, now.Unix(), now.Unix(), id)
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return Job{}, fault.New(fault.CodeInternal, true, err)
 	}
-	return job, err
+	defer tx.Rollback()
+	result, err := tx.ExecContext(ctx, `UPDATE jobs SET status='completed', stage='completed', publication_id=?, finished_at=?,
+heartbeat_at=NULL, lease_expires_at=NULL, progress_sequence=progress_sequence+1, updated_at=?
+WHERE job_id=? AND status='publishing'`, publicationID, now.Unix(), now.Unix(), id)
+	if err != nil {
+		return Job{}, fault.New(fault.CodeInternal, true, err)
+	}
+	if err := requireOne(result); err != nil {
+		return Job{}, err
+	}
+	attemptResult, err := tx.ExecContext(ctx, `UPDATE job_attempts SET status='completed', finished_at=?, updated_at=?
+WHERE job_id=? AND status='running'`, now.Unix(), now.Unix(), id)
+	if err != nil {
+		return Job{}, fault.New(fault.CodeInternal, true, err)
+	}
+	if err := requireOne(attemptResult); err != nil {
+		return Job{}, err
+	}
+	if err := tx.Commit(); err != nil {
+		return Job{}, fault.New(fault.CodeInternal, true, err)
+	}
+	return s.Get(ctx, id)
 }
 
 func (s *Store) RecoverCompleted(ctx context.Context, id, publicationID string) (Job, error) {
@@ -788,18 +923,37 @@ func (s *Store) RecoverCompleted(ctx context.Context, id, publicationID string) 
 		return Job{}, fault.New(fault.CodeValidation, false, nil)
 	}
 	now := s.clock.Now().UTC()
-	result, err := s.db.ExecContext(ctx, `
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return Job{}, fault.New(fault.CodeInternal, true, err)
+	}
+	defer tx.Rollback()
+	result, err := tx.ExecContext(ctx, `
 UPDATE jobs SET status = ?, stage = 'completed', publication_id = ?, finished_at = ?,
+                heartbeat_at=NULL, lease_expires_at=NULL,
+                issue_code=NULL, failure_retryable=0, next_attempt_at=NULL,
+                cancel_requested=0, cancel_requested_at=NULL,
                 progress_sequence = progress_sequence + 1, updated_at = ?
-WHERE job_id = ? AND status IN (?, ?)`, StatusCompleted, publicationID, now.Unix(), now.Unix(), id, StatusRunning, StatusPublishing)
+WHERE job_id = ? AND status IN (?, ?, ?, ?, ?, ?, ?)`, StatusCompleted, publicationID, now.Unix(), now.Unix(), id,
+		StatusQueued, StatusRunning, StatusPublishing, StatusFailed, StatusCancelled, StatusSuperseded, StatusNeedsRepair)
 	if err != nil {
 		return Job{}, fault.New(fault.CodeInternal, true, err)
 	}
 	if err := requireOne(result); err != nil {
 		return Job{}, err
 	}
-	_, _ = s.db.ExecContext(ctx, `UPDATE job_attempts SET status='recovered', finished_at=?, updated_at=?
-WHERE job_id=? AND status='running'`, now.Unix(), now.Unix(), id)
+	attemptResult, err := tx.ExecContext(ctx, `UPDATE job_attempts SET status='recovered', error_code=NULL,
+error_retryable=0, finished_at=?, heartbeat_at=NULL, lease_expires_at=NULL, updated_at=?
+WHERE job_id=? AND attempt=(SELECT attempt FROM jobs WHERE job_id=?)`, now.Unix(), now.Unix(), id, id)
+	if err != nil {
+		return Job{}, fault.New(fault.CodeInternal, true, err)
+	}
+	if err := requireOne(attemptResult); err != nil {
+		return Job{}, err
+	}
+	if err := tx.Commit(); err != nil {
+		return Job{}, fault.New(fault.CodeInternal, true, err)
+	}
 	return s.Get(ctx, id)
 }
 
@@ -808,7 +962,14 @@ func (s *Store) Fail(ctx context.Context, id, issueCode string) (Job, error) {
 }
 
 func (s *Store) FailWithRetryable(ctx context.Context, id, issueCode string, retryable bool) (Job, error) {
+	return s.failWithAttemptStatus(ctx, id, issueCode, retryable, "failed")
+}
+
+func (s *Store) failWithAttemptStatus(ctx context.Context, id, issueCode string, retryable bool, attemptStatus string) (Job, error) {
 	if issueCode == "" {
+		return Job{}, fault.New(fault.CodeValidation, false, nil)
+	}
+	if attemptStatus != "failed" && attemptStatus != "recovered" {
 		return Job{}, fault.New(fault.CodeValidation, false, nil)
 	}
 	now := s.clock.Now().UTC()
@@ -820,11 +981,22 @@ func (s *Store) FailWithRetryable(ctx context.Context, id, issueCode string, ret
 	if retryable && current.MaxRetries > 0 && current.Attempt <= current.MaxRetries {
 		nextAttempt = now.Add(retryDelay(current)).Unix()
 	}
-	result, err := s.db.ExecContext(ctx, `
-UPDATE jobs SET status = ?, stage = 'failed', issue_code = ?, finished_at = ?,
-                failure_retryable=?, last_error_at=?, heartbeat_at=NULL, lease_expires_at=NULL,
-                next_attempt_at=?, progress_sequence = progress_sequence + 1, updated_at = ?
-WHERE job_id = ? AND status IN (?, ?, ?)`, StatusFailed, issueCode, now.Unix(), boolInt(retryable),
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return Job{}, fault.New(fault.CodeInternal, true, err)
+	}
+	defer tx.Rollback()
+	result, err := tx.ExecContext(ctx, `
+UPDATE jobs SET
+ status=CASE WHEN cancel_requested=1 THEN 'cancelled' ELSE 'failed' END,
+ stage=CASE WHEN cancel_requested=1 THEN 'cancelled' ELSE 'failed' END,
+ issue_code=CASE WHEN cancel_requested=1 THEN NULL ELSE ? END,
+ finished_at=?, failure_retryable=CASE WHEN cancel_requested=1 THEN 0 ELSE ? END,
+ last_error_at=CASE WHEN cancel_requested=1 THEN last_error_at ELSE ? END,
+ heartbeat_at=NULL, lease_expires_at=NULL,
+ next_attempt_at=CASE WHEN cancel_requested=1 THEN NULL ELSE ? END,
+ progress_sequence=progress_sequence+1, updated_at=?
+WHERE job_id=? AND status IN (?, ?, ?)`, issueCode, now.Unix(), boolInt(retryable),
 		now.Unix(), nextAttempt, now.Unix(), id, StatusQueued, StatusRunning, StatusPublishing)
 	if err != nil {
 		return Job{}, fault.New(fault.CodeInternal, true, err)
@@ -832,8 +1004,27 @@ WHERE job_id = ? AND status IN (?, ?, ?)`, StatusFailed, issueCode, now.Unix(), 
 	if err := requireOne(result); err != nil {
 		return Job{}, err
 	}
-	_, _ = s.db.ExecContext(ctx, `UPDATE job_attempts SET status='failed', error_code=?, error_retryable=?, finished_at=?, updated_at=?
-WHERE job_id=? AND status IN ('queued', 'running')`, issueCode, boolInt(retryable), now.Unix(), now.Unix(), id)
+	var finalStatus Status
+	if err := tx.QueryRowContext(ctx, "SELECT status FROM jobs WHERE job_id=?", id).Scan(&finalStatus); err != nil {
+		return Job{}, fault.New(fault.CodeInternal, true, err)
+	}
+	var attemptResult sql.Result
+	if finalStatus == StatusCancelled {
+		attemptResult, err = tx.ExecContext(ctx, `UPDATE job_attempts SET status='cancelled', error_code=NULL, error_retryable=0, finished_at=?, updated_at=?
+WHERE job_id=? AND status IN ('queued', 'running')`, now.Unix(), now.Unix(), id)
+	} else {
+		attemptResult, err = tx.ExecContext(ctx, `UPDATE job_attempts SET status=?, error_code=?, error_retryable=?, finished_at=?, updated_at=?
+WHERE job_id=? AND status IN ('queued', 'running')`, attemptStatus, issueCode, boolInt(retryable), now.Unix(), now.Unix(), id)
+	}
+	if err != nil {
+		return Job{}, fault.New(fault.CodeInternal, true, err)
+	}
+	if err := requireOne(attemptResult); err != nil {
+		return Job{}, err
+	}
+	if err := tx.Commit(); err != nil {
+		return Job{}, fault.New(fault.CodeInternal, true, err)
+	}
 	return s.Get(ctx, id)
 }
 
@@ -1096,10 +1287,8 @@ func (s *Store) ReconcileAttempts(ctx context.Context, leaseTimeout time.Duratio
 			}
 			continue
 		}
-		_, _ = s.db.ExecContext(ctx, `UPDATE job_attempts SET status='recovered', error_code='PROCESS_INTERRUPTED',
-error_retryable=1, finished_at=?, updated_at=? WHERE job_id=? AND status='running'`, s.clock.Now().UTC().Unix(), s.clock.Now().UTC().Unix(), id)
 		if job.Status == StatusRunning || job.Status == StatusPublishing {
-			if _, err := s.FailWithRetryable(ctx, id, "PROCESS_INTERRUPTED", true); err != nil && !isJobStateConflict(err) {
+			if _, err := s.failWithAttemptStatus(ctx, id, "PROCESS_INTERRUPTED", true, "recovered"); err != nil && !isJobStateConflict(err) {
 				return err
 			}
 		}
@@ -1146,6 +1335,21 @@ func (s *Store) ListByStatuses(ctx context.Context, statuses ...Status) ([]Job, 
 
 func (s *Store) transition(ctx context.Context, id string, from, to Status, stage, assignments string, values []any, now time.Time) (Job, error) {
 	query := "UPDATE jobs SET status = ?, stage = ?, " + assignments + " progress_sequence = progress_sequence + 1, updated_at = ? WHERE job_id = ? AND status = ?"
+	args := []any{to, stage}
+	args = append(args, values...)
+	args = append(args, now.Unix(), id, from)
+	result, err := s.db.ExecContext(ctx, query, args...)
+	if err != nil {
+		return Job{}, fault.New(fault.CodeInternal, true, err)
+	}
+	if err := requireOne(result); err != nil {
+		return Job{}, err
+	}
+	return s.Get(ctx, id)
+}
+
+func (s *Store) transitionUnlessCancelled(ctx context.Context, id string, from, to Status, stage, assignments string, values []any, now time.Time) (Job, error) {
+	query := "UPDATE jobs SET status = ?, stage = ?, " + assignments + " progress_sequence = progress_sequence + 1, updated_at = ? WHERE job_id = ? AND status = ? AND cancel_requested=0"
 	args := []any{to, stage}
 	args = append(args, values...)
 	args = append(args, now.Unix(), id, from)

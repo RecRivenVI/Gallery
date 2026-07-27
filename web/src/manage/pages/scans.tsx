@@ -69,7 +69,7 @@ const JOB_STATUS_FILTERS = [
 ] as const;
 
 function canCancel(job: Job): boolean {
-  return job.status === 'queued' || job.status === 'running' || job.status === 'publishing';
+  return job.status === 'queued' || job.status === 'running';
 }
 
 function canRetry(job: Job): boolean {

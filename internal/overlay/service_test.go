@@ -286,6 +286,18 @@ func TestReconcileQueuedAndPublicationControlGap(t *testing.T) {
 	if job.Status != jobs.StatusPublishing || state.ProjectionStatus != "pending" {
 		t.Fatalf("故障点状态不符合恢复前提: job=%+v state=%+v", job, state)
 	}
+	if _, err := store.Control.SQL().ExecContext(ctx, `UPDATE jobs SET status='failed', stage='failed',
+cancel_requested=1, cancel_requested_at=?, failure_retryable=0, issue_code='LEGACY_CANCEL_GAP'
+WHERE job_id=?`, time.Now().Unix(), created.ProjectionJobID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.Control.SQL().ExecContext(ctx, `UPDATE job_attempts SET status='failed',
+error_code='LEGACY_CANCEL_GAP', error_retryable=0 WHERE job_id=? AND status='running'`, created.ProjectionJobID); err != nil {
+		t.Fatal(err)
+	}
+	if legacy, err := service.jobs.Get(ctx, created.ProjectionJobID); err != nil || legacy.Status != jobs.StatusFailed {
+		t.Fatalf("未构造出历史 terminal publication gap: %+v %v", legacy, err)
+	}
 	restarted, err := New(ctx, store.Control.SQL(), service.jobs, service.catalog, service.clock, nil)
 	if err != nil {
 		t.Fatal(err)
@@ -303,6 +315,38 @@ func TestReconcileQueuedAndPublicationControlGap(t *testing.T) {
 	_ = store.Catalog.SQL().QueryRowContext(ctx, "SELECT count(*) FROM query_publications WHERE job_id=?", created.ProjectionJobID).Scan(&count)
 	if count != 1 {
 		t.Fatalf("恢复产生重复 publication: %d", count)
+	}
+
+	retryPublished, err := restarted.Put(ctx, testWorkID, "owner", Input{TitleOverride: "已发布后租约恢复"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	restarted.faultInjector = func(stage string) error {
+		if stage == "after_publication" {
+			return errors.New("simulate post-publication control gap")
+		}
+		return nil
+	}
+	if err := restarted.Execute(ctx, retryPublished.ProjectionJobID); err == nil {
+		t.Fatal("第二个 publication/control gap 未注入")
+	}
+	restarted.faultInjector = nil
+	if _, err := restarted.jobs.FailWithRetryable(ctx, retryPublished.ProjectionJobID, "PROCESS_INTERRUPTED", true); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := restarted.jobs.Retry(ctx, retryPublished.ProjectionJobID, "recovery"); err != nil {
+		t.Fatal(err)
+	}
+	if err := restarted.Execute(ctx, retryPublished.ProjectionJobID); err != nil {
+		t.Fatalf("已发布 Overlay Job 重试未在入口对账: %v", err)
+	}
+	retryRecovered, err := restarted.jobs.Get(ctx, retryPublished.ProjectionJobID)
+	if err != nil || retryRecovered.Status != jobs.StatusCompleted {
+		t.Fatalf("已发布 Overlay Job 被错误收敛为 superseded: %+v %v", retryRecovered, err)
+	}
+	if err := store.Catalog.SQL().QueryRowContext(ctx,
+		"SELECT count(*) FROM query_publications WHERE job_id=?", retryPublished.ProjectionJobID).Scan(&count); err != nil || count != 1 {
+		t.Fatalf("Overlay 重试产生重复 publication: count=%d err=%v", count, err)
 	}
 
 	queued, err := restarted.Put(ctx, testWorkID, "owner", Input{TitleOverride: "queued 恢复"})

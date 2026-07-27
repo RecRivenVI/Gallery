@@ -409,6 +409,21 @@ func (s *Service) Execute(ctx context.Context, jobID string) error {
 	if err != nil {
 		return err
 	}
+	if publication, publicationErr := s.catalog.PublicationForJob(ctx, jobID); publicationErr == nil {
+		commitCtx := context.WithoutCancel(ctx)
+		if err := s.markPublished(commitCtx, jobID, publication.ControlWatermark, publication.ID); err != nil {
+			return err
+		}
+		recovered, err := s.jobs.RecoverCompleted(commitCtx, jobID, publication.ID)
+		if err != nil {
+			return err
+		}
+		s.notifier.PublicationPublished(publication)
+		s.notifier.JobChanged(recovered)
+		return nil
+	} else if !isCode(publicationErr, fault.CodeNotFound) {
+		return s.fail(ctx, job, publicationErr)
+	}
 	if err := s.catalog.AbortOverlayCandidatesForJob(ctx, jobID); err != nil {
 		return s.fail(ctx, job, err)
 	}
@@ -525,11 +540,12 @@ func (s *Service) Execute(ctx context.Context, jobID string) error {
 			}
 		}
 		s.notifier.PublicationPublished(publication)
-		job, err = s.jobs.Complete(ctx, job.ID, publication.ID)
+		commitCtx := context.WithoutCancel(ctx)
+		job, err = s.jobs.Complete(commitCtx, job.ID, publication.ID)
 		if err != nil {
 			return err
 		}
-		if err := s.markPublished(ctx, job.ID, publication.ControlWatermark, publication.ID); err != nil {
+		if err := s.markPublished(commitCtx, job.ID, publication.ControlWatermark, publication.ID); err != nil {
 			return err
 		}
 		s.notifier.JobChanged(job)
@@ -538,7 +554,21 @@ func (s *Service) Execute(ctx context.Context, jobID string) error {
 }
 
 func (s *Service) Reconcile(ctx context.Context) error {
-	nonterminal, err := s.jobs.ListByStatuses(ctx, jobs.StatusQueued, jobs.StatusRunning, jobs.StatusPublishing)
+	return s.reconcile(ctx, true)
+}
+
+// ReconcileActive 在通用租约回收前优先按 Catalog publication 权威事实收敛活动 Saga；
+// 历史 terminal gap 只由启动 Reconcile 扫描一次。
+func (s *Service) ReconcileActive(ctx context.Context) error {
+	return s.reconcile(ctx, false)
+}
+
+func (s *Service) reconcile(ctx context.Context, includeLegacy bool) error {
+	statuses := []jobs.Status{jobs.StatusQueued, jobs.StatusRunning, jobs.StatusPublishing, jobs.StatusCancelling}
+	if includeLegacy {
+		statuses = append(statuses, jobs.StatusFailed, jobs.StatusCancelled, jobs.StatusNeedsRepair, jobs.StatusSuperseded)
+	}
+	nonterminal, err := s.jobs.ListByStatuses(ctx, statuses...)
 	if err != nil {
 		return err
 	}
@@ -548,14 +578,14 @@ func (s *Service) Reconcile(ctx context.Context) error {
 		}
 		publication, publicationErr := s.catalog.PublicationForJob(ctx, job.ID)
 		if publicationErr == nil {
+			if err := s.markPublished(ctx, job.ID, publication.ControlWatermark, publication.ID); err != nil {
+				return err
+			}
 			if job.Status != jobs.StatusCompleted {
 				job, err = s.jobs.RecoverCompleted(ctx, job.ID, publication.ID)
 				if err != nil {
 					return err
 				}
-			}
-			if err := s.markPublished(ctx, job.ID, publication.ControlWatermark, publication.ID); err != nil {
-				return err
 			}
 			s.notifier.JobChanged(job)
 			continue
@@ -566,6 +596,9 @@ func (s *Service) Reconcile(ctx context.Context) error {
 		// 无 publication 的 queued Job 只由中央 Recovery Service 的 ListRunnable/Submit 领取，
 		// 与 scanner.Reconcile 对齐；这里不再自行 Start，避免与中央循环对同一 Job 形成竞争
 		// 领取窗口。running/publishing Job 必须等租约过期后再形成同一 Job 的新 Attempt。
+	}
+	if !includeLegacy {
+		return nil
 	}
 	completed, err := s.jobs.ListByStatuses(ctx, jobs.StatusCompleted)
 	if err != nil {

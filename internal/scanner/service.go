@@ -51,6 +51,13 @@ type SpaceGate interface {
 	CheckSpace(ctx context.Context, operation string, additionalBytes int64) error
 }
 
+type HashJobService interface {
+	Create(ctx context.Context, request hashjob.Request, createdBy string) (jobs.Job, error)
+	Start(jobID string)
+	WaitResult(ctx context.Context, jobID string) (media.HashResult, error)
+	Cancel(ctx context.Context, jobID string) (jobs.Job, error)
+}
+
 type Service struct {
 	context     context.Context
 	resources   *application.Resources
@@ -59,7 +66,7 @@ type Service struct {
 	notifier    Notifier
 	wait        sync.WaitGroup
 	dispatcher  Dispatcher
-	hash        *hashjob.Service
+	hash        HashJobService
 	maintenance *maintenance.Coordinator
 	space       SpaceGate
 	clock       ports.Clock
@@ -87,7 +94,7 @@ func (s *Service) SetDispatcher(d Dispatcher) { s.dispatcher = d }
 
 // SetHashService 将完整内容哈希交给独立 hash 资源池。未注入时保留同步 fallback，方便
 // 仅验证 Catalog 语义的单元测试；正式 bootstrap 始终注入持久 Hash Job Service。
-func (s *Service) SetHashService(service *hashjob.Service) { s.hash = service }
+func (s *Service) SetHashService(service HashJobService) { s.hash = service }
 
 func (s *Service) SetMaintenanceCoordinator(coordinator *maintenance.Coordinator) {
 	s.maintenance = coordinator
@@ -355,6 +362,21 @@ func (s *Service) Execute(ctx context.Context, jobID string) error {
 	if err != nil {
 		return err
 	}
+	if publication, publicationErr := s.catalog.PublicationForJob(ctx, jobID); publicationErr == nil {
+		commitCtx := context.WithoutCancel(ctx)
+		if err := s.resources.MarkOverlaySnapshotPublished(commitCtx, publication.ControlWatermark, publication.ID); err != nil {
+			return err
+		}
+		recovered, err := s.jobs.RecoverCompleted(commitCtx, jobID, publication.ID)
+		if err != nil {
+			return err
+		}
+		s.notifier.PublicationPublished(publication)
+		s.notifier.JobChanged(recovered)
+		return nil
+	} else if !isNotFound(publicationErr) {
+		return s.fail(ctx, job.ID, publicationErr)
+	}
 	// 同一逻辑 Job 的新 Attempt 复用 Job ID；先清理上次未发布候选，避免把中断的 staging
 	// 当成本次输入。活动 publication 不受影响。
 	_ = s.catalog.AbortCandidate(ctx, jobID)
@@ -501,6 +523,7 @@ func (s *Service) Execute(ctx context.Context, jobID string) error {
 			if !skipHash {
 				var hashed media.HashResult
 				var hashErr error
+				hashJobID := ""
 				if s.hash != nil {
 					hashJob, createErr := s.hash.Create(ctx, hashjob.Request{SourceID: source.ID, RelativePath: item.RelativePath,
 						ExpectedSize: item.ExpectedSize, ExpectedModTimeNanos: item.ExpectedModTimeNanos,
@@ -512,14 +535,24 @@ func (s *Service) Execute(ctx context.Context, jobID string) error {
 						s.hash.Start(hashJob.ID)
 					}
 					if createErr == nil {
+						hashJobID = hashJob.ID
 						hashed, hashErr = s.hash.WaitResult(ctx, hashJob.ID)
 					} else {
 						hashErr = createErr
 					}
 				} else {
-					hashed, hashErr = media.HashSourceFile(source.RootPath, item.RelativePath, nil)
+					hashed, hashErr = media.HashSourceFileWithOptions(source.RootPath, item.RelativePath, media.HashOptions{Context: ctx})
 				}
 				if hashErr != nil {
+					cancelRequested, cancelStateErr := s.cancellationRequested(job.ID)
+					if cancelStateErr != nil {
+						hashErr = errors.Join(hashErr, fmt.Errorf("读取父 Scan 取消状态: %w", cancelStateErr))
+					}
+					if hashJobID != "" && cancelRequested {
+						if _, cancelErr := s.hash.Cancel(context.Background(), hashJobID); cancelErr != nil {
+							hashErr = errors.Join(hashErr, fmt.Errorf("取消 Hash 子 Job %s: %w", hashJobID, cancelErr))
+						}
+					}
 					return s.fail(ctx, job.ID, hashErr)
 				}
 				item.Hash = hashed
@@ -530,7 +563,7 @@ func (s *Service) Execute(ctx context.Context, jobID string) error {
 			current++
 			job, err = s.jobs.Progress(ctx, job.ID, "hashing", current, total)
 			if err != nil {
-				return err
+				return s.fail(ctx, job.ID, err)
 			}
 			s.notifier.JobChanged(job)
 		}
@@ -679,11 +712,12 @@ func (s *Service) Execute(ctx context.Context, jobID string) error {
 		_ = s.catalog.AbortCandidate(ctx, job.ID)
 		return s.fail(ctx, job.ID, err)
 	}
-	if err := s.resources.MarkOverlaySnapshotPublished(ctx, publication.ControlWatermark, publication.ID); err != nil {
+	commitCtx := context.WithoutCancel(ctx)
+	if err := s.resources.MarkOverlaySnapshotPublished(commitCtx, publication.ControlWatermark, publication.ID); err != nil {
 		return err
 	}
 	s.notifier.PublicationPublished(publication)
-	job, err = s.jobs.Complete(ctx, job.ID, publication.ID)
+	job, err = s.jobs.Complete(commitCtx, job.ID, publication.ID)
 	if err != nil {
 		return err
 	}
@@ -692,7 +726,21 @@ func (s *Service) Execute(ctx context.Context, jobID string) error {
 }
 
 func (s *Service) Reconcile(ctx context.Context) error {
-	nonterminal, err := s.jobs.ListByStatuses(ctx, jobs.StatusQueued, jobs.StatusRunning, jobs.StatusPublishing)
+	return s.reconcile(ctx, true)
+}
+
+// ReconcileActive 供周期恢复在通用租约回收前对账可能已经提交的 publication；历史
+// terminal gap 只在启动 Reconcile 扫描一次，避免周期遍历全部终态 Job。
+func (s *Service) ReconcileActive(ctx context.Context) error {
+	return s.reconcile(ctx, false)
+}
+
+func (s *Service) reconcile(ctx context.Context, includeLegacy bool) error {
+	statuses := []jobs.Status{jobs.StatusQueued, jobs.StatusRunning, jobs.StatusPublishing, jobs.StatusCancelling}
+	if includeLegacy {
+		statuses = append(statuses, jobs.StatusFailed, jobs.StatusCancelled, jobs.StatusNeedsRepair, jobs.StatusSuperseded)
+	}
+	nonterminal, err := s.jobs.ListByStatuses(ctx, statuses...)
 	if err != nil {
 		return err
 	}
@@ -704,7 +752,7 @@ func (s *Service) Reconcile(ctx context.Context) error {
 			continue
 		}
 		publication, publicationErr := s.catalog.PublicationForJob(ctx, job.ID)
-		if publicationErr == nil && (job.Status == jobs.StatusRunning || job.Status == jobs.StatusPublishing) {
+		if publicationErr == nil {
 			if markErr := s.resources.MarkOverlaySnapshotPublished(ctx, publication.ControlWatermark, publication.ID); markErr != nil {
 				return markErr
 			}
@@ -720,6 +768,9 @@ func (s *Service) Reconcile(ctx context.Context) error {
 		}
 		// 未发布的 running/publishing Job 由中央租约回收循环在 lease 真正过期后收敛；
 		// 启动时 lease 尚有效不能提前判死。
+	}
+	if !includeLegacy {
+		return nil
 	}
 	completed, err := s.jobs.ListByStatuses(ctx, jobs.StatusCompleted)
 	if err != nil {
@@ -751,12 +802,22 @@ func (s *Service) Reconcile(ctx context.Context) error {
 	return nil
 }
 
+func (s *Service) cancellationRequested(jobID string) (bool, error) {
+	current, err := s.jobs.Get(context.Background(), jobID)
+	if err != nil {
+		return false, err
+	}
+	return current.CancelRequested, nil
+}
+
 func (s *Service) fail(ctx context.Context, jobID string, cause error) error {
 	current, _ := s.jobs.Get(context.Background(), jobID)
-	if current.CancelRequested || errors.Is(ctx.Err(), context.Canceled) {
+	if current.CancelRequested {
 		if cancelled, cancelErr := s.jobs.FinalizeCancelled(context.Background(), jobID); cancelErr == nil {
 			s.notifier.JobChanged(cancelled)
 			return cause
+		} else {
+			cause = errors.Join(cause, cancelErr)
 		}
 	}
 	code := faultCode(cause)
@@ -765,7 +826,10 @@ func (s *Service) fail(ctx context.Context, jobID string, cause error) error {
 	if errors.As(cause, &structured) {
 		retryable = structured.Retryable
 	}
-	failed, err := s.jobs.FailWithRetryable(ctx, jobID, string(code), retryable)
+	if errors.Is(ctx.Err(), context.Canceled) || errors.Is(cause, context.Canceled) {
+		code, retryable = fault.CodeProcessInterrupted, true
+	}
+	failed, err := s.jobs.FailWithRetryable(context.Background(), jobID, string(code), retryable)
 	if err == nil {
 		s.notifier.JobChanged(failed)
 	}

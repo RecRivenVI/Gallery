@@ -3,10 +3,12 @@ package maintenance_test
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"io"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -79,6 +81,161 @@ func TestPreflightRejectsInsufficientAppDirsSpace(t *testing.T) {
 }
 
 var _ ports.SpaceChecker = spaceChecker{}
+
+type blockingSpaceChecker struct {
+	entered chan struct{}
+	release chan struct{}
+	once    sync.Once
+}
+
+func (b *blockingSpaceChecker) FreeBytes(string) (int64, error) {
+	b.once.Do(func() { close(b.entered) })
+	<-b.release
+	return 1 << 40, nil
+}
+
+func TestMaintenanceCancellationEndsCancelled(t *testing.T) {
+	ctx := context.Background()
+	dirs := appdirs.UnderRoot(filepath.Join(t.TempDir(), "app"))
+	if err := dirs.Ensure(filesystem.OS{}); err != nil {
+		t.Fatal(err)
+	}
+	store, err := storage.Open(ctx, dirs)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	clk := clock.Fixed{Time: time.Date(2026, 7, 27, 15, 0, 0, 0, time.UTC)}
+	ids := identity.NewGenerator(clk)
+	jobStore, err := jobs.NewStore(store.Control.SQL(), clk, ids)
+	if err != nil {
+		t.Fatal(err)
+	}
+	catalogStore, err := catalog.NewStore(store.Catalog.SQL(), clk, ids)
+	if err != nil {
+		t.Fatal(err)
+	}
+	checker := &blockingSpaceChecker{entered: make(chan struct{}), release: make(chan struct{})}
+	service, err := maintenance.New(ctx, store.Control.SQL(), catalogStore, jobStore, nil, dirs, checker, clk)
+	if err != nil {
+		t.Fatal(err)
+	}
+	job, err := jobStore.CreateMaintenance(ctx, "catalog_gc", "owner")
+	if err != nil {
+		t.Fatal(err)
+	}
+	payload, err := json.Marshal(maintenance.Request{Operation: "catalog_gc"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := jobStore.SetRequest(ctx, job.ID, payload); err != nil {
+		t.Fatal(err)
+	}
+	runCtx, cancelRun := context.WithCancel(ctx)
+	done := make(chan error, 1)
+	go func() { done <- service.Execute(runCtx, job.ID) }()
+	select {
+	case <-checker.entered:
+	case <-time.After(3 * time.Second):
+		t.Fatal("维护 Job 未进入执行期空间复核")
+	}
+	if _, err := jobStore.RequestCancel(ctx, job.ID); err != nil {
+		t.Fatal(err)
+	}
+	cancelRun()
+	close(checker.release)
+	select {
+	case err := <-done:
+		if err == nil {
+			t.Fatal("取消维护错误地返回成功")
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("取消维护后 Execute 未退出")
+	}
+	stored, err := jobStore.Get(ctx, job.ID)
+	if err != nil || stored.Status != jobs.StatusCancelled || stored.NextAttemptAt != nil {
+		t.Fatalf("维护取消未收敛为无重试 cancelled: %+v %v", stored, err)
+	}
+	attempts, err := jobStore.ListAttempts(ctx, job.ID)
+	if err != nil || len(attempts) != 1 || attempts[0].Status != "cancelled" {
+		t.Fatalf("维护 Attempt 未收敛 cancelled: %+v %v", attempts, err)
+	}
+	// 取消路径必须释放维护互斥；后续 dry-run GC 不应死锁。
+	verifyCtx, cancelVerify := context.WithTimeout(ctx, 3*time.Second)
+	defer cancelVerify()
+	if _, err := service.RunGC(verifyCtx, 0, true); err != nil {
+		t.Fatalf("维护取消后互斥未释放: %v", err)
+	}
+}
+
+func TestMaintenanceShutdownRemainsRetryableProcessInterrupted(t *testing.T) {
+	ctx := context.Background()
+	dirs := appdirs.UnderRoot(filepath.Join(t.TempDir(), "app"))
+	if err := dirs.Ensure(filesystem.OS{}); err != nil {
+		t.Fatal(err)
+	}
+	store, err := storage.Open(ctx, dirs)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	clk := clock.Fixed{Time: time.Date(2026, 7, 27, 15, 1, 0, 0, time.UTC)}
+	ids := identity.NewGenerator(clk)
+	jobStore, err := jobs.NewStore(store.Control.SQL(), clk, ids)
+	if err != nil {
+		t.Fatal(err)
+	}
+	catalogStore, err := catalog.NewStore(store.Catalog.SQL(), clk, ids)
+	if err != nil {
+		t.Fatal(err)
+	}
+	checker := &blockingSpaceChecker{entered: make(chan struct{}), release: make(chan struct{})}
+	service, err := maintenance.New(ctx, store.Control.SQL(), catalogStore, jobStore, nil, dirs, checker, clk)
+	if err != nil {
+		t.Fatal(err)
+	}
+	job, err := jobStore.CreateMaintenance(ctx, "catalog_gc", "owner")
+	if err != nil {
+		t.Fatal(err)
+	}
+	payload, err := json.Marshal(maintenance.Request{Operation: "catalog_gc"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := jobStore.SetRequest(ctx, job.ID, payload); err != nil {
+		t.Fatal(err)
+	}
+	runCtx, cancelRun := context.WithCancel(ctx)
+	done := make(chan error, 1)
+	go func() { done <- service.Execute(runCtx, job.ID) }()
+	select {
+	case <-checker.entered:
+	case <-time.After(3 * time.Second):
+		t.Fatal("维护 Job 未进入执行期空间复核")
+	}
+	cancelRun()
+	close(checker.release)
+	select {
+	case err := <-done:
+		if err == nil {
+			t.Fatal("进程中断错误地返回成功")
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("进程中断后维护 Execute 未退出")
+	}
+	stored, err := jobStore.Get(ctx, job.ID)
+	if err != nil || stored.Status != jobs.StatusFailed || stored.CancelRequested ||
+		stored.IssueCode != string(fault.CodeProcessInterrupted) || !stored.FailureRetryable || stored.NextAttemptAt == nil {
+		t.Fatalf("无显式取消的 shutdown 未保留可恢复终态: %+v %v", stored, err)
+	}
+	attempts, err := jobStore.ListAttempts(ctx, job.ID)
+	if err != nil || len(attempts) != 1 || attempts[0].Status != "failed" ||
+		attempts[0].ErrorCode != string(fault.CodeProcessInterrupted) || !attempts[0].ErrorRetryable {
+		t.Fatalf("shutdown Attempt 未记录 PROCESS_INTERRUPTED: %+v %v", attempts, err)
+	}
+}
+
+var _ ports.SpaceChecker = (*blockingSpaceChecker)(nil)
 
 type maintenanceGCResolver struct{}
 

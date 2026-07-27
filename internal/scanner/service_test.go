@@ -223,11 +223,19 @@ func TestReconciliationRepairsBothCrossDatabaseStates(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	if _, err := store.Control.SQL().ExecContext(context.Background(),
+		"UPDATE jobs SET cancel_requested=1, cancel_requested_at=? WHERE job_id=?", time.Now().Unix(), publishedJob.ID); err != nil {
+		t.Fatal(err)
+	}
+	if cancelling, err := jobStore.Get(context.Background(), publishedJob.ID); err != nil || cancelling.Status != jobs.StatusCancelling {
+		t.Fatalf("未构造出历史 publishing+cancel gap: %+v %v", cancelling, err)
+	}
 	if err := service.Reconcile(context.Background()); err != nil {
 		t.Fatal(err)
 	}
 	recovered, err := jobStore.Get(context.Background(), publishedJob.ID)
-	if err != nil || recovered.Status != jobs.StatusCompleted || recovered.PublicationID != publication.ID {
+	if err != nil || recovered.Status != jobs.StatusCompleted || recovered.PublicationID != publication.ID ||
+		recovered.HeartbeatAt != nil || recovered.LeaseExpiresAt != nil {
 		t.Fatalf("已发布 Job 未恢复 completed: %+v %v", recovered, err)
 	}
 

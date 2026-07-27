@@ -20,6 +20,7 @@ type Submitter interface {
 type Service struct {
 	store        *jobs.Store
 	scheduler    Submitter
+	publication  func(context.Context) error
 	interval     time.Duration
 	leaseTimeout time.Duration
 	wait         sync.WaitGroup
@@ -38,7 +39,18 @@ func New(store *jobs.Store, scheduler Submitter, interval, leaseTimeout time.Dur
 	return &Service{store: store, scheduler: scheduler, interval: interval, leaseTimeout: leaseTimeout}, nil
 }
 
+// SetPublicationReconciler 注册 Catalog/Overlay publication Saga 的周期对账。它必须在
+// 通用租约回收前运行，避免已经提交的 publication 被先改写为失败或取消。
+func (s *Service) SetPublicationReconciler(reconcile func(context.Context) error) {
+	s.publication = reconcile
+}
+
 func (s *Service) ReconcileOnce(ctx context.Context) error {
+	if s.publication != nil {
+		if err := s.publication(ctx); err != nil {
+			return err
+		}
+	}
 	if err := s.store.ReconcileAttempts(ctx, s.leaseTimeout); err != nil {
 		return err
 	}
