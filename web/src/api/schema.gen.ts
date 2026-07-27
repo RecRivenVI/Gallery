@@ -2482,6 +2482,8 @@ export interface components {
             canonicalPackage: {
                 [key: string]: unknown;
             };
+            /** @description 后端规范化后的逐字节 UTF-8 JSON 文本；用于避免浏览器 Number 中转损失精度 */
+            canonicalText: string;
             packageHash: components["schemas"]["SHA256Digest"];
             semanticHash: components["schemas"]["SHA256Digest"];
         };
@@ -2558,12 +2560,14 @@ export interface components {
             result: components["schemas"]["RuleDryRunResult"];
         };
         RuleImpactRequest: {
-            before: {
+            /** @description 旧规则包对象、精确 JSON 文本，或首次版本使用的显式 null */
+            before: ({
                 [key: string]: unknown;
-            } | null;
+            } | string) | null;
+            /** @description 新规则包对象或精确 JSON 文本 */
             after: {
                 [key: string]: unknown;
-            };
+            } | string;
         };
         RuleImpactResult: {
             /** @enum {string} */
@@ -2679,13 +2683,17 @@ export interface components {
         RuleImportRequest: {
             /** @enum {string} */
             format: "json" | "yaml" | "toml";
-            content: unknown;
+            content: {
+                [key: string]: unknown;
+            } | string;
         };
         RuleImportResult: {
             format: string;
             canonicalJson: {
                 [key: string]: unknown;
             };
+            /** @description 导入、默认值物化和规范化后的逐字节 UTF-8 JSON 文本 */
+            canonicalText: string;
             diagnostics: {
                 path: string;
                 message: string;
@@ -2719,7 +2727,9 @@ export interface components {
             updatedAt: string;
         };
         RuleDraftSaveRequest: {
-            content: unknown;
+            content: {
+                [key: string]: unknown;
+            } | string;
             /** @enum {string} */
             format: "json" | "yaml" | "toml";
             baseSemanticHash?: components["schemas"]["SHA256Digest"];
@@ -2730,6 +2740,8 @@ export interface components {
             packageId: components["schemas"]["RulePackageId"];
             baseSemanticHash?: components["schemas"]["SHA256Digest"];
             content: unknown;
+            /** @description 服务端保存的精确原文；成功导入时为 canonical JSON，导入失败时为未覆盖的原始文本 */
+            contentText: string;
             /** @enum {string} */
             format: "json" | "yaml" | "toml";
             /** @enum {string} */
@@ -2750,9 +2762,7 @@ export interface components {
             diagnostics: {
                 [key: string]: unknown;
             }[];
-            validation?: {
-                [key: string]: unknown;
-            } | null;
+            validation?: components["schemas"]["RuleValidationResult"] | null;
         };
         RulePublishRequest: {
             expectedRevision?: number;

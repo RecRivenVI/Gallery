@@ -310,7 +310,7 @@ func (s *Server) validateRulePackage(w http.ResponseWriter, r *http.Request) {
 		s.writeRequestError(w, ruleRequestFault(fault.CodeRuleSchemaInvalid, "package", err))
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"canonicalPackage": json.RawMessage(result.CanonicalJSON), "packageHash": result.PackageHash, "semanticHash": result.SemanticHash})
+	writeJSON(w, http.StatusOK, ruleValidationMap(result))
 }
 
 func (s *Server) compileRulePackage(w http.ResponseWriter, r *http.Request) {
@@ -337,7 +337,8 @@ func (s *Server) compileRulePackage(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{
-		"canonicalPackage": json.RawMessage(result.CanonicalJSON), "packageHash": result.PackageHash, "semanticHash": result.SemanticHash,
+		"canonicalPackage": json.RawMessage(result.CanonicalJSON), "canonicalText": string(result.CanonicalJSON),
+		"packageHash": result.PackageHash, "semanticHash": result.SemanticHash,
 		"ruleIrHash": result.RuleIRHash, "canonicalParameters": json.RawMessage(result.CanonicalParameters), "ruleIr": result.IR, "cacheHit": result.CacheHit,
 	})
 }
@@ -395,7 +396,17 @@ func (s *Server) analyzeRuleImpact(w http.ResponseWriter, r *http.Request) {
 		s.writeRequestError(w, fault.WithField(fault.CodeRuleImpact, "after", errors.New("after 必须提供")))
 		return
 	}
-	result, err := s.rules.Impact(request.Before, request.After)
+	before, err := decodeRuleJSONDocument(request.Before, true)
+	if err != nil {
+		s.writeRequestError(w, fault.WithField(fault.CodeRuleImpact, "before", err))
+		return
+	}
+	after, err := decodeRuleJSONDocument(request.After, false)
+	if err != nil {
+		s.writeRequestError(w, fault.WithField(fault.CodeRuleImpact, "after", err))
+		return
+	}
+	result, err := s.rules.Impact(before, after)
 	if err != nil {
 		s.writeRequestError(w, ruleRequestFault(fault.CodeRuleImpact, "after", err))
 		return

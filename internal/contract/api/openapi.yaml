@@ -4341,9 +4341,12 @@ components:
     RuleValidationResult:
       type: object
       additionalProperties: false
-      required: [canonicalPackage, packageHash, semanticHash]
+      required: [canonicalPackage, canonicalText, packageHash, semanticHash]
       properties:
         canonicalPackage: {type: object, additionalProperties: true}
+        canonicalText:
+          type: string
+          description: 后端规范化后的逐字节 UTF-8 JSON 文本；用于避免浏览器 Number 中转损失精度
         packageHash: {$ref: "#/components/schemas/SHA256Digest"}
         semanticHash: {$ref: "#/components/schemas/SHA256Digest"}
     RuleCompileRequest:
@@ -4437,8 +4440,21 @@ components:
       additionalProperties: false
       required: [before, after]
       properties:
-        before: {type: object, nullable: true, additionalProperties: true}
-        after: {type: object, additionalProperties: true}
+        before:
+          description: 旧规则包对象、精确 JSON 文本，或首次版本使用的显式 null
+          nullable: true
+          oneOf:
+            - type: object
+              additionalProperties: true
+            - type: string
+              maxLength: 8388608
+        after:
+          description: 新规则包对象或精确 JSON 文本
+          oneOf:
+            - type: object
+              additionalProperties: true
+            - type: string
+              maxLength: 8388608
     RuleImpactResult:
       type: object
       additionalProperties: false
@@ -4601,14 +4617,22 @@ components:
         format:
           type: string
           enum: [json, yaml, toml]
-        content: {}
+        content:
+          oneOf:
+            - type: object
+              additionalProperties: true
+            - type: string
+              maxLength: 8388608
     RuleImportResult:
       type: object
       additionalProperties: false
-      required: [format, canonicalJson, diagnostics]
+      required: [format, canonicalJson, canonicalText, diagnostics]
       properties:
         format: {type: string}
         canonicalJson: {type: object, additionalProperties: true}
+        canonicalText:
+          type: string
+          description: 导入、默认值物化和规范化后的逐字节 UTF-8 JSON 文本
         diagnostics:
           type: array
           items:
@@ -4653,19 +4677,27 @@ components:
       additionalProperties: false
       required: [content, format]
       properties:
-        content: {}
+        content:
+          oneOf:
+            - type: object
+              additionalProperties: true
+            - type: string
+              maxLength: 8388608
         format: {type: string, enum: [json, yaml, toml]}
         baseSemanticHash: {$ref: "#/components/schemas/SHA256Digest"}
         expectedRevision: {type: integer, minimum: 0}
     RuleDraft:
       type: object
       additionalProperties: false
-      required: [id, packageId, content, format, validationStatus, diagnostics, revision, savedBy, createdAt, updatedAt]
+      required: [id, packageId, content, contentText, format, validationStatus, diagnostics, revision, savedBy, createdAt, updatedAt]
       properties:
         id: {$ref: "#/components/schemas/RuleDraftId"}
         packageId: {$ref: "#/components/schemas/RulePackageId"}
         baseSemanticHash: {$ref: "#/components/schemas/SHA256Digest"}
         content: {}
+        contentText:
+          type: string
+          description: 服务端保存的精确原文；成功导入时为 canonical JSON，导入失败时为未覆盖的原始文本
         format: {type: string, enum: [json, yaml, toml]}
         validationStatus: {type: string, enum: [draft, validated, invalid]}
         diagnostics: {type: array, items: {type: object, additionalProperties: true}}
@@ -4681,7 +4713,10 @@ components:
         draft: {$ref: "#/components/schemas/RuleDraft"}
         valid: {type: boolean}
         diagnostics: {type: array, items: {type: object, additionalProperties: true}}
-        validation: {type: object, nullable: true, additionalProperties: true}
+        validation:
+          allOf:
+            - $ref: "#/components/schemas/RuleValidationResult"
+          nullable: true
     RulePublishRequest:
       type: object
       additionalProperties: false

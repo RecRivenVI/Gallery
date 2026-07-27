@@ -227,6 +227,12 @@ func CompilePackage(input []byte) (CompiledPackage, error) {
 	if err != nil {
 		return CompiledPackage{}, err
 	}
+	// parameter_schema 是 RuleVersion 的执行契约，不能等到首次建立 Binding 时才发现
+	// Schema 本身不可编译。这里与 CompileBinding 使用同一个受限编译器，因此外部 $ref、
+	// 非法 dialect/关键字以及其它非自包含 Schema 都会在草稿校验和发布之前稳定失败。
+	if _, err := contractschema.Compile("rule-parameters.json", root["parameter_schema"]); err != nil {
+		return CompiledPackage{}, withField("/parameter_schema", fmt.Errorf("参数 Schema 无效: %w", err))
+	}
 	delete(root, "package_hash")
 	delete(root, "semantic_hash")
 	packageCanonical, err := canonicalObject(root)

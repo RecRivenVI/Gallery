@@ -4,7 +4,17 @@ import reactRefresh from 'eslint-plugin-react-refresh';
 import tseslint from 'typescript-eslint';
 
 export default tseslint.config(
-  { ignores: ['dist', 'node_modules', 'playwright-report', 'test-results', 'src/api/schema.gen.ts'] },
+  {
+    ignores: [
+      'dist',
+      'node_modules',
+      'playwright-report',
+      'test-results',
+      'src/api/schema.gen.ts',
+      'src/manage/ruleSchemaValidator.gen.cjs',
+      'src/manage/ruleSchemaValidator.gen.d.cts'
+    ]
+  },
   eslint.configs.recommended,
   ...tseslint.configs.strictTypeChecked,
   ...tseslint.configs.stylisticTypeChecked,

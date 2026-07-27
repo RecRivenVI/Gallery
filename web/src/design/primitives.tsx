@@ -164,6 +164,8 @@ export interface FieldProps {
   isRequired?: boolean;
   children: (render: FieldRenderProps) => ReactNode;
   className?: string;
+  /** RJSF 等外部表单拥有稳定字段 id 时可显式复用，避免 label 与错误摘要指向另一套 id。 */
+  controlId?: string;
 }
 
 /**
@@ -173,9 +175,17 @@ export interface FieldProps {
  * 只能由控件自己挂上，做成普通节点就一定会漏掉 aria-describedby。标准文本框与下拉框请直接
  * 用 TextInput / Select，它们由 RAC 负责这套关联。
  */
-export function Field({ label, description, errorMessage, isRequired, children, className }: FieldProps) {
+export function Field({
+  label,
+  description,
+  errorMessage,
+  isRequired,
+  children,
+  className,
+  controlId: suppliedControlId
+}: FieldProps) {
   const baseId = useId();
-  const controlId = `${baseId}-control`;
+  const controlId = suppliedControlId ?? `${baseId}-control`;
   const descriptionId = `${baseId}-description`;
   const errorId = `${baseId}-error`;
   const isInvalid = errorMessage !== undefined && errorMessage !== null && errorMessage !== '';

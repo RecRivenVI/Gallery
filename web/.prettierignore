@@ -1,5 +1,7 @@
 node_modules
 src/api/schema.gen.ts
+src/manage/ruleSchemaValidator.gen.cjs
+src/manage/ruleSchemaValidator.gen.d.cts
 ../internal/webapp/dist
 playwright-report
 test-results

@@ -270,7 +270,7 @@ func (r *Resources) SaveRuleDraft(ctx context.Context, packageID string, content
 	if expectedRevision < 0 {
 		return RuleDraft{}, fault.WithField(fault.CodeValidation, "revision", fmt.Errorf("expected revision is required"))
 	}
-	canonical, status, diagnostics := draftValidation(content, format)
+	canonical, status, diagnostics, storedFormat := draftValidation(content, format)
 	if len(canonical) == 0 {
 		canonical = append([]byte(nil), content...)
 	}
@@ -320,7 +320,7 @@ INSERT INTO rule_drafts
 (draft_id, package_id, base_semantic_hash, content_json, source_format, validation_status,
  diagnostics_json, revision, saved_by, created_at, updated_at)
 VALUES (?, ?, ?, ?, ?, ?, ?, 1, ?, ?, ?)`, existingID, packageID, nullableText(baseSemanticHash), string(canonical),
-			format, status, string(diagnosticsJSON), actor, now.Unix(), now.Unix())
+			storedFormat, status, string(diagnosticsJSON), actor, now.Unix(), now.Unix())
 		if err != nil {
 			return RuleDraft{}, fault.New(fault.CodeConflict, false, err)
 		}
@@ -336,7 +336,7 @@ VALUES (?, ?, ?, ?, ?, ?, ?, 1, ?, ?, ?)`, existingID, packageID, nullableText(b
 		_, err = tx.ExecContext(ctx, `
 UPDATE rule_drafts SET base_semantic_hash=?, content_json=?, source_format=?, validation_status=?,
  diagnostics_json=?, revision=?, saved_by=?, updated_at=? WHERE package_id=? AND revision=?`,
-			nullableText(baseSemanticHash), string(canonical), format, status, string(diagnosticsJSON), newRevision,
+			nullableText(baseSemanticHash), string(canonical), storedFormat, status, string(diagnosticsJSON), newRevision,
 			actor, now.Unix(), packageID, currentRevision)
 		if err == nil {
 			_, err = tx.ExecContext(ctx, `UPDATE rule_packages SET revision=revision+1, updated_at=? WHERE package_id=?`, now.Unix(), packageID)
@@ -398,7 +398,7 @@ FROM rule_drafts WHERE package_id = ?`, packageID))
 	if draft.Revision != expectedRevision {
 		return RuleDraftValidation{}, ruleDraftConflict(expectedRevision, draft.Revision)
 	}
-	canonical, status, diagnostics := draftValidation(draft.Content, draft.SourceFormat)
+	canonical, status, diagnostics, storedFormat := draftValidation(draft.Content, draft.SourceFormat)
 	var validation *rules.ValidationResult
 	if status == RuleDraftValidated {
 		value := rules.ValidationResult{}
@@ -423,9 +423,9 @@ FROM rule_drafts WHERE package_id = ?`, packageID))
 		// 把可恢复的输入替换成空内容。
 		content = append([]byte(nil), draft.Content...)
 	}
-	result, err := tx.ExecContext(ctx, `UPDATE rule_drafts SET content_json=?, validation_status=?, diagnostics_json=?,
+	result, err := tx.ExecContext(ctx, `UPDATE rule_drafts SET content_json=?, source_format=?, validation_status=?, diagnostics_json=?,
 revision=revision+1, saved_by=?, updated_at=? WHERE package_id=? AND revision=?`,
-		string(content), status, string(diagnosticsJSON), actor, now.Unix(), packageID, expectedRevision)
+		string(content), storedFormat, status, string(diagnosticsJSON), actor, now.Unix(), packageID, expectedRevision)
 	if err != nil {
 		return RuleDraftValidation{}, fault.New(fault.CodeInternal, true, err)
 	}
@@ -1136,16 +1136,18 @@ func (r *Resources) ListSourceRuleBindings(ctx context.Context, sourceID string)
 	return result, nil
 }
 
-func draftValidation(content []byte, format string) ([]byte, string, []rules.ImportDiagnostic) {
+func draftValidation(content []byte, format string) ([]byte, string, []rules.ImportDiagnostic, string) {
 	imported, err := rules.ImportRulePackage(format, content)
 	if err != nil {
-		return append([]byte(nil), content...), RuleDraftInvalid, []rules.ImportDiagnostic{{Path: rules.ErrorField(err), Message: err.Error()}}
+		return append([]byte(nil), content...), RuleDraftInvalid,
+			[]rules.ImportDiagnostic{{Path: rules.ErrorField(err), Message: err.Error()}}, normalizeRuleFormat(format)
 	}
 	compiled, err := rules.CompilePackage(imported.CanonicalJSON)
 	if err != nil {
-		return imported.CanonicalJSON, RuleDraftInvalid, []rules.ImportDiagnostic{{Path: rules.ErrorField(err), Message: err.Error()}}
+		return imported.CanonicalJSON, RuleDraftInvalid,
+			[]rules.ImportDiagnostic{{Path: rules.ErrorField(err), Message: err.Error()}}, "json"
 	}
-	return compiled.Canonical, RuleDraftValidated, []rules.ImportDiagnostic{}
+	return compiled.Canonical, RuleDraftValidated, []rules.ImportDiagnostic{}, "json"
 }
 
 func normalizeRuleFormat(format string) string {

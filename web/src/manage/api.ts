@@ -619,7 +619,8 @@ export function useRuleDraft(packageId: string | undefined) {
 
 export interface SaveRuleDraftInput {
   packageId: string;
-  content: unknown;
+  /** JSON 也以原始文本提交，避免任何数字先经过 JavaScript Number。 */
+  content: string;
   format: RuleDraft['format'];
   /** GET 草稿返回的 revision。服务端用它做 CAS，冲突返回 409 RULE_DRAFT_CONFLICT。 */
   expectedRevision: number;
@@ -780,8 +781,8 @@ export function useRuleAudits(packageId: string | undefined) {
 }
 
 export interface ImpactInput {
-  before: Record<string, unknown> | null;
-  after: Record<string, unknown>;
+  before: string | null;
+  after: string;
 }
 
 /** 变更影响评估。发布前必须展示它：它决定要不要重扫、重投影、重建搜索或重建派生资源。 */
@@ -807,7 +808,8 @@ export function useExportRuleVersion(semanticHash: string | null) {
       expectData(
         await api.GET('/api/v1/rule-versions/{semanticHash}/export', {
           params: { path: { semanticHash: semanticHash ?? '' }, query: { format: 'json' } },
-          signal
+          signal,
+          parseAs: 'text'
         })
       )
   });
@@ -824,6 +826,14 @@ export function useRuleSchema(enabled: boolean) {
     queryKey: ['rules', 'schema'],
     enabled,
     queryFn: async ({ signal }) => expectData(await api.GET('/api/v1/rules/schema', { signal }))
+  });
+}
+
+/** 内置、脱敏且随二进制分发的规则模板；表单只把它们载入本地草稿，不自动保存。 */
+export function useRuleExamples() {
+  return useQuery({
+    queryKey: ['rules', 'examples'],
+    queryFn: async ({ signal }) => expectData(await api.GET('/api/v1/rules/examples', { signal }))
   });
 }
 

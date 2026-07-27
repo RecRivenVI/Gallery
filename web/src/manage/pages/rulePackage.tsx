@@ -10,9 +10,9 @@
  *    blockPublish 为真时服务端会直接拒绝发布（409 RULE_PUBLISH_BLOCKED）。
  */
 
-import { useEffect, useState } from 'react';
+import { lazy, Suspense, useEffect, useState } from 'react';
 import { Link, useParams } from 'react-router-dom';
-import { Badge, Button, Checkbox, ErrorState, Select, TextInput, useToast } from '../../design';
+import { Badge, Button, Checkbox, ErrorState, Select, Tabs, TextInput, useToast } from '../../design';
 import { describeError, errorCode, errorCorrelationId } from '../../shared/errors';
 import { useCapability } from '../../shared/session';
 import {
@@ -31,6 +31,7 @@ import {
   type RuleVersion
 } from '../api';
 import { IMPACT_CATEGORY_LABELS, IMPACT_CATEGORY_TONES } from '../labels';
+import { isRecord, parseRuleText } from '../rules/lossless';
 import {
   Absent,
   AsyncPanel,
@@ -48,6 +49,8 @@ import {
 
 type DraftFormat = RuleDraft['format'];
 
+const RuleSchemaForm = lazy(() => import('../rules/RuleSchemaForm'));
+
 const SHA256_DIGEST = /^[a-f0-9]{64}$/;
 
 function semanticHashOrUndefined(value: string | undefined): string | undefined {
@@ -56,22 +59,15 @@ function semanticHashOrUndefined(value: string | undefined): string | undefined 
 
 const DRAFT_FORMATS: readonly DraftFormat[] = ['json', 'yaml', 'toml'];
 
-function stringifyDraft(content: unknown, format: DraftFormat): string {
-  if (typeof content === 'string') return content;
-  if (format === 'json') return JSON.stringify(content, null, 2);
-  return JSON.stringify(content, null, 2);
-}
-
-function parseDraft(text: string, format: DraftFormat): { value: unknown; error?: string } {
+function parseDraft(
+  text: string,
+  format: DraftFormat
+): { value: Record<string, unknown> | string | null; error?: string } {
   if (format !== 'json') {
     // YAML/TOML 由服务端转换为规范 JSON；这里原样作为字符串提交。
     return { value: text };
   }
-  try {
-    return { value: JSON.parse(text) };
-  } catch (error) {
-    return { value: null, error: error instanceof Error ? error.message : '不是合法的 JSON' };
-  }
+  return parseRuleText(text);
 }
 
 /* ————————————————————————————— 草稿 ————————————————————————————— */
@@ -120,7 +116,7 @@ function workspaceFromDraft(
         : { baseSemanticHash: normalizedOverride ?? normalizedCurrent })
     };
   }
-  const text = stringifyDraft(draft.content, draft.format);
+  const text = draft.contentText;
   const baseSemanticHash =
     normalizedOverride ?? semanticHashOrUndefined(draft.baseSemanticHash) ?? normalizedCurrent;
   return {
@@ -160,6 +156,7 @@ function absorbDraftMutation(
 }
 
 interface DraftEditorProps {
+  ruleSetId: string | undefined;
   workspace: DraftWorkspace | null;
   draft: ReturnType<typeof useRuleDraft>;
   save: ReturnType<typeof useSaveRuleDraft>;
@@ -167,12 +164,13 @@ interface DraftEditorProps {
   isLocked: boolean;
   remoteChanged: boolean;
   onEdit: (text: string, format: DraftFormat) => void;
-  onSave: (content: unknown, format: DraftFormat) => void;
+  onSave: (content: string, format: DraftFormat) => void;
   onValidate: () => void;
   onAdoptLatest: () => void;
 }
 
 function DraftEditor({
+  ruleSetId,
   workspace,
   draft,
   save,
@@ -185,8 +183,12 @@ function DraftEditor({
   onAdoptLatest
 }: DraftEditorProps) {
   const canWrite = useCapability('rules.write');
+  const [mode, setMode] = useState<'form' | 'text'>('text');
+  const [opaqueInvalid, setOpaqueInvalid] = useState(false);
+  const [modeError, setModeError] = useState<string>();
   const missing = draft.isError && errorCode(draft.error) === 'NOT_FOUND';
   const parsed = parseDraft(workspace?.text ?? '', workspace?.format ?? 'json');
+  const emptyJSONDraft = workspace?.format === 'json' && workspace.text.trim() === '';
   const conflict =
     errorCode(save.error) === 'RULE_DRAFT_CONFLICT' || errorCode(validate.error) === 'RULE_DRAFT_CONFLICT';
 
@@ -267,22 +269,82 @@ function DraftEditor({
         onSelectionChange={(key) => {
           if (key === null) return;
           const next = key as DraftFormat;
+          if (next !== 'json') {
+            setMode('text');
+            setOpaqueInvalid(false);
+          }
           onEdit(workspace.text, next);
         }}
         description="YAML/TOML 只是导入形态，服务端会转换为规范 JSON 后再保存。运行时唯一事实源永远是规范 JSON。"
       />
 
-      <TextInput
-        label="草稿内容"
-        value={workspace.text}
-        onChange={(next) => {
-          onEdit(next, workspace.format);
+      <Tabs
+        label="规则编辑模式"
+        selectedKey={mode}
+        onSelectionChange={(key) => {
+          if (key === 'text' && opaqueInvalid) {
+            setModeError('请先修复表单中无损 JSON 字段的语法错误，再切换到文本模式。');
+            return;
+          }
+          setModeError(undefined);
+          setMode(key as 'form' | 'text');
         }}
-        isMultiline
-        rows={18}
-        isDisabled={!canWrite || isLocked}
-        errorMessage={workspace.format === 'json' ? parsed.error : undefined}
+        items={[
+          {
+            id: 'form',
+            label: 'Schema 表单',
+            isDisabled:
+              workspace.format !== 'json' ||
+              (!emptyJSONDraft && (parsed.error !== undefined || !isRecord(parsed.value))) ||
+              ruleSetId === undefined,
+            content:
+              workspace.format === 'json' &&
+              (emptyJSONDraft || (parsed.error === undefined && isRecord(parsed.value))) &&
+              ruleSetId !== undefined ? (
+                <Suspense fallback={<p className="manage-section__description">正在载入 Schema 表单…</p>}>
+                  <RuleSchemaForm
+                    value={isRecord(parsed.value) ? parsed.value : {}}
+                    ruleSetId={ruleSetId}
+                    isDisabled={!canWrite || isLocked}
+                    isDirty={workspace.dirty}
+                    onChange={(next) => onEdit(next, 'json')}
+                    onOpaqueValidityChange={setOpaqueInvalid}
+                  />
+                </Suspense>
+              ) : (
+                <p className="manage-section__description">
+                  Schema 表单当前不可用：
+                  {workspace.format !== 'json'
+                    ? 'YAML/TOML 只能在文本模式导入。'
+                    : (parsed.error ??
+                      (!isRecord(parsed.value) ? '草稿不是 JSON 对象。' : '规则包的 ruleSetId 尚未载入。'))}
+                </p>
+              )
+          },
+          {
+            id: 'text',
+            label: workspace.format === 'json' ? 'JSON 文本' : `${workspace.format.toUpperCase()} 文本`,
+            content: (
+              <TextInput
+                label="草稿内容"
+                value={workspace.text}
+                onChange={(next) => {
+                  onEdit(next, workspace.format);
+                }}
+                isMultiline
+                rows={18}
+                isDisabled={!canWrite || isLocked}
+                errorMessage={workspace.format === 'json' ? parsed.error : undefined}
+              />
+            )
+          }
+        ]}
       />
+      {modeError === undefined ? null : (
+        <p className="ui-field__error" role="alert">
+          {modeError}
+        </p>
+      )}
 
       {canWrite ? (
         <div className="manage-form__actions">
@@ -293,10 +355,11 @@ function DraftEditor({
               !workspace.dirty ||
               isLocked ||
               workspace.text === '' ||
-              (workspace.format === 'json' && parsed.error !== undefined)
+              (workspace.format === 'json' && parsed.error !== undefined) ||
+              opaqueInvalid
             }
             onPress={() => {
-              onSave(parsed.value, workspace.format);
+              onSave(workspace.text, workspace.format);
             }}
           >
             保存草稿
@@ -358,18 +421,10 @@ function DraftEditor({
 
 /* ————————————————————————————— 影响评估 ————————————————————————————— */
 
-/** 把编辑器文本解析成影响评估可用的目标状态。只有规范 JSON 对象才是合法输入。 */
-function draftAsObject(text: string, format: DraftFormat): Record<string, unknown> | null {
+/** 影响评估直接传精确文本；解析只用于确认它是规范 JSON 对象，不重编码任何数字。 */
+function draftAsJSONText(text: string, format: DraftFormat): string | null {
   if (format !== 'json') return null;
-  try {
-    const parsed: unknown = JSON.parse(text);
-    if (typeof parsed === 'object' && parsed !== null && !Array.isArray(parsed)) {
-      return parsed as Record<string, unknown>;
-    }
-    return null;
-  } catch {
-    return null;
-  }
+  return parseRuleText(text).value === null ? null : text;
 }
 
 function ImpactPanel({
@@ -387,7 +442,7 @@ function ImpactPanel({
 }) {
   const canWrite = useCapability('rules.write');
   const before = useExportRuleVersion(currentSemanticHash ?? null);
-  const afterPackage = draftAsObject(workspace?.text ?? '', workspace?.format ?? 'json');
+  const afterPackage = draftAsJSONText(workspace?.text ?? '', workspace?.format ?? 'json');
   const beforeReady = currentSemanticHash === undefined || before.data !== undefined;
   const currentEvidence =
     workspace !== null &&
@@ -874,7 +929,7 @@ function RulePackageContent({ packageId }: { packageId: string }) {
     resetAnalysis();
   };
 
-  const saveWorkspace = (content: unknown, format: DraftFormat) => {
+  const saveWorkspace = (content: string, format: DraftFormat) => {
     if (!workspace?.dirty || publish.isPending || publishRefreshPending) return;
     const submittedBase = workspace.baseSemanticHash;
     const submitted: SubmittedDraftSnapshot = {
@@ -1047,6 +1102,7 @@ function RulePackageContent({ packageId }: { packageId: string }) {
       >
         <ContractNoteList area="rules" only={['rules-draft-if-match']} />
         <DraftEditor
+          ruleSetId={rulePackage.data?.ruleSetId}
           workspace={workspace}
           draft={draft}
           save={save}

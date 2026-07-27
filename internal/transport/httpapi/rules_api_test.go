@@ -11,6 +11,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -46,6 +47,9 @@ func TestRuleLifecycleIsAvailableThroughAuthenticatedAPI(t *testing.T) {
 	if first["cacheHit"] != false || second["cacheHit"] != true || first["ruleIrHash"] != second["ruleIrHash"] {
 		t.Fatalf("compile/cache 响应错误: first=%+v second=%+v", first, second)
 	}
+	if text, ok := first["canonicalText"].(string); !ok || text == "" {
+		t.Fatalf("compile 响应缺少 RuleValidationResult 的 canonicalText: %+v", first)
+	}
 	dryRun := postRuleJSON(t, client, server.URL, csrf, "/api/v1/rules/dry-run", map[string]any{
 		"package": packageValue, "parameters": map[string]any{},
 		"sample": map[string]any{"path": "layout-a/work", "metadata": map[string]any{}, "files": []any{map[string]any{"path": "media.bin", "size": 8}}},
@@ -80,6 +84,86 @@ func TestRuleImportRejectsEmptyFormatAtTransportBoundary(t *testing.T) {
 		"format":  "",
 		"content": map[string]any{"schemaVersion": "1"},
 	}, http.StatusBadRequest)
+}
+
+func TestRuleHTTPPreservesCanonicalTextAcrossStringRequests(t *testing.T) {
+	server, client, csrf := pairedRuleServer(t)
+	packageJSON, err := os.ReadFile(filepath.Join("..", "..", "rules", "testdata", "minimal-rule-package.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	const exactInteger = "9007199254740993123"
+	packageJSON = bytes.Replace(packageJSON, []byte(`"one-work-one-media"`), []byte(`"one-work-one-media","exact":`+exactInteger), 1)
+	if !bytes.Contains(packageJSON, []byte(exactInteger)) {
+		t.Fatal("精确数字夹具替换失败")
+	}
+
+	validated := postRuleJSON(t, client, server.URL, csrf, "/api/v1/rules/validate", map[string]any{
+		"package": json.RawMessage(packageJSON),
+	})
+	if text, ok := validated["canonicalText"].(string); !ok || !strings.Contains(text, exactInteger) {
+		t.Fatalf("validate 未返回精确 canonicalText: %+v", validated)
+	}
+
+	imported := postRuleJSON(t, client, server.URL, csrf, "/api/v1/rules/import", map[string]any{
+		"format": "json", "content": string(packageJSON),
+	})
+	if _, ok := imported["canonicalJson"].(map[string]any); !ok {
+		t.Fatalf("import canonicalJson 不是 JSON object（可能仍是 base64）: %T %+v", imported["canonicalJson"], imported)
+	}
+	if text, ok := imported["canonicalText"].(string); !ok || !strings.Contains(text, exactInteger) {
+		t.Fatalf("import 未返回精确 canonicalText: %+v", imported)
+	}
+	objectImported := postRuleJSON(t, client, server.URL, csrf, "/api/v1/rules/import", map[string]any{
+		"format": "json", "content": json.RawMessage(packageJSON),
+	})
+	_, objectOK := objectImported["canonicalJson"].(map[string]any)
+	objectText, textOK := objectImported["canonicalText"].(string)
+	if !objectOK || !textOK || objectText == "" {
+		t.Fatalf("import 旧 object 请求不再兼容: %+v", objectImported)
+	}
+
+	pkg := requestRuleJSON(t, client, server.URL, csrf, http.MethodPost, "/api/v1/rule-packages", map[string]any{
+		"ruleSetId": "rset_018f47d2-5c16-7a44-a8a0-000000000001", "name": "精确文本规则包",
+	}, http.StatusCreated)
+	base := "/api/v1/rule-packages/" + pkg["id"].(string)
+	draft := requestRuleJSONWithIfMatch(t, client, server.URL, csrf, http.MethodPut, base+"/draft", map[string]any{
+		"format": "json", "content": string(packageJSON),
+	}, `"0"`, http.StatusOK)
+	if draft["format"] != "json" {
+		t.Fatalf("字符串 JSON 草稿格式未收敛: %+v", draft)
+	}
+	if text, ok := draft["contentText"].(string); !ok || !strings.Contains(text, exactInteger) {
+		t.Fatalf("草稿未返回精确 contentText: %+v", draft)
+	}
+	if _, ok := draft["content"].(map[string]any); !ok {
+		t.Fatalf("草稿旧 content 兼容字段不再是 JSON object: %T %+v", draft["content"], draft)
+	}
+
+	validation := requestRuleJSONWithIfMatch(t, client, server.URL, csrf, http.MethodPost, base+"/draft/validate", nil, `"1"`, http.StatusOK)
+	nested, ok := validation["validation"].(map[string]any)
+	if !ok {
+		t.Fatalf("草稿 validation 不是正式结果对象: %+v", validation)
+	}
+	if _, ok := nested["canonicalPackage"].(map[string]any); !ok {
+		t.Fatalf("草稿 validation canonicalPackage 不是对象: %+v", nested)
+	}
+	if text, ok := nested["canonicalText"].(string); !ok || !strings.Contains(text, exactInteger) {
+		t.Fatalf("草稿 validation 未返回精确 canonicalText: %+v", nested)
+	}
+
+	initial := postRuleJSON(t, client, server.URL, csrf, "/api/v1/rules/impact", map[string]any{
+		"before": nil, "after": string(packageJSON),
+	})
+	if initial["category"] != "RESCAN_FULL" {
+		t.Fatalf("字符串 after 破坏首次 Impact: %+v", initial)
+	}
+	unchanged := postRuleJSON(t, client, server.URL, csrf, "/api/v1/rules/impact", map[string]any{
+		"before": string(packageJSON), "after": string(packageJSON),
+	})
+	if unchanged["category"] != "NO_ACTION" {
+		t.Fatalf("字符串 before/after 未按精确 JSON 处理: %+v", unchanged)
+	}
 }
 
 func TestPersistentRulePackageAPIUsesRevisionAndPublishCapability(t *testing.T) {

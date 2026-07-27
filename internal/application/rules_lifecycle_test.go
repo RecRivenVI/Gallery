@@ -17,6 +17,7 @@ import (
 	"github.com/RecRivenVI/gallery/internal/platform/clock"
 	"github.com/RecRivenVI/gallery/internal/platform/filesystem"
 	"github.com/RecRivenVI/gallery/internal/platform/identity"
+	"github.com/RecRivenVI/gallery/internal/rules"
 	"github.com/RecRivenVI/gallery/internal/storage"
 )
 
@@ -327,17 +328,160 @@ func TestInvalidRuleDraftIsPreservedAcrossValidation(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	pkg, err := resources.CreateRulePackage(ctx, "", "无效草稿", "", "owner")
+	for _, test := range []struct {
+		format  string
+		invalid string
+	}{
+		{format: "json", invalid: `{"`},
+		{format: "yaml", invalid: "base: &base\ncopy: *base\n"},
+		{format: "toml", invalid: "value = 1.5\n"},
+	} {
+		t.Run(test.format, func(t *testing.T) {
+			pkg, err := resources.CreateRulePackage(ctx, "", "无效草稿 "+test.format, "", "owner")
+			if err != nil {
+				t.Fatal(err)
+			}
+			draft, err := resources.SaveRuleDraft(ctx, pkg.ID, []byte(test.invalid), test.format, "", 0, "owner")
+			if err != nil || draft.ValidationStatus != application.RuleDraftInvalid || draft.SourceFormat != test.format || string(draft.Content) != test.invalid {
+				t.Fatalf("无效 %s 草稿保存错误: %+v %v", test.format, draft, err)
+			}
+			validation, err := resources.ValidateRuleDraft(ctx, pkg.ID, draft.Revision, "owner")
+			if err != nil || validation.Valid || validation.Draft.SourceFormat != test.format || string(validation.Draft.Content) != test.invalid || validation.Draft.ValidationStatus != application.RuleDraftInvalid {
+				t.Fatalf("无效 %s 草稿校验后未保留: %+v %v", test.format, validation, err)
+			}
+		})
+	}
+}
+
+func TestRuleDraftImportFormatsConvergeBeforeStoredValidation(t *testing.T) {
+	const yamlPackage = `rule_set_id: rset_018f47d2-5c16-7a44-a8a0-000000000001
+version: 0.1.0
+schema_version: 1
+normalization_algorithm_version: gallery-canonical-json-v1
+compiler_requirement: gallery-rule-compiler-v1
+cel_profile_version: gallery-cel-v1
+parameter_schema:
+  type: object
+  additionalProperties: false
+provider_namespaces: []
+primitives:
+  - id: work
+    kind: path_match
+    config:
+      scope: work_directory
+      glob: "*"
+      title: directory_name
+      stable_key: relative_path
+      metadata_file: metadata.json
+  - id: creator
+    kind: metadata_map
+    config:
+      fields:
+        creator: ["/creator/name"]
+  - id: media
+    kind: media_classify
+    config:
+      glob: "*.bin"
+      kind: image
+      mime: application/octet-stream
+cel_expressions: []
+tests:
+  - id: one-work-one-media
+extensions: {}
+`
+	const tomlPackage = `rule_set_id = "rset_018f47d2-5c16-7a44-a8a0-000000000001"
+version = "0.1.0"
+schema_version = 1
+normalization_algorithm_version = "gallery-canonical-json-v1"
+compiler_requirement = "gallery-rule-compiler-v1"
+cel_profile_version = "gallery-cel-v1"
+provider_namespaces = []
+cel_expressions = []
+tests = [{id = "one-work-one-media"}]
+
+[parameter_schema]
+type = "object"
+additionalProperties = false
+
+[[primitives]]
+id = "work"
+kind = "path_match"
+[primitives.config]
+scope = "work_directory"
+glob = "*"
+title = "directory_name"
+stable_key = "relative_path"
+metadata_file = "metadata.json"
+
+[[primitives]]
+id = "creator"
+kind = "metadata_map"
+[primitives.config.fields]
+creator = ["/creator/name"]
+
+[[primitives]]
+id = "media"
+kind = "media_classify"
+[primitives.config]
+glob = "*.bin"
+kind = "image"
+mime = "application/octet-stream"
+
+[extensions]
+`
+	jsonPackage, err := os.ReadFile(filepath.Join("..", "rules", "testdata", "minimal-rule-package.json"))
 	if err != nil {
 		t.Fatal(err)
 	}
-	const invalid = `{"`
-	draft, err := resources.SaveRuleDraft(ctx, pkg.ID, []byte(invalid), "json", "", 0, "owner")
-	if err != nil || draft.ValidationStatus != application.RuleDraftInvalid || string(draft.Content) != invalid {
-		t.Fatalf("无效草稿保存错误: %+v %v", draft, err)
+	expected, err := rules.CompilePackage(jsonPackage)
+	if err != nil {
+		t.Fatal(err)
 	}
-	validation, err := resources.ValidateRuleDraft(ctx, pkg.ID, draft.Revision, "owner")
-	if err != nil || validation.Valid || string(validation.Draft.Content) != invalid || validation.Draft.ValidationStatus != application.RuleDraftInvalid {
-		t.Fatalf("无效草稿校验后未保留: %+v %v", validation, err)
+	tests := []struct {
+		name   string
+		format string
+		input  []byte
+	}{
+		{name: "json", format: "json", input: jsonPackage},
+		{name: "yaml", format: "yaml", input: []byte(yamlPackage)},
+		{name: "toml", format: "toml", input: []byte(tomlPackage)},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			ctx := context.Background()
+			dirs := appdirs.UnderRoot(filepath.Join(t.TempDir(), "app"))
+			if err := dirs.Ensure(filesystem.OS{}); err != nil {
+				t.Fatal(err)
+			}
+			store, err := storage.Open(ctx, dirs)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer store.Close()
+			now := clock.Fixed{Time: time.Date(2026, 7, 27, 0, 0, 0, 0, time.UTC)}
+			resources, err := application.NewResources(store.Control.SQL(), dirs, filesystem.OS{}, now, identity.NewGenerator(now))
+			if err != nil {
+				t.Fatal(err)
+			}
+			pkg, err := resources.CreateRulePackage(ctx, expected.RuleSetID, "格式收敛", "", "owner")
+			if err != nil {
+				t.Fatal(err)
+			}
+			draft, err := resources.SaveRuleDraft(ctx, pkg.ID, test.input, test.format, "", 0, "owner")
+			if err != nil {
+				t.Fatal(err)
+			}
+			if draft.SourceFormat != "json" || draft.ValidationStatus != application.RuleDraftValidated || !bytes.Equal(draft.Content, expected.Canonical) {
+				t.Fatalf("%s 保存未收敛到 canonical JSON: format=%s status=%s content=%s", test.format, draft.SourceFormat, draft.ValidationStatus, draft.Content)
+			}
+			stored, err := resources.GetRuleDraft(ctx, pkg.ID)
+			if err != nil || stored.SourceFormat != "json" || !bytes.Equal(stored.Content, expected.Canonical) {
+				t.Fatalf("%s 读取草稿错误: %+v %v", test.format, stored, err)
+			}
+			validated, err := resources.ValidateRuleDraft(ctx, pkg.ID, stored.Revision, "owner")
+			if err != nil || !validated.Valid || validated.Draft.SourceFormat != "json" || !bytes.Equal(validated.Draft.Content, expected.Canonical) {
+				t.Fatalf("%s 重新校验破坏 canonical 草稿: %+v %v", test.format, validated, err)
+			}
+		})
 	}
 }

@@ -23,6 +23,7 @@ import { ThemeProvider } from '../shared/theme';
 import { ToastProvider } from '../design';
 import { faultResponse, jsonResponse, setFetchHandler } from '../../tests/http';
 import { ManageApp } from './app';
+import RULE_SCHEMA from '../../../internal/rules/rule-package.schema.json';
 
 /* ————————————————————————————— HTTP 桩 ————————————————————————————— */
 
@@ -156,6 +157,22 @@ const SOURCE = {
 
 const OLD_RULE_HASH = 'a'.repeat(64);
 const NEW_RULE_HASH = 'b'.repeat(64);
+const FORM_RULE_SET_ID = 'rset_00000000-0000-7000-8000-000000000001';
+
+const LOSSLESS_RULE_TEXT = `{
+  "rule_set_id": "${FORM_RULE_SET_ID}",
+  "version": "1.0.0",
+  "schema_version": 1,
+  "normalization_algorithm_version": "gallery-canonical-json-v1",
+  "compiler_requirement": "gallery-rule-compiler-v1",
+  "cel_profile_version": "gallery-cel-v1",
+  "parameter_schema": {"type": "object", "additionalProperties": false},
+  "provider_namespaces": [],
+  "primitives": [{"id": "metadata", "kind": "metadata_map", "config": {"integer": 9007199254740993123, "decimal": 1.2300000000000000001}}],
+  "cel_expressions": [],
+  "tests": [{"input": {"exponent": 1e+40}}],
+  "extensions": {"example.lossless": {"value": 9007199254740993123}}
+}`;
 
 function rulePackage(overrides: Record<string, unknown> = {}): Record<string, unknown> {
   return {
@@ -173,10 +190,12 @@ function rulePackage(overrides: Record<string, unknown> = {}): Record<string, un
 }
 
 function ruleDraft(overrides: Record<string, unknown> = {}): Record<string, unknown> {
+  const content = overrides.content ?? { version: 1 };
   return {
     id: 'draft_01',
     packageId: 'pkg_01',
-    content: { version: 1 },
+    content,
+    contentText: typeof content === 'string' ? content : JSON.stringify(content, null, 2),
     format: 'json',
     validationStatus: 'draft',
     diagnostics: [],
@@ -663,6 +682,141 @@ describe('同名 Source 写入身份', () => {
 /* ————————————————————————————— 5. 草稿 If-Match 冲突 ————————————————————————————— */
 
 describe('规则草稿', () => {
+  it('首次草稿可从内置模板起步，并注入当前 ruleSetId、移除派生 hash', async () => {
+    const examplePackage: Record<string, unknown> = {
+      rule_set_id: 'rset_00000000-0000-7000-8000-000000000099',
+      version: '1.0.0',
+      schema_version: 1,
+      normalization_algorithm_version: 'gallery-canonical-json-v1',
+      compiler_requirement: 'gallery-rule-compiler-v1',
+      cel_profile_version: 'gallery-cel-v1',
+      parameter_schema: { type: 'object', additionalProperties: false },
+      provider_namespaces: [],
+      primitives: [],
+      cel_expressions: [],
+      tests: [{}],
+      extensions: {},
+      package_hash: 'c'.repeat(64),
+      semantic_hash: 'd'.repeat(64)
+    };
+    route('GET /api/v1/rule-packages/pkg_01', () =>
+      jsonResponse(rulePackage({ ruleSetId: FORM_RULE_SET_ID }))
+    );
+    route('GET /api/v1/rule-packages/pkg_01/draft', () => faultResponse('NOT_FOUND', 404, 'corr-empty'));
+    route('GET /api/v1/rule-packages/pkg_01/versions', () => jsonResponse({ items: [] }));
+    route('GET /api/v1/rule-packages/pkg_01/audits', () => jsonResponse({ items: [] }));
+    route('GET /api/v1/rules/schema', () => jsonResponse(RULE_SCHEMA));
+    route('GET /api/v1/rules/examples', () =>
+      jsonResponse({
+        items: [
+          {
+            id: 'author-work-media',
+            name: '作者—作品—媒体层级',
+            category: 'hierarchical',
+            packageHash: 'c'.repeat(64),
+            semanticHash: 'd'.repeat(64),
+            package: examplePackage
+          }
+        ]
+      })
+    );
+
+    renderManage('/rules/pkg_01');
+    await userEvent.click(await screen.findByRole('tab', { name: 'Schema 表单' }));
+    await screen.findByTestId('rule-schema-form');
+    await selectOption(/起始模板/, '作者—作品—媒体层级');
+    await userEvent.click(screen.getByRole('button', { name: '载入起始模板' }));
+
+    expect(screen.getByText('有未保存修改')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: '保存草稿' })).not.toBeDisabled();
+    await userEvent.click(screen.getByRole('tab', { name: 'JSON 文本' }));
+    const text = (screen.getByRole('textbox', { name: /草稿内容/ }) as HTMLTextAreaElement).value;
+    expect(text).toContain(`"rule_set_id": "${FORM_RULE_SET_ID}"`);
+    expect(text).not.toContain('package_hash');
+    expect(text).not.toContain('semantic_hash');
+    expect(requestsTo('PUT /api/v1/rule-packages/pkg_01/draft')).toHaveLength(0);
+  });
+
+  it('Schema 表单复用草稿状态机，Schema 错误不阻止保存且未知数字无损', async () => {
+    let saveBody: Promise<{ content: string; format: string }> | undefined;
+    route('GET /api/v1/rule-packages/pkg_01', () =>
+      jsonResponse(rulePackage({ ruleSetId: FORM_RULE_SET_ID }))
+    );
+    route('GET /api/v1/rule-packages/pkg_01/draft', () =>
+      jsonResponse(
+        ruleDraft({
+          content: JSON.parse(LOSSLESS_RULE_TEXT),
+          contentText: LOSSLESS_RULE_TEXT,
+          validationStatus: 'draft'
+        })
+      )
+    );
+    route('GET /api/v1/rule-packages/pkg_01/versions', () => jsonResponse({ items: [] }));
+    route('GET /api/v1/rule-packages/pkg_01/audits', () => jsonResponse({ items: [] }));
+    route('GET /api/v1/rules/schema', () => jsonResponse(RULE_SCHEMA));
+    route('GET /api/v1/rules/examples', () => jsonResponse({ items: [] }));
+    route('PUT /api/v1/rule-packages/pkg_01/draft', (request) => {
+      saveBody = request.clone().json() as Promise<{ content: string; format: string }>;
+      return request
+        .clone()
+        .json()
+        .then((body: { content: string }) =>
+          jsonResponse(
+            ruleDraft({
+              content: JSON.parse(body.content),
+              contentText: body.content,
+              revision: 4,
+              validationStatus: 'invalid',
+              diagnostics: [{ path: '/version', message: '版本格式无效' }]
+            })
+          )
+        );
+    });
+
+    renderManage('/rules/pkg_01');
+    const formTab = await screen.findByRole('tab', { name: 'Schema 表单' });
+    expect(screen.getByRole('button', { name: '保存草稿' })).toBeDisabled();
+    await userEvent.click(formTab);
+    await waitFor(() => expect(formTab).toHaveAttribute('aria-selected', 'true'));
+    await waitFor(() => expect(requestsTo('GET /api/v1/rules/schema')).toHaveLength(1));
+    const formState = await screen.findByText(/运行时 Schema 与前端预编译版本不一致|Schema 错误是即时预检/);
+    expect(formState).toHaveTextContent('Schema 错误是即时预检');
+    await screen.findByTestId('rule-schema-form');
+    const extensions = screen.getByRole('textbox', { name: /extensions/ }) as HTMLTextAreaElement;
+    const exactExtensions = extensions.value;
+    expect(exactExtensions).toContain('9007199254740993123');
+    const version = await screen.findByRole('textbox', { name: /规则版本/ });
+    await userEvent.clear(version);
+    await userEvent.type(version, '1.0.1');
+    fireEvent.change(extensions, { target: { value: '{' } });
+    expect(screen.getByRole('button', { name: '保存草稿' })).toBeDisabled();
+    await userEvent.click(screen.getByRole('tab', { name: 'JSON 文本' }));
+    expect(screen.getByRole('tab', { name: 'Schema 表单' })).toHaveAttribute('aria-selected', 'true');
+    expect(
+      screen.getByText('请先修复表单中无损 JSON 字段的语法错误，再切换到文本模式。')
+    ).toBeInTheDocument();
+    fireEvent.change(extensions, { target: { value: exactExtensions } });
+    await waitFor(() => expect(screen.getByRole('button', { name: '保存草稿' })).not.toBeDisabled());
+
+    await userEvent.clear(version);
+    await userEvent.type(version, 'invalid-version');
+    fireEvent.blur(version);
+
+    expect((await screen.findAllByText(/must match pattern/i)).length).toBeGreaterThan(0);
+    // 本地 AJV 是预检：服务端明确允许保存 invalid 草稿，因此按钮仍可用。
+    expect(screen.getByRole('button', { name: '保存草稿' })).not.toBeDisabled();
+    await userEvent.click(screen.getByRole('button', { name: '保存草稿' }));
+    await waitFor(() => expect(requestsTo('PUT /api/v1/rule-packages/pkg_01/draft')).toHaveLength(1));
+
+    const body = await saveBody;
+    expect(body?.format).toBe('json');
+    expect(body?.content).toContain('9007199254740993123');
+    expect(body?.content).toContain('1.2300000000000000001');
+    expect(body?.content).toContain('1e+40');
+    expect(body?.content).toContain('"version": "invalid-version"');
+    expect(requestsTo('PUT /api/v1/rule-packages/pkg_01/draft')[0]?.ifMatch).toBe('"3"');
+  });
+
   it('保存带 If-Match 修订号，冲突时报告 RULE_DRAFT_CONFLICT 且不覆盖服务端内容', async () => {
     route('GET /api/v1/rule-packages/pkg_01', () => jsonResponse(rulePackage()));
     route('GET /api/v1/rule-packages/pkg_01/draft', () => jsonResponse(ruleDraft()));
@@ -728,7 +882,7 @@ describe('规则草稿', () => {
 
     await waitFor(() => expect(requestsTo('PUT /api/v1/rule-packages/pkg_01/draft')).toHaveLength(1));
     expect(requestsTo('PUT /api/v1/rule-packages/pkg_01/draft')[0]?.ifMatch).toBe('"0"');
-    expect(await saveBody).toEqual({ content: { version: 1 }, format: 'json' });
+    expect(await saveBody).toEqual({ content: '{"version":1}', format: 'json' });
 
     await userEvent.click(await screen.findByRole('button', { name: '校验草稿' }));
     await screen.findByText('校验通过');
@@ -736,7 +890,7 @@ describe('规则草稿', () => {
 
     await userEvent.click(screen.getByRole('button', { name: '评估本次修改的影响' }));
     await waitFor(() => expect(requestsTo('POST /api/v1/rules/impact')).toHaveLength(1));
-    expect(await impactBody).toEqual({ before: null, after: { version: 1 } });
+    expect(await impactBody).toEqual({ before: null, after: '{\n  "version": 1\n}' });
   });
 
   it('保存请求期间的新编辑不会被成功响应覆盖，并推进到服务端新 revision', async () => {
@@ -946,7 +1100,7 @@ describe('规则草稿', () => {
     await waitFor(() => expect(requestsTo('PUT /api/v1/rule-packages/pkg_01/draft')).toHaveLength(1));
     expect(requestsTo('PUT /api/v1/rule-packages/pkg_01/draft')[0]?.ifMatch).toBe('"3"');
     expect(await nextSaveBody).toEqual({
-      content: { version: 2 },
+      content: '{"version":2}',
       format: 'json',
       baseSemanticHash: NEW_RULE_HASH
     });

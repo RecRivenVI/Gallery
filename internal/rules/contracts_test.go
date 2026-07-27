@@ -61,3 +61,41 @@ func TestPackageHashesSeparateDistributionFromRuntimeSemantics(t *testing.T) {
 		}
 	}
 }
+
+func TestCompilePackageRejectsInvalidParameterSchemaBeforeBinding(t *testing.T) {
+	base, err := os.ReadFile(filepath.Join("testdata", "minimal-rule-package.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	original := []byte(`{"type": "object", "additionalProperties": false}`)
+	for _, test := range []struct {
+		name   string
+		schema string
+	}{
+		{name: "external ref", schema: `{"$ref":"file:///C:/forbidden/schema.json"}`},
+		{name: "invalid type", schema: `{"type":"not-a-json-schema-type"}`},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			input := bytes.Replace(base, original, []byte(test.schema), 1)
+			if bytes.Equal(input, base) {
+				t.Fatal("测试未替换 parameter_schema")
+			}
+			_, err := rules.CompilePackage(input)
+			if err == nil {
+				t.Fatal("非法 parameter_schema 未在 RulePackage 编译阶段拒绝")
+			}
+			if field := rules.ErrorField(err); field != "/parameter_schema" {
+				t.Fatalf("错误字段 = %q, want /parameter_schema; err=%v", field, err)
+			}
+		})
+	}
+
+	selfContained := bytes.Replace(base, original, []byte(`{
+  "$defs":{"name":{"type":"string","default":"匿名"}},
+  "type":"object","additionalProperties":false,
+  "properties":{"name":{"$ref":"#/$defs/name"}}
+}`), 1)
+	if _, err := rules.CompilePackage(selfContained); err != nil {
+		t.Fatalf("自包含 parameter_schema 被拒绝: %v", err)
+	}
+}

@@ -14,9 +14,10 @@
   "scripts": {
     "audit:ci": "node scripts/check-audit.mjs",
     "dev": "vite",
-    "generate": "npm run generate:api && npm run generate:icons",
+    "generate": "npm run generate:api && npm run generate:icons && npm run generate:rules-schema",
     "generate:api": "openapi-typescript ../internal/contract/api/openapi.yaml -o src/api/schema.gen.ts",
     "generate:icons": "node scripts/generate-icons.mjs",
+    "generate:rules-schema": "node scripts/generate-rule-schema-validator.mjs",
     "typecheck": "tsc -b --pretty false",
     "lint": "eslint . --max-warnings=0",
     "format:check": "prettier --check .",
@@ -27,7 +28,12 @@
     "test:smoke": "playwright test --project=chromium --grep @smoke"
   },
   "dependencies": {
+    "@rjsf/core": "6.7.1",
+    "@rjsf/utils": "6.7.1",
+    "@rjsf/validator-ajv8": "6.7.1",
     "@tanstack/react-query": "5.101.4",
+    "ajv": "8.20.0",
+    "lossless-json": "4.3.0",
     "openapi-fetch": "0.17.0",
     "react": "19.2.8",
     "react-aria-components": "1.19.0",

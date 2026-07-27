@@ -168,6 +168,111 @@
   gap: var(--space-2);
 }
 
+/* RJSF 只负责从权威 Schema 生成语义结构；视觉仍使用 Gallery 的 token。选择器限制在
+   manage-rule-schema-form 内，避免第三方类名影响其它管理页面。 */
+.manage-rule-schema-form,
+.manage-rule-schema-form .form-group,
+.manage-rule-schema-form .array-item-list,
+.manage-rule-schema-form .array-item {
+  display: grid;
+  gap: var(--space-3);
+  min-width: 0;
+}
+
+.manage-rule-schema-form fieldset {
+  display: grid;
+  gap: var(--space-3);
+  min-width: 0;
+  margin: 0;
+  padding: var(--space-3);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-sm);
+}
+
+.manage-rule-schema-form fieldset fieldset {
+  background: color-mix(in srgb, var(--color-surface) 65%, transparent);
+}
+
+.manage-rule-schema-form legend,
+.manage-rule-schema-form .control-label {
+  color: var(--color-text);
+  font-size: var(--text-sm);
+  font-weight: 650;
+  line-height: var(--leading-tight);
+}
+
+.manage-rule-schema-form legend {
+  padding-inline: var(--space-1);
+}
+
+.manage-rule-schema-form .form-control {
+  width: 100%;
+  min-height: var(--control-height);
+  padding: var(--space-2) var(--space-3);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-sm);
+  background: var(--color-surface);
+  color: var(--color-text);
+  font: inherit;
+}
+
+.manage-rule-schema-form textarea.form-control {
+  min-height: 8rem;
+  resize: vertical;
+  font-family: var(--font-mono);
+}
+
+.manage-rule-schema-form .form-control:focus-visible,
+.manage-rule-schema-form button:focus-visible {
+  outline: 2px solid transparent;
+  box-shadow: var(--focus-ring);
+}
+
+.manage-rule-schema-form .field-description,
+.manage-rule-schema-form .help-block {
+  margin: 0;
+  color: var(--color-text-muted);
+  font-size: var(--text-xs);
+}
+
+.manage-rule-schema-form .error-detail {
+  margin: 0;
+  padding-inline-start: var(--space-5);
+  color: var(--color-danger);
+  font-size: var(--text-xs);
+  font-weight: 600;
+}
+
+.manage-rule-schema-form .array-item-toolbox,
+.manage-rule-schema-form .row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: end;
+  gap: var(--space-2);
+}
+
+.manage-rule-schema-form button {
+  min-height: var(--control-height);
+  padding: var(--space-2) var(--space-3);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-sm);
+  background: var(--color-surface);
+  color: var(--color-text);
+  font: inherit;
+  cursor: pointer;
+}
+
+.manage-rule-schema-form button:hover:not(:disabled) {
+  border-color: var(--color-accent);
+}
+
+.manage-rule-schema-form button:disabled,
+.manage-rule-schema-form .form-control:disabled,
+.manage-rule-schema-form .form-control:read-only {
+  opacity: 0.58;
+  cursor: not-allowed;
+}
+
 /* ————————————————————————————— 表格 ————————————————————————————— */
 
 .manage-table-scroll {

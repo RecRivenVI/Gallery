@@ -1,6 +1,7 @@
 package httpapi
 
 import (
+	"bytes"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -209,7 +210,14 @@ func (s *Server) validateRuleDraft(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	w.Header().Set("ETag", fmt.Sprintf("\"%d\"", result.Draft.Revision))
-	writeJSON(w, http.StatusOK, map[string]any{"draft": ruleDraftMap(result.Draft), "valid": result.Valid, "diagnostics": result.Diagnostics, "validation": result.Validation})
+	var validation any
+	if result.Validation != nil {
+		validation = ruleValidationMap(*result.Validation)
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"draft": ruleDraftMap(result.Draft), "valid": result.Valid,
+		"diagnostics": result.Diagnostics, "validation": validation,
+	})
 }
 
 func (s *Server) publishRuleDraft(w http.ResponseWriter, r *http.Request) {
@@ -653,7 +661,10 @@ func (s *Server) importRulePackage(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	_ = session
-	writeJSON(w, http.StatusOK, result)
+	writeJSON(w, http.StatusOK, map[string]any{
+		"format": result.Format, "canonicalJson": json.RawMessage(result.CanonicalJSON),
+		"canonicalText": string(result.CanonicalJSON), "diagnostics": result.Diagnostics,
+	})
 }
 
 func (s *Server) diffRulePackages(w http.ResponseWriter, r *http.Request) {
@@ -805,7 +816,41 @@ func decodeRuleContent(raw json.RawMessage, format string) ([]byte, error) {
 		}
 		return []byte(text), nil
 	}
+	// JSON 文本编辑器必须能把原始 JSON 作为字符串传输；若先在浏览器中 JSON.parse，
+	// 超过 Number 安全范围的整数已经不可逆地丢失。规则包根 Schema 只接受 object，
+	// 因而把 JSON string 解释成其字符串内容不会与合法规则包值产生歧义。
+	if len(bytes.TrimSpace(raw)) > 0 && bytes.TrimSpace(raw)[0] == '"' {
+		var text string
+		if err := json.Unmarshal(raw, &text); err != nil {
+			return nil, errors.New("JSON content 字符串无效")
+		}
+		return []byte(text), nil
+	}
 	return append([]byte(nil), raw...), nil
+}
+
+func decodeRuleJSONDocument(raw json.RawMessage, allowNull bool) ([]byte, error) {
+	trimmed := bytes.TrimSpace(raw)
+	if len(trimmed) == 0 {
+		return nil, errors.New("规则 JSON 不能为空")
+	}
+	if bytes.Equal(trimmed, []byte("null")) {
+		if allowNull {
+			return []byte("null"), nil
+		}
+		return nil, errors.New("规则 JSON 不能为 null")
+	}
+	if trimmed[0] != '"' {
+		return append([]byte(nil), raw...), nil
+	}
+	var text string
+	if err := json.Unmarshal(raw, &text); err != nil {
+		return nil, errors.New("规则 JSON 文本无效")
+	}
+	if len(bytes.TrimSpace([]byte(text))) == 0 {
+		return nil, errors.New("规则 JSON 文本不能为空")
+	}
+	return []byte(text), nil
 }
 
 func ifMatchRevision(r *http.Request) int {
@@ -884,7 +929,7 @@ func ruleDraftMap(value application.RuleDraft) map[string]any {
 		content = json.RawMessage(value.Content)
 	}
 	result := map[string]any{
-		"id": value.ID, "packageId": value.PackageID, "content": content,
+		"id": value.ID, "packageId": value.PackageID, "content": content, "contentText": string(value.Content),
 		"format": value.SourceFormat, "validationStatus": value.ValidationStatus,
 		"diagnostics": json.RawMessage(defaultJSON(value.Diagnostics, []byte("[]"))), "revision": value.Revision,
 		"savedBy": value.SavedBy, "createdAt": value.CreatedAt, "updatedAt": value.UpdatedAt,
@@ -893,6 +938,13 @@ func ruleDraftMap(value application.RuleDraft) map[string]any {
 		result["baseSemanticHash"] = value.BaseSemanticHash
 	}
 	return result
+}
+
+func ruleValidationMap(value rules.ValidationResult) map[string]any {
+	return map[string]any{
+		"canonicalPackage": json.RawMessage(value.CanonicalJSON), "canonicalText": string(value.CanonicalJSON),
+		"packageHash": value.PackageHash, "semanticHash": value.SemanticHash,
+	}
 }
 
 func ruleVersionMap(value application.RuleVersion) map[string]any {

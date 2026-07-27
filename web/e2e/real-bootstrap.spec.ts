@@ -91,8 +91,28 @@ test('真实 galleryd 从空实例完成规则 UI 生命周期、绑定与 publi
   await expect(page.getByRole('heading', { name: '规则包', exact: true })).toBeVisible();
   await expect(page.getByText('尚无草稿', { exact: true }).first()).toBeVisible();
 
+  const [schemaResponse, examplesResponse] = await Promise.all([
+    page.waitForResponse((response) => pathIs(response, '/api/v1/rules/schema')),
+    page.waitForResponse((response) => pathIs(response, '/api/v1/rules/examples')),
+    page.getByRole('tab', { name: 'Schema 表单' }).click()
+  ]);
+  expect(schemaResponse.status()).toBe(200);
+  expect(schemaResponse.headers()['content-type']).toContain('application/schema+json');
+  expect(examplesResponse.status()).toBe(200);
+  await page.getByRole('button', { name: /起始模板/ }).click();
+  await page.getByRole('option', { name: '作者—作品—媒体层级' }).click();
+  await page.getByRole('button', { name: '载入起始模板' }).click();
+  await page.getByRole('textbox', { name: /规则版本/ }).fill('1.0.1');
+  await expect(page.getByText('有未保存修改', { exact: true })).toBeVisible();
+  await page.getByRole('tab', { name: 'JSON 文本' }).click();
+  const textEditor = page.getByRole('textbox', { name: '草稿内容' });
+  const templatedText = await textEditor.inputValue();
+  expect(templatedText).toContain(ruleSetId);
+  expect(templatedText).not.toContain('package_hash');
+  expect(templatedText).not.toContain('semantic_hash');
+
   const draftText = JSON.stringify(rulePackage, null, 2);
-  await page.getByRole('textbox', { name: '草稿内容' }).fill(draftText);
+  await textEditor.fill(draftText);
   const [saveResponse] = await Promise.all([
     page.waitForResponse((response) =>
       pathIs(response, `/api/v1/rule-packages/${createdPackage.id}/draft`, 'PUT')
@@ -101,11 +121,12 @@ test('真实 galleryd 从空实例完成规则 UI 生命周期、绑定与 publi
   ]);
   expect(saveResponse.status()).toBe(200);
   expect(saveResponse.request().headers()['if-match']).toBe('"0"');
-  expect(saveResponse.request().postDataJSON()).toEqual({ content: rulePackage, format: 'json' });
+  expect(saveResponse.request().postDataJSON()).toEqual({ content: draftText, format: 'json' });
   const savedDraft = (await saveResponse.json()) as {
     revision: number;
     format: string;
     content: unknown;
+    contentText: string;
   };
   expect(savedDraft.revision).toBeGreaterThan(0);
   expect(savedDraft.format).toBe('json');
@@ -113,6 +134,7 @@ test('真实 galleryd 从空实例完成规则 UI 生命周期、绑定与 publi
   const canonicalRulePackage = savedDraft.content as Record<string, unknown>;
   expect(canonicalRulePackage.package_hash).toMatch(/^[a-f0-9]{64}$/);
   expect(canonicalRulePackage.semantic_hash).toMatch(/^[a-f0-9]{64}$/);
+  expect(savedDraft.contentText).toBe(JSON.stringify(canonicalRulePackage));
   const savedRevision = savedDraft.revision;
   const serverDraftRevision = page
     .locator('dt', { hasText: /^服务端草稿 revision$/ })
@@ -133,12 +155,13 @@ test('真实 galleryd 从空实例完成规则 UI 生命周期、绑定与 publi
   expect(validationResponse.request().headers()['if-match']).toBe(`"${savedRevision}"`);
   const validation = (await validationResponse.json()) as {
     valid: boolean;
-    draft: { revision: number; content: unknown; validationStatus: string };
+    draft: { revision: number; content: unknown; contentText: string; validationStatus: string };
   };
   expect(validation.valid).toBe(true);
   expect(validation.draft.validationStatus).toBe('validated');
   expect(validation.draft.revision).toBeGreaterThan(savedRevision);
   expect(validation.draft.content).toEqual(canonicalRulePackage);
+  expect(validation.draft.contentText).toBe(savedDraft.contentText);
   const validatedRevision = validation.draft.revision;
   await expect(serverDraftRevision).toHaveText(String(validatedRevision));
   await expect(localDraftRevision).toHaveText(String(validatedRevision));
@@ -153,7 +176,7 @@ test('真实 galleryd 从空实例完成规则 UI 生命周期、绑定与 publi
   expect(impactResponse.status()).toBe(200);
   expect(impactResponse.request().postDataJSON()).toEqual({
     before: null,
-    after: canonicalRulePackage
+    after: savedDraft.contentText
   });
   const impact = (await impactResponse.json()) as { category: string; fullRescan: boolean };
   expect(impact.category).toBe('RESCAN_FULL');

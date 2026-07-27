@@ -36,9 +36,24 @@ func TestGeneratedRuleLifecycleConcurrencyAndBindingModes(t *testing.T) {
 			t.Fatal("规则生命周期修改端点必须生成 required If-Match")
 		}
 	}
-	impact := api.RuleImpactRequest{Before: nil, After: map[string]any{"rule_set_id": "initial"}}
+	var after api.RuleImpactRequest_After
+	if err := after.FromRuleImpactRequestAfter0(map[string]any{"rule_set_id": "initial"}); err != nil {
+		t.Fatal(err)
+	}
+	impact := api.RuleImpactRequest{Before: nil, After: after}
 	if impact.Before != nil {
 		t.Fatal("首次 RuleImpact 必须允许显式 null before")
+	}
+	encodedImpact, err := json.Marshal(impact)
+	if err != nil || !bytes.Contains(encodedImpact, []byte(`"before":null`)) {
+		t.Fatalf("首次 RuleImpact 未保留显式 null before: %s %v", encodedImpact, err)
+	}
+	var exact api.RuleImpactRequest_After
+	if err := exact.FromRuleImpactRequestAfter1(`{"exact":9007199254740993123}`); err != nil {
+		t.Fatal(err)
+	}
+	if value, err := exact.AsRuleImpactRequestAfter1(); err != nil || value == "" {
+		t.Fatalf("RuleImpact 精确 JSON 文本 union 不可用: value=%q err=%v", value, err)
 	}
 	direct := api.NewDirectSourceRuleBindingCreateRequest("src_00000000-0000-7000-8000-000000000001", string(bytes.Repeat([]byte{'0'}, 64)), map[string]any{}, 0)
 	parameter := api.NewParameterSourceRuleBindingCreateRequest("src_00000000-0000-7000-8000-000000000001", "rparam_00000000-0000-7000-8000-000000000001", 0, map[string]any{}, nil)

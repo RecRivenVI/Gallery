@@ -3008,10 +3008,13 @@ type RuleCompileResult struct {
 	CacheHit            bool                   `json:"cacheHit"`
 	CanonicalPackage    map[string]interface{} `json:"canonicalPackage"`
 	CanonicalParameters map[string]interface{} `json:"canonicalParameters"`
-	PackageHash         SHA256Digest           `json:"packageHash"`
-	RuleIr              map[string]interface{} `json:"ruleIr"`
-	RuleIrHash          SHA256Digest           `json:"ruleIrHash"`
-	SemanticHash        SHA256Digest           `json:"semanticHash"`
+
+	// CanonicalText 后端规范化后的逐字节 UTF-8 JSON 文本；用于避免浏览器 Number 中转损失精度
+	CanonicalText string                 `json:"canonicalText"`
+	PackageHash   SHA256Digest           `json:"packageHash"`
+	RuleIr        map[string]interface{} `json:"ruleIr"`
+	RuleIrHash    SHA256Digest           `json:"ruleIrHash"`
+	SemanticHash  SHA256Digest           `json:"semanticHash"`
 }
 
 // RuleDebugRequest defines model for RuleDebugRequest.
@@ -3043,8 +3046,11 @@ type RuleDiffEntryImpactCategory string
 
 // RuleDraft defines model for RuleDraft.
 type RuleDraft struct {
-	BaseSemanticHash *SHA256Digest             `json:"baseSemanticHash,omitempty"`
-	Content          interface{}               `json:"content"`
+	BaseSemanticHash *SHA256Digest `json:"baseSemanticHash,omitempty"`
+	Content          interface{}   `json:"content"`
+
+	// ContentText 服务端保存的精确原文；成功导入时为 canonical JSON，导入失败时为未覆盖的原始文本
+	ContentText      string                    `json:"contentText"`
 	CreatedAt        time.Time                 `json:"createdAt"`
 	Diagnostics      []map[string]interface{}  `json:"diagnostics"`
 	Format           RuleDraftFormat           `json:"format"`
@@ -3067,10 +3073,21 @@ type RuleDraftId = string
 
 // RuleDraftSaveRequest defines model for RuleDraftSaveRequest.
 type RuleDraftSaveRequest struct {
-	BaseSemanticHash *SHA256Digest              `json:"baseSemanticHash,omitempty"`
-	Content          interface{}                `json:"content"`
-	ExpectedRevision *int                       `json:"expectedRevision,omitempty"`
-	Format           RuleDraftSaveRequestFormat `json:"format"`
+	BaseSemanticHash *SHA256Digest                `json:"baseSemanticHash,omitempty"`
+	Content          RuleDraftSaveRequest_Content `json:"content"`
+	ExpectedRevision *int                         `json:"expectedRevision,omitempty"`
+	Format           RuleDraftSaveRequestFormat   `json:"format"`
+}
+
+// RuleDraftSaveRequestContent0 defines model for .
+type RuleDraftSaveRequestContent0 map[string]interface{}
+
+// RuleDraftSaveRequestContent1 defines model for .
+type RuleDraftSaveRequestContent1 = string
+
+// RuleDraftSaveRequest_Content defines model for RuleDraftSaveRequest.Content.
+type RuleDraftSaveRequest_Content struct {
+	union json.RawMessage
 }
 
 // RuleDraftSaveRequestFormat defines model for RuleDraftSaveRequest.Format.
@@ -3081,7 +3098,7 @@ type RuleDraftValidationResult struct {
 	Diagnostics []map[string]interface{} `json:"diagnostics"`
 	Draft       RuleDraft                `json:"draft"`
 	Valid       bool                     `json:"valid"`
-	Validation  *map[string]interface{}  `json:"validation,omitempty"`
+	Validation  *RuleValidationResult    `json:"validation,omitempty"`
 }
 
 // RuleDryRunRequest defines model for RuleDryRunRequest.
@@ -3148,8 +3165,33 @@ type RuleExplainResult struct {
 
 // RuleImpactRequest defines model for RuleImpactRequest.
 type RuleImpactRequest struct {
-	After  map[string]interface{}  `json:"after"`
-	Before *map[string]interface{} `json:"before"`
+	// After 新规则包对象或精确 JSON 文本
+	After RuleImpactRequest_After `json:"after"`
+
+	// Before 旧规则包对象、精确 JSON 文本，或首次版本使用的显式 null
+	Before *RuleImpactRequest_Before `json:"before"`
+}
+
+// RuleImpactRequestAfter0 defines model for .
+type RuleImpactRequestAfter0 map[string]interface{}
+
+// RuleImpactRequestAfter1 defines model for .
+type RuleImpactRequestAfter1 = string
+
+// RuleImpactRequest_After 新规则包对象或精确 JSON 文本
+type RuleImpactRequest_After struct {
+	union json.RawMessage
+}
+
+// RuleImpactRequestBefore0 defines model for .
+type RuleImpactRequestBefore0 map[string]interface{}
+
+// RuleImpactRequestBefore1 defines model for .
+type RuleImpactRequestBefore1 = string
+
+// RuleImpactRequest_Before 旧规则包对象、精确 JSON 文本，或首次版本使用的显式 null
+type RuleImpactRequest_Before struct {
+	union json.RawMessage
 }
 
 // RuleImpactResult defines model for RuleImpactResult.
@@ -3179,8 +3221,19 @@ type RuleImpactResultCategory string
 
 // RuleImportRequest defines model for RuleImportRequest.
 type RuleImportRequest struct {
-	Content interface{}             `json:"content"`
-	Format  RuleImportRequestFormat `json:"format"`
+	Content RuleImportRequest_Content `json:"content"`
+	Format  RuleImportRequestFormat   `json:"format"`
+}
+
+// RuleImportRequestContent0 defines model for .
+type RuleImportRequestContent0 map[string]interface{}
+
+// RuleImportRequestContent1 defines model for .
+type RuleImportRequestContent1 = string
+
+// RuleImportRequest_Content defines model for RuleImportRequest.Content.
+type RuleImportRequest_Content struct {
+	union json.RawMessage
 }
 
 // RuleImportRequestFormat defines model for RuleImportRequest.Format.
@@ -3189,6 +3242,9 @@ type RuleImportRequestFormat string
 // RuleImportResult defines model for RuleImportResult.
 type RuleImportResult struct {
 	CanonicalJson map[string]interface{} `json:"canonicalJson"`
+
+	// CanonicalText 导入、默认值物化和规范化后的逐字节 UTF-8 JSON 文本
+	CanonicalText string `json:"canonicalText"`
 	Diagnostics   []struct {
 		Column  *int   `json:"column,omitempty"`
 		Line    *int   `json:"line,omitempty"`
@@ -3289,8 +3345,11 @@ type RuleValidateRequest struct {
 // RuleValidationResult defines model for RuleValidationResult.
 type RuleValidationResult struct {
 	CanonicalPackage map[string]interface{} `json:"canonicalPackage"`
-	PackageHash      SHA256Digest           `json:"packageHash"`
-	SemanticHash     SHA256Digest           `json:"semanticHash"`
+
+	// CanonicalText 后端规范化后的逐字节 UTF-8 JSON 文本；用于避免浏览器 Number 中转损失精度
+	CanonicalText string       `json:"canonicalText"`
+	PackageHash   SHA256Digest `json:"packageHash"`
+	SemanticHash  SHA256Digest `json:"semanticHash"`
 }
 
 // RuleVersion defines model for RuleVersion.
@@ -4521,6 +4580,254 @@ type CreateScanJobJSONRequestBody = ScanJobCreateRequest
 
 // PutWorkOverlayJSONRequestBody defines body for PutWorkOverlay for application/json ContentType.
 type PutWorkOverlayJSONRequestBody = WorkOverlayPutRequest
+
+// AsRuleDraftSaveRequestContent0 returns the union data inside the RuleDraftSaveRequest_Content as a RuleDraftSaveRequestContent0
+func (t RuleDraftSaveRequest_Content) AsRuleDraftSaveRequestContent0() (RuleDraftSaveRequestContent0, error) {
+	var body RuleDraftSaveRequestContent0
+	err := json.Unmarshal(t.union, &body)
+	return body, err
+}
+
+// FromRuleDraftSaveRequestContent0 overwrites any union data inside the RuleDraftSaveRequest_Content as the provided RuleDraftSaveRequestContent0
+func (t *RuleDraftSaveRequest_Content) FromRuleDraftSaveRequestContent0(v RuleDraftSaveRequestContent0) error {
+	b, err := json.Marshal(v)
+	t.union = b
+	return err
+}
+
+// MergeRuleDraftSaveRequestContent0 performs a merge with any union data inside the RuleDraftSaveRequest_Content, using the provided RuleDraftSaveRequestContent0
+func (t *RuleDraftSaveRequest_Content) MergeRuleDraftSaveRequestContent0(v RuleDraftSaveRequestContent0) error {
+	b, err := json.Marshal(v)
+	if err != nil {
+		return err
+	}
+
+	merged, err := runtime.JSONMerge(t.union, b)
+	t.union = merged
+	return err
+}
+
+// AsRuleDraftSaveRequestContent1 returns the union data inside the RuleDraftSaveRequest_Content as a RuleDraftSaveRequestContent1
+func (t RuleDraftSaveRequest_Content) AsRuleDraftSaveRequestContent1() (RuleDraftSaveRequestContent1, error) {
+	var body RuleDraftSaveRequestContent1
+	err := json.Unmarshal(t.union, &body)
+	return body, err
+}
+
+// FromRuleDraftSaveRequestContent1 overwrites any union data inside the RuleDraftSaveRequest_Content as the provided RuleDraftSaveRequestContent1
+func (t *RuleDraftSaveRequest_Content) FromRuleDraftSaveRequestContent1(v RuleDraftSaveRequestContent1) error {
+	b, err := json.Marshal(v)
+	t.union = b
+	return err
+}
+
+// MergeRuleDraftSaveRequestContent1 performs a merge with any union data inside the RuleDraftSaveRequest_Content, using the provided RuleDraftSaveRequestContent1
+func (t *RuleDraftSaveRequest_Content) MergeRuleDraftSaveRequestContent1(v RuleDraftSaveRequestContent1) error {
+	b, err := json.Marshal(v)
+	if err != nil {
+		return err
+	}
+
+	merged, err := runtime.JSONMerge(t.union, b)
+	t.union = merged
+	return err
+}
+
+func (t RuleDraftSaveRequest_Content) MarshalJSON() ([]byte, error) {
+	b, err := t.union.MarshalJSON()
+	return b, err
+}
+
+func (t *RuleDraftSaveRequest_Content) UnmarshalJSON(b []byte) error {
+	err := t.union.UnmarshalJSON(b)
+	return err
+}
+
+// AsRuleImpactRequestAfter0 returns the union data inside the RuleImpactRequest_After as a RuleImpactRequestAfter0
+func (t RuleImpactRequest_After) AsRuleImpactRequestAfter0() (RuleImpactRequestAfter0, error) {
+	var body RuleImpactRequestAfter0
+	err := json.Unmarshal(t.union, &body)
+	return body, err
+}
+
+// FromRuleImpactRequestAfter0 overwrites any union data inside the RuleImpactRequest_After as the provided RuleImpactRequestAfter0
+func (t *RuleImpactRequest_After) FromRuleImpactRequestAfter0(v RuleImpactRequestAfter0) error {
+	b, err := json.Marshal(v)
+	t.union = b
+	return err
+}
+
+// MergeRuleImpactRequestAfter0 performs a merge with any union data inside the RuleImpactRequest_After, using the provided RuleImpactRequestAfter0
+func (t *RuleImpactRequest_After) MergeRuleImpactRequestAfter0(v RuleImpactRequestAfter0) error {
+	b, err := json.Marshal(v)
+	if err != nil {
+		return err
+	}
+
+	merged, err := runtime.JSONMerge(t.union, b)
+	t.union = merged
+	return err
+}
+
+// AsRuleImpactRequestAfter1 returns the union data inside the RuleImpactRequest_After as a RuleImpactRequestAfter1
+func (t RuleImpactRequest_After) AsRuleImpactRequestAfter1() (RuleImpactRequestAfter1, error) {
+	var body RuleImpactRequestAfter1
+	err := json.Unmarshal(t.union, &body)
+	return body, err
+}
+
+// FromRuleImpactRequestAfter1 overwrites any union data inside the RuleImpactRequest_After as the provided RuleImpactRequestAfter1
+func (t *RuleImpactRequest_After) FromRuleImpactRequestAfter1(v RuleImpactRequestAfter1) error {
+	b, err := json.Marshal(v)
+	t.union = b
+	return err
+}
+
+// MergeRuleImpactRequestAfter1 performs a merge with any union data inside the RuleImpactRequest_After, using the provided RuleImpactRequestAfter1
+func (t *RuleImpactRequest_After) MergeRuleImpactRequestAfter1(v RuleImpactRequestAfter1) error {
+	b, err := json.Marshal(v)
+	if err != nil {
+		return err
+	}
+
+	merged, err := runtime.JSONMerge(t.union, b)
+	t.union = merged
+	return err
+}
+
+func (t RuleImpactRequest_After) MarshalJSON() ([]byte, error) {
+	b, err := t.union.MarshalJSON()
+	return b, err
+}
+
+func (t *RuleImpactRequest_After) UnmarshalJSON(b []byte) error {
+	err := t.union.UnmarshalJSON(b)
+	return err
+}
+
+// AsRuleImpactRequestBefore0 returns the union data inside the RuleImpactRequest_Before as a RuleImpactRequestBefore0
+func (t RuleImpactRequest_Before) AsRuleImpactRequestBefore0() (RuleImpactRequestBefore0, error) {
+	var body RuleImpactRequestBefore0
+	err := json.Unmarshal(t.union, &body)
+	return body, err
+}
+
+// FromRuleImpactRequestBefore0 overwrites any union data inside the RuleImpactRequest_Before as the provided RuleImpactRequestBefore0
+func (t *RuleImpactRequest_Before) FromRuleImpactRequestBefore0(v RuleImpactRequestBefore0) error {
+	b, err := json.Marshal(v)
+	t.union = b
+	return err
+}
+
+// MergeRuleImpactRequestBefore0 performs a merge with any union data inside the RuleImpactRequest_Before, using the provided RuleImpactRequestBefore0
+func (t *RuleImpactRequest_Before) MergeRuleImpactRequestBefore0(v RuleImpactRequestBefore0) error {
+	b, err := json.Marshal(v)
+	if err != nil {
+		return err
+	}
+
+	merged, err := runtime.JSONMerge(t.union, b)
+	t.union = merged
+	return err
+}
+
+// AsRuleImpactRequestBefore1 returns the union data inside the RuleImpactRequest_Before as a RuleImpactRequestBefore1
+func (t RuleImpactRequest_Before) AsRuleImpactRequestBefore1() (RuleImpactRequestBefore1, error) {
+	var body RuleImpactRequestBefore1
+	err := json.Unmarshal(t.union, &body)
+	return body, err
+}
+
+// FromRuleImpactRequestBefore1 overwrites any union data inside the RuleImpactRequest_Before as the provided RuleImpactRequestBefore1
+func (t *RuleImpactRequest_Before) FromRuleImpactRequestBefore1(v RuleImpactRequestBefore1) error {
+	b, err := json.Marshal(v)
+	t.union = b
+	return err
+}
+
+// MergeRuleImpactRequestBefore1 performs a merge with any union data inside the RuleImpactRequest_Before, using the provided RuleImpactRequestBefore1
+func (t *RuleImpactRequest_Before) MergeRuleImpactRequestBefore1(v RuleImpactRequestBefore1) error {
+	b, err := json.Marshal(v)
+	if err != nil {
+		return err
+	}
+
+	merged, err := runtime.JSONMerge(t.union, b)
+	t.union = merged
+	return err
+}
+
+func (t RuleImpactRequest_Before) MarshalJSON() ([]byte, error) {
+	b, err := t.union.MarshalJSON()
+	return b, err
+}
+
+func (t *RuleImpactRequest_Before) UnmarshalJSON(b []byte) error {
+	err := t.union.UnmarshalJSON(b)
+	return err
+}
+
+// AsRuleImportRequestContent0 returns the union data inside the RuleImportRequest_Content as a RuleImportRequestContent0
+func (t RuleImportRequest_Content) AsRuleImportRequestContent0() (RuleImportRequestContent0, error) {
+	var body RuleImportRequestContent0
+	err := json.Unmarshal(t.union, &body)
+	return body, err
+}
+
+// FromRuleImportRequestContent0 overwrites any union data inside the RuleImportRequest_Content as the provided RuleImportRequestContent0
+func (t *RuleImportRequest_Content) FromRuleImportRequestContent0(v RuleImportRequestContent0) error {
+	b, err := json.Marshal(v)
+	t.union = b
+	return err
+}
+
+// MergeRuleImportRequestContent0 performs a merge with any union data inside the RuleImportRequest_Content, using the provided RuleImportRequestContent0
+func (t *RuleImportRequest_Content) MergeRuleImportRequestContent0(v RuleImportRequestContent0) error {
+	b, err := json.Marshal(v)
+	if err != nil {
+		return err
+	}
+
+	merged, err := runtime.JSONMerge(t.union, b)
+	t.union = merged
+	return err
+}
+
+// AsRuleImportRequestContent1 returns the union data inside the RuleImportRequest_Content as a RuleImportRequestContent1
+func (t RuleImportRequest_Content) AsRuleImportRequestContent1() (RuleImportRequestContent1, error) {
+	var body RuleImportRequestContent1
+	err := json.Unmarshal(t.union, &body)
+	return body, err
+}
+
+// FromRuleImportRequestContent1 overwrites any union data inside the RuleImportRequest_Content as the provided RuleImportRequestContent1
+func (t *RuleImportRequest_Content) FromRuleImportRequestContent1(v RuleImportRequestContent1) error {
+	b, err := json.Marshal(v)
+	t.union = b
+	return err
+}
+
+// MergeRuleImportRequestContent1 performs a merge with any union data inside the RuleImportRequest_Content, using the provided RuleImportRequestContent1
+func (t *RuleImportRequest_Content) MergeRuleImportRequestContent1(v RuleImportRequestContent1) error {
+	b, err := json.Marshal(v)
+	if err != nil {
+		return err
+	}
+
+	merged, err := runtime.JSONMerge(t.union, b)
+	t.union = merged
+	return err
+}
+
+func (t RuleImportRequest_Content) MarshalJSON() ([]byte, error) {
+	b, err := t.union.MarshalJSON()
+	return b, err
+}
+
+func (t *RuleImportRequest_Content) UnmarshalJSON(b []byte) error {
+	err := t.union.UnmarshalJSON(b)
+	return err
+}
 
 // AsSourceRuleBindingCreateRequest0 returns the union data inside the SourceRuleBindingCreateRequest as a SourceRuleBindingCreateRequest0
 func (t SourceRuleBindingCreateRequest) AsSourceRuleBindingCreateRequest0() (SourceRuleBindingCreateRequest0, error) {
