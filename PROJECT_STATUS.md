@@ -60,10 +60,10 @@ Gallery 是一个"本地优先"（数据主要放在自己电脑上，不依赖�
 | 阶段 3：扫描、任务与目录库 | ✅（代码与模拟数据层面） | 🟡（真实大盘抽样通过，全量未完成） | 真实固态硬盘（SSD）、机械硬盘（HDD）各完成几十万文件规模的抽样验收，发现并修复了 2 个真实 bug | 真实全量扫描被主动叫停，正式性能门禁尚未跑完；网络共享盘尚未验证 | 阶段 4 正式压力测试 |
 | 阶段 4：查询与媒体 | 🟡（主线代码完成，部分参数未冻结） | 🟡（正确性收口完成，500,000 规模正式压力测试已执行） | 搜索、排序、分页、显式规则/有效封面、媒体读取/下载、缩略图生成全部有代码闭环；EV-51 用 catalog v18 窄候选降低搜索开销，EV-52 用 catalog v19 验证封印把完整候选验证与 publication 指针切换分离，当前工作站最终版 500k/10 Source 微基准指针切换为 0.539 ms | 新基准与 100k/10 Source 生产预检都不是完整 500k Reference/Degradation 矩阵；排序权重、Total、租约仍为暂定值，Creator/Library 聚合授权和正式 API Freeze 尚未完成 | 完成聚合授权、正式性能矩阵与接口冻结 |
 | 阶段 5：账户、安全与多客户端 | 🟠（代码与合成安全收尾已实现；恶意输入缺陷已收口） | 🟡（Chrome/Edge 同机主路径补证，正式 Gate 未通过） | EV-37/EV-38/EV-44 之外，已修复登录路径 Argon2id 内存放大、两处资源存在性预言机、规则参数模式任意本地文件读取、日志键进程崩溃、外部工具进程树失控；EV-48 又为全部规则递归路径建立统一 256 层上限，并收紧空导入格式、NTFS 备用数据流/控制台设备、带符号 Range 与非规范 Cursor | 真实 LAN 多设备、目标低端设备 Argon2id、真实恶意资源和外部安全测试门禁仍未完成；修复代码与合成 fuzz 不能替代正式 Security Gate | 完成外部设备与恶意资源门禁 |
-| 阶段 6：Web/PWA 界面 | 🟠（**前端已从零重写为双入口**：旧单入口基线全部删除，画廊端与管理端各自实现） | 🟡（**仍只有合成证据**，真实后端浏览器覆盖未建立，正式 Gate 未通过） | 共享设计系统（三套主题、密度、reduced motion）、画廊端（发现/作品/全屏查看/文件根/Overlay、媒体并发自律与缩略图克制）、管理端（扫描任务/诊断/安全/规则/治理，并如实呈现服务端能力边界）；服务端按路径前缀选外壳，消除管理端深链落入画廊 | **两端均无真实后端验证**——证据只到 vitest 与浏览器内合成 API；真实媒体、真实 `MEDIA_READ_BUSY`、真实 WebSocket 重连、Firefox、触摸设备与屏幕阅读器全未验证；画廊端无 DOM 虚拟化，数千张卡片时 DOM 会变重；配置编辑器（M6d）未实现 | 真实后端完整写路径 E2E 并纳入 CI，不进入桌面壳 |
+| 阶段 6：Web/PWA 界面 | 🟠（前端双入口与首条管理自举链路已实现） | 🟡（隔离 Chromium/真实 `galleryd` 首条 E2E 已建立，正式 Gate 未通过） | 共享设计系统、画廊端与管理端双入口；EV-54 从空实例 UI 创建 Library/Source、真实 API 建立 RuleVersion/Binding、UI 发起 `index` 扫描并核对 publication，且真实 `job.*` WebSocket 驱动 sequence 与 HTTP snapshot 刷新 | 首条门禁只用合成 Source，规则 UI、画廊端 publication-bound 浏览/媒体、其余管理写路径、真实 `MEDIA_READ_BUSY`、Firefox、触摸设备与屏幕阅读器全未验证；画廊端无 DOM 虚拟化；配置编辑器（M6d）未实现 | 扩大真实后端业务与可访问性 E2E，不进入桌面壳 |
 | 阶段 7：平台适配与正式发行 | ⏳（仅早期实验代码涉及，不属于正式产品） | ⛔ | 无 | Windows 之外的平台、安装包、签名、升级等均尚未开始 | 最后阶段 |
 
-**概览**：Gallery 已有正式后端和同源内嵌 Web/PWA 代码基线，Chrome/Edge 已验证主要认证与浏览器恢复路径；但真实大规模、真实多平台、真实网络硬盘、完整 Security/Web Gate 和正式发行仍未完成。2026-07-23 的独立审计（[验证记录 EV-39](Documents/证据/验证记录.md)）用真实浏览器探针发现阶段 6 的「业务闭环」此前被高估：实时 WebSocket 通道在真实浏览器中 100% 握手失败，网页端多数写入口因 capability 名不符而不渲染。这些阻断性缺陷已在同日的 [EV-40](Documents/证据/验证记录.md) 修复并经真实 Chrome/Edge 复验；[EV-44](Documents/证据/验证记录.md) 又关闭 Work 聚合查询的 `AUTHZ-1`/`QRY-1`，[EV-45](Documents/证据/验证记录.md) 关闭阶段 4 testlab 无持续入口的 `TEST-2`。EV-42 的同快照封面与 CustomCover 编辑、EV-44 的安全审计空态仍只有合成/mock/组件证据。完整业务写路径的浏览器端到端覆盖尚未建立，阶段 6 Web Gate 依旧未通过。
+**概览**：Gallery 已有正式后端和同源内嵌 Web/PWA 代码基线，Chrome/Edge 已验证主要认证与浏览器恢复路径；但真实大规模、真实多平台、真实网络硬盘、完整 Security/Web Gate 和正式发行仍未完成。2026-07-23 的独立审计（[验证记录 EV-39](Documents/证据/验证记录.md)）用真实浏览器探针发现阶段 6 的「业务闭环」此前被高估：实时 WebSocket 通道在真实浏览器中 100% 握手失败，网页端多数写入口因 capability 名不符而不渲染。这些阻断性缺陷已在同日的 [EV-40](Documents/证据/验证记录.md) 修复并经真实 Chrome/Edge 复验；[EV-54](Documents/证据/验证记录.md) 又让首个 Library/Source 管理自举、扫描 publication 与真实 WS→HTTP snapshot 刷新进入隔离真实后端持续门禁。EV-42 的同快照封面与 CustomCover 编辑、EV-44 的安全审计空态仍只有合成/mock/组件证据；其余业务写路径和画廊端浏览/媒体 E2E 尚未建立，阶段 6 Web Gate 依旧未通过。
 
 **2026-07-27 首次真实来源有界验证与安全审计的结论（[EV-47](Documents/证据/验证记录.md)）**：本轮再次证实
 「代码闭环」与「真实可用」之间的距离比此前记录的更大——发现的缺陷全部属于「代码存在、测试通过、
@@ -108,7 +108,7 @@ Gallery 是一个"本地优先"（数据主要放在自己电脑上，不依赖�
 | 排序与排名细节 | 初始只提出「需要搜索排序」，未给权重 | 新增细化 | 阶段 4 落地字段级 Ranking v2（标题 3 / 作者 2 / 标签 1 / 文件名 0），结构冻结、数值 PRE_FREEZE | 阶段 4 Correctness 收口逐步细化 | 结构已实现，数值待压力测试后冻结 |
 | 按需校验单个文件（VerificationTarget） | 初始未提及 | 新增 | 经 EV-30→EV-34 五轮修正，最终以 EV-34 的 publication 冻结结论为准 | 见验证记录 EV-30~EV-34 | 已收口；说明「验证记录标记通过」也需看是否为最新一轮结论 |
 | Progress 排序 | 初始计划未单列 | **已实现并统一语义** | 排序协议 v2 增加服务端 `progress_asc`/`progress_desc`、签名 keyset、动态 dependency set 与 Web 控件；排序判据固定使用 publication snapshot，live Overlay 只展示 | EV-49 合成回归 | EV-39 发现的能力表/实现矛盾已关闭；数值性能仍待 Reference Gate |
-| 阶段 6 业务闭环 | 「普通浏览器完成所有业务闭环后，才开始壳集成」 | **完成度被高估，已下调** | EV-39 实测：WebSocket 在真实浏览器 100% 握手失败；6 个 capability 名与后端权威词表不符，Overlay 编辑、任务取消/重试、Library 创建、Source 登记、按需确认与全部治理动作在真实后端下永不渲染 | EV-39 真实 Chrome/Edge 探针与后端词表逐项核对 | 闭环条件明确未满足，仍不得进入壳集成 |
+| 阶段 6 业务闭环 | 「普通浏览器完成所有业务闭环后，才开始壳集成」 | **完成度被高估后已下调，现恢复首个持续切片** | EV-39 实测发现 WebSocket 与 capability 阻断；EV-40 修复，EV-54 又以隔离真实后端覆盖首个 Library/Source、扫描 publication 与真实 WS→HTTP snapshot 刷新 | EV-39/40 真实 Chrome/Edge 探针；EV-54 Chromium/真实 `galleryd` 合成 Source 持续 E2E | 首条管理自举已覆盖，但完整闭环条件仍未满足，不得进入壳集成 |
 
 ---
 
@@ -288,7 +288,7 @@ Gallery 是一个"本地优先"（数据主要放在自己电脑上，不依赖�
 | HDD/SMB/NAS 真实场景 | 阶段 3、7 | 无正式代码测试；早期实验里有相关原型 | EV-25 明确写"全量扫描未完成，正式全量性能 Gate 仍未通过" | 🟡（仅抽样） / ⏳（全量与网络盘） | 真实 SSD ~36.6 万文件、真实 HDD ~63.2 万文件（均为抽样，非全量） | 抽样结果不能当作全量场景的性能保证；网络共享盘尚未验证 |
 | Windows/Linux/macOS/Docker 平台支持 | 阶段 7 | CI 只有 Windows + Ubuntu 两个系统 | ADR-007 四级支持成熟度表 | 🟡（Windows/Linux 停在"CI 能运行"层级）/ ⏳（macOS/Docker） | GitHub Actions | 未达到"发行候选"或"正式支持"级别；CI 上的 Linux 也不是原生 Linux 全部行为的完整验证 |
 | 安全（认证、授权、Web 边界、路径穿越、恶意元数据/媒体、限流） | 阶段 5 | 正式生产包覆盖账户/Token/Grant/Session/WS/Web 与合成攻击；Work 查询逐成员授权；真实 Chrome/Edge 已覆盖 Personal/LAN 主路径和吊销 | EV-09、EV-37、EV-38、EV-44 | 🟡 | Windows 合成与浏览器；WSL race | 真实物理 LAN 多设备、目标低端设备与真实恶意资源门禁未完成，整体 Gate 未通过 |
-| Web/PWA 界面测试 | 阶段 6 | `web/src/**/*.test.ts(x)`（7 个文件 12 个用例）与 `web/scripts/check-audit.test.mjs`（16 个用例）、`web/e2e`、`internal/webapp/*_test.go` | EV-38～EV-40、EV-42、EV-44 | 🟡 | Vitest 合计 8 个文件 28 项；既有 Chrome/Edge 真实后端证据；EV-42 为 Chromium mock smoke 3/3；EV-44 增加安全审计空态组件测试 | CI 浏览器 Job 仍全程 mock API；真实后端 E2E 在 CI 中恒跳过。封面与安全审计空态新增路径未复验真实 `galleryd` |
+| Web/PWA 界面测试 | 阶段 6 | `web/src/**/*.test.ts(x)`、`web/scripts/check-audit.test.mjs`、`web/e2e`、`internal/webapp/*_test.go` 与 `tools/testlab/cmd/web-e2e` | EV-38～EV-40、EV-42、EV-44、EV-54 | 🟡 | Vitest 13 个文件 147 项；Chromium mock smoke；Chrome/Edge 既有真实认证/实时证据；EV-54 新增隔离 Chromium/真实 `galleryd` 4 项 E2E 与 Source guard | 首条真实后端管理自举已纳入 CI workflow，但封面/媒体、规则 UI、其余管理写路径、Firefox/真实移动设备/屏幕阅读器仍未覆盖 |
 | 阶段 4 查询/媒体 Correctness（testlab） | 阶段 4 | `tools/testlab/stages/stage4/smoke_test.go` 与既有 query/media orchestrator | EV-36、EV-45 | ✅（1k 合成持续 smoke）/ 🧪（500k 人工正式矩阵） | 普通 `go test` 经生产 bootstrap + 真实 loopback HTTP 执行 39 查询 + 6 Cursor + 20 media/derived finding | 持续入口只关闭 `TEST-2`；不运行 perf，`creator.id` 和裸伪造 publication 错误码差异仍是显式限制，不代表 500k Reference、HDD/SMB/NAS 或 API Freeze |
 | 发布/签名/SBOM | 阶段 7 | CI 里仅有依赖漏洞扫描 `govulncheck`（只在 Linux 任务中运行） | ci.yml | 🟡（仅依赖漏洞扫描这一项） | GitHub Actions Linux | 签名、SBOM、安装包流程尚不存在 |
 | Fuzz（随机变异输入）测试、Benchmark（性能基准）测试 | — | `internal/auth/password_benchmark_test.go` 已有 Argon2id benchmark，尚无正式 Fuzz | EV-38 | 🟡 | 当前 Windows 高性能工作站 | 不代表目标低端设备参数门禁 |
@@ -300,7 +300,7 @@ Gallery 是一个"本地优先"（数据主要放在自己电脑上，不依赖�
 | 分类 | 具体内容 | 客户端现在能做什么 |
 |---|---|---|
 | 公开 HTTP 接口 | OpenAPI `0.6.0-pre-alpha`，100 条路径 / 服务端 120 条路由，覆盖 Library/Source、规则、任务、查询/媒体、Overlay、账户/授权/分享与维护 | Web/PWA 接入了其中 56 条；契约仍未 Freeze。`deleteRulePackage` 的路径漂移已在 EV-40 修复，并新增比对契约与注册路由集合的持续测试 |
-| WebSocket 实时通道 | `/ws/v1` 推送任务、publication、安全吊销等事件 | EV-40 修复握手与信封字段后，真实 Chrome/Edge 已验证连接建立并收到事件；sequence/gap 检测与 snapshot 恢复路径本身仍无浏览器端断言 |
+| WebSocket 实时通道 | `/ws/v1` 推送任务、publication、安全吊销等事件 | EV-40 修复握手与信封字段后，真实 Chrome/Edge 已验证连接建立并收到事件；EV-54 又在真实后端 E2E 中以新 Job、列表 refetch 与页面 sequence 严格递增断言 `job.*` 事件后的 HTTP snapshot 恢复。gap/重连和其他事件类型仍未覆盖 |
 | 命令行工具 `galleryctl` | 只有 `version`（查看版本）和 `health`（查看健康状态）两个命令 | 尚不能覆盖主要管理操作 |
 | 后台任务 | 扫描、哈希、目录维护、崩溃恢复、备份、Overlay 重投影 | Web/PWA 提供任务列表/详情、attempt、取消与重试入口 |
 | 内部服务（不对外暴露） | 外部工具调用框架（`internal/toolrunner`）——代码和调度已经就绪，但生产环境里尚未接入任何真实功能，解析器留空 | 客户端无法触达 |
@@ -364,8 +364,8 @@ Gallery 是一个"本地优先"（数据主要放在自己电脑上，不依赖�
 | 性能风险 | 真实机械硬盘（HDD）全量扫描此前实测约需 22 小时才能扫完 20 万文件（在改为增量模式前），虽已缓解，但正式的全量性能门禁至今尚未跑完，真实使用中大型库的完整扫描表现仍待验证 |
 | 平台风险 | Linux 支持目前只验证过 WSL（Windows 内置的 Linux 兼容层）和 GitHub Actions 的 `ubuntu-latest`，尚未验证独立安装的原生 Linux 系统；macOS、Docker、真实网络共享盘（SMB/NAS）尚未验证 |
 | 安全风险 | 阶段 5 账户/凭据/授权、匿名 Share、全资源矩阵、恶意输入与 WS 防滥用代码及合成测试已落地；EV-44 已关闭 Work 聚合查询逐成员授权缺口，EV-46 已关闭 `SEC-3`（媒体呈现改由服务端内联白名单决定，三条正文路径统一加 sandbox CSP）；真实 LAN 多设备/浏览器和目标设备 Argon2id 门禁仍缺，不能描述为完整 Security Gate 通过 |
-| 产品/UI 缺口 | Web/PWA 代码基线已存在，EV-39 发现的实时通道与写入口阻断已在 EV-40 修复并经真实 Chrome/Edge 复验；但 Firefox、真实移动设备/屏幕阅读器、窄屏侧栏焦点陷阱、完整管理写路径 E2E 和正式可用性 Gate 均未完成 |
-| 测试体系缺口 | CI 的浏览器 Job 仍全程 mock，真实后端 E2E 在 CI 中恒跳过；EV-45 已让阶段 4 testlab Correctness 进入普通 `go test`，但 500k 性能/十来源矩阵仍是人工门禁；全仓库 0 个 Fuzz；`internal/platform/{process,watcher,disk,filesystem,identity,clock}` 与 `cmd/galleryd` 为零测试包。EV-40 已为 `WS-1`/`WS-2`/`CAP-1`/`API-1` 各自建立回归防线（含跨语言词表比对与契约 Schema 比对），但把真实后端 E2E 纳入 CI 仍是未关闭的缺口 |
+| 产品/UI 缺口 | Web/PWA 代码基线已存在，EV-39 的实时通道与写入口阻断已由 EV-40 关闭；EV-54 又覆盖首条真实后端管理自举。但 Firefox、真实移动设备/屏幕阅读器、窄屏侧栏焦点陷阱、画廊端浏览/媒体与其余管理写路径 E2E、正式可用性 Gate 均未完成 |
+| 测试体系缺口 | EV-54 已让首条 Chromium/真实后端 E2E 进入 CI workflow，并保持 mock smoke 与真实证据分层；EV-45 已让阶段 4 testlab Correctness 进入普通 `go test`，但 500k 性能/十来源矩阵仍是人工门禁；全仓库仍无正式 Fuzz，部分平台包仍缺直接测试。WS gap/重连、画廊浏览/媒体和其余管理写路径仍未进入真实后端持续门禁 |
 | 发行缺口 | 没有安装包、没有代码签名、没有软件物料清单（SBOM）、没有升级机制的正式实现 |
 | 明确不进入 v1 的事项 | 原始文件写入/回收站、远程/公网访问、插件系统、原生手机客户端、压缩包/PDF/漫画容器格式解析、无限制单字中文搜索与拼音搜索、外部独立搜索引擎、自动导入其他同类产品数据 |
 
@@ -380,7 +380,7 @@ Gallery 是一个"本地优先"（数据主要放在自己电脑上，不依赖�
 | 0 | 缺陷收口（EV-39 登记项已全部关闭，见 EV-40、EV-44、EV-45、EV-46） | EV-40 关闭 6 项 P1 及 `SEC-4`/`TEST-1`/`BLD-1`/`A11Y-1` 键盘部分；EV-44 关闭 `AUTHZ-1`/`QRY-1`；EV-45 关闭 `TEST-2`；EV-46 关闭 `MED-1`、`SEC-3`，并新发现修复 `LINK-1`（Windows 目录联接被识别为普通文件）、`TX-1`（WAL 读后写事务过期读快照）与迁移预算门禁不可复现 | 阻断性缺陷优先；`MED-1` 由 ADR-010 裁决完整性证据分层，`SEC-3` 由规范 08 新增呈现策略裁决 |
 | 1 | 阶段 4 收尾 | 正式性能门禁（Reference/Degradation Performance Gate）与 API 接口冻结 | 1k testlab Correctness 已持续化；正式性能、十来源与接口数值仍未冻结 |
 | 2 | 阶段 5 | 完成真实 LAN 多设备与目标低端设备 Argon2id 延迟/并发验证 | 同机 Chrome/Edge 和高性能工作站证据已取得，剩余缺口需要外部设备环境 |
-| 3 | 阶段 6 | 在缺陷收口后扩大 Web/PWA 的浏览器、可访问性、真实设备与完整业务写路径门禁 | 只有写路径 E2E 进入门禁，才能防止同类完成度高估再次发生 |
+| 3 | 阶段 6 | 在 EV-54 首条管理自举门禁上继续覆盖 publication-bound 画廊浏览/媒体、规则 UI、其余管理写路径、浏览器/可访问性与真实设备 | 先扩大真实后端 E2E，再对业务闭环和发布可用性作结论 |
 | 4 | 阶段 7 | 跨平台正式支持（Linux 原生、macOS、Docker）、网络共享盘（SMB/NAS）支持、安装包/签名/正式发行 | 需要前面阶段稳定后，大规模的平台适配和发行准备才有意义 |
 
 ---
