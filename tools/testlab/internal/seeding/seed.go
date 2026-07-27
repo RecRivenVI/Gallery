@@ -27,13 +27,8 @@ import (
 	"github.com/RecRivenVI/gallery/tools/testlab/internal/corpus"
 )
 
-// SourcesEnvVar 是 Source 数量的环境变量入口。
-//
-// 为什么用环境变量而不是命令行 flag：本轮任务明确禁止修改 tools/testlab/cmd/seed/**
-// （其规模上限刚被调过），而 Source 数量必须能从 CLI 驱动，否则 500,000 规模的正式
-// 语料仍然只有一个 Source，cloneUnchangedSources 的 12 条搬运语句在实测中依然一条都
-// 执行不到。这是一条**过渡措施**：下一轮允许改动 cmd/seed 时应改为 `-sources` flag。
-// 它不静默——解析结果会打印到 stderr，并写进 Manifest.Sources 与报告的 corpus 事实。
+// SourcesEnvVar 是 Source 数量的兼容环境变量入口。正式 CLI 已提供 -sources；保留本
+// 入口只为旧脚本兼容，解析结果仍会打印到 stderr 并写入 Manifest。
 const SourcesEnvVar = "GALLERY_TESTLAB_SEED_SOURCES"
 
 // Config 是构建一次合成 Catalog publication 所需的全部参数。SourceRoot 非空时
@@ -45,7 +40,7 @@ type Config struct {
 	Scale      int
 	BatchSize  int
 
-	// Sources 是把语料分布到的 Source 数量，<=0 时先查 SourcesEnvVar，仍未指定则为 1。
+	// Sources 是把语料分布到的 Source 数量，0 时先查兼容 SourcesEnvVar，仍未指定则为 1；负数无效。
 	// 每个 Source 各自走一遍完整的 BeginCandidate/Stage/Overlay/Validate/Publish 周期，
 	// 因此从第二个 Source 开始，BeginCandidate 会真正执行 cloneUnchangedSources 把此前
 	// 全部 Source 的投影（含 FTS5 索引）搬进新 revision；最后一个 Source 搬运的比例是
@@ -57,6 +52,9 @@ type Config struct {
 func resolveSources(configured int) (int, error) {
 	if configured > 0 {
 		return configured, nil
+	}
+	if configured < 0 {
+		return 0, fmt.Errorf("Source 数量必须为非负整数: %d", configured)
 	}
 	raw := strings.TrimSpace(os.Getenv(SourcesEnvVar))
 	if raw == "" {
@@ -158,8 +156,9 @@ func Run(ctx context.Context, cfg Config) (corpus.Manifest, error) {
 	// Hidden/Favorite/Progress 全部抹回默认值。
 	overlayFacts := make(map[string]catalog.OverlayFact, n)
 	firstJobID := ""
-	var stageTotal, overlayTotal, publishTotal time.Duration
+	var stageTotal, overlayTotal, validationTotal, publishTotal time.Duration
 	beginDurations := make([]int64, 0, sources)
+	validationDurations := make([]int64, 0, sources)
 	publishDurations := make([]int64, 0, sources)
 	visibleCounts := make([]int, 0, sources)
 	var publication catalog.Publication
@@ -199,9 +198,13 @@ func Run(ctx context.Context, cfg Config) (corpus.Manifest, error) {
 		}
 		overlayTotal += time.Since(overlayStarted)
 
+		validationStarted := time.Now()
 		if err := catalogStore.ValidateCandidate(ctx, candidate); err != nil {
 			return corpus.Manifest{}, fmt.Errorf("validate candidate (source %d/%d): %w", slot+1, sources, err)
 		}
+		validationElapsed := time.Since(validationStarted)
+		validationTotal += validationElapsed
+		validationDurations = append(validationDurations, validationElapsed.Milliseconds())
 		publishStarted := time.Now()
 		publication, err = catalogStore.Publish(ctx, candidate)
 		if err != nil {
@@ -220,13 +223,15 @@ func Run(ctx context.Context, cfg Config) (corpus.Manifest, error) {
 		SchemaVersion: 2, Scale: n, LibraryID: libraryID, SourceID: sourceIDs[0], JobID: firstJobID,
 		CreatorIDs: creatorIDs, QueryPublicationID: publication.ID, CatalogRevisionID: publication.CatalogRevisionID,
 		StageDurationMs: stageTotal.Milliseconds(), OverlayDurationMs: overlayTotal.Milliseconds(),
-		PublishDurationMs: publishTotal.Milliseconds(), TotalDurationMs: time.Since(started).Milliseconds(),
-		Stats:                    corpus.ComputeStats(n),
-		Sources:                  sources,
-		SourceIDs:                sourceIDs,
-		SourceVisibleWorkCounts:  visibleCounts,
-		SourceBeginDurationsMs:   beginDurations,
-		SourcePublishDurationsMs: publishDurations,
+		ValidationDurationMs: validationTotal.Milliseconds(),
+		PublishDurationMs:    publishTotal.Milliseconds(), TotalDurationMs: time.Since(started).Milliseconds(),
+		Stats:                       corpus.ComputeStats(n),
+		Sources:                     sources,
+		SourceIDs:                   sourceIDs,
+		SourceVisibleWorkCounts:     visibleCounts,
+		SourceBeginDurationsMs:      beginDurations,
+		SourceValidationDurationsMs: validationDurations,
+		SourcePublishDurationsMs:    publishDurations,
 	}
 	return manifest, nil
 }

@@ -195,21 +195,22 @@ type Stats struct {
 // Manifest 是 testlabseed 写出的、供 testlabprobe 读取的真实生成结果：真实生成的
 // 公开领域 ID（不得由 probe 硬编码或凭空猜测）与本次语料的确定性统计真值。
 type Manifest struct {
-	SchemaVersion      int      `json:"schemaVersion"`
-	Scale              int      `json:"scale"`
-	Tier               string   `json:"tier,omitempty"`
-	Nonrecommended     bool     `json:"nonrecommendedScale,omitempty"`
-	LibraryID          string   `json:"libraryId"`
-	SourceID           string   `json:"sourceId"`
-	JobID              string   `json:"jobId"`
-	CreatorIDs         []string `json:"creatorIds"`
-	QueryPublicationID string   `json:"queryPublicationId"`
-	CatalogRevisionID  string   `json:"catalogRevisionId"`
-	StageDurationMs    int64    `json:"stageDurationMs"`
-	OverlayDurationMs  int64    `json:"overlayDurationMs"`
-	PublishDurationMs  int64    `json:"publishDurationMs"`
-	TotalDurationMs    int64    `json:"totalDurationMs"`
-	Stats              Stats    `json:"stats"`
+	SchemaVersion        int      `json:"schemaVersion"`
+	Scale                int      `json:"scale"`
+	Tier                 string   `json:"tier,omitempty"`
+	Nonrecommended       bool     `json:"nonrecommendedScale,omitempty"`
+	LibraryID            string   `json:"libraryId"`
+	SourceID             string   `json:"sourceId"`
+	JobID                string   `json:"jobId"`
+	CreatorIDs           []string `json:"creatorIds"`
+	QueryPublicationID   string   `json:"queryPublicationId"`
+	CatalogRevisionID    string   `json:"catalogRevisionId"`
+	StageDurationMs      int64    `json:"stageDurationMs"`
+	OverlayDurationMs    int64    `json:"overlayDurationMs"`
+	ValidationDurationMs int64    `json:"validationDurationMs"`
+	PublishDurationMs    int64    `json:"publishDurationMs"`
+	TotalDurationMs      int64    `json:"totalDurationMs"`
+	Stats                Stats    `json:"stats"`
 
 	// Sources 是本次语料实际分布到的 Source 数量；SourceID 保持为第一个 Source，
 	// 使既有单 Source 断言无需改写即可继续工作。
@@ -218,11 +219,12 @@ type Manifest struct {
 	// （WHERE source_id<>?）在单 Source 语料下一条都不会执行，而它正是"重扫一个
 	// Source 时按比例复制其余全部 Source 投影与 FTS5 索引"的路径，是发布代价大头
 	// 之一。只有 Sources>1 的语料才会真正走到它。
-	Sources                  int      `json:"sources,omitempty"`
-	SourceIDs                []string `json:"sourceIds,omitempty"`
-	SourceVisibleWorkCounts  []int    `json:"sourceVisibleWorkCounts,omitempty"`
-	SourceBeginDurationsMs   []int64  `json:"sourceBeginDurationsMs,omitempty"`
-	SourcePublishDurationsMs []int64  `json:"sourcePublishDurationsMs,omitempty"`
+	Sources                     int      `json:"sources,omitempty"`
+	SourceIDs                   []string `json:"sourceIds,omitempty"`
+	SourceVisibleWorkCounts     []int    `json:"sourceVisibleWorkCounts,omitempty"`
+	SourceBeginDurationsMs      []int64  `json:"sourceBeginDurationsMs,omitempty"`
+	SourceValidationDurationsMs []int64  `json:"sourceValidationDurationsMs,omitempty"`
+	SourcePublishDurationsMs    []int64  `json:"sourcePublishDurationsMs,omitempty"`
 }
 
 // SourceCount 返回本次语料的 Source 数量，对没有该字段的历史 manifest 返回 1。

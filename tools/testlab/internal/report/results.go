@@ -157,6 +157,8 @@ type CorpusFacts struct {
 	// SourceBeginDurationsMs 是逐个 Source 的 BeginCandidate 耗时，即 cloneUnchangedSources
 	// 的实际代价（第一个 Source 没有可搬运的对象，因此是该路径的空载基线）。
 	SourceBeginDurationsMs []int64 `json:"sourceBeginDurationsMs,omitempty"`
+	// SourceValidationDurationsMs 是逐个 Source 的完整候选验证耗时，不属于短 publication 事务。
+	SourceValidationDurationsMs []int64 `json:"sourceValidationDurationsMs,omitempty"`
 	// SourcePublishDurationsMs 是逐个 Source 的 Publish 耗时。
 	SourcePublishDurationsMs []int64 `json:"sourcePublishDurationsMs,omitempty"`
 }

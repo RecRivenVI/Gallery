@@ -42,6 +42,9 @@ FROM work_search_candidates c JOIN work_projections w
 INSERT INTO creator_projections
 (catalog_revision_id, overlay_revision_id, creator_id, name, sort_name_key)
 VALUES ('cat', 'ovr', 'creator', 'Alice', 'OLD');
+INSERT INTO candidate_validation_seals
+(catalog_revision_id, overlay_revision_id, candidate_kind, validation_version, validated_at)
+VALUES ('cat', 'ovr', 'catalog', 1, 1);
 UPDATE gallery_catalog_meta SET value='1' WHERE key='natural_sort_key_encoding';`); err != nil {
 		t.Fatal(err)
 	}
@@ -50,6 +53,7 @@ UPDATE gallery_catalog_meta SET value='1' WHERE key='natural_sort_key_encoding';
 		t.Fatal(err)
 	}
 	var workKey, candidateKey, creatorKey, version string
+	var sealCount int
 	if err := db.QueryRowContext(ctx, "SELECT sort_title_key FROM work_projections WHERE work_id='work'").Scan(&workKey); err != nil {
 		t.Fatal(err)
 	}
@@ -63,8 +67,11 @@ UPDATE gallery_catalog_meta SET value='1' WHERE key='natural_sort_key_encoding';
 		"SELECT value FROM gallery_catalog_meta WHERE key='natural_sort_key_encoding'").Scan(&version); err != nil {
 		t.Fatal(err)
 	}
-	if workKey != querytext.NaturalSortKey("ab") || candidateKey != workKey || creatorKey != querytext.NaturalSortKey("Alice") || version != "2" {
-		t.Fatalf("排序键回填不完整: work=%q candidate=%q creator=%q version=%q", workKey, candidateKey, creatorKey, version)
+	if err := db.QueryRowContext(ctx, "SELECT count(*) FROM candidate_validation_seals").Scan(&sealCount); err != nil {
+		t.Fatal(err)
+	}
+	if workKey != querytext.NaturalSortKey("ab") || candidateKey != workKey || creatorKey != querytext.NaturalSortKey("Alice") || version != "2" || sealCount != 0 {
+		t.Fatalf("排序键回填不完整: work=%q candidate=%q creator=%q version=%q seal=%d", workKey, candidateKey, creatorKey, version, sealCount)
 	}
 	if err := ensureNaturalSortKeyEncoding(ctx, db); err != nil {
 		t.Fatalf("重复回填应为 no-op: %v", err)

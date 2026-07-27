@@ -32,8 +32,10 @@ type AggregateCover struct {
 //  2. cloneUnchangedSources 按 `source_id<>?` 继承其它 Source 的事实，而作者与资料库天然横跨多个
 //     Source。单 Source 重扫后，受影响作者的聚合封面必须重算，简单继承会让它停留在旧值。
 //
-// 因此本函数在 publish 事务内、投影已经完全就位之后执行一次，先清空本 revision 的既有聚合行再
-// 重建，使结果只由当前投影决定，不受执行次数与历史残留影响。
+// 因此本函数在 candidate validation 的 IMMEDIATE 事务内、投影已经完全就位之后执行一次，先清空
+// 本 revision 的既有聚合行再重建，使结果只由当前投影决定，不受执行次数与历史残留影响。验证成功
+// 后写入持久封印，短 publication 事务只确认该封印；这既保持聚合与快照同代次，也避免全量窗口
+// 计算进入目标 P95 <250 ms 的指针切换事务。
 //
 // **层级依赖**：作者取其最新作品的有效封面；平台（Source）取该 Source 内的最新作者；资料库取
 // 其最新平台。Creator 与 Source 共享一次物化的候选集：前者按 Creator 全局分组，后者按 Source

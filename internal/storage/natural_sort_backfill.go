@@ -34,6 +34,12 @@ func ensureNaturalSortKeyEncoding(ctx context.Context, db *sql.DB) error {
 		return err
 	}
 	defer tx.Rollback()
+	// 排序键回填会改写 WorkProjection 与搜索窄候选；若升级前恰有崩溃遗留的已验证
+	// staging candidate，其旧封印必须与回填在同一事务内失效，不能让后续恢复路径把
+	// v1/v2 混合候选直接发布。已发布 revision 的历史封印只是审计事实，删除也无害。
+	if _, err := tx.ExecContext(ctx, "DELETE FROM candidate_validation_seals"); err != nil {
+		return err
+	}
 	for _, table := range []struct {
 		name, source, target string
 	}{

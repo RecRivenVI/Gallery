@@ -61,9 +61,9 @@ func TestMultiSourceSeedExercisesCloneUnchangedSources(t *testing.T) {
 		t.Fatalf("逐 Source 可见计数合计 %d != 语料 VisibleN %d", visibleSum, manifest.Stats.VisibleN)
 	}
 	// 每个 Source 都必须真的产生过一次 BeginCandidate 与一次 Publish。
-	if len(manifest.SourceBeginDurationsMs) != sources || len(manifest.SourcePublishDurationsMs) != sources {
-		t.Fatalf("逐 Source 计时条数不足: begin=%d publish=%d, want %d",
-			len(manifest.SourceBeginDurationsMs), len(manifest.SourcePublishDurationsMs), sources)
+	if len(manifest.SourceBeginDurationsMs) != sources || len(manifest.SourceValidationDurationsMs) != sources || len(manifest.SourcePublishDurationsMs) != sources {
+		t.Fatalf("逐 Source 计时条数不足: begin=%d validation=%d publish=%d, want %d",
+			len(manifest.SourceBeginDurationsMs), len(manifest.SourceValidationDurationsMs), len(manifest.SourcePublishDurationsMs), sources)
 	}
 
 	db := openCatalog(t, appRoot)
@@ -163,6 +163,9 @@ func TestResolveSourcesPrefersConfigOverEnvironment(t *testing.T) {
 	t.Setenv(SourcesEnvVar, "4")
 	if got, err := resolveSources(2); err != nil || got != 2 {
 		t.Fatalf("显式 Sources 应优先于环境变量: got=%d err=%v", got, err)
+	}
+	if _, err := resolveSources(-1); err == nil {
+		t.Fatal("负 Source 数量未被拒绝")
 	}
 	if got, err := resolveSources(0); err != nil || got != 4 {
 		t.Fatalf("未指定 Sources 时应采用环境变量: got=%d err=%v", got, err)

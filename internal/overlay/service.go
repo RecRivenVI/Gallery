@@ -448,7 +448,7 @@ func (s *Service) Execute(ctx context.Context, jobID string) error {
 			var merges []domain.CreatorMergePair
 			merges, err = creators.ReadMergePairs(ctx, s.control)
 			if err == nil {
-				err = s.catalog.ApplyCreatorMerges(ctx, candidate.CatalogRevisionID, candidate.OverlayRevisionID, merges)
+				err = s.catalog.ApplyOverlayCandidateCreatorMerges(ctx, candidate, merges)
 			}
 		}
 		if err == nil {

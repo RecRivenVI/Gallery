@@ -658,7 +658,7 @@ func (s *Service) Execute(ctx context.Context, jobID string) error {
 		_ = s.catalog.AbortCandidate(ctx, job.ID)
 		return s.fail(ctx, job.ID, err)
 	}
-	if err := s.catalog.ApplyCreatorMerges(ctx, candidate.CatalogRevisionID, candidate.OverlayRevisionID, creatorMerges); err != nil {
+	if err := s.catalog.ApplyCatalogCandidateCreatorMerges(ctx, candidate, creatorMerges); err != nil {
 		_ = s.catalog.AbortCandidate(ctx, job.ID)
 		return s.fail(ctx, job.ID, err)
 	}

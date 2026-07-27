@@ -54,7 +54,7 @@ func TestReferenceQueryPerformance(t *testing.T) {
 	}
 	defer store.Close()
 
-	buildDuration, publicationDuration := seedReferenceProjection(t, store, sampleSize, sourceCount)
+	buildDuration, pointerPublishDuration := seedReferenceProjection(t, store, sampleSize, sourceCount)
 	now := time.Date(2026, 7, 16, 8, 0, 0, 0, time.UTC)
 	service, err := galleryquery.NewService(ctx, store.Control.SQL(), store.Catalog.SQL(), clock.Fixed{Time: now}, nil)
 	if err != nil {
@@ -104,8 +104,8 @@ func TestReferenceQueryPerformance(t *testing.T) {
 	if err := store.Catalog.SQL().QueryRowContext(ctx, "SELECT sqlite_version()").Scan(&sqliteVersion); err != nil {
 		t.Fatal(err)
 	}
-	t.Logf("REFERENCE_PERFORMANCE sample=%d sources=%d sqlite=%s cache=warm concurrency=1 runs=31 build=%s store_publish=%s membership_p50=%s membership_p95=%s browse_p50=%s browse_p95=%s browse_no_total_p50=%s browse_no_total_p95=%s selective_cjk_p50=%s selective_cjk_p95=%s filename_p50=%s filename_p95=%s%s",
-		sampleSize, sourceCount, sqliteVersion, buildDuration, publicationDuration, membershipP50, membershipP95,
+	t.Logf("REFERENCE_PERFORMANCE sample=%d sources=%d sqlite=%s cache=warm concurrency=1 runs=31 build=%s pointer_publish=%s membership_p50=%s membership_p95=%s browse_p50=%s browse_p95=%s browse_no_total_p50=%s browse_no_total_p95=%s selective_cjk_p50=%s selective_cjk_p95=%s filename_p50=%s filename_p95=%s%s",
+		sampleSize, sourceCount, sqliteVersion, buildDuration, pointerPublishDuration, membershipP50, membershipP95,
 		browseP50, browseP95, browseNoTotalP50, browseNoTotalP95, selectiveP50, selectiveP95,
 		filenameP50, filenameP95, partialMetrics)
 }
@@ -192,6 +192,15 @@ FROM work_search_candidates c JOIN work_projections w
  AND w.overlay_revision_id=c.overlay_revision_id
  AND w.work_id=c.work_id
 WHERE c.catalog_revision_id=? AND c.overlay_revision_id=?`, catalogID, overlayID); err != nil {
+		tx.Rollback()
+		t.Fatal(err)
+	}
+	// 此文件是查询候选微基准，不构造 SourceMedia/Blob/关系等完整候选事实。fixture
+	// 显式预置“完整验证已由上游完成”的封印，只测量 publication 指针切换；正式候选
+	// Validate 与 1%/10%/50% publication 矩阵必须由 tools/testlab 生产路径留证。
+	if _, err := tx.ExecContext(ctx, `INSERT INTO candidate_validation_seals
+(catalog_revision_id, overlay_revision_id, candidate_kind, validation_version, validated_at)
+VALUES (?, ?, 'catalog', 1, 1)`, catalogID, overlayID); err != nil {
 		tx.Rollback()
 		t.Fatal(err)
 	}

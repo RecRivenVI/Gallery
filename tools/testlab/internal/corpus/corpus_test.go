@@ -137,8 +137,9 @@ func TestManifestRoundTrip(t *testing.T) {
 	original := Manifest{
 		SchemaVersion: 2, Scale: 42, LibraryID: "lib_test", SourceID: "src_test", JobID: "job_test",
 		CreatorIDs: []string{"ctr_a", "ctr_b"}, QueryPublicationID: "qpub_test", CatalogRevisionID: "crev_test",
-		StageDurationMs: 1, OverlayDurationMs: 2, PublishDurationMs: 3, TotalDurationMs: 6,
-		Stats: ComputeStats(42),
+		StageDurationMs: 1, OverlayDurationMs: 2, ValidationDurationMs: 3, PublishDurationMs: 4, TotalDurationMs: 10,
+		SourceValidationDurationsMs: []int64{3},
+		Stats:                       ComputeStats(42),
 	}
 	path := filepath.Join(t.TempDir(), "manifest.json")
 	encoded, err := json.MarshalIndent(original, "", "  ")

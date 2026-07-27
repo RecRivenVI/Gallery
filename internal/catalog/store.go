@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/RecRivenVI/gallery/internal/contract/fault"
@@ -239,9 +240,10 @@ type GCOptions struct {
 }
 
 type Store struct {
-	db    *sql.DB
-	clock ports.Clock
-	ids   ports.IDGenerator
+	db          *sql.DB
+	clock       ports.Clock
+	ids         ports.IDGenerator
+	candidateMu sync.Mutex
 }
 
 func NewStore(db *sql.DB, clock ports.Clock, ids ports.IDGenerator) (*Store, error) {
@@ -267,6 +269,8 @@ func NewStore(db *sql.DB, clock ports.Clock, ids ports.IDGenerator) (*Store, err
 // job_id 上的 UNIQUE 约束因此保持不变：它表达的是“同一 Job 任一时刻至多一个 Catalog
 // revision 归属”，而不是“该 Job 一辈子只能拥有一行”。
 func (s *Store) BeginCandidate(ctx context.Context, jobID, sourceID string, controlWatermark int64) (Candidate, error) {
+	s.candidateMu.Lock()
+	defer s.candidateMu.Unlock()
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return Candidate{}, fault.New(fault.CodeInternal, true, err)
@@ -414,6 +418,8 @@ func validateSearchFieldValues(work WorkFact) error {
 }
 
 func (s *Store) Stage(ctx context.Context, candidate Candidate, works []WorkFact, media []MediaFact) error {
+	s.candidateMu.Lock()
+	defer s.candidateMu.Unlock()
 	for _, work := range works {
 		if err := validateSearchFieldValues(work); err != nil {
 			return err
@@ -435,8 +441,34 @@ func (s *Store) Stage(ctx context.Context, candidate Candidate, works []WorkFact
 }
 
 func (s *Store) ValidateCandidate(ctx context.Context, candidate Candidate) error {
+	s.candidateMu.Lock()
+	defer s.candidateMu.Unlock()
+	// 先用独立 IMMEDIATE 事务撤销旧封印。这样显式重验一旦失败，旧封印不会随
+	// 验证事务回滚而复活；Publish 在整个重验窗口都只能 fail-closed。
+	if err := s.clearValidationSeal(ctx, catalogMutationTarget(candidate)); err != nil {
+		return err
+	}
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return fault.New(fault.CodeInternal, true, err)
+	}
+	defer tx.Rollback()
+	var catalogStatus, catalogJobID, catalogSourceID, overlayStatus string
+	var controlWatermark int64
+	if err := tx.QueryRowContext(ctx, `SELECT c.status, c.job_id, c.source_id, o.status, o.control_watermark
+FROM catalog_revisions c JOIN overlay_projection_revisions o
+  ON o.catalog_revision_id=c.catalog_revision_id
+WHERE c.catalog_revision_id=? AND o.overlay_revision_id=?`,
+		candidate.CatalogRevisionID, candidate.OverlayRevisionID).Scan(
+		&catalogStatus, &catalogJobID, &catalogSourceID, &overlayStatus, &controlWatermark); err != nil {
+		return fault.New(fault.CodeCatalogCandidateInvalid, false, err)
+	}
+	if catalogStatus != "staging" || overlayStatus != "staging" || catalogJobID != candidate.JobID ||
+		catalogSourceID != candidate.SourceID || controlWatermark != candidate.ControlWatermark {
+		return fault.New(fault.CodeCatalogCandidateInvalid, false, nil)
+	}
 	var workCount, mediaCount, invalidBlob int
-	if err := s.db.QueryRowContext(ctx, `SELECT
+	if err := tx.QueryRowContext(ctx, `SELECT
   (SELECT count(*) FROM source_works WHERE catalog_revision_id = ? AND source_id = ?),
   (SELECT count(*) FROM source_media WHERE catalog_revision_id = ? AND source_id = ?),
 	  (SELECT count(*) FROM content_blobs WHERE catalog_revision_id = ? AND (algorithm <> 'sha256-v1' OR length(digest) <> 64))`,
@@ -447,11 +479,11 @@ func (s *Store) ValidateCandidate(ctx context.Context, candidate Candidate) erro
 	if workCount == 0 || mediaCount == 0 || invalidBlob != 0 {
 		return fault.New(fault.CodeCatalogCandidateInvalid, false, nil)
 	}
-	if err := validateSearchProjection(ctx, s.db, candidate.CatalogRevisionID, candidate.OverlayRevisionID); err != nil {
+	if err := validateSearchProjection(ctx, tx, candidate.CatalogRevisionID, candidate.OverlayRevisionID); err != nil {
 		return err
 	}
 	var orphan, orphanCreator int
-	if err := s.db.QueryRowContext(ctx, `SELECT count(*) FROM media_projections m
+	if err := tx.QueryRowContext(ctx, `SELECT count(*) FROM media_projections m
 LEFT JOIN work_projections w ON w.catalog_revision_id = m.catalog_revision_id
  AND w.overlay_revision_id = m.overlay_revision_id AND w.work_id = m.work_id
 WHERE m.catalog_revision_id = ? AND w.work_id IS NULL`, candidate.CatalogRevisionID).Scan(&orphan); err != nil {
@@ -460,7 +492,7 @@ WHERE m.catalog_revision_id = ? AND w.work_id IS NULL`, candidate.CatalogRevisio
 	if orphan != 0 {
 		return fault.New(fault.CodeCatalogCandidateInvalid, false, nil)
 	}
-	if err := s.db.QueryRowContext(ctx, `SELECT count(*) FROM work_creator_relations r
+	if err := tx.QueryRowContext(ctx, `SELECT count(*) FROM work_creator_relations r
 LEFT JOIN work_projections w ON w.catalog_revision_id=r.catalog_revision_id
  AND w.overlay_revision_id=r.overlay_revision_id AND w.work_id=r.work_id
 LEFT JOIN creator_projections c ON c.catalog_revision_id=r.catalog_revision_id
@@ -472,11 +504,23 @@ WHERE r.catalog_revision_id=? AND (w.work_id IS NULL OR c.creator_id IS NULL)`,
 	if orphanCreator != 0 {
 		return fault.New(fault.CodeCatalogCandidateInvalid, false, nil)
 	}
-	if err := validateSourceMembership(ctx, s.db, candidate.CatalogRevisionID, candidate.OverlayRevisionID); err != nil {
+	if err := validateSourceMembership(ctx, tx, candidate.CatalogRevisionID, candidate.OverlayRevisionID); err != nil {
 		return err
 	}
-	if err := s.validateProjectionCovers(ctx, candidate.CatalogRevisionID, candidate.OverlayRevisionID); err != nil {
+	if err := validateProjectionCovers(ctx, tx, candidate.CatalogRevisionID, candidate.OverlayRevisionID); err != nil {
 		return err
+	}
+	// 聚合封面是完整 projection 的派生事实，必须在封印写入前完成。它可能扫描整个
+	// revision，因此属于候选验证事务，而不是目标 P95 <250 ms 的 publication 事务。
+	if err := computeAggregateCovers(ctx, tx, candidate.CatalogRevisionID, candidate.OverlayRevisionID); err != nil {
+		return err
+	}
+	if err := writeValidationSeal(ctx, tx, candidate.CatalogRevisionID, candidate.OverlayRevisionID,
+		validationKindCatalog, s.clock.Now().UTC().Unix()); err != nil {
+		return err
+	}
+	if err := tx.Commit(); err != nil {
+		return fault.New(fault.CodeInternal, true, err)
 	}
 	return nil
 }
@@ -489,6 +533,124 @@ WHERE r.catalog_revision_id=? AND (w.work_id IS NULL OR c.creator_id IS NULL)`,
 // 对每个 Work 重复探测成员表。
 type queryRower interface {
 	QueryRowContext(context.Context, string, ...any) *sql.Row
+}
+
+const (
+	validationKindCatalog = "catalog"
+	validationKindOverlay = "overlay"
+	validationVersion     = 1
+)
+
+type candidateMutationTarget struct {
+	kind                  string
+	catalogRevisionID     string
+	overlayRevisionID     string
+	baseOverlayRevisionID string
+	jobID                 string
+	sourceID              string
+	controlWatermark      int64
+}
+
+func catalogMutationTarget(candidate Candidate) candidateMutationTarget {
+	return candidateMutationTarget{
+		kind: validationKindCatalog, catalogRevisionID: candidate.CatalogRevisionID,
+		overlayRevisionID: candidate.OverlayRevisionID, jobID: candidate.JobID,
+		sourceID: candidate.SourceID, controlWatermark: candidate.ControlWatermark,
+	}
+}
+
+func overlayMutationTarget(candidate OverlayCandidate) candidateMutationTarget {
+	return candidateMutationTarget{
+		kind: validationKindOverlay, catalogRevisionID: candidate.CatalogRevisionID,
+		overlayRevisionID: candidate.OverlayRevisionID, baseOverlayRevisionID: candidate.BaseOverlayRevisionID,
+		jobID: candidate.JobID, controlWatermark: candidate.ControlWatermark,
+	}
+}
+
+// ensureCandidateMutable 在候选内容写入的同一个 IMMEDIATE 事务内确认目标仍是调用方
+// 持有的 staging candidate，且尚未被 Validate 封印。封印是候选的完成标记：一旦验证
+// 成功，旧 Candidate 不能再通过 Stage/Overlay/Creator merge 原地改写快照；需要重建时
+// 必须重新 Begin candidate。
+func ensureCandidateState(ctx context.Context, tx *sql.Tx, target candidateMutationTarget, requireUnsealed bool) error {
+	var sealed int
+	switch target.kind {
+	case validationKindCatalog:
+		var catalogStatus, catalogJobID, catalogSourceID, overlayStatus string
+		var controlWatermark int64
+		if err := tx.QueryRowContext(ctx, `SELECT c.status, c.job_id, c.source_id, o.status, o.control_watermark,
+EXISTS (SELECT 1 FROM candidate_validation_seals v
+        WHERE v.catalog_revision_id=c.catalog_revision_id AND v.overlay_revision_id=o.overlay_revision_id)
+FROM catalog_revisions c JOIN overlay_projection_revisions o
+  ON o.catalog_revision_id=c.catalog_revision_id
+WHERE c.catalog_revision_id=? AND o.overlay_revision_id=?`,
+			target.catalogRevisionID, target.overlayRevisionID).Scan(
+			&catalogStatus, &catalogJobID, &catalogSourceID, &overlayStatus, &controlWatermark, &sealed); err != nil {
+			return fault.New(fault.CodeCatalogCandidateInvalid, false, err)
+		}
+		if catalogStatus != "staging" || overlayStatus != "staging" || catalogJobID != target.jobID ||
+			catalogSourceID != target.sourceID || controlWatermark != target.controlWatermark || (requireUnsealed && sealed != 0) {
+			return fault.New(fault.CodeCatalogCandidateInvalid, false, nil)
+		}
+	case validationKindOverlay:
+		var catalogStatus, overlayStatus, projectionJobID, baseOverlayRevisionID string
+		var controlWatermark int64
+		if err := tx.QueryRowContext(ctx, `SELECT c.status, o.status, coalesce(o.projection_job_id, ''),
+o.control_watermark, o.base_overlay_revision_id,
+EXISTS (SELECT 1 FROM candidate_validation_seals v
+        WHERE v.catalog_revision_id=o.catalog_revision_id AND v.overlay_revision_id=o.overlay_revision_id)
+FROM catalog_revisions c
+JOIN overlay_projection_revisions o ON o.catalog_revision_id=c.catalog_revision_id
+WHERE c.catalog_revision_id=? AND o.overlay_revision_id=?`,
+			target.catalogRevisionID, target.overlayRevisionID).Scan(
+			&catalogStatus, &overlayStatus, &projectionJobID, &controlWatermark,
+			&baseOverlayRevisionID, &sealed); err != nil {
+			return fault.New(fault.CodeCatalogCandidateInvalid, false, err)
+		}
+		if catalogStatus != "published" || overlayStatus != "staging" || projectionJobID != target.jobID ||
+			controlWatermark != target.controlWatermark || baseOverlayRevisionID != target.baseOverlayRevisionID ||
+			(requireUnsealed && sealed != 0) {
+			return fault.New(fault.CodeCatalogCandidateInvalid, false, nil)
+		}
+	default:
+		return fault.New(fault.CodeCatalogCandidateInvalid, false, nil)
+	}
+	return nil
+}
+
+func ensureCandidateMutable(ctx context.Context, tx *sql.Tx, target candidateMutationTarget) error {
+	return ensureCandidateState(ctx, tx, target, true)
+}
+
+func (s *Store) clearValidationSeal(ctx context.Context, target candidateMutationTarget) error {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return fault.New(fault.CodeInternal, true, err)
+	}
+	defer tx.Rollback()
+	if err := ensureCandidateState(ctx, tx, target, false); err != nil {
+		return err
+	}
+	if _, err := tx.ExecContext(ctx, `DELETE FROM candidate_validation_seals
+WHERE catalog_revision_id=? AND overlay_revision_id=?`, target.catalogRevisionID, target.overlayRevisionID); err != nil {
+		return fault.New(fault.CodeInternal, true, err)
+	}
+	if err := tx.Commit(); err != nil {
+		return fault.New(fault.CodeInternal, true, err)
+	}
+	return nil
+}
+
+func writeValidationSeal(ctx context.Context, tx *sql.Tx, catalogRevisionID, overlayRevisionID, kind string, validatedAt int64) error {
+	if _, err := tx.ExecContext(ctx, `INSERT INTO candidate_validation_seals
+(catalog_revision_id, overlay_revision_id, candidate_kind, validation_version, validated_at)
+VALUES (?, ?, ?, ?, ?)
+ON CONFLICT(catalog_revision_id, overlay_revision_id) DO UPDATE SET
+  candidate_kind=excluded.candidate_kind,
+  validation_version=excluded.validation_version,
+  validated_at=excluded.validated_at`, catalogRevisionID, overlayRevisionID, kind, validationVersion, validatedAt); err != nil {
+		return fault.New(fault.CodeInternal, true, err)
+	}
+	return nil
 }
 
 const validateSearchProjectionSQL = `SELECT
@@ -580,9 +742,9 @@ func validateSourceMembership(ctx context.Context, queryer queryRower, catalogRe
 // validateProjectionCovers 是 Candidate 与 Overlay Candidate 共用的封面不变量门禁：
 // Source 规则键必须命中同 Work 的 SourceMedia；规则/有效 CanonicalMedia 必须属于同一
 // Work，且封面选择绝不能再借用负 ordinal 表达。
-func (s *Store) validateProjectionCovers(ctx context.Context, catalogRevisionID, overlayRevisionID string) error {
+func validateProjectionCovers(ctx context.Context, queryer queryRower, catalogRevisionID, overlayRevisionID string) error {
 	var invalidSourceCover, invalidRuleCover, invalidEffectiveCover, negativeOrdinal int
-	err := s.db.QueryRowContext(ctx, `SELECT
+	err := queryer.QueryRowContext(ctx, `SELECT
 (SELECT count(*) FROM source_works sw
  WHERE sw.catalog_revision_id=? AND sw.rule_cover_media_source_key<>'' AND NOT EXISTS (
    SELECT 1 FROM source_media sm
@@ -622,6 +784,8 @@ func (s *Store) validateProjectionCovers(ctx context.Context, catalogRevisionID,
 }
 
 func (s *Store) Publish(ctx context.Context, candidate Candidate) (Publication, error) {
+	s.candidateMu.Lock()
+	defer s.candidateMu.Unlock()
 	publicationID, err := s.ids.New(domain.IDQueryPublication)
 	if err != nil {
 		return Publication{}, fault.New(fault.CodeInternal, true, err)
@@ -632,29 +796,27 @@ func (s *Store) Publish(ctx context.Context, candidate Candidate) (Publication, 
 		return Publication{}, fault.New(fault.CodeInternal, true, err)
 	}
 	defer tx.Rollback()
-	var catalogStatus, overlayStatus string
-	if err := tx.QueryRowContext(ctx, `SELECT c.status, o.status FROM catalog_revisions c
+	var catalogStatus, overlayStatus, validationKind string
+	var sealedVersion int
+	if err := tx.QueryRowContext(ctx, `SELECT c.status, o.status, v.candidate_kind, v.validation_version
+FROM catalog_revisions c
 JOIN overlay_projection_revisions o ON o.catalog_revision_id = c.catalog_revision_id
-WHERE c.catalog_revision_id = ? AND o.overlay_revision_id = ?`, candidate.CatalogRevisionID, candidate.OverlayRevisionID).Scan(&catalogStatus, &overlayStatus); err != nil {
+JOIN candidate_validation_seals v
+  ON v.catalog_revision_id=c.catalog_revision_id AND v.overlay_revision_id=o.overlay_revision_id
+WHERE c.catalog_revision_id=? AND o.overlay_revision_id=?
+  AND c.job_id=? AND c.source_id=? AND o.control_watermark=?`,
+		candidate.CatalogRevisionID, candidate.OverlayRevisionID, candidate.JobID, candidate.SourceID,
+		candidate.ControlWatermark).Scan(&catalogStatus, &overlayStatus, &validationKind, &sealedVersion); err != nil {
 		return Publication{}, fault.New(fault.CodeCatalogCandidateInvalid, false, err)
 	}
-	if catalogStatus != "staging" || overlayStatus != "staging" {
+	if catalogStatus != "staging" || overlayStatus != "staging" ||
+		validationKind != validationKindCatalog || sealedVersion != validationVersion {
 		return Publication{}, fault.New(fault.CodeCatalogCandidateInvalid, false, nil)
 	}
-	// ValidateCandidate 与 Publish 之间可能隔着 Job/Saga 调度；publication 事务必须再次
-	// fail-closed，禁止在验证后发生候选/FTS 漂移时仍把损坏快照切为 active。
-	if err := validateSearchProjection(ctx, tx, candidate.CatalogRevisionID, candidate.OverlayRevisionID); err != nil {
-		return Publication{}, err
-	}
-	if err := validateSourceMembership(ctx, tx, candidate.CatalogRevisionID, candidate.OverlayRevisionID); err != nil {
-		return Publication{}, err
-	}
-	// 聚合封面在这里整体重算：此刻投影已完全就位（本 Source 的 Stage、其它 Source 的继承、
-	// Overlay 事实重放都已完成），而 publication 尚未可见。放在 publish 事务内保证聚合结果与
-	// 快照严格同代次，不存在「已发布但聚合还没算完」的中间态。
-	if err := computeAggregateCovers(ctx, tx, candidate.CatalogRevisionID, candidate.OverlayRevisionID); err != nil {
-		return Publication{}, err
-	}
+	// 完整一致性校验与聚合封面重算已经在 ValidateCandidate 的 IMMEDIATE 事务中完成。
+	// 所有 Store 级候选写路径都会在写事务中拒绝已封印或非 staging 目标，因此这里的
+	// 常数级确认既 fail-closed，又保持
+	// publication 事务只负责创建合法句柄与切换 active 指针。
 	if _, err := tx.ExecContext(ctx, `INSERT INTO query_publications
 (query_publication_id, catalog_revision_id, overlay_revision_id, job_id, control_watermark, created_at)
 VALUES (?, ?, ?, ?, ?, ?)`, publication.ID, publication.CatalogRevisionID, publication.OverlayRevisionID, publication.JobID, publication.ControlWatermark, publication.CreatedAt.Unix()); err != nil {
@@ -679,6 +841,8 @@ ON CONFLICT(singleton) DO UPDATE SET query_publication_id = excluded.query_publi
 // BeginOverlayCandidate 固定当前合法 publication 的 Catalog 与 Overlay 基线，
 // 只在新的 Overlay revision 中构造查询投影，不改动 Source-derived 事实。
 func (s *Store) BeginOverlayCandidate(ctx context.Context, jobID, catalogRevisionID string, controlWatermark int64) (OverlayCandidate, error) {
+	s.candidateMu.Lock()
+	defer s.candidateMu.Unlock()
 	current, err := s.Current(ctx)
 	if err != nil {
 		return OverlayCandidate{}, err
@@ -701,8 +865,10 @@ func (s *Store) BeginOverlayCandidate(ctx context.Context, jobID, catalogRevisio
 	defer tx.Rollback()
 	now := s.clock.Now().UTC().Unix()
 	if _, err := tx.ExecContext(ctx, `INSERT INTO overlay_projection_revisions
-(overlay_revision_id, catalog_revision_id, control_watermark, status, created_at, projection_job_id)
-VALUES (?, ?, ?, 'staging', ?, ?)`, candidate.OverlayRevisionID, candidate.CatalogRevisionID, candidate.ControlWatermark, now, candidate.JobID); err != nil {
+(overlay_revision_id, catalog_revision_id, control_watermark, status, created_at, projection_job_id,
+ base_overlay_revision_id)
+VALUES (?, ?, ?, 'staging', ?, ?, ?)`, candidate.OverlayRevisionID, candidate.CatalogRevisionID,
+		candidate.ControlWatermark, now, candidate.JobID, candidate.BaseOverlayRevisionID); err != nil {
 		return OverlayCandidate{}, fault.New(fault.CodeInternal, true, err)
 	}
 	if _, err := tx.ExecContext(ctx, `INSERT INTO work_projections
@@ -752,10 +918,24 @@ FROM work_creator_relations WHERE catalog_revision_id=? AND overlay_revision_id=
 }
 
 func (s *Store) ApplyOverlayFacts(ctx context.Context, candidate OverlayCandidate, facts map[string]OverlayFact) error {
-	rows, err := s.db.QueryContext(ctx, `SELECT w.work_id, sw.title, sw.creator, sw.tags_json, sw.filenames_text
+	s.candidateMu.Lock()
+	defer s.candidateMu.Unlock()
+	return s.applyOverlayFacts(ctx, overlayMutationTarget(candidate), facts)
+}
+
+func (s *Store) applyOverlayFacts(ctx context.Context, target candidateMutationTarget, facts map[string]OverlayFact) error {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return fault.New(fault.CodeInternal, true, err)
+	}
+	defer tx.Rollback()
+	if err := ensureCandidateMutable(ctx, tx, target); err != nil {
+		return err
+	}
+	rows, err := tx.QueryContext(ctx, `SELECT w.work_id, sw.title, sw.creator, sw.tags_json, sw.filenames_text
 FROM work_projections w JOIN source_works sw
 ON sw.catalog_revision_id=w.catalog_revision_id AND sw.source_id=w.source_id AND sw.source_key=w.source_key
-WHERE w.catalog_revision_id=? AND w.overlay_revision_id=? ORDER BY w.work_id`, candidate.CatalogRevisionID, candidate.OverlayRevisionID)
+WHERE w.catalog_revision_id=? AND w.overlay_revision_id=? ORDER BY w.work_id`, target.catalogRevisionID, target.overlayRevisionID)
 	if err != nil {
 		return fault.New(fault.CodeInternal, true, err)
 	}
@@ -772,11 +952,6 @@ WHERE w.catalog_revision_id=? AND w.overlay_revision_id=? ORDER BY w.work_id`, c
 	if err := rows.Close(); err != nil {
 		return fault.New(fault.CodeInternal, true, err)
 	}
-	tx, err := s.db.BeginTx(ctx, nil)
-	if err != nil {
-		return fault.New(fault.CodeInternal, true, err)
-	}
-	defer tx.Rollback()
 	for _, item := range works {
 		var tags, filenames []string
 		_ = json.Unmarshal([]byte(item.tags), &tags)
@@ -811,24 +986,24 @@ WHERE catalog_revision_id=? AND overlay_revision_id=? AND work_id=?`,
 			document.LatinTokens, document.SortTitleKey, hidden, favorite, fact.Progress,
 			document.TitleNorm, document.CreatorNorm, document.TagsNorm, document.FilenamesNorm,
 			fact.CustomCoverMediaID, fact.CustomCoverMediaID, fact.CustomCoverMediaID,
-			candidate.CatalogRevisionID, candidate.OverlayRevisionID, item.id); err != nil {
+			target.catalogRevisionID, target.overlayRevisionID, item.id); err != nil {
 			return fault.New(fault.CodeInternal, true, err)
 		}
 	}
 	// 同一事务内替换 FTS 与窄候选：Scan Candidate 已有基础索引，Overlay Candidate 则为空。
 	// 先删候选再删 FTS，避免提交任何只更新一侧的中间状态。
 	if _, err := tx.ExecContext(ctx, `DELETE FROM work_search_candidates
-WHERE catalog_revision_id=? AND overlay_revision_id=?`, candidate.CatalogRevisionID, candidate.OverlayRevisionID); err != nil {
+WHERE catalog_revision_id=? AND overlay_revision_id=?`, target.catalogRevisionID, target.overlayRevisionID); err != nil {
 		return fault.New(fault.CodeInternal, true, err)
 	}
 	if _, err := tx.ExecContext(ctx, `DELETE FROM work_search
-WHERE catalog_revision_id=? AND overlay_revision_id=?`, candidate.CatalogRevisionID, candidate.OverlayRevisionID); err != nil {
+WHERE catalog_revision_id=? AND overlay_revision_id=?`, target.catalogRevisionID, target.overlayRevisionID); err != nil {
 		return fault.New(fault.CodeInternal, true, err)
 	}
-	if err := insertSearchCandidatesForRevision(ctx, tx, candidate.CatalogRevisionID, candidate.OverlayRevisionID); err != nil {
+	if err := insertSearchCandidatesForRevision(ctx, tx, target.catalogRevisionID, target.overlayRevisionID); err != nil {
 		return fault.New(fault.CodeInternal, true, err)
 	}
-	if err := insertSearchDocumentsForRevision(ctx, tx, candidate.CatalogRevisionID, candidate.OverlayRevisionID); err != nil {
+	if err := insertSearchDocumentsForRevision(ctx, tx, target.catalogRevisionID, target.overlayRevisionID); err != nil {
 		return fault.New(fault.CodeInternal, true, err)
 	}
 	if err := tx.Commit(); err != nil {
@@ -838,13 +1013,12 @@ WHERE catalog_revision_id=? AND overlay_revision_id=?`, candidate.CatalogRevisio
 }
 
 func (s *Store) ApplyCatalogCandidateOverlays(ctx context.Context, candidate Candidate, facts map[string]OverlayFact) error {
-	return s.ApplyOverlayFacts(ctx, OverlayCandidate{
-		CatalogRevisionID: candidate.CatalogRevisionID, OverlayRevisionID: candidate.OverlayRevisionID,
-		JobID: candidate.JobID, ControlWatermark: candidate.ControlWatermark,
-	}, facts)
+	s.candidateMu.Lock()
+	defer s.candidateMu.Unlock()
+	return s.applyOverlayFacts(ctx, catalogMutationTarget(candidate), facts)
 }
 
-// ApplyCreatorMerges 让查询投影的展示层反映 control.db 中已生效的创作者合并：把
+// applyCreatorMerges 让查询投影的展示层反映 control.db 中已生效的创作者合并：把
 // 主创作者 base 身份属于被合并集合的作品的规范化创作者名重写为 target 名，并重建这
 // 些作品的 work_search 文档。它在 ApplyOverlayFacts 之后运行——后者已把整个 revision
 // 的 work_projections.creator 复位为 source_works 的 base 名，因此本方法只需按当前合并
@@ -852,9 +1026,8 @@ func (s *Store) ApplyCatalogCandidateOverlays(ctx context.Context, candidate Can
 //
 // work_creator_relations 与 creator_projections 保持 base（原始绑定）身份不变：它们当前
 // 不参与任何查询路径，把有效创作者折叠进投影会破坏撤销可逆性；待未来“按创作者浏览”
-// 查询需要时，再引入 base_creator_id 单独物化有效关系。该方法对 Scan 的 Candidate 与
-// Overlay 重投影通用，因此以显式 revision 传参。
-func (s *Store) ApplyCreatorMerges(ctx context.Context, catalogRevisionID, overlayRevisionID string, merges []domain.CreatorMergePair) error {
+// 查询需要时，再引入 base_creator_id 单独物化有效关系。
+func (s *Store) applyCreatorMerges(ctx context.Context, target candidateMutationTarget, merges []domain.CreatorMergePair) error {
 	if len(merges) == 0 {
 		return nil
 	}
@@ -863,6 +1036,9 @@ func (s *Store) ApplyCreatorMerges(ctx context.Context, catalogRevisionID, overl
 		return fault.New(fault.CodeInternal, true, err)
 	}
 	defer tx.Rollback()
+	if err := ensureCandidateMutable(ctx, tx, target); err != nil {
+		return err
+	}
 	type affectedWork struct{ workID, title, tagsJSON, filenames, creator string }
 	var affected []affectedWork
 	for _, pair := range merges {
@@ -870,7 +1046,7 @@ func (s *Store) ApplyCreatorMerges(ctx context.Context, catalogRevisionID, overl
 FROM work_creator_relations r JOIN work_projections w
  ON w.catalog_revision_id=r.catalog_revision_id AND w.overlay_revision_id=r.overlay_revision_id AND w.work_id=r.work_id
 WHERE r.catalog_revision_id=? AND r.overlay_revision_id=? AND r.creator_id=? AND r.role='primary' AND r.ordinal=0`,
-			catalogRevisionID, overlayRevisionID, pair.Absorbed)
+			target.catalogRevisionID, target.overlayRevisionID, pair.Absorbed)
 		if err != nil {
 			return fault.New(fault.CodeInternal, true, err)
 		}
@@ -896,13 +1072,13 @@ normalized_original_text=?, cjk_bigram_token_text=?, latin_trigram_token_text=?,
 search_creator_norm=?
 WHERE catalog_revision_id=? AND overlay_revision_id=? AND work_id=?`,
 			item.creator, document.NormalizedOriginal, document.CJKTokens, document.LatinTokens,
-			document.SortTitleKey, document.CreatorNorm, catalogRevisionID, overlayRevisionID, item.workID); err != nil {
+			document.SortTitleKey, document.CreatorNorm, target.catalogRevisionID, target.overlayRevisionID, item.workID); err != nil {
 			return fault.New(fault.CodeInternal, true, err)
 		}
 		var searchRowID int64
 		if err := tx.QueryRowContext(ctx, `SELECT search_rowid FROM work_search_candidates
 WHERE catalog_revision_id=? AND overlay_revision_id=? AND work_id=?`,
-			catalogRevisionID, overlayRevisionID, item.workID).Scan(&searchRowID); err != nil {
+			target.catalogRevisionID, target.overlayRevisionID, item.workID).Scan(&searchRowID); err != nil {
 			return fault.New(fault.CodeInternal, true, err)
 		}
 		if _, err := tx.ExecContext(ctx, `UPDATE work_search_candidates SET
@@ -916,7 +1092,7 @@ WHERE search_rowid=?`, document.NormalizedOriginal, document.CreatorNorm, search
 		if _, err := tx.ExecContext(ctx, `INSERT INTO work_search
 (rowid, catalog_revision_id, overlay_revision_id, work_id,
  normalized_original_text, cjk_bigram_token_text, latin_trigram_token_text)
-VALUES (?, ?, ?, ?, ?, ?, ?)`, searchRowID, catalogRevisionID, overlayRevisionID, item.workID,
+VALUES (?, ?, ?, ?, ?, ?, ?)`, searchRowID, target.catalogRevisionID, target.overlayRevisionID, item.workID,
 			document.NormalizedOriginal, document.CJKTokens, document.LatinTokens); err != nil {
 			return fault.New(fault.CodeInternal, true, err)
 		}
@@ -927,9 +1103,45 @@ VALUES (?, ?, ?, ?, ?, ?, ?)`, searchRowID, catalogRevisionID, overlayRevisionID
 	return nil
 }
 
+func (s *Store) ApplyCatalogCandidateCreatorMerges(ctx context.Context, candidate Candidate, merges []domain.CreatorMergePair) error {
+	s.candidateMu.Lock()
+	defer s.candidateMu.Unlock()
+	return s.applyCreatorMerges(ctx, catalogMutationTarget(candidate), merges)
+}
+
+func (s *Store) ApplyOverlayCandidateCreatorMerges(ctx context.Context, candidate OverlayCandidate, merges []domain.CreatorMergePair) error {
+	s.candidateMu.Lock()
+	defer s.candidateMu.Unlock()
+	return s.applyCreatorMerges(ctx, overlayMutationTarget(candidate), merges)
+}
+
 func (s *Store) ValidateOverlayCandidate(ctx context.Context, candidate OverlayCandidate) error {
+	s.candidateMu.Lock()
+	defer s.candidateMu.Unlock()
+	if err := s.clearValidationSeal(ctx, overlayMutationTarget(candidate)); err != nil {
+		return err
+	}
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return fault.New(fault.CodeInternal, true, err)
+	}
+	defer tx.Rollback()
+	var catalogStatus, candidateStatus, projectionJobID string
+	var controlWatermark int64
+	if err := tx.QueryRowContext(ctx, `SELECT c.status, o.status, coalesce(o.projection_job_id, ''), o.control_watermark
+FROM catalog_revisions c JOIN overlay_projection_revisions o
+  ON o.catalog_revision_id=c.catalog_revision_id
+WHERE c.catalog_revision_id=? AND o.overlay_revision_id=?`,
+		candidate.CatalogRevisionID, candidate.OverlayRevisionID).Scan(
+		&catalogStatus, &candidateStatus, &projectionJobID, &controlWatermark); err != nil {
+		return fault.New(fault.CodeCatalogCandidateInvalid, false, err)
+	}
+	if catalogStatus != "published" || candidateStatus != "staging" || projectionJobID != candidate.JobID ||
+		controlWatermark != candidate.ControlWatermark {
+		return fault.New(fault.CodeCatalogCandidateInvalid, false, nil)
+	}
 	var baseWorks, works, baseMedia, media, baseCreators, creators, baseRelations, relations int
-	err := s.db.QueryRowContext(ctx, `SELECT
+	err = tx.QueryRowContext(ctx, `SELECT
 (SELECT count(*) FROM work_projections WHERE catalog_revision_id=? AND overlay_revision_id=?),
 (SELECT count(*) FROM work_projections WHERE catalog_revision_id=? AND overlay_revision_id=?),
 (SELECT count(*) FROM media_projections WHERE catalog_revision_id=? AND overlay_revision_id=?),
@@ -953,19 +1165,31 @@ func (s *Store) ValidateOverlayCandidate(ctx context.Context, candidate OverlayC
 	if works != baseWorks || media != baseMedia || creators != baseCreators || relations != baseRelations {
 		return fault.New(fault.CodeCatalogCandidateInvalid, false, nil)
 	}
-	if err := validateSearchProjection(ctx, s.db, candidate.CatalogRevisionID, candidate.OverlayRevisionID); err != nil {
+	if err := validateSearchProjection(ctx, tx, candidate.CatalogRevisionID, candidate.OverlayRevisionID); err != nil {
 		return err
 	}
-	if err := validateSourceMembership(ctx, s.db, candidate.CatalogRevisionID, candidate.OverlayRevisionID); err != nil {
+	if err := validateSourceMembership(ctx, tx, candidate.CatalogRevisionID, candidate.OverlayRevisionID); err != nil {
 		return err
 	}
-	if err := s.validateProjectionCovers(ctx, candidate.CatalogRevisionID, candidate.OverlayRevisionID); err != nil {
+	if err := validateProjectionCovers(ctx, tx, candidate.CatalogRevisionID, candidate.OverlayRevisionID); err != nil {
 		return err
+	}
+	if err := computeAggregateCovers(ctx, tx, candidate.CatalogRevisionID, candidate.OverlayRevisionID); err != nil {
+		return err
+	}
+	if err := writeValidationSeal(ctx, tx, candidate.CatalogRevisionID, candidate.OverlayRevisionID,
+		validationKindOverlay, s.clock.Now().UTC().Unix()); err != nil {
+		return err
+	}
+	if err := tx.Commit(); err != nil {
+		return fault.New(fault.CodeInternal, true, err)
 	}
 	return nil
 }
 
 func (s *Store) PublishOverlay(ctx context.Context, candidate OverlayCandidate) (Publication, error) {
+	s.candidateMu.Lock()
+	defer s.candidateMu.Unlock()
 	publicationID, err := s.ids.New(domain.IDQueryPublication)
 	if err != nil {
 		return Publication{}, fault.New(fault.CodeInternal, true, err)
@@ -978,30 +1202,37 @@ func (s *Store) PublishOverlay(ctx context.Context, candidate OverlayCandidate) 
 		return Publication{}, fault.New(fault.CodeInternal, true, err)
 	}
 	defer tx.Rollback()
-	var activeCatalog, activeOverlay, candidateStatus, catalogStatus string
-	var activeWatermark int64
-	if err := tx.QueryRowContext(ctx, `SELECT q.catalog_revision_id, q.overlay_revision_id, q.control_watermark,
-o.status, c.status FROM active_query_publication a
-JOIN query_publications q ON q.query_publication_id=a.query_publication_id
-JOIN overlay_projection_revisions o ON o.overlay_revision_id=?
+	var persistedCatalog, persistedJob, candidateStatus, catalogStatus, validationKind, persistedBaseOverlay string
+	var persistedWatermark int64
+	var sealedVersion int
+	if err := tx.QueryRowContext(ctx, `SELECT o.catalog_revision_id, coalesce(o.projection_job_id, ''),
+o.control_watermark, o.status, c.status, v.candidate_kind, v.validation_version, o.base_overlay_revision_id
+FROM overlay_projection_revisions o
 JOIN catalog_revisions c ON c.catalog_revision_id=o.catalog_revision_id
-WHERE a.singleton=1`, candidate.OverlayRevisionID).Scan(&activeCatalog, &activeOverlay, &activeWatermark, &candidateStatus, &catalogStatus); err != nil {
+JOIN candidate_validation_seals v
+  ON v.catalog_revision_id=o.catalog_revision_id AND v.overlay_revision_id=o.overlay_revision_id
+WHERE o.overlay_revision_id=?`, candidate.OverlayRevisionID).Scan(
+		&persistedCatalog, &persistedJob, &persistedWatermark, &candidateStatus, &catalogStatus,
+		&validationKind, &sealedVersion, &persistedBaseOverlay); err != nil {
 		return Publication{}, fault.New(fault.CodeCatalogCandidateInvalid, false, err)
 	}
-	if activeCatalog != candidate.CatalogRevisionID || activeOverlay != candidate.BaseOverlayRevisionID ||
-		activeWatermark >= candidate.ControlWatermark || candidateStatus != "staging" || catalogStatus != "published" {
+	if persistedCatalog != candidate.CatalogRevisionID || persistedJob != candidate.JobID ||
+		persistedWatermark != candidate.ControlWatermark || persistedBaseOverlay != candidate.BaseOverlayRevisionID ||
+		candidateStatus != "staging" || catalogStatus != "published" ||
+		validationKind != validationKindOverlay || sealedVersion != validationVersion {
+		return Publication{}, fault.New(fault.CodeCatalogCandidateInvalid, false, nil)
+	}
+	var activeCatalog, activeOverlay string
+	var activeWatermark int64
+	if err := tx.QueryRowContext(ctx, `SELECT q.catalog_revision_id, q.overlay_revision_id, q.control_watermark
+FROM active_query_publication a
+JOIN query_publications q ON q.query_publication_id=a.query_publication_id
+WHERE a.singleton=1`).Scan(&activeCatalog, &activeOverlay, &activeWatermark); err != nil {
+		return Publication{}, fault.New(fault.CodeInternal, true, err)
+	}
+	if activeCatalog != persistedCatalog || activeOverlay != persistedBaseOverlay ||
+		activeWatermark >= persistedWatermark {
 		return Publication{}, fault.New(fault.CodeConflict, true, nil)
-	}
-	if err := validateSearchProjection(ctx, tx, candidate.CatalogRevisionID, candidate.OverlayRevisionID); err != nil {
-		return Publication{}, err
-	}
-	if err := validateSourceMembership(ctx, tx, candidate.CatalogRevisionID, candidate.OverlayRevisionID); err != nil {
-		return Publication{}, err
-	}
-	// Overlay 重新发布同样必须重算聚合封面：用户设置的 CustomCover 会改变作品的有效封面，
-	// 而聚合取的正是有效封面，因此这条路径不能只继承旧聚合行。
-	if err := computeAggregateCovers(ctx, tx, candidate.CatalogRevisionID, candidate.OverlayRevisionID); err != nil {
-		return Publication{}, err
 	}
 	if _, err := tx.ExecContext(ctx, `INSERT INTO query_publications
 (query_publication_id, catalog_revision_id, overlay_revision_id, job_id, control_watermark, created_at)
@@ -1023,18 +1254,32 @@ WHERE overlay_revision_id=? AND status='staging'`, publication.CreatedAt.Unix(),
 }
 
 func (s *Store) FinishOverlayCandidate(ctx context.Context, candidate OverlayCandidate, status string) error {
+	s.candidateMu.Lock()
+	defer s.candidateMu.Unlock()
 	if status != "aborted" && status != "superseded" {
 		return fault.New(fault.CodeValidation, false, nil)
 	}
-	_, err := s.db.ExecContext(ctx, `UPDATE overlay_projection_revisions SET status=?
-WHERE overlay_revision_id=? AND status='staging'`, status, candidate.OverlayRevisionID)
+	result, err := s.db.ExecContext(ctx, `UPDATE overlay_projection_revisions SET status=?
+WHERE overlay_revision_id=? AND catalog_revision_id=? AND status='staging'
+  AND coalesce(projection_job_id, '')=? AND control_watermark=? AND base_overlay_revision_id=?`,
+		status, candidate.OverlayRevisionID, candidate.CatalogRevisionID, candidate.JobID,
+		candidate.ControlWatermark, candidate.BaseOverlayRevisionID)
 	if err != nil {
 		return fault.New(fault.CodeInternal, true, err)
+	}
+	changed, err := result.RowsAffected()
+	if err != nil {
+		return fault.New(fault.CodeInternal, true, err)
+	}
+	if changed != 1 {
+		return fault.New(fault.CodeCatalogCandidateInvalid, false, nil)
 	}
 	return nil
 }
 
 func (s *Store) AbortOverlayCandidatesForJob(ctx context.Context, jobID string) error {
+	s.candidateMu.Lock()
+	defer s.candidateMu.Unlock()
 	_, err := s.db.ExecContext(ctx, `UPDATE overlay_projection_revisions SET status='aborted'
 WHERE status='staging' AND projection_job_id=?`, jobID)
 	if err != nil {
@@ -1306,6 +1551,8 @@ FROM query_publications WHERE job_id = ?`, jobID).Scan(&publication.ID, &publica
 }
 
 func (s *Store) AbortCandidate(ctx context.Context, jobID string) error {
+	s.candidateMu.Lock()
+	defer s.candidateMu.Unlock()
 	_, err := s.db.ExecContext(ctx, `UPDATE catalog_revisions SET status = 'aborted' WHERE job_id = ? AND status = 'staging'`, jobID)
 	if err != nil {
 		return fault.New(fault.CodeInternal, true, err)
@@ -1340,6 +1587,8 @@ func protectedBlobClause(revisionColumn string, blobs []domain.ContentBlobRef) (
 // 读取租约保护的查询快照。FTS5 表不受外键级联管理，必须与对应 Overlay
 // revision 在同一事务中显式删除。
 func (s *Store) GarbageCollect(ctx context.Context, retention time.Duration) (GCResult, error) {
+	s.candidateMu.Lock()
+	defer s.candidateMu.Unlock()
 	return s.garbageCollect(ctx, retention, nil)
 }
 
@@ -1379,6 +1628,12 @@ AND NOT EXISTS (
   SELECT 1 FROM content_blobs b JOIN blob_read_leases l
     ON l.blob_algorithm=b.algorithm AND l.blob_digest=b.digest
   WHERE b.catalog_revision_id=q.catalog_revision_id AND l.expires_at>?
+)
+AND NOT EXISTS (
+  SELECT 1 FROM overlay_projection_revisions pending
+  WHERE pending.catalog_revision_id=q.catalog_revision_id
+    AND pending.base_overlay_revision_id=q.overlay_revision_id
+    AND pending.status='staging'
 )`+publicationProtectedClause+`
 ORDER BY q.created_at, q.query_publication_id`, append([]any{cutoff, now, now}, publicationProtectedArgs...)...)
 	if err != nil {
@@ -1439,6 +1694,12 @@ AND NOT EXISTS (
   SELECT 1 FROM content_blobs b JOIN blob_read_leases l
     ON l.blob_algorithm=b.algorithm AND l.blob_digest=b.digest
   WHERE b.catalog_revision_id=o.catalog_revision_id AND l.expires_at>?
+)
+AND NOT EXISTS (
+  SELECT 1 FROM overlay_projection_revisions pending
+  WHERE pending.catalog_revision_id=o.catalog_revision_id
+    AND pending.base_overlay_revision_id=o.overlay_revision_id
+    AND pending.status='staging'
 )`+overlayProtectedClause+`
 ORDER BY o.created_at, o.overlay_revision_id`, append([]any{cutoff, now}, overlayProtectedArgs...)...)
 	if err != nil {
@@ -1473,6 +1734,12 @@ WHERE catalog_revision_id=? AND overlay_revision_id=?`, item.catalog, item.overl
 	rows, err = tx.QueryContext(ctx, `SELECT catalog_revision_id FROM catalog_revisions
 WHERE status IN ('published', 'aborted') AND created_at<=?
 AND NOT EXISTS (SELECT 1 FROM query_publications q WHERE q.catalog_revision_id=catalog_revisions.catalog_revision_id)
+AND NOT EXISTS (
+  SELECT 1 FROM overlay_projection_revisions pending
+  WHERE pending.catalog_revision_id=catalog_revisions.catalog_revision_id
+    AND pending.status='staging'
+    AND pending.base_overlay_revision_id<>''
+)
 AND NOT EXISTS (
   SELECT 1 FROM content_blobs b JOIN blob_read_leases l
     ON l.blob_algorithm=b.algorithm AND l.blob_digest=b.digest
@@ -1513,6 +1780,8 @@ AND NOT EXISTS (
 // GarbageCollectWithOptions 在已有 GC 保护之外收敛遗留 staging candidate。活动 Job 的
 // candidate 永不 abort；DryRun 只返回可处理数量，供维护 API 做空间和影响预览。
 func (s *Store) GarbageCollectWithOptions(ctx context.Context, options GCOptions) (GCResult, error) {
+	s.candidateMu.Lock()
+	defer s.candidateMu.Unlock()
 	if options.Retention < 0 {
 		return GCResult{}, fault.New(fault.CodeValidation, false, nil)
 	}
@@ -1601,6 +1870,9 @@ func (s *Store) stageWorks(ctx context.Context, candidate Candidate, works []Wor
 		return fault.New(fault.CodeInternal, true, err)
 	}
 	defer tx.Rollback()
+	if err := ensureCandidateMutable(ctx, tx, catalogMutationTarget(candidate)); err != nil {
+		return err
+	}
 	members := make(map[string]string)
 	for _, work := range works {
 		if work.SourceID != candidate.SourceID {
@@ -1715,6 +1987,9 @@ func (s *Store) stageMedia(ctx context.Context, candidate Candidate, items []Med
 		return fault.New(fault.CodeInternal, true, err)
 	}
 	defer tx.Rollback()
+	if err := ensureCandidateMutable(ctx, tx, catalogMutationTarget(candidate)); err != nil {
+		return err
+	}
 	for _, item := range items {
 		state := item.ContentVerificationState
 		if state == "" {

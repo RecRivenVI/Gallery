@@ -311,6 +311,7 @@ func recordCorpusFacts(rep *report.Report, manifest corpus.Manifest) {
 		Scale: manifest.Scale, SourceCount: sources,
 		ClonedSourceCountOnLastPublish: sources - 1,
 		SourceBeginDurationsMs:         manifest.SourceBeginDurationsMs,
+		SourceValidationDurationsMs:    manifest.SourceValidationDurationsMs,
 		SourcePublishDurationsMs:       manifest.SourcePublishDurationsMs,
 	}
 	if sources <= 1 {

@@ -3,11 +3,13 @@ package catalog_test
 import (
 	"context"
 	"errors"
+	"sync"
 	"testing"
 	"time"
 
 	"github.com/RecRivenVI/gallery/internal/catalog"
 	"github.com/RecRivenVI/gallery/internal/contract/fault"
+	"github.com/RecRivenVI/gallery/internal/domain"
 	"github.com/RecRivenVI/gallery/internal/platform/appdirs"
 	"github.com/RecRivenVI/gallery/internal/platform/clock"
 	"github.com/RecRivenVI/gallery/internal/platform/filesystem"
@@ -499,7 +501,7 @@ func TestGarbageCollectReclaimsAbandonedStagingCandidate(t *testing.T) {
 	}
 }
 
-func TestPublishRevalidatesSearchProjectionInsidePublicationTransaction(t *testing.T) {
+func TestValidateCandidateRejectsSearchProjectionDriftWithoutWritingSeal(t *testing.T) {
 	tests := []struct {
 		name    string
 		corrupt func(*testing.T, *storage.Store, catalog.Candidate)
@@ -528,25 +530,170 @@ func TestPublishRevalidatesSearchProjectionInsidePublicationTransaction(t *testi
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
 			catalogStore, store := newCandidateTestStore(t)
-			candidate := stageValidCandidate(t, catalogStore, "job-publish-revalidate", "source-a",
-				"work-1", "media-1", candidateDigestA, true)
+			candidate := stageValidCandidate(t, catalogStore, "job-validate-search", "source-a",
+				"work-1", "media-1", candidateDigestA, false)
 			test.corrupt(t, store, candidate)
-			if _, err := catalogStore.Publish(context.Background(), candidate); !hasFaultCode(err, fault.CodeCatalogCandidateInvalid) {
-				t.Fatalf("Publish 未拒绝验证后的搜索投影漂移: %v", err)
+			if err := catalogStore.ValidateCandidate(context.Background(), candidate); !hasFaultCode(err, fault.CodeCatalogCandidateInvalid) {
+				t.Fatalf("ValidateCandidate 未拒绝搜索投影漂移: %v", err)
 			}
-			if got := countRows(t, store, `SELECT count(*) FROM query_publications WHERE job_id=?`, candidate.JobID); got != 0 {
-				t.Fatalf("损坏 Candidate 仍创建了 publication: %d", got)
+			if got := countRows(t, store, `SELECT count(*) FROM candidate_validation_seals
+WHERE catalog_revision_id=? AND overlay_revision_id=?`, candidate.CatalogRevisionID, candidate.OverlayRevisionID); got != 0 {
+				t.Fatalf("损坏 Candidate 仍写入验证封印: %d", got)
 			}
 		})
 	}
 }
 
-func TestPublishOverlayRevalidatesSearchProjectionInsidePublicationTransaction(t *testing.T) {
+func TestPublishRequiresCandidateValidationSeal(t *testing.T) {
+	catalogStore, store := newCandidateTestStore(t)
+	ctx := context.Background()
+	candidate := stageValidCandidate(t, catalogStore, "job-seal-required", "source-a",
+		"work-1", "media-1", candidateDigestA, false)
+	if _, err := catalogStore.Publish(ctx, candidate); !hasFaultCode(err, fault.CodeCatalogCandidateInvalid) {
+		t.Fatalf("缺少验证封印时 Publish 未 fail-closed: %v", err)
+	}
+	if got := countRows(t, store, `SELECT count(*) FROM query_publications WHERE job_id=?`, candidate.JobID); got != 0 {
+		t.Fatalf("缺少封印仍创建了 publication: %d", got)
+	}
+	if err := catalogStore.ValidateCandidate(ctx, candidate); err != nil {
+		t.Fatal(err)
+	}
+	if got := countRows(t, store, `SELECT count(*) FROM candidate_validation_seals
+WHERE catalog_revision_id=? AND overlay_revision_id=? AND candidate_kind='catalog' AND validation_version=1`,
+		candidate.CatalogRevisionID, candidate.OverlayRevisionID); got != 1 {
+		t.Fatalf("完整验证后封印数=%d", got)
+	}
+	publishCandidate(t, catalogStore, candidate)
+}
+
+func TestCatalogValidationSealFinalizesCandidateMutations(t *testing.T) {
+	catalogStore, store := newCandidateTestStore(t)
+	ctx := context.Background()
+	candidate := stageValidCandidate(t, catalogStore, "job-seal-stage", "source-a",
+		"work-1", "media-1", candidateDigestA, true)
+	works, mediaFacts := minimalCandidateFacts("source-a", "work-2", "media-2", candidateDigestB)
+	works[0].SourceKey = "work-two"
+	works[0].SourceTitle = "work-two"
+	works[0].Title = "work-two"
+	mediaFacts[0].SourceKey = "work-two/media.bin"
+	mediaFacts[0].WorkSourceKey = "work-two"
+	mediaFacts[0].RelativePath = "work-two/media.bin"
+	mediaFacts[0].LocationKey = "loc-media-2"
+	if err := catalogStore.Stage(ctx, candidate, works, mediaFacts); !hasFaultCode(err, fault.CodeCatalogCandidateInvalid) {
+		t.Fatalf("封印后的 Stage 未被拒绝: %v", err)
+	}
+	if got := countRows(t, store, `SELECT count(*) FROM candidate_validation_seals
+WHERE catalog_revision_id=? AND overlay_revision_id=?`, candidate.CatalogRevisionID, candidate.OverlayRevisionID); got != 1 {
+		t.Fatalf("被拒绝的 Stage 改变了验证封印: %d", got)
+	}
+	if got := countRows(t, store, `SELECT count(*) FROM work_projections WHERE catalog_revision_id=?`, candidate.CatalogRevisionID); got != 1 {
+		t.Fatalf("被拒绝的 Stage 改变了 WorkProjection: %d", got)
+	}
+	publishCandidate(t, catalogStore, candidate)
+	if err := catalogStore.Stage(ctx, candidate, works, mediaFacts); !hasFaultCode(err, fault.CodeCatalogCandidateInvalid) {
+		t.Fatalf("已发布 Candidate 仍可 Stage: %v", err)
+	}
+	if err := catalogStore.ApplyCatalogCandidateOverlays(ctx, candidate, map[string]catalog.OverlayFact{
+		"work-1": {Favorite: true},
+	}); !hasFaultCode(err, fault.CodeCatalogCandidateInvalid) {
+		t.Fatalf("已发布 Candidate 仍可重投影 Overlay: %v", err)
+	}
+	if err := catalogStore.ApplyCatalogCandidateCreatorMerges(ctx, candidate, []domain.CreatorMergePair{{
+		Absorbed: "creator-old", Target: "creator-new", TargetName: "Creator New",
+	}}); !hasFaultCode(err, fault.CodeCatalogCandidateInvalid) {
+		t.Fatalf("已发布 Candidate 仍可改写 Creator 投影: %v", err)
+	}
+	if got := countRows(t, store, `SELECT favorite FROM work_projections
+WHERE catalog_revision_id=? AND overlay_revision_id=? AND work_id='work-1'`,
+		candidate.CatalogRevisionID, candidate.OverlayRevisionID); got != 0 {
+		t.Fatalf("已发布快照被原地改写: favorite=%d", got)
+	}
+}
+
+func TestCatalogMutationGuardsRejectWrongIdentityAndAbortedCandidate(t *testing.T) {
+	catalogStore, store := newCandidateTestStore(t)
+	ctx := context.Background()
+	candidate := stageValidCandidate(t, catalogStore, "job-guard", "source-a",
+		"work-1", "media-1", candidateDigestA, false)
+	works, mediaFacts := minimalCandidateFacts("source-a", "work-2", "media-2", candidateDigestB)
+	works[0].SourceKey, works[0].SourceTitle, works[0].Title = "work-two", "work-two", "work-two"
+	mediaFacts[0].SourceKey, mediaFacts[0].WorkSourceKey = "work-two/media.bin", "work-two"
+	mediaFacts[0].RelativePath, mediaFacts[0].LocationKey = "work-two/media.bin", "loc-media-2"
+
+	wrong := []catalog.Candidate{candidate, candidate, candidate}
+	wrong[0].JobID = "job-wrong"
+	wrong[1].SourceID = "source-wrong"
+	wrong[2].ControlWatermark++
+	for index, item := range wrong {
+		if err := catalogStore.Stage(ctx, item, works, mediaFacts); !hasFaultCode(err, fault.CodeCatalogCandidateInvalid) {
+			t.Fatalf("错误身份 %d 未被拒绝: %v", index, err)
+		}
+	}
+	if got := countRows(t, store, `SELECT count(*) FROM work_projections WHERE catalog_revision_id=?`, candidate.CatalogRevisionID); got != 1 {
+		t.Fatalf("错误身份写入改变了 Candidate: %d", got)
+	}
+	if err := catalogStore.AbortCandidate(ctx, candidate.JobID); err != nil {
+		t.Fatal(err)
+	}
+	if err := catalogStore.Stage(ctx, candidate, works, mediaFacts); !hasFaultCode(err, fault.CodeCatalogCandidateInvalid) {
+		t.Fatalf("aborted Candidate 仍可 Stage: %v", err)
+	}
+}
+
+func TestFailedCandidateRevalidationDoesNotRestoreOldSeal(t *testing.T) {
+	catalogStore, store := newCandidateTestStore(t)
+	ctx := context.Background()
+	candidate := stageValidCandidate(t, catalogStore, "job-revalidate-seal", "source-a",
+		"work-1", "media-1", candidateDigestA, true)
+	if _, err := store.Catalog.SQL().Exec(`DELETE FROM work_search_candidates WHERE catalog_revision_id=?`, candidate.CatalogRevisionID); err != nil {
+		t.Fatal(err)
+	}
+	if err := catalogStore.ValidateCandidate(ctx, candidate); !hasFaultCode(err, fault.CodeCatalogCandidateInvalid) {
+		t.Fatalf("显式重验未拒绝损坏候选: %v", err)
+	}
+	if got := countRows(t, store, `SELECT count(*) FROM candidate_validation_seals
+WHERE catalog_revision_id=? AND overlay_revision_id=?`, candidate.CatalogRevisionID, candidate.OverlayRevisionID); got != 0 {
+		t.Fatalf("失败重验后旧封印复活: %d", got)
+	}
+	if _, err := catalogStore.Publish(ctx, candidate); !hasFaultCode(err, fault.CodeCatalogCandidateInvalid) {
+		t.Fatalf("失败重验后仍可发布: %v", err)
+	}
+}
+
+func TestConcurrentCandidateRevalidationIsIdempotent(t *testing.T) {
+	catalogStore, store := newCandidateTestStore(t)
+	candidate := stageValidCandidate(t, catalogStore, "job-concurrent-revalidate", "source-a",
+		"work-1", "media-1", candidateDigestA, true)
+	start := make(chan struct{})
+	errs := make(chan error, 2)
+	var ready sync.WaitGroup
+	ready.Add(2)
+	for range 2 {
+		go func() {
+			ready.Done()
+			<-start
+			errs <- catalogStore.ValidateCandidate(context.Background(), candidate)
+		}()
+	}
+	ready.Wait()
+	close(start)
+	for range 2 {
+		if err := <-errs; err != nil {
+			t.Fatalf("并发重验返回错误: %v", err)
+		}
+	}
+	if got := countRows(t, store, `SELECT count(*) FROM candidate_validation_seals
+WHERE catalog_revision_id=? AND overlay_revision_id=?`, candidate.CatalogRevisionID, candidate.OverlayRevisionID); got != 1 {
+		t.Fatalf("并发重验后的封印数=%d", got)
+	}
+}
+
+func TestOverlayValidationSealFinalizesCandidateMutations(t *testing.T) {
 	catalogStore, store := newCandidateTestStore(t)
 	ctx := context.Background()
 	base := stageValidCandidate(t, catalogStore, "job-overlay-base", "source-a", "work-1", "media-1", candidateDigestA, true)
 	publishCandidate(t, catalogStore, base)
-	overlay, err := catalogStore.BeginOverlayCandidate(ctx, "job-overlay-revalidate", base.CatalogRevisionID, 2)
+	overlay, err := catalogStore.BeginOverlayCandidate(ctx, "job-overlay-seal", base.CatalogRevisionID, 2)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -556,15 +703,145 @@ func TestPublishOverlayRevalidatesSearchProjectionInsidePublicationTransaction(t
 	if err := catalogStore.ValidateOverlayCandidate(ctx, overlay); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := store.Catalog.SQL().Exec(`DELETE FROM work_search_candidates
-WHERE catalog_revision_id=? AND overlay_revision_id=?`, overlay.CatalogRevisionID, overlay.OverlayRevisionID); err != nil {
+	if got := countRows(t, store, `SELECT count(*) FROM candidate_validation_seals
+WHERE catalog_revision_id=? AND overlay_revision_id=? AND candidate_kind='overlay' AND validation_version=1`,
+		overlay.CatalogRevisionID, overlay.OverlayRevisionID); got != 1 {
+		t.Fatalf("Overlay 完整验证后封印数=%d", got)
+	}
+	if err := catalogStore.ApplyOverlayFacts(ctx, overlay, map[string]catalog.OverlayFact{
+		"work-1": {Favorite: true},
+	}); !hasFaultCode(err, fault.CodeCatalogCandidateInvalid) {
+		t.Fatalf("封印后的 Overlay 重投影未被拒绝: %v", err)
+	}
+	if got := countRows(t, store, `SELECT count(*) FROM candidate_validation_seals
+WHERE catalog_revision_id=? AND overlay_revision_id=?`, overlay.CatalogRevisionID, overlay.OverlayRevisionID); got != 1 {
+		t.Fatalf("被拒绝的 Overlay 重投影改变了封印: %d", got)
+	}
+	if got := countRows(t, store, `SELECT favorite FROM work_projections
+WHERE catalog_revision_id=? AND overlay_revision_id=? AND work_id='work-1'`,
+		overlay.CatalogRevisionID, overlay.OverlayRevisionID); got != 0 {
+		t.Fatalf("封印后的 Overlay Candidate 被原地改写: favorite=%d", got)
+	}
+	if _, err := catalogStore.PublishOverlay(ctx, overlay); err != nil {
+		t.Fatalf("封印后的 Overlay 发布失败: %v", err)
+	}
+	if err := catalogStore.ApplyOverlayFacts(ctx, overlay, map[string]catalog.OverlayFact{
+		"work-1": {Favorite: true},
+	}); !hasFaultCode(err, fault.CodeCatalogCandidateInvalid) {
+		t.Fatalf("已发布 Overlay Candidate 仍可重投影: %v", err)
+	}
+}
+
+func TestOverlayMutationGuardRejectsWrongIdentity(t *testing.T) {
+	catalogStore, _ := newCandidateTestStore(t)
+	ctx := context.Background()
+	base := stageValidCandidate(t, catalogStore, "job-overlay-guard-base", "source-a",
+		"work-1", "media-1", candidateDigestA, true)
+	publishCandidate(t, catalogStore, base)
+	overlay, err := catalogStore.BeginOverlayCandidate(ctx, "job-overlay-guard", base.CatalogRevisionID, 2)
+	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := catalogStore.PublishOverlay(ctx, overlay); !hasFaultCode(err, fault.CodeCatalogCandidateInvalid) {
-		t.Fatalf("PublishOverlay 未拒绝验证后的搜索投影漂移: %v", err)
+	wrong := []catalog.OverlayCandidate{overlay, overlay, overlay}
+	wrong[0].JobID = "job-wrong"
+	wrong[1].ControlWatermark++
+	wrong[2].BaseOverlayRevisionID = "ovr_wrong"
+	for index, item := range wrong {
+		if err := catalogStore.ApplyOverlayFacts(ctx, item, map[string]catalog.OverlayFact{}); !hasFaultCode(err, fault.CodeCatalogCandidateInvalid) {
+			t.Fatalf("错误 Overlay 身份 %d 未被拒绝: %v", index, err)
+		}
 	}
-	if got := countRows(t, store, `SELECT count(*) FROM query_publications WHERE job_id=?`, overlay.JobID); got != 0 {
-		t.Fatalf("损坏 Overlay Candidate 仍创建了 publication: %d", got)
+	if err := catalogStore.ApplyOverlayFacts(ctx, overlay, map[string]catalog.OverlayFact{}); err != nil {
+		t.Fatalf("合法 Overlay Candidate 被拒绝: %v", err)
+	}
+	if err := catalogStore.ValidateOverlayCandidate(ctx, overlay); err != nil {
+		t.Fatalf("合法 Overlay Candidate 验证失败: %v", err)
+	}
+	wrongBase := overlay
+	wrongBase.BaseOverlayRevisionID = "ovr_wrong"
+	if _, err := catalogStore.PublishOverlay(ctx, wrongBase); !hasFaultCode(err, fault.CodeCatalogCandidateInvalid) {
+		t.Fatalf("PublishOverlay 接受了调用方替换的 base 身份: %v", err)
+	}
+	if err := catalogStore.FinishOverlayCandidate(ctx, wrongBase, "aborted"); !hasFaultCode(err, fault.CodeCatalogCandidateInvalid) {
+		t.Fatalf("FinishOverlayCandidate 接受了调用方替换的 base 身份: %v", err)
+	}
+	wrongCatalog := overlay
+	wrongCatalog.CatalogRevisionID = "cat_wrong"
+	if _, err := catalogStore.PublishOverlay(ctx, wrongCatalog); !hasFaultCode(err, fault.CodeCatalogCandidateInvalid) {
+		t.Fatalf("PublishOverlay 接受了调用方替换的 catalog 身份: %v", err)
+	}
+}
+
+func TestOverlayActiveDriftIsDeferredToPublishCAS(t *testing.T) {
+	catalogStore, storageStore := newCandidateTestStore(t)
+	ctx := context.Background()
+	base := stageValidCandidate(t, catalogStore, "job-overlay-drift-base", "source-a",
+		"work-1", "media-1", candidateDigestA, true)
+	basePublication := publishCandidate(t, catalogStore, base)
+
+	stale, err := catalogStore.BeginOverlayCandidate(ctx, "job-overlay-drift-stale", base.CatalogRevisionID, 2)
+	if err != nil {
+		t.Fatal(err)
+	}
+	winner, err := catalogStore.BeginOverlayCandidate(ctx, "job-overlay-drift-winner", base.CatalogRevisionID, 3)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if stale.BaseOverlayRevisionID != basePublication.OverlayRevisionID ||
+		winner.BaseOverlayRevisionID != basePublication.OverlayRevisionID {
+		t.Fatalf("并行候选没有固定同一创建基线: stale=%q winner=%q base=%q",
+			stale.BaseOverlayRevisionID, winner.BaseOverlayRevisionID, basePublication.OverlayRevisionID)
+	}
+	if err := catalogStore.ApplyOverlayFacts(ctx, winner, map[string]catalog.OverlayFact{}); err != nil {
+		t.Fatal(err)
+	}
+	if err := catalogStore.ValidateOverlayCandidate(ctx, winner); err != nil {
+		t.Fatal(err)
+	}
+	winnerPublication, err := catalogStore.PublishOverlay(ctx, winner)
+	if err != nil {
+		t.Fatal(err)
+	}
+	gcResult, err := catalogStore.GarbageCollect(ctx, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if gcResult.Publications != 0 || countRows(t, storageStore,
+		`SELECT count(*) FROM query_publications WHERE query_publication_id=?`, basePublication.ID) != 1 {
+		t.Fatalf("GC 回收了 staging Overlay 持久引用的 base publication: %+v", gcResult)
+	}
+
+	if err := catalogStore.ApplyOverlayFacts(ctx, stale, map[string]catalog.OverlayFact{}); err != nil {
+		t.Fatalf("active 漂移错误地使合法旧基线候选无法继续构造: %v", err)
+	}
+	if err := catalogStore.ValidateOverlayCandidate(ctx, stale); err != nil {
+		t.Fatalf("active 漂移错误地使合法旧基线候选无法验证: %v", err)
+	}
+	if _, err := catalogStore.PublishOverlay(ctx, stale); !hasFaultCode(err, fault.CodeConflict) {
+		t.Fatalf("旧基线候选发布未由 active CAS 返回 CONFLICT: %v", err)
+	}
+	current, err := catalogStore.Current(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if current.ID != winnerPublication.ID || current.OverlayRevisionID != winner.OverlayRevisionID {
+		t.Fatalf("旧基线候选越过 CAS 改变 active publication: %+v", current)
+	}
+	if got := countRows(t, storageStore, `SELECT count(*) FROM candidate_validation_seals
+WHERE catalog_revision_id=? AND overlay_revision_id=? AND candidate_kind='overlay'`,
+		stale.CatalogRevisionID, stale.OverlayRevisionID); got != 1 {
+		t.Fatalf("CAS 冲突不应破坏已经完成的候选封印: %d", got)
+	}
+	if err := catalogStore.FinishOverlayCandidate(ctx, stale, "superseded"); err != nil {
+		t.Fatal(err)
+	}
+	gcResult, err = catalogStore.GarbageCollect(ctx, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if gcResult.Publications != 1 || countRows(t, storageStore,
+		`SELECT count(*) FROM query_publications WHERE query_publication_id=?`, basePublication.ID) != 0 {
+		t.Fatalf("terminal candidate 释放后 base publication 未恢复可回收: %+v", gcResult)
 	}
 }
 
@@ -606,6 +883,11 @@ WHERE catalog_revision_id=? AND overlay_revision_id=?`, overlay.CatalogRevisionI
 			}
 			if err := test.finish(ctx, catalogStore, overlay); err != nil {
 				t.Fatal(err)
+			}
+			if err := catalogStore.ApplyOverlayFacts(ctx, overlay, map[string]catalog.OverlayFact{
+				"work-1": {Favorite: true},
+			}); !hasFaultCode(err, fault.CodeCatalogCandidateInvalid) {
+				t.Fatalf("terminal Overlay Candidate 仍可重投影: %v", err)
 			}
 			result, err := catalogStore.GarbageCollect(ctx, 0)
 			if err != nil {

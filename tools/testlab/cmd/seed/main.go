@@ -41,6 +41,7 @@ func main() {
 	appRoot := flag.String("approot", "", "目标 AppDirs 父目录（必须为空或不存在）")
 	scale := flag.Int("scale", 1000, "生成的 WorkProjection 数量")
 	batchSize := flag.Int("batch", 20000, "单次 Stage 调用的批大小，控制峰值内存")
+	sources := flag.Int("sources", 0, "语料分布到的 Source 数量；0 时兼容读取 GALLERY_TESTLAB_SEED_SOURCES，仍未指定则为 1")
 	manifestPath := flag.String("manifest-out", "", "写入生成语料统计摘要 JSON 的路径（必需，probe 从中读取真实生成的 ID）")
 	tier := flag.String("tier", "", "本次运行的规模等级标签（smoke/integration/preflight/reference/nonrecommended），仅写入 manifest 供报告标注，不影响生成逻辑")
 	allowNonrecommended := flag.Bool("allow-nonrecommended-scale", false, "显式允许生成 >=1,000,000 的非推荐诊断规模")
@@ -56,7 +57,7 @@ func main() {
 		fmt.Println("NONRECOMMENDED_SCALE：本次规模不属于正式支持规模，不构成标准 Gate")
 	}
 
-	manifest, err := runSeed(context.Background(), seedConfig{AppRoot: *appRoot, Scale: *scale, BatchSize: *batchSize})
+	manifest, err := runSeed(context.Background(), seedConfig{AppRoot: *appRoot, Scale: *scale, BatchSize: *batchSize, Sources: *sources})
 	if err != nil {
 		log.Fatalf("testlabseed 失败: %v", err)
 	}
@@ -70,7 +71,7 @@ func main() {
 	if err := os.WriteFile(*manifestPath, encoded, 0o644); err != nil {
 		log.Fatalf("write manifest: %v", err)
 	}
-	fmt.Printf("testlabseed: scale=%d tier=%s stageMs=%d overlayMs=%d publishMs=%d totalMs=%d manifest=%s\n",
-		manifest.Scale, manifest.Tier, manifest.StageDurationMs, manifest.OverlayDurationMs, manifest.PublishDurationMs,
+	fmt.Printf("testlabseed: scale=%d tier=%s stageMs=%d overlayMs=%d validationMs=%d publishMs=%d totalMs=%d manifest=%s\n",
+		manifest.Scale, manifest.Tier, manifest.StageDurationMs, manifest.OverlayDurationMs, manifest.ValidationDurationMs, manifest.PublishDurationMs,
 		manifest.TotalDurationMs, *manifestPath)
 }
