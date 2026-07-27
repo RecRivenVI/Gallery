@@ -36,9 +36,44 @@ jobs:
         if: runner.os == 'Linux'
         shell: pwsh
         run: ./scripts/Check.ps1 -Race
-      - name: Go vulnerability database
+      # govulncheck 必须先安装再调用，不能沿用 `go run ...@version`：`go run` 会按当前 GOOS
+      # 构建工具本身，因此在 Linux runner 上做 GOOS=windows 扫描时，`go run` 产出的是一个
+      # Windows 可执行文件，根本无法在 runner 上执行。安装一次（宿主平台），随后只改变
+      # **被扫描目标**的 GOOS，是唯一正确的做法。
+      - name: 安装 govulncheck
         if: runner.os == 'Linux'
-        run: go run golang.org/x/vuln/cmd/govulncheck@v1.6.0 ./cmd/... ./internal/... ./pkg/... ./tools/...
+        run: |
+          go install golang.org/x/vuln/cmd/govulncheck@v1.6.0
+          echo "$(go env GOPATH)/bin" >> "$GITHUB_PATH"
+      # 扫描范围用 `./...` 而不是逐个顶层目录：显式清单需要人工维护，任何新增顶层 Go 目录
+      # 都会静默落在扫描之外。`./...` 覆盖主模块的全部包，包括 web/node_modules 下随 npm
+      # 依赖分发、且确实被 `go vet ./...`/`go test ./...` 编译的 Go 包。
+      - name: 依赖漏洞扫描（Linux 调用图）
+        if: runner.os == 'Linux'
+        run: govulncheck ./...
+      # 可达性分析按当前 GOOS 构建调用图。只扫 Linux 会让 `free_windows.go` 与全部
+      # `golang.org/x/sys/windows` 调用图完全不在分析范围内——而 Windows 11 x64 才是 v1 的
+      # 正式目标平台。扫描目标平台与 runner 操作系统无关（govulncheck 只做类型检查与 SSA
+      # 分析，不执行被扫描代码），因此这一次在同一个 Linux runner 上完成，不额外占用
+      # Windows runner 时间。
+      - name: 依赖漏洞扫描（Windows 调用图）
+        if: runner.os == 'Linux'
+        env:
+          GOOS: windows
+          GOARCH: amd64
+        run: govulncheck ./...
+      # Test-Bench 下的两个 cleanroom 实验台是**独立 Go module**，`./...` 在仓库根不会进入
+      # 它们，必须逐个 module 调用。它们不进入正式发行，但仍被 CI 之外的人工流程实际构建与
+      # 运行，因此按 AGENTS.md「依赖安全」的要求不得仅凭目录名判定其依赖告警可以忽略。
+      - name: 依赖漏洞扫描（Test-Bench 独立模块）
+        if: runner.os == 'Linux'
+        run: |
+          set -euo pipefail
+          for module in Test-Bench/cleanroom-lab Test-Bench/cleanroom-lab-real; do
+            echo "::group::govulncheck $module"
+            (cd "$module" && govulncheck ./...)
+            echo "::endgroup::"
+          done
 
   web-browser:
     name: Web 浏览器 smoke
