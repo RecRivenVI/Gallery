@@ -16,6 +16,8 @@ import (
 
 const SortProtocolVersion = 1
 
+var cursorEncoding = base64.RawURLEncoding.Strict()
+
 // RankProtocolVersion 标识排序结果内使用的 ranking tier 算法版本。任何改变 tier 计算
 // 方式的变更都必须递增本常量，使旧 cursor 随之失效而不是静默产生不一致的续页顺序。
 // tier 权重数值本身在正式压力测试前保持 PRE_FREEZE，但协议版本字段是冻结兼容点。
@@ -72,7 +74,7 @@ func (s *CursorSigner) Issue(claims CursorClaims) (string, error) {
 		return "", fault.New(fault.CodeCursorInvalid, false, err)
 	}
 	signature := s.sign(payload)
-	return base64.RawURLEncoding.EncodeToString(payload) + "." + base64.RawURLEncoding.EncodeToString(signature), nil
+	return cursorEncoding.EncodeToString(payload) + "." + cursorEncoding.EncodeToString(signature), nil
 }
 
 func (s *CursorSigner) Verify(token string) (CursorClaims, error) {
@@ -80,12 +82,12 @@ func (s *CursorSigner) Verify(token string) (CursorClaims, error) {
 	if len(parts) != 2 {
 		return CursorClaims{}, fault.New(fault.CodeCursorInvalid, false, nil)
 	}
-	payload, err := base64.RawURLEncoding.DecodeString(parts[0])
-	if err != nil {
+	payload, err := cursorEncoding.DecodeString(parts[0])
+	if err != nil || cursorEncoding.EncodeToString(payload) != parts[0] {
 		return CursorClaims{}, fault.New(fault.CodeCursorInvalid, false, err)
 	}
-	signature, err := base64.RawURLEncoding.DecodeString(parts[1])
-	if err != nil || !hmac.Equal(signature, s.sign(payload)) {
+	signature, err := cursorEncoding.DecodeString(parts[1])
+	if err != nil || cursorEncoding.EncodeToString(signature) != parts[1] || !hmac.Equal(signature, s.sign(payload)) {
 		return CursorClaims{}, fault.New(fault.CodeCursorInvalid, false, err)
 	}
 	decoder := json.NewDecoder(strings.NewReader(string(payload)))

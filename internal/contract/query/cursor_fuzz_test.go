@@ -133,16 +133,14 @@ func FuzzCursorVerifyMatchesIndependentOracle(f *testing.F) {
 			if !wantAccept {
 				t.Fatalf("Verify 接受了 oracle 拒绝的游标（期望 %s）: %q", wantCode, truncateToken(token))
 			}
-			// 被接受的 claims 必须能重新签发，且重签结果必须**收敛**：再 Verify 一次
-			// 得到同一组 claims，再 Issue 一次逐字节相同。
-			//
-			// 这里不能要求 `reissued == token`。fuzz 已经证伪了那条更强的性质：
-			// base64 层是可锻的（见 TestCursorTokenEncodingIsMalleable），同一组
-			// claims 对应无穷多个 Verify 都接受的 token 字符串。真正的契约是
-			// **规范形态存在且稳定**，而不是"输入即规范形态"。
+			// Verify 只接受签发器产生的规范 base64url 形态，因此重新签发必须与
+			// 输入逐字节相同；token 原文可安全用于审计去重。
 			reissued, issueErr := signer.Issue(claims)
 			if issueErr != nil {
 				t.Fatalf("Verify 接受的 claims 无法重新签发: %v", issueErr)
+			}
+			if reissued != token {
+				t.Fatalf("Verify 接受了非规范游标\n输入: %q\n规范: %q", truncateToken(token), truncateToken(reissued))
 			}
 			reverified, verifyErr := signer.Verify(reissued)
 			if verifyErr != nil {
@@ -191,11 +189,11 @@ func cursorOracle(token string) (bool, fault.Code) {
 	if len(parts) != 2 {
 		return false, fault.CodeCursorInvalid
 	}
-	payload, err := base64.RawURLEncoding.DecodeString(parts[0])
+	payload, err := decodeCanonicalCursorSegment(parts[0])
 	if err != nil {
 		return false, fault.CodeCursorInvalid
 	}
-	signature, err := base64.RawURLEncoding.DecodeString(parts[1])
+	signature, err := decodeCanonicalCursorSegment(parts[1])
 	if err != nil || !hmac.Equal(signature, fuzzCursorSign(payload)) {
 		return false, fault.CodeCursorInvalid
 	}
@@ -218,6 +216,18 @@ func cursorOracle(token string) (bool, fault.Code) {
 		return false, fault.CodeCursorExpired
 	}
 	return true, ""
+}
+
+func decodeCanonicalCursorSegment(segment string) ([]byte, error) {
+	encoding := base64.RawURLEncoding.Strict()
+	decoded, err := encoding.DecodeString(segment)
+	if err != nil {
+		return nil, err
+	}
+	if encoding.EncodeToString(decoded) != segment {
+		return nil, errors.New("非规范 base64url")
+	}
+	return decoded, nil
 }
 
 func cursorClaimsStructurallyValid(claims query.CursorClaims) bool {
@@ -257,32 +267,13 @@ func isLowerHexSHA256Oracle(value string) bool {
 	return true
 }
 
-// TestCursorTokenEncodingIsMalleable 记录 fuzz 实测发现的**当前行为**：游标 token 不是
-// 规范形态，同一组 claims 对应无穷多个 Verify 都接受的 token 字符串。
-//
-// 成因在 base64 层，不在 HMAC 层：
-//
-//   - Go 的 base64 解码器**静默忽略** `\r` 与 `\n`，因此可以在两段 base64 的任意位置
-//     插入换行而不改变解码结果；
-//   - Go 的 base64 解码器默认**不校验尾部填充位为零**（非 Strict 模式），因此 32 字节
-//     签名的最后一个 base64 字符存在多个等价写法。
-//
-// 两者都不改变解码后的 payload，所以 HMAC 照常匹配、claims 照常合法——**授权语义不受
-// 影响，这不是越权**。风险是"token 字符串不能当作身份"：cursor 经
-// `r.URL.Query().Get("cursor")` 取得，攻击者用 `%0D` 就能注入换行，于是任何以 token
-// 原文为键的缓存、限流、审计去重或重放检测都会被绕开。当前实现没有这类逻辑（租约以
-// HMAC 保护的 claims.LeaseID 为准），因此登记为待修的健壮性缺陷而不是安全门禁。
-//
-// 修法是把 Verify 收紧为"解码后重新编码必须逐字节等于输入"，或改用
-// base64.RawURLEncoding.Strict() 并显式拒绝 `\r`/`\n`。修好后本测试会失败并提示改写。
-func TestCursorTokenEncodingIsMalleable(t *testing.T) {
+func TestCursorTokenEncodingIsCanonical(t *testing.T) {
 	signer := newFuzzCursorSigner(t)
 	token, err := signer.Issue(fuzzValidCursorClaims())
 	if err != nil {
 		t.Fatalf("签发基准游标: %v", err)
 	}
-	baseline, err := signer.Verify(token)
-	if err != nil {
+	if _, err := signer.Verify(token); err != nil {
 		t.Fatalf("基准游标必须通过校验: %v", err)
 	}
 
@@ -293,30 +284,16 @@ func TestCursorTokenEncodingIsMalleable(t *testing.T) {
 		"签名段中插入 CR":        insertIntoSignatureSegment(t, token, "\r"),
 		"签名段中插入 LF":        insertIntoSignatureSegment(t, token, "\n"),
 		"首尾包裹换行":           "\n" + token + "\n",
+		"签名尾部非零填充位":        nonCanonicalSignatureTail(t, token),
 	}
 
-	var accepted []string
 	for name, variant := range variants {
-		if variant == token {
-			continue
+		_, verifyErr := signer.Verify(variant)
+		var structured *fault.Error
+		if !errors.As(verifyErr, &structured) || structured.Code != fault.CodeCursorInvalid || structured.Retryable {
+			t.Fatalf("%s：非规范 token 必须返回不可重试 CURSOR_INVALID，实际 %v", name, verifyErr)
 		}
-		claims, verifyErr := signer.Verify(variant)
-		if verifyErr != nil {
-			continue
-		}
-		if claims != baseline {
-			t.Fatalf("%s：被接受的变体解出了不同的 claims，这已经越出可锻性范畴\n原: %+v\n变体: %+v",
-				name, baseline, claims)
-		}
-		accepted = append(accepted, name)
 	}
-
-	if len(accepted) == 0 {
-		t.Fatalf("游标 token 已经是规范形态，请把本测试改写成正向断言")
-	}
-	sortStrings(accepted)
-	t.Logf("已知缺陷：下列与签发结果**不同字节**的 token 变体全部通过校验，且解出同一组 claims：%v", accepted)
-	t.Logf("成因：base64 解码忽略 CR/LF；cursor 取自 URL query，%%0D/%%0A 可直接注入")
 }
 
 // insertIntoSignatureSegment 在 `.` 之后（签名段内部）插入给定字符。
@@ -329,12 +306,19 @@ func insertIntoSignatureSegment(t *testing.T, token, insert string) string {
 	return token[:dot+3] + insert + token[dot+3:]
 }
 
-func sortStrings(values []string) {
-	for i := 1; i < len(values); i++ {
-		for j := i; j > 0 && values[j] < values[j-1]; j-- {
-			values[j], values[j-1] = values[j-1], values[j]
-		}
+func nonCanonicalSignatureTail(t *testing.T, token string) string {
+	t.Helper()
+	const alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_"
+	dot := strings.IndexByte(token, '.')
+	if dot < 0 || len(token)-dot-1 == 0 {
+		t.Fatalf("token 形状异常: %q", truncateToken(token))
 	}
+	last := token[len(token)-1]
+	index := strings.IndexByte(alphabet, last)
+	if index < 0 || index&0x03 != 0 {
+		t.Fatalf("签名规范尾字符异常 %q", last)
+	}
+	return token[:len(token)-1] + string(alphabet[index+1])
 }
 
 // TestCursorVerifyRejectsEverySingleBitFlip 是顺序不变量的定向补充：fuzz 很难自己
