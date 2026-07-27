@@ -103,7 +103,7 @@ type presentationTimeValue struct {
 var (
 	workSortOptions = map[string]struct{}{
 		"date_desc": {}, "date_asc": {}, "title_asc": {}, "title_desc": {},
-		"name_asc": {}, "name_desc": {},
+		"name_asc": {}, "name_desc": {}, "progress_asc": {}, "progress_desc": {},
 	}
 	authorSortOptions = map[string]struct{}{
 		"name_asc": {}, "name_desc": {}, "latest_desc": {}, "latest_asc": {},

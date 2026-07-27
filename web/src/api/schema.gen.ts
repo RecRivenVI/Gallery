@@ -1835,7 +1835,7 @@ export interface components {
             /** @enum {integer} */
             websocketProtocolVersion: 1;
             /** @enum {integer} */
-            sortProtocolVersion: 1;
+            sortProtocolVersion: 2;
             /** @enum {integer} */
             ruleSchemaVersion: 1;
         };
@@ -2160,7 +2160,7 @@ export interface components {
         WorkListResponse: {
             queryPublicationId: components["schemas"]["QueryPublicationId"];
             /** @enum {integer} */
-            sortProtocolVersion: 1;
+            sortProtocolVersion: 2;
             /** @enum {integer} */
             rankProtocolVersion: 2;
             catalogRevision: string;
@@ -5655,7 +5655,8 @@ export interface operations {
                 sourceId?: components["schemas"]["SourceId"];
                 /** @description 服务端权威结构化过滤 AST 的 JSON 编码：{"all"|"any"|"not"|"field"/"op"/"value"}。 未知字段、未知操作符或类型错误一律返回 VALIDATION_ERROR。已注册字段与语义见 Documents/规范/06-查询-搜索与排序.md。 */
                 filter?: string;
-                sortDirection?: "asc" | "desc";
+                /** @description 服务端权威作品排序。name_* 是 title_* 的兼容别名；日期缺失值无论升降序都位于末尾。 Source 页面应从 SourcePresentation.sort.workOptions 选择允许展示的选项，客户端不得本地重排。 */
+                sort?: "title_asc" | "title_desc" | "name_asc" | "name_desc" | "date_asc" | "date_desc" | "progress_asc" | "progress_desc";
                 limit?: number;
                 cursor?: string;
                 queryPublicationId?: components["schemas"]["QueryPublicationId"];

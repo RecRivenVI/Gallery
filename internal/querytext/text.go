@@ -138,7 +138,10 @@ func NaturalSortKey(value string) string {
 		for end < len(runes) && !(runes[end] >= '0' && runes[end] <= '9') {
 			end++
 		}
-		output.WriteString("0" + hex.EncodeToString([]byte(string(runes[index:end]))) + ";")
+		// 文本段终止符必须小于十六进制字母表里的最小字符（'0'）。旧编码使用 ';'，
+		// 使 "a" 的键在 "ab" 之后：短段的 ';' 会与长段下一位的十六进制数字比较，
+		// 而 ';' > '0'。'!' 同时满足前缀先行，并且不会出现在 hex payload 中。
+		output.WriteString("0" + hex.EncodeToString([]byte(string(runes[index:end]))) + "!")
 		index = end
 	}
 	return output.String()

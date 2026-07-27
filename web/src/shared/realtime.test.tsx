@@ -38,7 +38,7 @@ const AUTHENTICATED_BOOTSTRAP = {
   csrfToken: 'csrf-authenticated-11111111111111111111',
   apiVersion: 'v1',
   websocketProtocolVersion: 1,
-  sortProtocolVersion: 1,
+  sortProtocolVersion: 2,
   ruleSchemaVersion: 1
 };
 

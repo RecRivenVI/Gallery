@@ -243,7 +243,7 @@ func cursorClaimsStructurallyValid(claims query.CursorClaims) bool {
 	if _, err := domain.ParseID(domain.IDCanonicalWork, claims.LastCanonicalWorkID); err != nil {
 		return false
 	}
-	if claims.LastSortKey == "" || len(claims.LastSortKey) > 8192 {
+	if len(claims.LastSortKey) > 8192 {
 		return false
 	}
 	if claims.LeaseID == "" || len(claims.LeaseID) > 128 {
@@ -467,7 +467,6 @@ func addCursorTokenSeeds(f *testing.F) {
 		func(c *query.CursorClaims) { c.QueryPublicationID = "wrk_018f47d2-5c16-7a44-a8a0-000000000001" },
 		func(c *query.CursorClaims) { c.QueryPublicationID = "" },
 		func(c *query.CursorClaims) { c.LastCanonicalWorkID = "qpub_018f47d2-5c16-7a44-a8a0-000000000002" },
-		func(c *query.CursorClaims) { c.LastSortKey = "" },
 		func(c *query.CursorClaims) { c.LastSortKey = strings.Repeat("s", 8192) },
 		func(c *query.CursorClaims) { c.LastSortKey = strings.Repeat("s", 8193) },
 		func(c *query.CursorClaims) { c.LeaseID = "" },

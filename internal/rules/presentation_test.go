@@ -158,3 +158,17 @@ func TestPresentationRejectsInvalidConfiguration(t *testing.T) {
 		})
 	}
 }
+
+func TestPresentationAcceptsProgressWorkSorts(t *testing.T) {
+	compiled, err := rules.CompilePackage([]byte(presentationPackage(
+		`,{"id":"ui","kind":"presentation","config":{"sort":{"work_default":"progress_desc","work_options":["progress_desc","progress_asc"]}}}`,
+		"")))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if compiled.IR.Presentation == nil || compiled.IR.Presentation.Sort == nil ||
+		compiled.IR.Presentation.Sort.WorkDefault != "progress_desc" ||
+		len(compiled.IR.Presentation.Sort.WorkOptions) != 2 {
+		t.Fatalf("Progress 排序未进入规则呈现 IR: %+v", compiled.IR.Presentation)
+	}
+}

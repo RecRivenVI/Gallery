@@ -279,13 +279,13 @@ func (e BootstrapResponseRuleSchemaVersion) Valid() bool {
 
 // Defines values for BootstrapResponseSortProtocolVersion.
 const (
-	BootstrapResponseSortProtocolVersionN1 BootstrapResponseSortProtocolVersion = 1
+	BootstrapResponseSortProtocolVersionN2 BootstrapResponseSortProtocolVersion = 2
 )
 
 // Valid indicates whether the value is a known member of the BootstrapResponseSortProtocolVersion enum.
 func (e BootstrapResponseSortProtocolVersion) Valid() bool {
 	switch e {
-	case BootstrapResponseSortProtocolVersionN1:
+	case BootstrapResponseSortProtocolVersionN2:
 		return true
 	default:
 		return false
@@ -1872,13 +1872,13 @@ func (e TotalMode) Valid() bool {
 
 // Defines values for TotalProtocolVersion.
 const (
-	TotalProtocolVersionN1 TotalProtocolVersion = 1
+	N1 TotalProtocolVersion = 1
 )
 
 // Valid indicates whether the value is a known member of the TotalProtocolVersion enum.
 func (e TotalProtocolVersion) Valid() bool {
 	switch e {
-	case TotalProtocolVersionN1:
+	case N1:
 		return true
 	default:
 		return false
@@ -1908,13 +1908,13 @@ func (e UserStatusRequestStatus) Valid() bool {
 
 // Defines values for WorkListResponseRankProtocolVersion.
 const (
-	N2 WorkListResponseRankProtocolVersion = 2
+	WorkListResponseRankProtocolVersionN2 WorkListResponseRankProtocolVersion = 2
 )
 
 // Valid indicates whether the value is a known member of the WorkListResponseRankProtocolVersion enum.
 func (e WorkListResponseRankProtocolVersion) Valid() bool {
 	switch e {
-	case N2:
+	case WorkListResponseRankProtocolVersionN2:
 		return true
 	default:
 		return false
@@ -1923,13 +1923,13 @@ func (e WorkListResponseRankProtocolVersion) Valid() bool {
 
 // Defines values for WorkListResponseSortProtocolVersion.
 const (
-	N1 WorkListResponseSortProtocolVersion = 1
+	N2 WorkListResponseSortProtocolVersion = 2
 )
 
 // Valid indicates whether the value is a known member of the WorkListResponseSortProtocolVersion enum.
 func (e WorkListResponseSortProtocolVersion) Valid() bool {
 	switch e {
-	case N1:
+	case N2:
 		return true
 	default:
 		return false
@@ -2119,18 +2119,36 @@ func (e ListSourceStructureDecisionsParamsStatus) Valid() bool {
 	}
 }
 
-// Defines values for ListWorksParamsSortDirection.
+// Defines values for ListWorksParamsSort.
 const (
-	Asc  ListWorksParamsSortDirection = "asc"
-	Desc ListWorksParamsSortDirection = "desc"
+	DateAsc      ListWorksParamsSort = "date_asc"
+	DateDesc     ListWorksParamsSort = "date_desc"
+	NameAsc      ListWorksParamsSort = "name_asc"
+	NameDesc     ListWorksParamsSort = "name_desc"
+	ProgressAsc  ListWorksParamsSort = "progress_asc"
+	ProgressDesc ListWorksParamsSort = "progress_desc"
+	TitleAsc     ListWorksParamsSort = "title_asc"
+	TitleDesc    ListWorksParamsSort = "title_desc"
 )
 
-// Valid indicates whether the value is a known member of the ListWorksParamsSortDirection enum.
-func (e ListWorksParamsSortDirection) Valid() bool {
+// Valid indicates whether the value is a known member of the ListWorksParamsSort enum.
+func (e ListWorksParamsSort) Valid() bool {
 	switch e {
-	case Asc:
+	case DateAsc:
 		return true
-	case Desc:
+	case DateDesc:
+		return true
+	case NameAsc:
+		return true
+	case NameDesc:
+		return true
+	case ProgressAsc:
+		return true
+	case ProgressDesc:
+		return true
+	case TitleAsc:
+		return true
+	case TitleDesc:
 		return true
 	default:
 		return false
@@ -4308,16 +4326,18 @@ type ListWorksParams struct {
 	SourceId  *SourceId  `form:"sourceId,omitempty" json:"sourceId,omitempty"`
 
 	// Filter 服务端权威结构化过滤 AST 的 JSON 编码：{"all"|"any"|"not"|"field"/"op"/"value"}。 未知字段、未知操作符或类型错误一律返回 VALIDATION_ERROR。已注册字段与语义见 Documents/规范/06-查询-搜索与排序.md。
-	Filter             *string                       `form:"filter,omitempty" json:"filter,omitempty"`
-	SortDirection      *ListWorksParamsSortDirection `form:"sortDirection,omitempty" json:"sortDirection,omitempty"`
-	Limit              *int                          `form:"limit,omitempty" json:"limit,omitempty"`
-	Cursor             *string                       `form:"cursor,omitempty" json:"cursor,omitempty"`
-	QueryPublicationId *QueryPublicationId           `form:"queryPublicationId,omitempty" json:"queryPublicationId,omitempty"`
-	OmitTotal          *bool                         `form:"omitTotal,omitempty" json:"omitTotal,omitempty"`
+	Filter *string `form:"filter,omitempty" json:"filter,omitempty"`
+
+	// Sort 服务端权威作品排序。name_* 是 title_* 的兼容别名；日期缺失值无论升降序都位于末尾。 Source 页面应从 SourcePresentation.sort.workOptions 选择允许展示的选项，客户端不得本地重排。
+	Sort               *ListWorksParamsSort `form:"sort,omitempty" json:"sort,omitempty"`
+	Limit              *int                 `form:"limit,omitempty" json:"limit,omitempty"`
+	Cursor             *string              `form:"cursor,omitempty" json:"cursor,omitempty"`
+	QueryPublicationId *QueryPublicationId  `form:"queryPublicationId,omitempty" json:"queryPublicationId,omitempty"`
+	OmitTotal          *bool                `form:"omitTotal,omitempty" json:"omitTotal,omitempty"`
 }
 
-// ListWorksParamsSortDirection defines parameters for ListWorks.
-type ListWorksParamsSortDirection string
+// ListWorksParamsSort defines parameters for ListWorks.
+type ListWorksParamsSort string
 
 // GetWorkParams defines parameters for GetWork.
 type GetWorkParams struct {
@@ -13056,9 +13076,9 @@ func NewListWorksRequest(server string, params *ListWorksParams) (*http.Request,
 
 		}
 
-		if params.SortDirection != nil {
+		if params.Sort != nil {
 
-			if queryFrag, err := runtime.StyleParamWithOptions("form", true, "sortDirection", *params.SortDirection, runtime.StyleParamOptions{ParamLocation: runtime.ParamLocationQuery, Type: "string", Format: ""}); err != nil {
+			if queryFrag, err := runtime.StyleParamWithOptions("form", true, "sort", *params.Sort, runtime.StyleParamOptions{ParamLocation: runtime.ParamLocationQuery, Type: "string", Format: ""}); err != nil {
 				return nil, err
 			} else {
 				for _, qp := range strings.Split(queryFrag, "&") {

@@ -1895,7 +1895,16 @@ paths:
             未知字段、未知操作符或类型错误一律返回 VALIDATION_ERROR。已注册字段与语义见
             Documents/规范/06-查询-搜索与排序.md。
           schema: {type: string, maxLength: 8192}
-        - {name: sortDirection, in: query, required: false, schema: {type: string, enum: [asc, desc], default: asc}}
+        - name: sort
+          in: query
+          required: false
+          description: >-
+            服务端权威作品排序。name_* 是 title_* 的兼容别名；日期缺失值无论升降序都位于末尾。
+            Source 页面应从 SourcePresentation.sort.workOptions 选择允许展示的选项，客户端不得本地重排。
+          schema:
+            type: string
+            enum: [title_asc, title_desc, name_asc, name_desc, date_asc, date_desc, progress_asc, progress_desc]
+            default: title_asc
         - {name: limit, in: query, required: false, schema: {type: integer, minimum: 1, maximum: 200, default: 50}}
         - {name: cursor, in: query, required: false, schema: {type: string, maxLength: 16384}}
         - {name: queryPublicationId, in: query, required: false, schema: {$ref: "#/components/schemas/QueryPublicationId"}}
@@ -2966,7 +2975,7 @@ components:
           enum: [1]
         sortProtocolVersion:
           type: integer
-          enum: [1]
+          enum: [2]
         ruleSchemaVersion:
           type: integer
           enum: [1]
@@ -3640,7 +3649,7 @@ components:
           $ref: "#/components/schemas/QueryPublicationId"
         sortProtocolVersion:
           type: integer
-          enum: [1]
+          enum: [2]
         rankProtocolVersion:
           type: integer
           enum: [2]

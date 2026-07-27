@@ -104,7 +104,7 @@ func TestSearchQueryPlanSortsNarrowRowsAndProjectsAfterPagination(t *testing.T) 
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			statement, args, err := galleryquery.BuildPageStatementForTest(ctx, "cat", "ovr", sources, sources,
-				galleryquery.Request{Search: "title-005000", SortDirection: "asc", Limit: 100}, test.claims)
+				galleryquery.Request{Search: "title-005000", Sort: "title_asc", Limit: 100}, test.claims)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -157,7 +157,7 @@ func TestSearchQueryPlanSortsNarrowRowsAndProjectsAfterPagination(t *testing.T) 
 	// 单阶段，上面的断言一定会失败。
 	t.Run("negative-control-single-phase", func(t *testing.T) {
 		statement, args, err := galleryquery.BuildSinglePhaseSearchStatementForTest(ctx, "cat", "ovr", sources, sources,
-			galleryquery.Request{Search: "title-005000", SortDirection: "asc", Limit: 100}, contractquery.CursorClaims{})
+			galleryquery.Request{Search: "title-005000", Sort: "title_asc", Limit: 100}, contractquery.CursorClaims{})
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -214,7 +214,7 @@ func TestBrowseQueryPlanKeepsCoveringIndexWithoutSorter(t *testing.T) {
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			statement, args, err := galleryquery.BuildPageStatementForTest(ctx, "cat", "ovr", sources, sources,
-				galleryquery.Request{SortDirection: "asc", Limit: 100}, test.claims)
+				galleryquery.Request{Sort: "title_asc", Limit: 100}, test.claims)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -252,15 +252,15 @@ func TestTwoPhaseSearchPageMatchesSinglePhaseRowsAndOrder(t *testing.T) {
 		request galleryquery.Request
 		allowed []string
 	}{
-		{name: "asc-all", request: galleryquery.Request{Search: "apple", SortDirection: "asc", Limit: 2}, allowed: candidates},
-		{name: "desc-all", request: galleryquery.Request{Search: "apple", SortDirection: "desc", Limit: 2}, allowed: candidates},
-		{name: "asc-limit1", request: galleryquery.Request{Search: "apple", SortDirection: "asc", Limit: 1}, allowed: candidates},
-		{name: "partial-authorization", request: galleryquery.Request{Search: "apple", SortDirection: "asc", Limit: 3}, allowed: []string{"src_test"}},
+		{name: "asc-all", request: galleryquery.Request{Search: "apple", Sort: "title_asc", Limit: 2}, allowed: candidates},
+		{name: "desc-all", request: galleryquery.Request{Search: "apple", Sort: "title_desc", Limit: 2}, allowed: candidates},
+		{name: "asc-limit1", request: galleryquery.Request{Search: "apple", Sort: "title_asc", Limit: 1}, allowed: candidates},
+		{name: "partial-authorization", request: galleryquery.Request{Search: "apple", Sort: "title_asc", Limit: 3}, allowed: []string{"src_test"}},
 		{name: "structured-filter", request: galleryquery.Request{
-			Search: "apple", SortDirection: "asc", Limit: 2,
+			Search: "apple", Sort: "title_asc", Limit: 2,
 			Filter: `{"field":"overlay.favorite","op":"eq","value":true}`,
 		}, allowed: candidates},
-		{name: "cjk", request: galleryquery.Request{Search: "苹果", SortDirection: "asc", Limit: 2}, allowed: candidates},
+		{name: "cjk", request: galleryquery.Request{Search: "苹果", Sort: "title_asc", Limit: 2}, allowed: candidates},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			var claims contractquery.CursorClaims
@@ -313,7 +313,7 @@ func TestSearchJoinBackKeepsSnapshotPayload(t *testing.T) {
 	scope := galleryquery.AuthorizationScope("owner", []string{"library.read"})
 
 	result, err := service.Search(context.Background(), authorizedRequest(galleryquery.Request{
-		Search: "work", SortDirection: "asc", Limit: 20, AuthorizationScope: scope,
+		Search: "work", Sort: "title_asc", Limit: 20, AuthorizationScope: scope,
 	}))
 	if err != nil {
 		t.Fatal(err)
@@ -361,7 +361,7 @@ func TestSearchCursorPaginationCoversEveryHitOnce(t *testing.T) {
 	for _, direction := range []string{"asc", "desc"} {
 		t.Run(direction, func(t *testing.T) {
 			single, err := service.Search(ctx, authorizedRequest(galleryquery.Request{
-				Search: "apple", SortDirection: direction, Limit: 100, AuthorizationScope: scope,
+				Search: "apple", Sort: "title_" + direction, Limit: 100, AuthorizationScope: scope,
 			}))
 			if err != nil {
 				t.Fatal(err)
@@ -371,7 +371,7 @@ func TestSearchCursorPaginationCoversEveryHitOnce(t *testing.T) {
 			}
 
 			request := authorizedRequest(galleryquery.Request{
-				Search: "apple", SortDirection: direction, Limit: 2, AuthorizationScope: scope,
+				Search: "apple", Sort: "title_" + direction, Limit: 2, AuthorizationScope: scope,
 			})
 			var paged []string
 			for {
@@ -407,7 +407,7 @@ type pageKey struct {
 	rankTier int
 }
 
-// collectPageKeys 从任意分页语句中按列名取出 (work_id, sort_title_key, rank_tier)，
+// collectPageKeys 从任意分页语句中按列名取出 (work_id, sort_key, rank_tier)，
 // 使差分比较不依赖两条语句的投影宽度。
 func collectPageKeys(t *testing.T, db *sql.DB, statement string, args ...any) []pageKey {
 	t.Helper()
@@ -424,7 +424,7 @@ func collectPageKeys(t *testing.T, db *sql.DB, statement string, args ...any) []
 	for position, name := range columns {
 		index[name] = position
 	}
-	for _, required := range []string{"work_id", "sort_title_key", "rank_tier"} {
+	for _, required := range []string{"work_id", "sort_key", "rank_tier"} {
 		if _, ok := index[required]; !ok {
 			t.Fatalf("分页语句缺少列 %q: %v", required, columns)
 		}
@@ -443,9 +443,7 @@ func collectPageKeys(t *testing.T, db *sql.DB, statement string, args ...any) []
 		if raw, ok := values[index["work_id"]].(string); ok {
 			key.workID = raw
 		}
-		if raw, ok := values[index["sort_title_key"]].(string); ok {
-			key.sortKey = raw
-		}
+		key.sortKey = fmt.Sprint(values[index["sort_key"]])
 		if raw, ok := values[index["rank_tier"]].(int64); ok {
 			key.rankTier = int(raw)
 		}

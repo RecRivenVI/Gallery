@@ -20,7 +20,7 @@ const bootstrap = {
   csrfToken: 'csrf-browser-only',
   apiVersion: 'v1',
   websocketProtocolVersion: 1,
-  sortProtocolVersion: 1,
+  sortProtocolVersion: 2,
   ruleSchemaVersion: 1
 };
 
@@ -56,7 +56,7 @@ async function respond(route: Route) {
   if (url.pathname === '/api/v1/works')
     return json({
       queryPublicationId: publication,
-      sortProtocolVersion: 1,
+      sortProtocolVersion: 2,
       rankProtocolVersion: 2,
       catalogRevision: 'cat_1',
       overlayProjectionRevision: 'overlay_1',

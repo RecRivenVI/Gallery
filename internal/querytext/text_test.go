@@ -27,6 +27,11 @@ func TestSearchNormalizationTokensAndNaturalSort(t *testing.T) {
 	if querytext.NaturalSortKey("ＦＩＬＥ2") != querytext.NaturalSortKey("file2") {
 		t.Fatal("NFKC/case fold 排序未收敛")
 	}
+	for _, pair := range [][2]string{{"a", "ab"}, {"file", "file2"}, {"作品", "作品集"}} {
+		if !(querytext.NaturalSortKey(pair[0]) < querytext.NaturalSortKey(pair[1])) {
+			t.Fatalf("自然排序的文本前缀顺序错误: %q 应位于 %q 之前", pair[0], pair[1])
+		}
+	}
 }
 
 // TestNormalizeInvalidUTF8DoesNotHang 回归 GO-2026-5970：golang.org/x/text

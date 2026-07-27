@@ -4,9 +4,8 @@
  * 平台页、作者页与全部作品共用它，差别只有一个固定的查询范围。这样搜索、排序、筛选、
  * 分页、游标失效与空/错误态的行为在整个画廊里只有一份实现。
  *
- * 排序说明（重要）：服务端当前**只能按标题排序**，`sortDirection` 是唯一的排序控制。
- * 规则的 `presentation.sort` 会下发一组排序选项名（date_desc 之类），但查询协议里还没有
- * 对应实现。这里**刻意不渲染**那些选项：让用户选一个不会生效的排序，比不给选项更糟。
+ * 排序由服务端执行并进入签名游标。Source 页面按规则下发的 workOptions/default 渲染，
+ * 全局页面使用完整公共词表；客户端不对分页结果做本地重排。
  */
 
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
@@ -38,10 +37,29 @@ const KIND_OPTIONS = [
   { id: 'audio', label: '含音频' }
 ] as const;
 
-const SORT_OPTIONS = [
-  { id: 'asc', label: '标题升序' },
-  { id: 'desc', label: '标题降序' }
-] as const;
+const SORT_LABELS: Record<WorkQueryParams['sort'], string> = {
+  title_asc: '标题升序',
+  title_desc: '标题降序',
+  name_asc: '名称升序',
+  name_desc: '名称降序',
+  date_asc: '发布时间升序',
+  date_desc: '发布时间降序',
+  progress_asc: '阅读进度升序',
+  progress_desc: '阅读进度降序'
+};
+
+const DEFAULT_SORTS: WorkQueryParams['sort'][] = [
+  'title_asc',
+  'title_desc',
+  'date_desc',
+  'date_asc',
+  'progress_desc',
+  'progress_asc'
+];
+
+function isWorkSort(value: string | undefined | null): value is WorkQueryParams['sort'] {
+  return value !== undefined && value !== null && Object.hasOwn(SORT_LABELS, value);
+}
 
 function readHidden(value: string | null): HiddenVisibility {
   return value === 'include' || value === 'only' ? value : 'exclude';
@@ -70,7 +88,21 @@ export function WorkBrowser({ scope, presentation, heading, emptyDescription }: 
 
   const q = searchParams.get('q') ?? '';
   const tag = searchParams.get('tag') ?? '';
-  const sortDirection = searchParams.get('dir') === 'desc' ? 'desc' : 'asc';
+  const sortOptions = useMemo(() => {
+    const declared = presentation?.sort?.workOptions?.filter(isWorkSort) ?? [];
+    const values = declared.length === 0 ? DEFAULT_SORTS : [...new Set(declared)];
+    return values.map((id) => ({ id, label: SORT_LABELS[id] }));
+  }, [presentation?.sort?.workOptions]);
+  const declaredDefault = presentation?.sort?.workDefault;
+  const fallbackSort =
+    isWorkSort(declaredDefault) && sortOptions.some((option) => option.id === declaredDefault)
+      ? declaredDefault
+      : (sortOptions[0]?.id ?? 'title_asc');
+  const requestedSort = searchParams.get('sort');
+  const sort =
+    isWorkSort(requestedSort) && sortOptions.some((option) => option.id === requestedSort)
+      ? requestedSort
+      : fallbackSort;
   const favorite = searchParams.get('fav') === '1';
   const hidden = canSeeHidden ? readHidden(searchParams.get('hidden')) : 'exclude';
   const kind = searchParams.get('kind') ?? 'any';
@@ -110,7 +142,7 @@ export function WorkBrowser({ scope, presentation, heading, emptyDescription }: 
     sourceId: scope?.sourceId,
     libraryId: scope?.libraryId,
     filter,
-    sortDirection
+    sort
   };
   const list = useWorkList(params);
 
@@ -153,10 +185,10 @@ export function WorkBrowser({ scope, presentation, heading, emptyDescription }: 
         <Select
           className="gal-toolbar__control"
           label="排序"
-          options={SORT_OPTIONS}
-          selectedKey={sortDirection}
-          onSelectionChange={(key) => update({ dir: key ?? 'asc' })}
-          description="服务端当前只支持按标题排序"
+          options={sortOptions}
+          selectedKey={sort}
+          onSelectionChange={(key) => update({ sort: key === fallbackSort ? undefined : (key ?? undefined) })}
+          description="服务端排序；缺失日期始终排在末尾"
         />
         <Select
           className="gal-toolbar__control"

@@ -37,7 +37,7 @@ const BOOTSTRAP = {
   csrfToken: 'csrf-token-for-tests',
   apiVersion: 'v1',
   websocketProtocolVersion: 1,
-  sortProtocolVersion: 1,
+  sortProtocolVersion: 2,
   ruleSchemaVersion: 1
 };
 
@@ -74,7 +74,7 @@ interface ListOverrides {
 function workList(overrides: ListOverrides = {}) {
   return {
     queryPublicationId: PUBLICATION,
-    sortProtocolVersion: 1,
+    sortProtocolVersion: 2,
     rankProtocolVersion: 2,
     catalogRevision: 'cat_1',
     overlayProjectionRevision: 'overlay_1',
@@ -112,12 +112,12 @@ function testMediaLoader(): MediaLoader {
   });
 }
 
-function renderGallery(ui: ReactNode) {
+function renderGallery(ui: ReactNode, initialEntry = '/browse') {
   return render(
     <QueryClientProvider client={createQueryClient()}>
       <ThemeProvider surface="gallery">
         <ToastProvider>
-          <MemoryRouter initialEntries={['/browse']}>
+          <MemoryRouter initialEntries={[initialEntry]}>
             <SessionProvider>
               <MediaLoaderProvider loader={testMediaLoader()}>{ui}</MediaLoaderProvider>
             </SessionProvider>
@@ -157,6 +157,37 @@ describe('数量协议的渲染', () => {
     expect(await screen.findByText(/共 1000\+ 件作品/)).toBeInTheDocument();
     expect(screen.queryByText('共 1000 件作品')).not.toBeInTheDocument();
     expect(screen.getByText(/超出服务端统计预算/)).toBeInTheDocument();
+  });
+});
+
+describe('服务端排序协议', () => {
+  it('按规则下发的作品排序集渲染，并把选择作为 sort 查询参数发送', async () => {
+    let requestedSort: string | null = null;
+    setFetchHandler((request) => {
+      const url = new URL(request.url);
+      if (url.pathname === '/api/v1/bootstrap') return jsonResponse(BOOTSTRAP);
+      if (url.pathname === '/api/v1/works') {
+        requestedSort = url.searchParams.get('sort');
+        return jsonResponse(workList());
+      }
+      return faultResponse('NOT_FOUND', 404);
+    });
+
+    renderGallery(
+      <WorkBrowser
+        presentation={{
+          showInSidebar: true,
+          showInManager: true,
+          sort: { workDefault: 'date_desc', workOptions: ['date_desc', 'title_asc'] }
+        }}
+      />
+    );
+
+    expect(await screen.findByText('合成作品')).toBeInTheDocument();
+    expect(requestedSort).toBe('date_desc');
+    await userEvent.click(screen.getByLabelText('排序'));
+    await userEvent.click(await screen.findByRole('option', { name: '标题升序' }));
+    await waitFor(() => expect(requestedSort).toBe('title_asc'));
   });
 });
 

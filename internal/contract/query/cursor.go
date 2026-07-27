@@ -14,7 +14,9 @@ import (
 	"github.com/RecRivenVI/gallery/internal/ports"
 )
 
-const SortProtocolVersion = 1
+// SortProtocolVersion v2 引入公开的 title/date/progress 排序词表、发布日期 null-last
+// 规则与修正后的自然排序键编码。旧游标不能按新键解释，必须统一过期。
+const SortProtocolVersion = 2
 
 var cursorEncoding = base64.RawURLEncoding.Strict()
 
@@ -145,7 +147,9 @@ func validateClaims(claims CursorClaims) error {
 	if _, err := domain.ParseID(domain.IDCanonicalWork, claims.LastCanonicalWorkID); err != nil {
 		return fmt.Errorf("last work ID 无效: %w", err)
 	}
-	if claims.LastSortKey == "" || len(claims.LastSortKey) > 8192 || claims.LeaseID == "" || len(claims.LeaseID) > 128 {
+	// 空字符串是合法标题排序键（空标题按自然顺序位于最前），游标是否处于有效分页位置
+	// 由必填的 LastCanonicalWorkID 判定，不能再把空 key 当作“没有游标”。
+	if len(claims.LastSortKey) > 8192 || claims.LeaseID == "" || len(claims.LeaseID) > 128 {
 		return fmt.Errorf("cursor 必需字段为空")
 	}
 	if claims.IssuedAt.IsZero() || !claims.ExpiresAt.After(claims.IssuedAt) {

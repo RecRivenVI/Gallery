@@ -2497,8 +2497,8 @@ func (s *Server) listWorks(w http.ResponseWriter, r *http.Request) {
 	result, err := s.query.Search(r.Context(), queryservice.Request{
 		Search: r.URL.Query().Get("q"), Tag: r.URL.Query().Get("tag"),
 		LibraryID: r.URL.Query().Get("libraryId"), SourceID: r.URL.Query().Get("sourceId"),
-		Filter:        filter,
-		SortDirection: r.URL.Query().Get("sortDirection"), Limit: limit, Cursor: r.URL.Query().Get("cursor"),
+		Filter: filter,
+		Sort:   r.URL.Query().Get("sort"), Limit: limit, Cursor: r.URL.Query().Get("cursor"),
 		QueryPublicationID: r.URL.Query().Get("queryPublicationId"), OmitTotal: omitTotal,
 		AuthorizationScope: queryservice.AuthorizationScope(fmt.Sprintf("%s:%d:%v", session.PrincipalID, session.SecurityVersion, session.TokenScopes), session.Capabilities),
 		AuthorizeSources: func(ctx context.Context, capabilities, sourceIDs []string) ([]string, error) {

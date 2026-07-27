@@ -48,7 +48,7 @@ const BOOTSTRAP = {
   csrfToken: 'csrf-manage-000000000000000000000000',
   apiVersion: 'v1',
   websocketProtocolVersion: 1,
-  sortProtocolVersion: 1,
+  sortProtocolVersion: 2,
   ruleSchemaVersion: 1
 };
 

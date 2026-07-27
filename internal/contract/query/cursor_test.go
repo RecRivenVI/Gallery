@@ -111,7 +111,7 @@ func TestVerifySeparatesProtocolUpgradeFromMalformedCursor(t *testing.T) {
 			fault.CodeCursorInvalid, false},
 		{"作品 ID 非法", func(c *query.CursorClaims) { c.LastCanonicalWorkID = "not-an-id" },
 			fault.CodeCursorInvalid, false},
-		{"排序键为空", func(c *query.CursorClaims) { c.LastSortKey = "" },
+		{"排序键过长", func(c *query.CursorClaims) { c.LastSortKey = strings.Repeat("s", 8193) },
 			fault.CodeCursorInvalid, false},
 	} {
 		t.Run(item.name, func(t *testing.T) {

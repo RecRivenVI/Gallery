@@ -35,7 +35,7 @@ func testAuthorization(candidateSourceIDs, allowedSourceIDs []string) sourceAuth
 }
 
 // BuildPageStatementForTest 返回生产分页语句与实参。request 必须已经带上调用方期望的
-// Limit/SortDirection，本函数不重复 Search 的默认值填充。
+// Limit/Sort，本函数不重复 Search 的默认值填充。
 func BuildPageStatementForTest(ctx context.Context, catalogRevision, overlayRevision string,
 	candidateSourceIDs, allowedSourceIDs []string, request Request, claims contractquery.CursorClaims) (string, []any, error) {
 	filterNode, err := ParseFilter(request.Filter)
@@ -48,6 +48,10 @@ func BuildPageStatementForTest(ctx context.Context, catalogRevision, overlayRevi
 		testAuthorization(candidateSourceIDs, allowedSourceIDs), request,
 		querytext.PlanSearch(request.Search), filterNode, claims)
 }
+
+// EmptyCursorClaimsForTest 返回第一页构建使用的空 claims，避免外部测试为了调用生产 SQL
+// builder 直接依赖 contract/query 的具体类型。
+func EmptyCursorClaimsForTest() contractquery.CursorClaims { return contractquery.CursorClaims{} }
 
 // BuildSinglePhaseSearchStatementForTest 是两阶段改写之前那种单阶段形态的参照实现，只
 // 用作差分校验的 oracle，不参与任何生产路径。
@@ -79,13 +83,14 @@ func BuildSinglePhaseSearchStatementForTest(ctx context.Context, catalogRevision
 		return "", nil, err
 	}
 
-	operator, direction := ">", "ASC"
-	if request.SortDirection == "desc" {
-		operator, direction = "<", "DESC"
+	sortSpec, err := resolveWorkSort(request.Sort)
+	if err != nil {
+		return "", nil, err
 	}
+	sortColumn := "w." + sortSpec.column
 
 	statement := fmt.Sprintf(`WITH tiers AS (
-SELECT w.work_id AS work_id, w.sort_title_key AS sort_title_key,
+SELECT w.work_id AS work_id, %s AS sort_key,
 %s AS media_count,
 (%s) AS title_tier, (%s) AS creator_tier, (%s) AS tag_tier, (%s) AS filename_tier
 FROM work_projections w%s WHERE %s
@@ -93,8 +98,8 @@ FROM work_projections w%s WHERE %s
 scored AS (
 SELECT *, max(%s, %s, %s, %s) AS rank_tier FROM tiers
 )
-SELECT work_id, sort_title_key, media_count, rank_tier FROM scored`,
-		mediaCountExpr,
+SELECT work_id, sort_key, media_count, rank_tier FROM scored`,
+		sortColumn, mediaCountExpr,
 		singleFieldTierSQL("w.search_title_norm"), singleFieldTierSQL("w.search_creator_norm"),
 		multiFieldTierSQL("w.search_tags_norm"), multiFieldTierSQL("w.search_filenames_norm"),
 		join, strings.Join(where, " AND "),
@@ -108,12 +113,15 @@ SELECT work_id, sort_title_key, media_count, rank_tier FROM scored`,
 		plan.NormalizedQuery, plan.NormalizedQuery, plan.NormalizedQuery,
 	}
 	args = append(args, fromArgs...)
-	if claims.LastSortKey != "" {
-		statement += fmt.Sprintf(
-			" WHERE (rank_tier < ? OR (rank_tier = ? AND (sort_title_key %s ? OR (sort_title_key = ? AND work_id %s ?))))",
-			operator, operator)
-		args = append(args, claims.LastRankTier, claims.LastRankTier, claims.LastSortKey, claims.LastSortKey, claims.LastCanonicalWorkID)
+	if claims.LastCanonicalWorkID != "" {
+		continuation, continuationArgs, err := sortSpec.continuation("sort_key", "work_id", claims)
+		if err != nil {
+			return "", nil, err
+		}
+		statement += " WHERE (rank_tier < ? OR (rank_tier = ? AND " + continuation + "))"
+		args = append(args, claims.LastRankTier, claims.LastRankTier)
+		args = append(args, continuationArgs...)
 	}
-	statement += fmt.Sprintf(" ORDER BY rank_tier DESC, sort_title_key %s, work_id %s LIMIT ?", direction, direction)
+	statement += " ORDER BY rank_tier DESC, " + sortSpec.orderBy("sort_key", "work_id") + " LIMIT ?"
 	return statement, append(args, request.Limit+1), nil
 }

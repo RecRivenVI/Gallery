@@ -45,8 +45,8 @@ func RunCursorCorrectness(rep *report.Report, sess *environment.Session) {
 		rep.Add("cursor/reuse-with-different-query-rejected", wrongQuery.JSON400.Error.Code == api.CURSOREXPIRED, fmt.Sprintf("code=%v", wrongQuery.JSON400.Error.Code))
 	}
 
-	// 换用不同排序方向复用同一个游标：同样必须 CURSOR_EXPIRED。
-	wrongSort, err := listWorks(sess, api.ListWorksParams{Limit: ptr(50), Cursor: ptr(cursor), SortDirection: ptr(api.ListWorksParamsSortDirection("desc"))})
+	// 换用不同排序复用同一个游标：同样必须 CURSOR_EXPIRED。
+	wrongSort, err := listWorks(sess, api.ListWorksParams{Limit: ptr(50), Cursor: ptr(cursor), Sort: ptr(api.ListWorksParamsSort("title_desc"))})
 	if err != nil || wrongSort.JSON400 == nil {
 		rep.Add("cursor/reuse-with-different-sort-rejected", false, fmt.Sprintf("err=%v status=%d", err, environment.StatusOf(wrongSort)))
 	} else {

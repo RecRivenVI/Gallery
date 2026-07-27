@@ -109,7 +109,7 @@ type Request struct {
 	LibraryID          string
 	SourceID           string
 	Filter             string
-	SortDirection      string
+	Sort               string
 	Limit              int
 	Cursor             string
 	QueryPublicationID string
@@ -200,12 +200,11 @@ func (s *Service) Search(ctx context.Context, request Request) (Result, error) {
 	if request.Limit < 1 || request.Limit > 200 {
 		return Result{}, fault.WithField(fault.CodeValidation, "limit", nil)
 	}
-	if request.SortDirection == "" {
-		request.SortDirection = "asc"
+	sortSpec, err := resolveWorkSort(request.Sort)
+	if err != nil {
+		return Result{}, fault.WithField(fault.CodeValidation, "sort", err)
 	}
-	if request.SortDirection != "asc" && request.SortDirection != "desc" {
-		return Result{}, fault.WithField(fault.CodeValidation, "sortDirection", nil)
-	}
+	request.Sort = sortSpec.name
 	plan := querytext.PlanSearch(request.Search)
 	if plan.TooShort {
 		return Result{}, fault.WithField(fault.CodeQueryTooShort, "q", nil)
@@ -230,7 +229,7 @@ func (s *Service) Search(ctx context.Context, request Request) (Result, error) {
 	}
 	queryFingerprint := fingerprint(map[string]any{
 		"q": plan.NormalizedQuery, "tag": request.Tag, "libraryId": request.LibraryID, "sourceId": request.SourceID,
-		"filter": filterCanonical, "sort": "title", "direction": request.SortDirection, "limit": request.Limit,
+		"filter": filterCanonical, "sort": request.Sort, "limit": request.Limit,
 		"rankProtocolVersion": contractquery.RankProtocolVersion, "dependencySet": dependencyFingerprint,
 	})
 	var claims contractquery.CursorClaims
@@ -489,20 +488,52 @@ func (s *Service) baseFilter(ctx context.Context, pub publication, authorization
 		where = append(where, "w.hidden = 0")
 	}
 	fromSuffix := ""
-	// 无搜索 browse 按实际收窄维度选择能同时服务过滤与稳定排序的索引。FTS 路径由
+	// 无搜索 browse 按实际收窄维度和排序字段选择能同时服务过滤与稳定排序的索引。FTS 路径由
 	// SQLite 根据 work_search 驱动关系自行规划，不在这里强制 WorkProjection 索引。
 	if plan.NormalizedQuery == "" {
+		sortSpec, err := resolveWorkSort(request.Sort)
+		if err != nil {
+			return nil, "", nil, err
+		}
+		indexFor := func(scope string) string {
+			suffix := "query"
+			switch sortSpec.kind {
+			case workSortInstant:
+				suffix = "published"
+			case workSortProgress:
+				suffix = "progress"
+			}
+			if scope == "global" {
+				if suffix == "query" {
+					return "work_projections_query_idx"
+				}
+				return "work_projections_" + suffix + "_idx"
+			}
+			return "work_projections_" + scope + "_" + suffix + "_idx"
+		}
 		switch {
 		case request.SourceID != "":
-			fromSuffix = " INDEXED BY work_projections_source_query_idx"
+			fromSuffix = " INDEXED BY " + indexFor("source")
 		case positiveAllowedFilter && (forTotal || len(authorization.AllowedSourceIDs) == 1):
-			fromSuffix = " INDEXED BY work_projections_source_query_idx"
+			if forTotal {
+				fromSuffix = " INDEXED BY work_projections_source_query_idx"
+			} else {
+				fromSuffix = " INDEXED BY " + indexFor("source")
+			}
 		case request.LibraryID != "":
-			fromSuffix = " INDEXED BY work_projections_library_query_idx"
+			if forTotal {
+				fromSuffix = " INDEXED BY work_projections_library_query_idx"
+			} else {
+				fromSuffix = " INDEXED BY " + indexFor("library")
+			}
 		case forTotal && negativeDeniedFilter:
 			fromSuffix = " INDEXED BY work_projections_source_query_idx"
 		default:
-			fromSuffix = " INDEXED BY work_projections_query_idx"
+			if forTotal {
+				fromSuffix = " INDEXED BY work_projections_query_idx"
+			} else {
+				fromSuffix = " INDEXED BY " + indexFor("global")
+			}
 		}
 	}
 	if request.LibraryID != "" {
@@ -565,27 +596,32 @@ func (s *Service) buildPageStatement(ctx context.Context, pub publication, autho
 		return "", nil, err
 	}
 
-	operator, direction := ">", "ASC"
-	if request.SortDirection == "desc" {
-		operator, direction = "<", "DESC"
+	sortSpec, err := resolveWorkSort(request.Sort)
+	if err != nil {
+		return "", nil, err
 	}
+	sortColumn := "w." + sortSpec.column
 
 	if plan.NormalizedQuery == "" {
 		statement := fmt.Sprintf(`WITH scored AS (
-SELECT w.work_id, w.title, w.creator, w.tags_json, w.filenames_text, w.sort_title_key, w.favorite, w.progress, w.cover_media_id, w.badges_json, w.description, w.source_url, w.published_at_ns,
-%s AS media_count, 0 AS rank_tier
-FROM work_projections w%s WHERE %s
-)
-SELECT work_id, title, creator, tags_json, filenames_text, sort_title_key, favorite, progress, cover_media_id, badges_json, description, source_url, published_at_ns, media_count, rank_tier FROM scored`,
-			mediaCountExpr, join, strings.Join(where, " AND "))
+	SELECT w.work_id, w.title, w.creator, w.tags_json, w.filenames_text, %s AS sort_key, w.favorite, w.progress, w.cover_media_id, w.badges_json, w.description, w.source_url, w.published_at_ns,
+	%s AS media_count, 0 AS rank_tier
+	FROM work_projections w%s WHERE %s
+	)
+	SELECT work_id, title, creator, tags_json, filenames_text, sort_key, favorite, progress, cover_media_id, badges_json, description, source_url, published_at_ns, media_count, rank_tier FROM scored`,
+			sortColumn, mediaCountExpr, join, strings.Join(where, " AND "))
 		args := append([]any{}, fromArgs...)
-		if claims.LastSortKey != "" {
+		if claims.LastCanonicalWorkID != "" {
 			// 无搜索时 rank_tier 恒为 0；把它保留在 keyset 谓词会阻止 SQLite
 			// 直接利用 sort_title_key/work_id 的索引顺序，并诱发整批排序。
-			statement += fmt.Sprintf(" WHERE (sort_title_key %s ? OR (sort_title_key = ? AND work_id %s ?))", operator, operator)
-			args = append(args, claims.LastSortKey, claims.LastSortKey, claims.LastCanonicalWorkID)
+			continuation, continuationArgs, err := sortSpec.continuation("sort_key", "work_id", claims)
+			if err != nil {
+				return "", nil, err
+			}
+			statement += " WHERE " + continuation
+			args = append(args, continuationArgs...)
 		}
-		statement += fmt.Sprintf(" ORDER BY sort_title_key %s, work_id %s LIMIT ?", direction, direction)
+		statement += " ORDER BY " + sortSpec.orderBy("sort_key", "work_id") + " LIMIT ?"
 		return statement, append(args, request.Limit+1), nil
 	}
 
@@ -601,32 +637,34 @@ SELECT work_id, title, creator, tags_json, filenames_text, sort_title_key, favor
 
 	keysetSQL := ""
 	var keysetArgs []any
-	if claims.LastSortKey != "" {
-		keysetSQL = fmt.Sprintf(
-			" WHERE (rank_tier < ? OR (rank_tier = ? AND (sort_title_key %s ? OR (sort_title_key = ? AND work_id %s ?))))",
-			operator, operator)
-		keysetArgs = []any{claims.LastRankTier, claims.LastRankTier, claims.LastSortKey, claims.LastSortKey, claims.LastCanonicalWorkID}
+	if claims.LastCanonicalWorkID != "" {
+		continuation, continuationArgs, err := sortSpec.continuation("sort_key", "work_id", claims)
+		if err != nil {
+			return "", nil, err
+		}
+		keysetSQL = " WHERE (rank_tier < ? OR (rank_tier = ? AND " + continuation + "))"
+		keysetArgs = append([]any{claims.LastRankTier, claims.LastRankTier}, continuationArgs...)
 	}
 
 	statement := fmt.Sprintf(`WITH tiers AS (
-SELECT w.work_id AS work_id, w.sort_title_key AS sort_title_key,
+	SELECT w.work_id AS work_id, %s AS sort_key,
 (%s) AS title_tier, (%s) AS creator_tier, (%s) AS tag_tier, (%s) AS filename_tier
 FROM work_projections w%s WHERE %s
 ),
 scored AS (
-SELECT work_id, sort_title_key, max(%s, %s, %s, %s) AS rank_tier FROM tiers
+	SELECT work_id, sort_key, max(%s, %s, %s, %s) AS rank_tier FROM tiers
 ),
 page AS (
-SELECT work_id, sort_title_key, rank_tier FROM scored%s ORDER BY rank_tier DESC, sort_title_key %s, work_id %s LIMIT ?
+	SELECT work_id, sort_key, rank_tier FROM scored%s ORDER BY rank_tier DESC, %s LIMIT ?
 )
-SELECT p.work_id, w.title, w.creator, w.tags_json, w.filenames_text, p.sort_title_key, w.favorite, w.progress, w.cover_media_id, w.badges_json, w.description, w.source_url, w.published_at_ns,
+	SELECT p.work_id, w.title, w.creator, w.tags_json, w.filenames_text, p.sort_key, w.favorite, w.progress, w.cover_media_id, w.badges_json, w.description, w.source_url, w.published_at_ns,
 %s AS media_count, p.rank_tier
 FROM page p JOIN work_projections w ON w.catalog_revision_id = ? AND w.overlay_revision_id = ? AND w.work_id = p.work_id
-ORDER BY p.rank_tier DESC, p.sort_title_key %s, p.work_id %s`,
-		titleTierSQL, creatorTierSQL, tagTierSQL, filenameTierSQL, join, strings.Join(where, " AND "),
+	ORDER BY p.rank_tier DESC, %s`,
+		sortColumn, titleTierSQL, creatorTierSQL, tagTierSQL, filenameTierSQL, join, strings.Join(where, " AND "),
 		combinedFieldScoreSQL("title_tier", fieldPriorityTitle), combinedFieldScoreSQL("creator_tier", fieldPriorityCreator),
 		combinedFieldScoreSQL("tag_tier", fieldPriorityTag), combinedFieldScoreSQL("filename_tier", fieldPriorityFilename),
-		keysetSQL, direction, direction, mediaCountExpr, direction, direction)
+		keysetSQL, sortSpec.orderBy("sort_key", "work_id"), mediaCountExpr, sortSpec.orderBy("p.sort_key", "p.work_id"))
 
 	args := []any{
 		plan.NormalizedQuery, plan.NormalizedQuery, plan.NormalizedQuery, // title
@@ -652,16 +690,25 @@ func (s *Service) query(ctx context.Context, pub publication, authorization sour
 	}
 	defer rows.Close()
 	items := make([]Work, 0, request.Limit+1)
+	sortSpec, err := resolveWorkSort(request.Sort)
+	if err != nil {
+		return nil, false, fault.New(fault.CodeInternal, false, err)
+	}
 	for rows.Next() {
 		var work Work
 		var tags, filenames, badges string
 		var favorite int
 		var publishedAtNanos int64
-		if err := rows.Scan(&work.ID, &work.Title, &work.Creator, &tags, &filenames, &work.SortKey,
+		var rawSortKey any
+		if err := rows.Scan(&work.ID, &work.Title, &work.Creator, &tags, &filenames, &rawSortKey,
 			&favorite, &work.Progress, &work.CoverMediaID, &badges,
 			&work.Description, &work.SourceURL, &publishedAtNanos,
 			&work.MediaCount, &work.RankTier); err != nil {
 			return nil, false, fault.New(fault.CodeInternal, true, err)
+		}
+		work.SortKey, err = sortSpec.formatCursorKey(rawSortKey)
+		if err != nil {
+			return nil, false, fault.New(fault.CodeInternal, false, err)
 		}
 		work.Favorite = favorite != 0
 		// 0 表示该作品没有可用发布时间；不把它表达成 Unix 纪元，否则客户端无法区分
@@ -888,7 +935,10 @@ func buildDependencySet(request Request, plan querytext.SearchPlan, filterNode *
 	if request.SourceID != "" {
 		fields = append(fields, DependencyField{Field: "source.id", Role: DependencyRolePredicate})
 	}
-	fields = append(fields, DependencyField{Field: "title", Role: DependencyRoleOrdering})
+	sortSpec, err := resolveWorkSort(request.Sort)
+	if err == nil {
+		fields = append(fields, DependencyField{Field: sortSpec.dependency, Role: DependencyRoleOrdering})
+	}
 	if plan.NormalizedQuery != "" {
 		fields = append(fields,
 			DependencyField{Field: "title", Role: DependencyRoleSearch},

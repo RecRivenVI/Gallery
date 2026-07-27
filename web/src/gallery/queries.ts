@@ -124,13 +124,16 @@ export interface WorkQueryParams {
   libraryId?: string;
   /** 结构化过滤 AST 的 JSON 编码，由 contracts.ts 的 buildFilterAst 构造。 */
   filter?: string;
-  /**
-   * 唯一的排序控制。
-   *
-   * 服务端当前**只能按标题排序**，规则下发的排序选项名（date_desc 之类）在查询协议里
-   * 还没有对应实现，因此界面只暴露升/降序，不渲染无法生效的排序项。
-   */
-  sortDirection: 'asc' | 'desc';
+  /** 服务端权威排序名；客户端只选择，不得重排已经分页的结果。 */
+  sort:
+    | 'title_asc'
+    | 'title_desc'
+    | 'name_asc'
+    | 'name_desc'
+    | 'date_asc'
+    | 'date_desc'
+    | 'progress_asc'
+    | 'progress_desc';
   limit?: number;
 }
 
@@ -167,7 +170,7 @@ function workQuery(params: WorkQueryParams, cursor: string | undefined) {
     ...(params.filter === undefined || params.filter === '' ? {} : { filter: params.filter }),
     ...(params.limit === undefined ? {} : { limit: params.limit }),
     ...(cursor === undefined ? {} : { cursor }),
-    sortDirection: params.sortDirection
+    sort: params.sort
   };
 }
 

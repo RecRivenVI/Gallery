@@ -44,7 +44,7 @@ func TestFTSSnapshotKeysetCursorAndAuthorization(t *testing.T) {
 		t.Fatal(err)
 	}
 	scope := galleryquery.AuthorizationScope("owner", []string{"library.read"})
-	request := authorizedRequest(galleryquery.Request{Limit: 2, SortDirection: "asc", AuthorizationScope: scope})
+	request := authorizedRequest(galleryquery.Request{Limit: 2, Sort: "title_asc", AuthorizationScope: scope})
 	var ids []string
 	var cursor string
 	firstCursor := ""
@@ -89,7 +89,7 @@ func TestFTSSnapshotKeysetCursorAndAuthorization(t *testing.T) {
 	assertCode(t, err, fault.CodeQueryTooShort)
 
 	seedPublication(t, store, "002", []seedWork{{title: "new-active", creator: "", tags: nil, filenames: nil}})
-	continued, err := service.Search(ctx, authorizedRequest(galleryquery.Request{Limit: 2, Cursor: firstCursor, SortDirection: "asc", AuthorizationScope: scope}))
+	continued, err := service.Search(ctx, authorizedRequest(galleryquery.Request{Limit: 2, Cursor: firstCursor, Sort: "title_asc", AuthorizationScope: scope}))
 	if err != nil || continued.QueryPublicationID != publicationID {
 		t.Fatalf("active 切换后旧游标未继续旧 publication: %+v %v", continued, err)
 	}
@@ -378,7 +378,7 @@ func TestBrowseRankZeroCursorPaginatesEquivalentlyInBothDirections(t *testing.T)
 	} {
 		t.Run(test.direction, func(t *testing.T) {
 			request := authorizedRequest(galleryquery.Request{
-				Limit: 2, SortDirection: test.direction, AuthorizationScope: scope,
+				Limit: 2, Sort: "title_" + test.direction, AuthorizationScope: scope,
 			})
 			var titles []string
 			for {
@@ -406,6 +406,90 @@ func TestBrowseRankZeroCursorPaginatesEquivalentlyInBothDirections(t *testing.T)
 	}
 }
 
+func TestWorkSortProtocolV2KeysetNullLastAndDependencies(t *testing.T) {
+	ctx := context.Background()
+	dirs := appdirs.UnderRoot(t.TempDir())
+	if err := dirs.Ensure(filesystem.OS{}); err != nil {
+		t.Fatal(err)
+	}
+	store, err := storage.Open(ctx, dirs)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	seedPublication(t, store, "806", []seedWork{
+		{title: "date-newer-a", publishedAtNS: 200, progress: 0.25},
+		{title: "date-missing", publishedAtNS: 0, progress: 0.75},
+		{title: "date-old", publishedAtNS: 100, progress: 0.25},
+		{title: "date-newer-b", publishedAtNS: 200, progress: 0},
+	})
+	service, err := galleryquery.NewService(ctx, store.Control.SQL(), store.Catalog.SQL(),
+		clock.Fixed{Time: time.Date(2026, 7, 27, 3, 0, 0, 0, time.UTC)}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	scope := galleryquery.AuthorizationScope("owner", []string{"library.read"})
+	tests := []struct {
+		sort       string
+		want       []string
+		dependency string
+	}{
+		{sort: "date_asc", want: []string{"date-old", "date-newer-a", "date-newer-b", "date-missing"}, dependency: "publishedAt"},
+		{sort: "date_desc", want: []string{"date-newer-b", "date-newer-a", "date-old", "date-missing"}, dependency: "publishedAt"},
+		{sort: "progress_asc", want: []string{"date-newer-b", "date-newer-a", "date-old", "date-missing"}, dependency: "overlay.progress"},
+		{sort: "progress_desc", want: []string{"date-missing", "date-old", "date-newer-a", "date-newer-b"}, dependency: "overlay.progress"},
+	}
+	for _, test := range tests {
+		t.Run(test.sort, func(t *testing.T) {
+			request := authorizedRequest(galleryquery.Request{Sort: test.sort, Limit: 2, AuthorizationScope: scope})
+			var titles []string
+			var first galleryquery.Result
+			for {
+				page, err := service.Search(ctx, request)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if len(titles) == 0 {
+					first = page
+				}
+				for _, item := range page.Items {
+					titles = append(titles, item.Title)
+				}
+				if page.NextCursor == "" {
+					break
+				}
+				request.Cursor = page.NextCursor
+			}
+			if !reflect.DeepEqual(titles, test.want) {
+				t.Fatalf("%s 分页顺序=%v want=%v", test.sort, titles, test.want)
+			}
+			if !hasDependency(first.DependencySet, test.dependency, galleryquery.DependencyRoleOrdering) {
+				t.Fatalf("%s 缺少排序依赖 %s: %+v", test.sort, test.dependency, first.DependencySet)
+			}
+		})
+	}
+
+	first, err := service.Search(ctx, authorizedRequest(galleryquery.Request{Sort: "date_desc", Limit: 2, AuthorizationScope: scope}))
+	if err != nil || first.NextCursor == "" {
+		t.Fatalf("日期首页或游标无效: %+v %v", first, err)
+	}
+	_, err = service.Search(ctx, authorizedRequest(galleryquery.Request{
+		Sort: "progress_desc", Limit: 2, Cursor: first.NextCursor, AuthorizationScope: scope,
+	}))
+	assertCode(t, err, fault.CodeCursorExpired)
+	_, err = service.Search(ctx, authorizedRequest(galleryquery.Request{Sort: "unknown", Limit: 2, AuthorizationScope: scope}))
+	assertCode(t, err, fault.CodeValidation)
+}
+
+func hasDependency(fields []galleryquery.DependencyField, name, role string) bool {
+	for _, field := range fields {
+		if field.Field == name && field.Role == role {
+			return true
+		}
+	}
+	return false
+}
+
 type seedWork struct {
 	title, creator  string
 	tags, filenames []string
@@ -414,6 +498,7 @@ type seedWork struct {
 	hidden          bool
 	favorite        bool
 	progress        float64
+	publishedAtNS   int64
 }
 
 func seedPublication(t *testing.T, store *storage.Store, suffix string, works []seedWork) string {
@@ -484,9 +569,9 @@ VALUES (?, ?, 1, 'published', 1, 1)`, ov, cat); err != nil {
 		_, err := store.Catalog.SQL().ExecContext(ctx, `INSERT INTO work_projections
 (catalog_revision_id, overlay_revision_id, work_id, source_id, source_key, library_id, title, creator, tags_json, filenames_text,
  normalized_original_text, cjk_bigram_token_text, latin_trigram_token_text, sort_title_key, hidden, favorite, progress,
- search_title_norm, search_creator_norm, search_tags_norm, search_filenames_norm)
-VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`, cat, ov, id, sourceID, fmt.Sprintf("source-%d", index), libraryID, value.title, value.creator, string(tags), string(filenames), document.NormalizedOriginal, document.CJKTokens, document.LatinTokens, document.SortTitleKey,
-			hidden, favorite, value.progress, document.TitleNorm, document.CreatorNorm, document.TagsNorm, document.FilenamesNorm)
+	 search_title_norm, search_creator_norm, search_tags_norm, search_filenames_norm, published_at_ns)
+	VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`, cat, ov, id, sourceID, fmt.Sprintf("source-%d", index), libraryID, value.title, value.creator, string(tags), string(filenames), document.NormalizedOriginal, document.CJKTokens, document.LatinTokens, document.SortTitleKey,
+			hidden, favorite, value.progress, document.TitleNorm, document.CreatorNorm, document.TagsNorm, document.FilenamesNorm, value.publishedAtNS)
 		if err != nil {
 			t.Fatal(err)
 		}
