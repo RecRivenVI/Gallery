@@ -5,7 +5,7 @@ Gallery（画廊）是一个本地优先、只读来源、规则驱动的个人�
 媒体文件始终留在用户自己的目录里：Gallery 不改名、不移动、不删除原文件，只读取内容并建立一个可以随时删除重建的目录数据库（Catalog）。收藏、阅读进度和人工整理结果单独保存，不会因为重新扫描而丢失。内嵌 Web/PWA、CLI、未来桌面壳和第三方客户端均基于同一套 API 契约。
 
 > [!IMPORTANT]
-> Gallery 当前仍处于 pre-alpha 开发阶段。阶段 0～4 后端主线、阶段 5 安全代码基线及阶段 6 Web/PWA 页面代码基线均已实现；Chrome/Edge 已完成合成 smoke 与真实后端认证主路径验证，但阶段 5 Security Gate 和阶段 6 Web Gate 均未通过。2026-07-23 的独立审计（[验证记录 EV-39](Documents/证据/验证记录.md)）发现实时 WebSocket 与权限名阻断；这些缺陷已由 [EV-40](Documents/证据/验证记录.md) 修复。[EV-54～EV-59](Documents/证据/验证记录.md) 随后以隔离 Chromium/真实 `galleryd` 打通管理自举、publication-bound 画廊/媒体、CustomCover、规则草稿→发布→Binding→扫描、无损规则文本、模板驱动 Schema 表单及规则回滚/弃用/ParameterSet；[EV-60](Documents/证据/验证记录.md) 又补齐 Personal Session/API Token/Share、安全管理写链和真实 WebSocket 断线后的 snapshot 恢复，并覆盖独立 loopback LAN 账户/Grant/Session 管理；[EV-61](Documents/证据/验证记录.md) 覆盖 control 备份、恢复干跑/待重启登记和 Catalog GC dry-run；[EV-62](Documents/证据/验证记录.md) 再覆盖规则绑定暂停/恢复、作品人工解绑/撤销，以及 retry-backoff Job 取消、同 ID 重试和 Attempt 历史。这些仍不等于真实媒体或完整业务闭环，任意规则的完整可视化构建、其余治理决策、长任务运行中取消和实际重启恢复仍未覆盖。当前没有安装发行版本或完整使用教程，也尚未完成真实全量性能、SMB/NAS、真实 LAN 多设备、目标低端设备、Firefox/真实移动设备和跨平台发行门禁。
+> Gallery 当前仍处于 pre-alpha 开发阶段。阶段 0～4 后端主线、阶段 5 安全代码基线及阶段 6 Web/PWA 页面代码基线均已实现；Chrome/Edge 已完成合成 smoke 与真实后端认证主路径验证，但阶段 5 Security Gate 和阶段 6 Web Gate 均未通过。2026-07-23 的独立审计（[验证记录 EV-39](Documents/证据/验证记录.md)）发现实时 WebSocket 与权限名阻断；这些缺陷已由 [EV-40](Documents/证据/验证记录.md) 修复。[EV-54～EV-59](Documents/证据/验证记录.md) 随后以隔离 Chromium/真实 `galleryd` 打通管理自举、publication-bound 画廊/媒体、CustomCover、规则草稿→发布→Binding→扫描、无损规则文本、模板驱动 Schema 表单及规则回滚/弃用/ParameterSet；[EV-60](Documents/证据/验证记录.md) 又补齐 Personal Session/API Token/Share、安全管理写链和真实 WebSocket 断线后的 snapshot 恢复，并覆盖独立 loopback LAN 账户/Grant/Session 管理；[EV-61](Documents/证据/验证记录.md) 覆盖 control 备份、恢复干跑/待重启登记和 Catalog GC dry-run；[EV-62](Documents/证据/验证记录.md) 再覆盖规则绑定暂停/恢复、作品人工解绑/撤销，以及 retry-backoff Job 取消、同 ID 重试和 Attempt 历史；[EV-64](Documents/证据/验证记录.md) 进一步以同一隔离 AppDirs 的实际重启证明 control 恢复生效。这些仍不等于真实媒体或完整业务闭环，任意规则的完整可视化构建、其余治理决策、长任务运行中取消与进程中断恢复仍未覆盖。当前没有安装发行版本或完整使用教程，也尚未完成真实全量性能、SMB/NAS、真实 LAN 多设备、目标低端设备、Firefox/真实移动设备和跨平台发行门禁。
 
 ## 特色功能
 
@@ -22,7 +22,7 @@ Gallery（画廊）是一个本地优先、只读来源、规则驱动的个人�
 | 媒体读取与缩略图 | 支持按字节范围下载（Range）、ETag、按需内容校验和 JPEG 缩略图 | 已实现 |
 | API-first | Web、CLI、桌面壳和第三方客户端共用同一套正式 API | 已实现后端契约 |
 | 本地账户、资源授权与分享 | Personal 配对、LAN 本地账户、Session、API Token、Library/Source Grant、即时吊销，以及匿名 Work/Media/媒体正文 Share | 后端代码与合成安全门禁已实现；Personal 与同机 loopback LAN 安全管理已有真实浏览器链，物理 LAN/目标设备 Gate 未通过 |
-| 图形界面 | 响应式 Web/PWA 覆盖浏览、作品/媒体、实际封面与 CustomCover 编辑、Overlay、任务、规则、安全和维护页面 | 页面代码基线、Library/Source/扫描、publication-bound 画廊/媒体、CustomCover、规则生命周期、Schema 表单、安全、维护、规则绑定状态、作品人工解绑/撤销和 retry-backoff 任务真实写后 E2E 已实现；其余治理、长任务取消/重启与完整设备门禁仍待覆盖 |
+| 图形界面 | 响应式 Web/PWA 覆盖浏览、作品/媒体、实际封面与 CustomCover 编辑、Overlay、任务、规则、安全和维护页面 | 页面代码基线、Library/Source/扫描、publication-bound 画廊/媒体、CustomCover、规则生命周期、Schema 表单、安全、维护、规则绑定状态、作品人工解绑/撤销、retry-backoff 任务与 control 恢复实际重启 E2E 已实现；其余治理、长任务取消/中断恢复与完整设备门禁仍待覆盖 |
 | 安装与发行 | 安装包、签名、升级、跨平台发行 | 尚未开始 |
 
 ## 设计特点
@@ -65,7 +65,7 @@ Gallery（画廊）是一个本地优先、只读来源、规则驱动的个人�
 | 阶段 3：扫描、任务与目录库 | ✅（代码与模拟数据层面） | 🟡（真实大盘抽样通过，全量未完成） | 真实 SSD/HDD 各完成几十万文件规模抽样验收 | 真实全量扫描性能门禁尚未跑完；网络共享盘尚未验证 | 阶段 4 正式压力测试 |
 | 阶段 4：查询与媒体 | 🟡（主线完成，部分参数未冻结） | 🟡（正确性收口完成，500,000 规模正式压力测试已执行） | 搜索、排序、分页、显式规则/有效封面、媒体读取、缩略图生成均有代码闭环；500,000 规模 Correctness/Cursor 通过 | 排序权重、结果总数、租约时长等仍是暂定值；500,000 规模下部分查询类别仍有已知未修复的架构性延迟 | 性能优化候选评估与接口冻结 |
 | 阶段 5：账户、安全与多客户端 | 🟠（代码与合成安全收尾已实现） | 🟡（Personal 与同机 LAN 安全管理补证，正式 Gate 未通过） | LAN 本地账户、Argon2id、Session、API Token、资源 Grant、匿名 Share 与 WS 防滥用已形成代码闭环并有真实浏览器管理链 | 真实 LAN 多设备、目标设备 Argon2id 与真实恶意输入资源门禁未完成 | 完成外部设备安全门禁 |
-| 阶段 6：Web/PWA 界面 | 🟠（页面代码基线与首批真实业务链路已实现） | 🟡（隔离 Chromium/真实后端 E2E 已建立；正式 Gate 未通过） | 同源 Web/PWA 覆盖浏览与管理页面；空实例自举、publication-bound 画廊/媒体、CustomCover、规则生命周期/ParameterSet/Schema 表单、安全管理、维护、规则绑定状态、作品人工解绑/撤销、retry-backoff Job 与 WS 断线 snapshot 恢复已有持续 E2E | 任意规则的完整可视化构建、其余治理路径、长任务运行中取消与真正的重启恢复、WS sequence gap、Firefox、真实移动设备/屏幕阅读器及窄屏焦点陷阱未完成 | 扩大真实业务与可访问性门禁，不进入桌面壳 |
+| 阶段 6：Web/PWA 界面 | 🟠（页面代码基线与首批真实业务链路已实现） | 🟡（隔离 Chromium/真实后端 E2E 已建立；正式 Gate 未通过） | 同源 Web/PWA 覆盖浏览与管理页面；空实例自举、publication-bound 画廊/媒体、CustomCover、规则生命周期/ParameterSet/Schema 表单、安全管理、维护、规则绑定状态、作品人工解绑/撤销、retry-backoff Job、control 恢复实际重启与 WS 断线 snapshot 恢复已有持续 E2E | 任意规则的完整可视化构建、其余治理路径、长任务运行中取消与进程中断恢复、WS sequence gap、Firefox、真实移动设备/屏幕阅读器及窄屏焦点陷阱未完成 | 扩大真实业务与可访问性门禁，不进入桌面壳 |
 | 阶段 7：平台适配与正式发行 | ⏳ | ⛔ | 无 | 安装包、签名、跨平台支持均未开始 | 最后阶段 |
 
 状态图例、每个阶段的详细功能清单、测试与门禁证据，见完整项目状态文档：
@@ -75,7 +75,7 @@ Gallery（画廊）是一个本地优先、只读来源、规则驱动的个人�
 
 ## 项目当前处于什么位置
 
-阶段 0～4 的后端主线已经完成代码实现与合成正确性验证（Correctness，即在模拟/构造数据下验证逻辑是否正确，不代表真实规模下的性能表现）。阶段 4 的正式性能与 API Freeze 尚未完成。阶段 5 已增加 Chrome/Edge 同机双上下文、Session 吊销、LAN 模式登录和当前工作站 Argon2id 证据，EV-60 又以隔离 Chromium 覆盖 Personal Token/Share/Session 与独立 loopback LAN 账户/Grant/Session 管理；真实跨设备与目标设备门禁仍缺，完整 Security Gate 未通过。阶段 6 已形成可由 `galleryd` 直接提供的 Web/PWA 页面代码基线；EV-39 发现、EV-40 修复的实时通道与权限阻断不再回归完成度表述，EV-54～EV-59 建立管理自举、publication-bound 画廊/媒体、CustomCover、规则生命周期、无损文本与模板驱动 Schema 表单，EV-60 补齐安全管理链和真实 WebSocket 断线后的 HTTP snapshot 恢复，EV-61 覆盖备份、恢复验证/登记与安全的 GC dry-run，EV-62 再覆盖规则绑定状态、作品人工解绑/撤销与 retry-backoff Job 取消/重试。这些链路仍使用合成 Source；任意规则的完整可视化构建、其余治理路径、长任务运行中取消、真正的重启恢复、完整浏览器/真实移动设备和可访问性 Gate 均未完成。当前仍没有面向普通用户的安装包；真实机械硬盘全量扫描、SMB/NAS、原生平台文件身份和正式发行门禁均尚未完成。
+阶段 0～4 的后端主线已经完成代码实现与合成正确性验证（Correctness，即在模拟/构造数据下验证逻辑是否正确，不代表真实规模下的性能表现）。阶段 4 的正式性能与 API Freeze 尚未完成。阶段 5 已增加 Chrome/Edge 同机双上下文、Session 吊销、LAN 模式登录和当前工作站 Argon2id 证据，EV-60 又以隔离 Chromium 覆盖 Personal Token/Share/Session 与独立 loopback LAN 账户/Grant/Session 管理；真实跨设备与目标设备门禁仍缺，完整 Security Gate 未通过。阶段 6 已形成可由 `galleryd` 直接提供的 Web/PWA 页面代码基线；EV-39 发现、EV-40 修复的实时通道与权限阻断不再回归完成度表述，EV-54～EV-59 建立管理自举、publication-bound 画廊/媒体、CustomCover、规则生命周期、无损文本与模板驱动 Schema 表单，EV-60 补齐安全管理链和真实 WebSocket 断线后的 HTTP snapshot 恢复，EV-61 覆盖备份、恢复验证/登记与安全的 GC dry-run，EV-62 再覆盖规则绑定状态、作品人工解绑/撤销与 retry-backoff Job 取消/重试，EV-64 已用同一隔离 AppDirs 实际重启证明 control 恢复生效。这些链路仍使用合成 Source；任意规则的完整可视化构建、其余治理路径、长任务运行中取消与进程中断恢复、完整浏览器/真实移动设备和可访问性 Gate 均未完成。当前仍没有面向普通用户的安装包；真实机械硬盘全量扫描、SMB/NAS、原生平台文件身份和正式发行门禁均尚未完成。
 
 详细依据见 [PROJECT_STATUS.md](./PROJECT_STATUS.md)。
 
