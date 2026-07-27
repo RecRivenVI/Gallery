@@ -83,6 +83,7 @@ export interface RealtimeEnvelope {
 export type RealtimeEffect =
   | 'snapshot' // 重新拉取全部快照
   | 'jobs' // 只失效任务列表
+  | 'jobs-and-maintenance' // 终态任务同时可能发布维护侧快照（例如备份 manifest）
   | 'publication' // 失效发布相关的浏览/查询结果
   | 'session' // 重新拉取 bootstrap（认证或授权发生变化）
   | 'none';
@@ -111,11 +112,12 @@ export function realtimeEffect(eventType: RealtimeEventType): RealtimeEffect {
       return 'snapshot';
     case 'job.queued':
     case 'job.progress':
-    case 'job.completed':
-    case 'job.failed':
     case 'job.status':
     case 'job.issue':
       return 'jobs';
+    case 'job.completed':
+    case 'job.failed':
+      return 'jobs-and-maintenance';
     case 'query.publication.published':
     case 'catalog.publication':
     case 'overlay.publication':
@@ -344,6 +346,12 @@ export function RealtimeProvider({ children, transport = browserTransport, url }
               break;
             case 'jobs':
               void queryClient.invalidateQueries({ queryKey: ['jobs'] });
+              break;
+            case 'jobs-and-maintenance':
+              void queryClient.invalidateQueries({ queryKey: ['jobs'] });
+              // control_backup 的 manifest 只在异步 Job 完成后出现。创建请求返回时失效一次
+              // 还不够；终态事件必须让当前打开的诊断页重新读取服务端维护快照。
+              void queryClient.invalidateQueries({ queryKey: ['maintenance'] });
               break;
             case 'publication':
               for (const prefix of PUBLICATION_QUERY_PREFIXES) {

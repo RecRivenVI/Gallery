@@ -208,6 +208,11 @@ func run() (exitCode int) {
 			"e2e/real-security.spec.ts",
 			"--project=chromium", "--workers=1", "--retries=0")
 	}
+	if testErr == nil {
+		testErr = command(runCtx, 2*time.Minute, webRoot, env, nodeBin, playwright, "test",
+			"e2e/real-maintenance.spec.ts",
+			"--project=chromium", "--workers=1", "--retries=0")
+	}
 	stop := server.Stop()
 	serverStopped = true
 	after, guardErr := snapshot(sourceRoot)

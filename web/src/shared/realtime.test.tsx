@@ -162,7 +162,9 @@ describe('协议常量', () => {
 
   it('每个事件类型都有明确的本地动作', () => {
     for (const type of REALTIME_EVENT_TYPES) {
-      expect(['snapshot', 'jobs', 'publication', 'session', 'none']).toContain(realtimeEffect(type));
+      expect(['snapshot', 'jobs', 'jobs-and-maintenance', 'publication', 'session', 'none']).toContain(
+        realtimeEffect(type)
+      );
     }
     expect(realtimeEffect('connection.ready')).toBe('snapshot');
     expect(realtimeEffect('session.revoked')).toBe('session');
@@ -259,6 +261,20 @@ describe('RealtimeProvider', () => {
     expect(invalidate.mock.calls.map(([filters]) => filters?.queryKey?.[0])).toEqual([
       ...PUBLICATION_QUERY_PREFIXES
     ]);
+  });
+
+  it('终态 Job 同时失效任务与维护快照', async () => {
+    const transport = new FakeTransport();
+    const queryClient = createQueryClient();
+    const invalidate = vi.spyOn(queryClient, 'invalidateQueries');
+    render(<Harness transport={transport} queryClient={queryClient} />);
+    await screen.findByTestId('status');
+    transport.open();
+    invalidate.mockClear();
+
+    transport.send(envelope('job.completed', 1));
+
+    expect(invalidate.mock.calls.map(([filters]) => filters?.queryKey?.[0])).toEqual(['jobs', 'maintenance']);
   });
 
   it('重复 sequence 被忽略且不推进游标', async () => {
