@@ -145,6 +145,23 @@ func (p *Personal) AuthorizeSession(ctx context.Context, session Session, capabi
 	return false, nil
 }
 
+// EffectiveCapabilities 返回 Session 在给定作用域上实际可用的 capability。Session 中的
+// Capabilities 只是角色预设（以及 API Token 创建时快照）的上限；显式 Grant、deny 优先级
+// 和 Token scope 仍必须逐项经过与公开服务方法相同的 AuthorizeSession 判定。
+func (p *Personal) EffectiveCapabilities(ctx context.Context, session Session, scope ResourceScope) ([]string, error) {
+	effective := make([]string, 0, len(session.Capabilities))
+	for _, capability := range normalizeCapabilities(session.Capabilities) {
+		allowed, err := p.AuthorizeSession(ctx, session, capability, scope)
+		if err != nil {
+			return nil, err
+		}
+		if allowed {
+			effective = append(effective, capability)
+		}
+	}
+	return effective, nil
+}
+
 // AuthorizeSessionSources 对候选 Source 批量执行 all-of capability 授权，返回按 Source ID
 // 排序且去重后的允许集合。它与逐个调用 AuthorizeSession 保持相同语义，但把当前角色、
 // active Grant 和 Source->Library 映射固定在同一个短读事务快照内，避免列表查询按 Source

@@ -96,6 +96,11 @@ function SessionsPanel() {
               },
               { id: 'label', header: '客户端', render: (row) => row.clientLabel },
               {
+                id: 'id',
+                header: 'Session ID',
+                render: (row) => <MonoId value={row.id} label="Session ID" />
+              },
+              {
                 id: 'method',
                 header: '认证方式',
                 render: (row) => (row.authMethod === 'password' ? '密码' : '一次性配对')
@@ -199,7 +204,7 @@ function ScopePicker({
 /* ————————————————————————————— API Token ————————————————————————————— */
 
 function TokensPanel() {
-  const { show } = useToast();
+  const { show, dismiss } = useToast();
   const tokens = useApiTokens();
   const create = useCreateApiToken();
   const revoke = useRevokeApiToken();
@@ -210,6 +215,7 @@ function TokensPanel() {
   const [scopeId, setScopeId] = useState('');
   const [expiryDays, setExpiryDays] = useState('');
   const [secret, setSecret] = useState<string | null>(null);
+  const [secretToastId, setSecretToastId] = useState<string | null>(null);
 
   const days = Number.parseInt(expiryDays, 10);
   const expiryValid = expiryDays === '' || (Number.isFinite(days) && days > 0);
@@ -263,12 +269,14 @@ function TokensPanel() {
                       setSecret(token.secret);
                       setName('');
                       setSelected(new Set());
-                      show({
-                        title: 'Token 已创建',
-                        description: '密文只显示这一次。',
-                        tone: 'warning',
-                        timeoutMs: 0
-                      });
+                      setSecretToastId(
+                        show({
+                          title: 'Token 已创建',
+                          description: '密文只显示这一次。',
+                          tone: 'warning',
+                          timeoutMs: 0
+                        })
+                      );
                     }
                   }
                 );
@@ -358,6 +366,8 @@ function TokensPanel() {
         description="这是该 Token 的完整密文，服务端只保留前缀。现在就把它保存到你的密码管理器里。"
         onDismiss={() => {
           setSecret(null);
+          if (secretToastId !== null) dismiss(secretToastId);
+          setSecretToastId(null);
           // 同时清掉 mutation 缓存里的响应，避免密文在内存中比对话框活得更久。
           create.reset();
         }}
@@ -375,7 +385,7 @@ const SHARE_SCOPES = [
 ] as const;
 
 function SharesPanel() {
-  const { show } = useToast();
+  const { show, dismiss } = useToast();
   const shares = useShares();
   const create = useCreateShare();
   const revoke = useRevokeShare();
@@ -385,6 +395,7 @@ function SharesPanel() {
   const [allowDownload, setAllowDownload] = useState(false);
   const [expiryHours, setExpiryHours] = useState('24');
   const [secret, setSecret] = useState<string | null>(null);
+  const [secretToastId, setSecretToastId] = useState<string | null>(null);
 
   const hours = Number.parseInt(expiryHours, 10);
   const expiryValid = Number.isFinite(hours) && hours > 0;
@@ -434,12 +445,14 @@ function SharesPanel() {
                     onSuccess: (share) => {
                       setSecret(share.secret);
                       setScopeId('');
-                      show({
-                        title: '分享已创建',
-                        description: '密文只显示这一次。',
-                        tone: 'warning',
-                        timeoutMs: 0
-                      });
+                      setSecretToastId(
+                        show({
+                          title: '分享已创建',
+                          description: '密文只显示这一次。',
+                          tone: 'warning',
+                          timeoutMs: 0
+                        })
+                      );
                     }
                   }
                 );
@@ -524,6 +537,8 @@ function SharesPanel() {
         description="把它拼进分享链接后交给对方。服务端只保留前缀，这里关闭后无法再取回。"
         onDismiss={() => {
           setSecret(null);
+          if (secretToastId !== null) dismiss(secretToastId);
+          setSecretToastId(null);
           create.reset();
         }}
       />

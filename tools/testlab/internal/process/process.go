@@ -88,10 +88,32 @@ func StartGallerydWithSourceRootsContext(
 	timeout time.Duration,
 	sourceRoots ...string,
 ) (*Process, error) {
+	return startGallerydWithSourceRootsContext(
+		ctx, "personal", binPath, appRoot, logPath, timeout, sourceRoots...,
+	)
+}
+
+// StartGallerydLANContext 以 LAN 模式但仍只监听 loopback 自动端口启动真实 galleryd。
+// 它只用于验证 LAN Owner、密码 Session、账户与 Grant 等同机浏览器契约；物理第二台设备
+// 仍属于单独的 Security Gate，调用方不得把本 helper 的结果外推为真实 LAN 多设备支持。
+func StartGallerydLANContext(
+	ctx context.Context,
+	binPath, appRoot, logPath string,
+	timeout time.Duration,
+) (*Process, error) {
+	return startGallerydWithSourceRootsContext(ctx, "lan", binPath, appRoot, logPath, timeout)
+}
+
+func startGallerydWithSourceRootsContext(
+	ctx context.Context,
+	mode, binPath, appRoot, logPath string,
+	timeout time.Duration,
+	sourceRoots ...string,
+) (*Process, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, fmt.Errorf("启动 galleryd 已取消: %w", err)
 	}
-	args := []string{"-mode=personal", "-listen=127.0.0.1:0", "-app-root=" + appRoot}
+	args := []string{"-mode=" + mode, "-listen=127.0.0.1:0", "-app-root=" + appRoot}
 	for _, root := range sourceRoots {
 		if root == "" {
 			return nil, fmt.Errorf("source root 不能为空")

@@ -132,6 +132,15 @@ func TestStartGallerydWithSourceRootsRejectsEmptyRootBeforeStarting(t *testing.T
 	}
 }
 
+func TestStartGallerydLANContextHonoursPreCancelledContext(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	_, err := StartGallerydLANContext(ctx, "not-executed", t.TempDir(), filepath.Join(t.TempDir(), "log"), time.Second)
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("LAN 启动未保留预取消原因: %v", err)
+	}
+}
+
 func TestStopOnAlreadyExitedNonzeroProcessReportsFailure(t *testing.T) {
 	appRoot := t.TempDir()
 	logPath := filepath.Join(t.TempDir(), "helper.log")

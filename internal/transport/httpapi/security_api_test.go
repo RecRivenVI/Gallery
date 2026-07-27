@@ -83,6 +83,57 @@ func TestLANInitializationAndSessionAuthentication(t *testing.T) {
 	}
 }
 
+func TestLANLoginAndBootstrapExposeOnlyGlobalEffectiveCapabilities(t *testing.T) {
+	server, _ := newLANSecurityServer(t, false)
+	ownerClient, ownerCSRF := establishLANOwner(t, server)
+	create := requestJSON(t, ownerClient, http.MethodPost, server.URL+"/api/v1/admin/users", server.URL, ownerCSRF,
+		map[string]any{
+			"username": "viewer", "displayName": "Viewer", "password": "viewer-password-strong", "roles": []string{"viewer"},
+			"grants": []any{
+				map[string]any{"effect": "allow", "capability": "library.read", "scope": map[string]any{"kind": "global"}},
+				map[string]any{"effect": "allow", "capability": "media.read", "scope": map[string]any{"kind": "global"}},
+				map[string]any{"effect": "deny", "capability": "media.read", "scope": map[string]any{"kind": "global"}},
+			},
+		})
+	if create.StatusCode != http.StatusCreated {
+		t.Fatalf("创建 Viewer status=%d body=%s", create.StatusCode, readAndClose(t, create))
+	}
+	_ = create.Body.Close()
+
+	viewerJar, _ := cookiejar.New(nil)
+	viewerClient := &http.Client{Jar: viewerJar}
+	viewerCSRF := bootstrapCSRF(t, viewerClient, server.URL)
+	login := requestJSON(t, viewerClient, http.MethodPost, server.URL+"/api/v1/auth/login", server.URL, viewerCSRF,
+		map[string]any{"username": "viewer", "password": "viewer-password-strong"})
+	loginBody := readAndClose(t, login)
+	if login.StatusCode != http.StatusCreated {
+		t.Fatalf("Viewer 登录 status=%d body=%s", login.StatusCode, loginBody)
+	}
+	var established api.SessionEstablishedResponse
+	if err := json.Unmarshal(loginBody, &established); err != nil {
+		t.Fatalf("Viewer 登录响应解析失败: %v body=%s", err, loginBody)
+	}
+	if got := strings.Join(established.EffectiveCapabilities, ","); got != "library.read" {
+		t.Fatalf("登录响应泄露非 global effective capability: %q", got)
+	}
+
+	bootstrap := requestJSON(t, viewerClient, http.MethodGet, server.URL+"/api/v1/bootstrap", "", "", nil)
+	bootstrapBody := readAndClose(t, bootstrap)
+	if bootstrap.StatusCode != http.StatusOK {
+		t.Fatalf("Viewer bootstrap status=%d body=%s", bootstrap.StatusCode, bootstrapBody)
+	}
+	var snapshot api.BootstrapResponse
+	if err := json.Unmarshal(bootstrapBody, &snapshot); err != nil {
+		t.Fatalf("Viewer bootstrap 响应解析失败: %v body=%s", err, bootstrapBody)
+	}
+	if got := strings.Join(snapshot.EffectiveCapabilities, ","); got != "library.read" {
+		t.Fatalf("bootstrap 泄露非 global effective capability: %q", got)
+	}
+	if got := strings.Join(snapshot.AvailableCapabilities, ","); got != "bindings.read,library.read,media.read,rules.read,tokens.manage" {
+		t.Fatalf("bootstrap available capability 未使用 Viewer 角色上限: %q", got)
+	}
+}
+
 func TestLANSecurityRejectsCrossOriginHostAndSetsSecureCookieOnTLS(t *testing.T) {
 	server, _ := newLANSecurityServer(t, true)
 	client := server.Client()

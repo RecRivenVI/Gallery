@@ -87,9 +87,10 @@ func run() (exitCode int) {
 	}()
 
 	appRoot := filepath.Join(testRoot, "app")
+	lanAppRoot := filepath.Join(testRoot, "app-lan")
 	sourceRoot := filepath.Join(testRoot, "source")
 	logsRoot := filepath.Join(testRoot, "logs")
-	for _, dir := range []string{appRoot, sourceRoot, logsRoot} {
+	for _, dir := range []string{appRoot, lanAppRoot, sourceRoot, logsRoot} {
 		if err := os.MkdirAll(dir, 0o700); err != nil {
 			return fail("创建隔离目录", err)
 		}
@@ -202,6 +203,11 @@ func run() (exitCode int) {
 			"e2e/real-rule-lifecycle.spec.ts",
 			"--project=chromium", "--workers=1", "--retries=0")
 	}
+	if testErr == nil {
+		testErr = command(runCtx, 2*time.Minute, webRoot, env, nodeBin, playwright, "test",
+			"e2e/real-security.spec.ts",
+			"--project=chromium", "--workers=1", "--retries=0")
+	}
 	stop := server.Stop()
 	serverStopped = true
 	after, guardErr := snapshot(sourceRoot)
@@ -217,7 +223,48 @@ func run() (exitCode int) {
 		return fail("真实浏览器 E2E", errors.Join(testErr, guardErr, diagnosticErr))
 	}
 
-	fmt.Println("真实 galleryd 浏览器 E2E 通过；合成 Source 只读 guard 通过；galleryd 已优雅停止")
+	// LAN 浏览器链使用独立 AppDirs 和同一份已编译 galleryd，但仍只监听动态 loopback。
+	// 它验证 LAN 模式的产品契约，不得被描述为物理第二台设备或真实网络门禁。
+	lanLog := filepath.Join(logsRoot, "galleryd-lan.log")
+	lanServer, err := testprocess.StartGallerydLANContext(
+		runCtx,
+		galleryd,
+		lanAppRoot,
+		lanLog,
+		60*time.Second,
+	)
+	if err != nil {
+		return fail("启动隔离 LAN galleryd", errors.Join(err, retainDiagnostics(lanLog, diagnosticsRoot)))
+	}
+	lanStopped := false
+	defer func() {
+		if lanStopped {
+			return
+		}
+		if err := stopError(lanServer.Stop()); err != nil {
+			fmt.Fprintf(os.Stderr, "回收隔离 LAN galleryd 失败: %v\n", err)
+			exitCode = 1
+		}
+	}()
+	lanEnv := []string{"GALLERY_REAL_LAN_BASE_URL=" + lanServer.BaseURL}
+	lanErr := waitHealthy(runCtx, lanServer.BaseURL, 30*time.Second)
+	if lanErr == nil {
+		lanErr = command(runCtx, 2*time.Minute, webRoot, lanEnv, nodeBin, playwright, "test",
+			"e2e/real-lan.spec.ts",
+			"--project=chromium", "--workers=1", "--retries=0")
+	}
+	lanStop := lanServer.Stop()
+	lanStopped = true
+	lanErr = errors.Join(lanErr, stopError(lanStop))
+	if lanErr != nil {
+		diagnosticErr := retainDiagnostics(lanLog, diagnosticsRoot)
+		if diagnosticErr == nil {
+			fmt.Printf("失败诊断已保存到：%s\n", diagnosticsRoot)
+		}
+		return fail("真实 LAN 浏览器 E2E", errors.Join(lanErr, diagnosticErr))
+	}
+
+	fmt.Println("真实 Personal/LAN galleryd 浏览器 E2E 通过；合成 Source 只读 guard 通过；galleryd 均已优雅停止")
 	return 0
 }
 

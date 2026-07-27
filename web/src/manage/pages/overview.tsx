@@ -197,7 +197,7 @@ export function OverviewPage() {
           </p>
         )}
         <p className="manage-section__description">
-          服务端声明的完整词表共 {bootstrap.availableCapabilities.length} 项。
+          当前主体的角色 capability 上限共 {bootstrap.availableCapabilities.length} 项。
         </p>
       </Section>
 

@@ -459,9 +459,20 @@ func (s *Server) bootstrap(w http.ResponseWriter, r *http.Request) {
 		response.LanInitialized = initialized
 	}
 	if session, err := s.authenticate(r); err == nil {
+		available, availableErr := s.auth.AvailableCapabilitiesForPrincipal(r.Context(), session.PrincipalID)
+		if availableErr != nil {
+			s.writeRequestError(w, availableErr)
+			return
+		}
+		effective, effectiveErr := s.auth.EffectiveCapabilities(r.Context(), session, auth.ResourceScope{Kind: "global"})
+		if effectiveErr != nil {
+			s.writeRequestError(w, fault.New(fault.CodeInternal, true, effectiveErr))
+			return
+		}
 		response.Authenticated = true
 		response.PrincipalId = &session.PrincipalID
-		response.EffectiveCapabilities = append([]string(nil), session.Capabilities...)
+		response.AvailableCapabilities = available
+		response.EffectiveCapabilities = effective
 		response.CsrfToken = session.CSRFToken
 	}
 	writeJSON(w, http.StatusOK, response)
@@ -517,10 +528,15 @@ func (s *Server) exchangePairingCredential(w http.ResponseWriter, r *http.Reques
 		writeFault(w, asFault(err), statusForFault(err))
 		return
 	}
+	effective, err := s.auth.EffectiveCapabilities(r.Context(), session, auth.ResourceScope{Kind: "global"})
+	if err != nil {
+		s.writeRequestError(w, fault.New(fault.CodeInternal, true, err))
+		return
+	}
 	s.setSessionCookie(w, r, session, cookie)
 	writeJSON(w, http.StatusCreated, api.SessionEstablishedResponse{
 		Session: sessionSummary(session), CsrfToken: session.CSRFToken,
-		EffectiveCapabilities: append([]string(nil), session.Capabilities...),
+		EffectiveCapabilities: effective,
 	})
 }
 
@@ -579,10 +595,15 @@ func (s *Server) login(w http.ResponseWriter, r *http.Request) {
 		s.writeRequestError(w, err)
 		return
 	}
+	effective, err := s.auth.EffectiveCapabilities(r.Context(), session, auth.ResourceScope{Kind: "global"})
+	if err != nil {
+		s.writeRequestError(w, fault.New(fault.CodeInternal, true, err))
+		return
+	}
 	s.setSessionCookie(w, r, session, cookie)
 	writeJSON(w, http.StatusCreated, api.SessionEstablishedResponse{
 		Session: sessionSummary(session), CsrfToken: session.CSRFToken,
-		EffectiveCapabilities: append([]string(nil), session.Capabilities...),
+		EffectiveCapabilities: effective,
 	})
 }
 

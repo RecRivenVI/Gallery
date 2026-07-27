@@ -108,7 +108,7 @@ jobs:
         with:
           name: web-real-backend-diagnostics
           path: |
-            web/test-results/real-backend/galleryd.log
+            web/test-results/real-backend/galleryd*.log
             web/test-results/**/*.png
             web/test-results/**/*.webm
           if-no-files-found: warn

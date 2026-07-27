@@ -1521,6 +1521,7 @@ describe('分享密文', () => {
     expect(screen.queryByText(secret)).not.toBeInTheDocument();
     expect(screen.queryByTestId('one-time-secret')).not.toBeInTheDocument();
     expect(screen.queryByRole('button', { name: /查看密文/ })).not.toBeInTheDocument();
+    expect(screen.queryByText('分享已创建')).not.toBeInTheDocument();
     // 也不会为了再显示一次而重新请求服务端。
     expect(requestsTo('POST /api/v1/shares')).toHaveLength(1);
   });

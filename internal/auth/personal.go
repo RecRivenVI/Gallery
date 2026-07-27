@@ -158,6 +158,14 @@ func (p *Personal) AvailableCapabilities() []string {
 	return append([]string(nil), PersonalOwnerCapabilities...)
 }
 
+func (p *Personal) AvailableCapabilitiesForPrincipal(ctx context.Context, principalID string) ([]string, error) {
+	capabilities, err := principalCapabilities(ctx, p.db, principalID)
+	if err != nil {
+		return nil, fault.New(fault.CodeInternal, true, err)
+	}
+	return capabilities, nil
+}
+
 func (p *Personal) CreatePairingAttempt(ctx context.Context) (PairingAttempt, error) {
 	credential, err := randomToken(p.random, pairingTokenBytes)
 	if err != nil {

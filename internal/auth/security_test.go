@@ -215,6 +215,42 @@ func TestLANOwnerUserGrantTokenAndRevocationLifecycle(t *testing.T) {
 	}
 }
 
+func TestGlobalEffectiveCapabilitiesApplyAllowAndDenyGrants(t *testing.T) {
+	ctx := context.Background()
+	manager, _, _ := newSecurityManager(t)
+	owner, err := manager.InitializeLANOwner(ctx, auth.CreateUserInput{
+		Username: "owner", DisplayName: "Owner", Password: "owner-password-strong",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = manager.CreateUser(ctx, owner.ID, auth.CreateUserInput{
+		Username: "viewer", DisplayName: "Viewer", Password: "viewer-password-strong", Roles: []string{"viewer"},
+		Grants: []auth.GrantInput{
+			{Effect: "allow", Capability: "library.read", Scope: auth.ResourceScope{Kind: "global"}},
+			{Effect: "allow", Capability: "media.read", Scope: auth.ResourceScope{Kind: "global"}},
+			{Effect: "deny", Capability: "media.read", Scope: auth.ResourceScope{Kind: "global"}},
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	session, _, err := manager.Login(ctx, "viewer", "viewer-password-strong", "browser", "loopback")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !auth.HasCapability(session, "media.read") {
+		t.Fatalf("Session capability 上限意外丢失 media.read: %+v", session.Capabilities)
+	}
+	effective, err := manager.EffectiveCapabilities(ctx, session, auth.ResourceScope{Kind: "global"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := strings.Join(effective, ","); got != "library.read" {
+		t.Fatalf("global effective capability 未应用 allow/deny: %q", got)
+	}
+}
+
 func TestSessionIdleExpiryAndPasswordChangeInvalidateCredentials(t *testing.T) {
 	ctx := context.Background()
 	manager, _, manual := newSecurityManager(t)
