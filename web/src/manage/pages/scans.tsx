@@ -267,11 +267,18 @@ function ResourceBootstrap() {
 }
 
 function canCancel(job: Job): boolean {
-  return job.status === 'queued' || job.status === 'running';
+  return (
+    job.status === 'queued' ||
+    job.status === 'running' ||
+    ((job.status === 'failed' || job.status === 'needs_repair') &&
+      job.failureRetryable === true &&
+      job.nextAttemptAt !== null &&
+      job.nextAttemptAt !== undefined)
+  );
 }
 
 function canRetry(job: Job): boolean {
-  return job.status === 'failed' || job.status === 'needs_repair' || job.status === 'cancelled';
+  return (job.status === 'failed' || job.status === 'needs_repair') && job.failureRetryable === true;
 }
 
 /**
@@ -583,6 +590,16 @@ function JobTable() {
               },
               { id: 'stage', header: '阶段', render: (row) => row.stage, wrap: true },
               {
+                id: 'nextAttemptAt',
+                header: '下次重试',
+                render: (row) =>
+                  row.nextAttemptAt === null || row.nextAttemptAt === undefined ? (
+                    <Absent />
+                  ) : (
+                    formatDateTime(row.nextAttemptAt)
+                  )
+              },
+              {
                 id: 'profile',
                 header: '扫描档案',
                 render: (row) => row.scanProfile ?? <Absent />
@@ -608,7 +625,14 @@ function JobTable() {
                         label="取消"
                         dialogTitle="取消任务"
                         confirmLabel="确认取消"
-                        description={`任务 ${row.id} 会在下一个安全点停止。已经完成的部分不会回滚。变更所需 capability：${JOB_MUTATION_CAPABILITY[row.type]}（绑定 Source 的任务按 Source 作用域判定）。`}
+                        description={
+                          (row.status === 'failed' || row.status === 'needs_repair') &&
+                          row.failureRetryable === true &&
+                          row.nextAttemptAt !== null &&
+                          row.nextAttemptAt !== undefined
+                            ? `任务 ${row.id} 正在等待 ${formatDateTime(row.nextAttemptAt)} 自动重试。取消后不会再次入队，既有失败 Attempt 保持不变。变更所需 capability：${JOB_MUTATION_CAPABILITY[row.type]}。`
+                            : `任务 ${row.id} 会在下一个安全点停止。已经完成的部分不会回滚。变更所需 capability：${JOB_MUTATION_CAPABILITY[row.type]}（绑定 Source 的任务按 Source 作用域判定）。`
+                        }
                         onConfirm={() => {
                           cancel.mutate(row.id, {
                             onSuccess: () => {

@@ -9,6 +9,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"flag"
 	"fmt"
@@ -28,6 +29,13 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/RecRivenVI/gallery/internal/auth"
+	"github.com/RecRivenVI/gallery/internal/jobs"
+	"github.com/RecRivenVI/gallery/internal/maintenance"
+	"github.com/RecRivenVI/gallery/internal/platform/appdirs"
+	"github.com/RecRivenVI/gallery/internal/platform/clock"
+	"github.com/RecRivenVI/gallery/internal/platform/identity"
+	"github.com/RecRivenVI/gallery/internal/storage"
 	testprocess "github.com/RecRivenVI/gallery/tools/testlab/internal/process"
 )
 
@@ -36,6 +44,11 @@ type fileFact struct {
 	Mode    fs.FileMode
 	ModTime int64
 	SHA256  string
+}
+
+type retryPendingJobFixtures struct {
+	CancelID string
+	RetryID  string
 }
 
 func main() {
@@ -119,6 +132,10 @@ func run() (exitCode int) {
 	if err != nil {
 		return fail("记录 Source 只读基线", err)
 	}
+	retryPendingJobs, err := seedRetryPendingJobs(runCtx, appRoot)
+	if err != nil {
+		return fail("准备任务取消/重试夹具", err)
+	}
 
 	webRoot := filepath.Join(root, "web")
 	diagnosticsRoot := filepath.Join(webRoot, "test-results", "real-backend")
@@ -173,6 +190,8 @@ func run() (exitCode int) {
 		"GALLERY_REAL_BASE_URL=" + server.BaseURL,
 		"GALLERY_REAL_SOURCE_ROOT=" + sourceRoot,
 		"GALLERY_REAL_RULE_PACKAGE=" + rulePackage,
+		"GALLERY_REAL_CANCEL_JOB_ID=" + retryPendingJobs.CancelID,
+		"GALLERY_REAL_RETRY_JOB_ID=" + retryPendingJobs.RetryID,
 	}
 	playwright := filepath.Join(webRoot, "node_modules", "@playwright", "test", "cli.js")
 	testErr := waitHealthy(runCtx, server.BaseURL, 30*time.Second)
@@ -196,6 +215,13 @@ func run() (exitCode int) {
 	if testErr == nil {
 		testErr = command(runCtx, 2*time.Minute, webRoot, env, nodeBin, playwright, "test",
 			"e2e/real-gallery.spec.ts",
+			"--project=chromium", "--workers=1", "--retries=0")
+	}
+	// 规则绑定状态链必须在规则生命周期用例永久弃用规则包之前完成；否则服务端会按正式
+	// 契约拒绝重新激活该 Binding。治理与 Job 用例完成后会恢复所有可供后续用例使用的状态。
+	if testErr == nil {
+		testErr = command(runCtx, 2*time.Minute, webRoot, env, nodeBin, playwright, "test",
+			"e2e/real-jobs-governance.spec.ts",
 			"--project=chromium", "--workers=1", "--retries=0")
 	}
 	if testErr == nil {
@@ -271,6 +297,72 @@ func run() (exitCode int) {
 
 	fmt.Println("真实 Personal/LAN galleryd 浏览器 E2E 通过；合成 Source 只读 guard 通过；galleryd 均已优雅停止")
 	return 0
+}
+
+// seedRetryPendingJobs 在 galleryd 取得 AppDirs 单写锁之前，用正式 Job Store 建立两个处于
+// retry backoff 的合成维护 Job。服务启动时它们的 next_attempt_at 尚未到期，因此恢复循环
+// 不会抢先执行；浏览器随后分别验证持久取消与手动 Retry。夹具不写 Source，也不绕过任务状态机。
+func seedRetryPendingJobs(ctx context.Context, appRoot string) (fixtures retryPendingJobFixtures, err error) {
+	dirs := appdirs.UnderRoot(appRoot)
+	store, err := storage.Open(ctx, dirs)
+	if err != nil {
+		return retryPendingJobFixtures{}, err
+	}
+	defer func() {
+		err = errors.Join(err, store.Close())
+	}()
+	systemClock := clock.System{}
+	jobStore, err := jobs.NewStore(store.Control.SQL(), systemClock, identity.NewGenerator(systemClock))
+	if err != nil {
+		return retryPendingJobFixtures{}, err
+	}
+	request, err := json.Marshal(maintenance.Request{
+		RetentionSeconds: 86400,
+		DryRun:           true,
+		Operation:        "catalog_gc",
+	})
+	if err != nil {
+		return retryPendingJobFixtures{}, err
+	}
+	options := jobs.CreateOptions{
+		ResourceClass:   jobs.ResourceMaintenance,
+		RequestJSON:     request,
+		MaxRetries:      3,
+		RetryPolicyJSON: []byte(`{"kind":"fixed","baseMs":3600000,"maxMs":3600000}`),
+	}
+	seed := func(target string) (string, error) {
+		job, createErr := jobStore.CreateWithOptions(ctx, "catalog_gc", "", auth.PersonalOwnerID, jobs.CreateOptions{
+			ResourceClass:   options.ResourceClass,
+			TargetResource:  target,
+			RequestJSON:     options.RequestJSON,
+			MaxRetries:      options.MaxRetries,
+			RetryPolicyJSON: options.RetryPolicyJSON,
+		})
+		if createErr != nil {
+			return "", createErr
+		}
+		if _, startErr := jobStore.StartStage(ctx, job.ID, "e2e_transient"); startErr != nil {
+			return "", startErr
+		}
+		failed, failErr := jobStore.FailWithRetryable(ctx, job.ID, "E2E_TRANSIENT", true)
+		if failErr != nil {
+			return "", failErr
+		}
+		if failed.Status != jobs.StatusFailed || !failed.FailureRetryable || failed.NextAttemptAt == nil ||
+			!failed.NextAttemptAt.After(systemClock.Now().Add(30*time.Minute)) {
+			return "", fmt.Errorf("retry-backoff 夹具状态不符合预期")
+		}
+		return failed.ID, nil
+	}
+	cancelID, err := seed("e2e-cancel")
+	if err != nil {
+		return retryPendingJobFixtures{}, err
+	}
+	retryID, err := seed("e2e-retry")
+	if err != nil {
+		return retryPendingJobFixtures{}, err
+	}
+	return retryPendingJobFixtures{CancelID: cancelID, RetryID: retryID}, nil
 }
 
 func writeSyntheticPNG(path string, width, height int, seed uint8) error {

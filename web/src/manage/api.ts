@@ -1197,6 +1197,33 @@ export function useCreateSourceRuleBinding(): UseMutationResult<
   });
 }
 
+export interface UpdateSourceRuleBindingInput {
+  bindingId: string;
+  status: NonNullable<SourceRuleBinding['status']>;
+}
+
+/** 暂停、恢复或显式标记一条 SourceRuleBinding；最终授权仍按该 Binding 的 Source scope 判定。 */
+export function useUpdateSourceRuleBinding(): UseMutationResult<
+  SourceRuleBinding,
+  unknown,
+  UpdateSourceRuleBindingInput
+> {
+  const header = useCsrfHeaders();
+  const invalidate = useInvalidate();
+  return useMutation({
+    mutationFn: async (input: UpdateSourceRuleBindingInput) =>
+      expectData(
+        await api.PATCH('/api/v1/source-rule-bindings/{bindingId}', {
+          params: { header, path: { bindingId: input.bindingId } },
+          body: { status: input.status }
+        })
+      ),
+    onSuccess: () => {
+      invalidate(['rules']);
+    }
+  });
+}
+
 /* ————————————————————————————— 治理 ————————————————————————————— */
 
 export interface BindingIssueFilters {

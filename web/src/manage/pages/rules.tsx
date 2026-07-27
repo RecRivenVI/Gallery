@@ -22,12 +22,15 @@ import {
   useRulePackages,
   useRuleVersionsForPackages,
   useSourceRuleBindings,
-  useSources
+  useSources,
+  useUpdateSourceRuleBinding,
+  type SourceRuleBinding
 } from '../api';
 import { isRecord, parseRuleValue } from '../rules/lossless';
 import {
   Absent,
   AsyncPanel,
+  ConfirmAction,
   ContractNoteList,
   DataTable,
   Facts,
@@ -165,6 +168,7 @@ function BindingsPanel() {
   const bindings = useSourceRuleBindings(sourceId);
   const effective = useEffectiveRuleBinding(sourceId);
   const create = useCreateSourceRuleBinding();
+  const update = useUpdateSourceRuleBinding();
   const [bindingMode, setBindingMode] = useState<'direct' | 'parameter'>('direct');
   const [semanticHash, setSemanticHash] = useState<string | null>(null);
   const [parameterId, setParameterId] = useState<string | null>(null);
@@ -220,6 +224,7 @@ function BindingsPanel() {
           <EffectiveBinding query={effective} />
 
           <h3 className="manage-section__title">全部绑定</h3>
+          <InlineError error={update.error} title="绑定状态未能更新" />
           <AsyncPanel query={bindings}>
             {(data) => (
               <DataTable
@@ -229,6 +234,11 @@ function BindingsPanel() {
                 emptyTitle="该来源还没有任何规则绑定"
                 emptyDescription="没有生效绑定时扫描会失败，因为规则是解释 Source 结构的唯一入口。"
                 columns={[
+                  {
+                    id: 'id',
+                    header: 'Binding ID',
+                    render: (row) => <MonoId value={row.id} label="Binding ID" />
+                  },
                   {
                     id: 'status',
                     header: '状态',
@@ -273,7 +283,35 @@ function BindingsPanel() {
                         <MonoId value={row.parameterHash} label="parameterHash" />
                       )
                   },
-                  { id: 'created', header: '创建时间', render: (row) => formatDateTime(row.createdAt) }
+                  { id: 'created', header: '创建时间', render: (row) => formatDateTime(row.createdAt) },
+                  {
+                    id: 'actions',
+                    header: '操作',
+                    render: (row) => (
+                      <BindingStatusActions
+                        binding={row}
+                        isPending={update.isPending}
+                        onStatus={(status) => {
+                          update.mutate(
+                            { bindingId: row.id, status },
+                            {
+                              onSuccess: () => {
+                                show({
+                                  title:
+                                    status === 'active'
+                                      ? '绑定已恢复'
+                                      : status === 'paused'
+                                        ? '绑定已暂停'
+                                        : '绑定已标记无效',
+                                  tone: status === 'active' ? 'success' : 'warning'
+                                });
+                              }
+                            }
+                          );
+                        }}
+                      />
+                    )
+                  }
                 ]}
               />
             )}
@@ -412,6 +450,55 @@ function BindingsPanel() {
         </>
       )}
     </Section>
+  );
+}
+
+function BindingStatusActions({
+  binding,
+  isPending,
+  onStatus
+}: {
+  binding: SourceRuleBinding;
+  isPending: boolean;
+  onStatus: (status: NonNullable<SourceRuleBinding['status']>) => void;
+}) {
+  const status = binding.status ?? 'active';
+  return (
+    <span className="manage-cell-actions">
+      {status === 'active' ? null : (
+        <ConfirmAction
+          label="恢复"
+          variant="secondary"
+          dialogTitle="恢复规则绑定"
+          confirmLabel="确认恢复"
+          isPending={isPending}
+          description={`恢复后该 Binding 会重新参与 Source ${binding.sourceId} 的生效选择；若引用的规则版本或规则包已不可用，服务端会拒绝且保持原状态。`}
+          onConfirm={() => onStatus('active')}
+        />
+      )}
+      {status === 'paused' ? null : (
+        <ConfirmAction
+          label="暂停"
+          variant="secondary"
+          dialogTitle="暂停规则绑定"
+          confirmLabel="确认暂停"
+          isPending={isPending}
+          description={`暂停后该 Binding 不再参与 Source ${binding.sourceId} 的生效选择；已经入队的 Job 仍使用自己冻结的规则快照。`}
+          onConfirm={() => onStatus('paused')}
+        />
+      )}
+      {status === 'invalid' ? null : (
+        <ConfirmAction
+          label="标记无效"
+          variant="danger"
+          dialogTitle="标记规则绑定无效"
+          confirmLabel="确认标记无效"
+          isPending={isPending}
+          description={`这会把 Binding ${binding.id} 显式标记为 invalid，使其不再参与生效选择；不会删除规则版本或历史 Job。`}
+          onConfirm={() => onStatus('invalid')}
+        />
+      )}
+    </span>
   );
 }
 

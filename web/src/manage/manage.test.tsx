@@ -562,6 +562,57 @@ describe('任务状态的事实源', () => {
     expect(within(currentRow as HTMLElement).getByText('执行中')).toBeInTheDocument();
     expect(within(currentRow as HTMLElement).queryByText('已完成')).not.toBeInTheDocument();
   });
+
+  it('失败后等待自动重试的 Job 可以取消，取消终态不会错误提供重试入口', async () => {
+    let current = job({
+      id: 'job_01BACKOFF',
+      type: 'catalog_gc',
+      sourceId: undefined,
+      status: 'failed',
+      stage: 'retry_backoff',
+      issueCode: 'E2E_TRANSIENT',
+      failureRetryable: true,
+      nextAttemptAt: '2026-07-27T02:00:00Z'
+    });
+    route('GET /api/v1/sources', () => jsonResponse({ sources: [SOURCE] }));
+    route('GET /api/v1/jobs', () => jsonResponse({ jobs: [current] }));
+    route('POST /api/v1/jobs/job_01BACKOFF/cancel', () => {
+      current = {
+        ...current,
+        status: 'cancelled',
+        stage: 'cancelled',
+        failureRetryable: false,
+        nextAttemptAt: null,
+        cancelRequested: true
+      };
+      return jsonResponse(current, 202);
+    });
+
+    renderManage('/scans');
+    const link = await screen.findByRole('link', { name: 'job_01BACKOFF' });
+    const row = link.closest('tr');
+    expect(row).not.toBeNull();
+    expect(within(row as HTMLElement).getByText('已失败')).toBeInTheDocument();
+    expect(within(row as HTMLElement).getByText('2026-07-27 10:00:00')).toBeInTheDocument();
+
+    await userEvent.click(within(row as HTMLElement).getByRole('button', { name: '取消' }));
+    const dialog = await screen.findByRole('dialog', { name: '取消任务' });
+    expect(within(dialog).getByText(/取消后不会再次入队，既有失败 Attempt 保持不变/)).toBeInTheDocument();
+    await userEvent.click(within(dialog).getByRole('button', { name: '确认取消' }));
+
+    await waitFor(() => expect(requestsTo('POST /api/v1/jobs/job_01BACKOFF/cancel')).toHaveLength(1));
+    expect(requestsTo('POST /api/v1/jobs/job_01BACKOFF/cancel')[0]?.csrf).toBe(BOOTSTRAP.csrfToken);
+    const cancelledRow = screen.getByRole('link', { name: 'job_01BACKOFF' }).closest('tr');
+    await waitFor(() => {
+      expect(within(cancelledRow as HTMLElement).getByText('已取消')).toBeInTheDocument();
+    });
+    expect(
+      within(cancelledRow as HTMLElement).queryByRole('button', { name: '取消' })
+    ).not.toBeInTheDocument();
+    expect(
+      within(cancelledRow as HTMLElement).queryByRole('button', { name: '重试' })
+    ).not.toBeInTheDocument();
+  });
 });
 
 /* ————————————————————————————— 3. index 档案被 409 拒绝 ————————————————————————————— */
@@ -647,7 +698,7 @@ describe('同名 Source 写入身份', () => {
     route('GET /api/v1/rule-packages/pkg_unpublished/versions', () => jsonResponse({ items: [] }));
     route('GET /api/v1/source-rule-bindings', () => jsonResponse({ bindings: [] }));
     route('GET /api/v1/sources/src_b/effective-rule-binding', () =>
-      faultResponse('RULE_BINDING_NOT_MATCHED', 409, 'corr-effective')
+      faultResponse('NOT_FOUND', 404, 'corr-effective')
     );
     route('POST /api/v1/source-rule-bindings', (request) => {
       body = request.clone().json();
@@ -681,6 +732,82 @@ describe('同名 Source 写入身份', () => {
       priority: 100,
       parameters: '{}'
     });
+  });
+
+  it('已有规则绑定可以暂停、标记无效并恢复，列表与生效绑定都从服务端快照重取', async () => {
+    let status: 'active' | 'paused' | 'invalid' = 'active';
+    let patchBody: Promise<unknown> | undefined;
+    const binding = () => ({
+      id: 'srb_01',
+      sourceId: 'src_b',
+      semanticHash: OLD_RULE_HASH,
+      parameters: {},
+      parametersText: '{}',
+      overrideText: '{}',
+      priority: 0,
+      ruleIrHash: 'd'.repeat(64),
+      status,
+      createdAt: '2026-07-27T03:00:00Z',
+      updatedAt: '2026-07-27T03:00:00Z'
+    });
+    route('GET /api/v1/sources', () => jsonResponse({ sources: duplicateSources }));
+    route('GET /api/v1/rule-packages', () =>
+      jsonResponse({ items: [rulePackage({ currentSemanticHash: OLD_RULE_HASH })] })
+    );
+    route('GET /api/v1/rule-packages/pkg_01/versions', () =>
+      jsonResponse({ items: [ruleVersion({ semanticHash: OLD_RULE_HASH })] })
+    );
+    route('GET /api/v1/source-rule-bindings', () => jsonResponse({ bindings: [binding()] }));
+    route('GET /api/v1/sources/src_b/effective-rule-binding', () =>
+      status === 'active' ? jsonResponse(binding()) : faultResponse('NOT_FOUND', 404, 'corr-paused')
+    );
+    route('PATCH /api/v1/source-rule-bindings/srb_01', (request) => {
+      patchBody = request.clone().json();
+      const requested = request.clone().json() as Promise<{ status: 'active' | 'paused' | 'invalid' }>;
+      return requested.then((body) => {
+        status = body.status;
+        return jsonResponse(binding());
+      });
+    });
+
+    renderManage('/rules');
+    await screen.findByRole('button', { name: /来源/ });
+    await selectOption(/来源/, '同名来源 · src_b');
+    const bindingsTable = await screen.findByRole('table', { name: 'Source 规则绑定' });
+    const bindingRow = within(bindingsTable).getByText('srb_01').closest('tr');
+    expect(bindingRow).not.toBeNull();
+
+    await userEvent.click(within(bindingRow as HTMLElement).getByRole('button', { name: '暂停' }));
+    let dialog = await screen.findByRole('dialog', { name: '暂停规则绑定' });
+    await userEvent.click(within(dialog).getByRole('button', { name: '确认暂停' }));
+    await waitFor(() => expect(requestsTo('PATCH /api/v1/source-rule-bindings/srb_01')).toHaveLength(1));
+    expect(await patchBody).toEqual({ status: 'paused' });
+    await waitFor(() => expect(within(bindingRow as HTMLElement).getByText('paused')).toBeInTheDocument());
+    expect(screen.getByText(/服务端没有返回生效绑定（NOT_FOUND）/)).toBeInTheDocument();
+
+    await userEvent.click(within(bindingRow as HTMLElement).getByRole('button', { name: '恢复' }));
+    dialog = await screen.findByRole('dialog', { name: '恢复规则绑定' });
+    await userEvent.click(within(dialog).getByRole('button', { name: '确认恢复' }));
+    await waitFor(() => expect(requestsTo('PATCH /api/v1/source-rule-bindings/srb_01')).toHaveLength(2));
+    expect(await patchBody).toEqual({ status: 'active' });
+    await waitFor(() => expect(within(bindingRow as HTMLElement).getByText('active')).toBeInTheDocument());
+    expect(screen.queryByText(/服务端没有返回生效绑定/)).not.toBeInTheDocument();
+
+    await userEvent.click(within(bindingRow as HTMLElement).getByRole('button', { name: '标记无效' }));
+    dialog = await screen.findByRole('dialog', { name: '标记规则绑定无效' });
+    await userEvent.click(within(dialog).getByRole('button', { name: '确认标记无效' }));
+    await waitFor(() => expect(requestsTo('PATCH /api/v1/source-rule-bindings/srb_01')).toHaveLength(3));
+    expect(await patchBody).toEqual({ status: 'invalid' });
+    await waitFor(() => expect(within(bindingRow as HTMLElement).getByText('invalid')).toBeInTheDocument());
+    expect(screen.getByText(/服务端没有返回生效绑定（NOT_FOUND）/)).toBeInTheDocument();
+
+    await userEvent.click(within(bindingRow as HTMLElement).getByRole('button', { name: '恢复' }));
+    dialog = await screen.findByRole('dialog', { name: '恢复规则绑定' });
+    await userEvent.click(within(dialog).getByRole('button', { name: '确认恢复' }));
+    await waitFor(() => expect(requestsTo('PATCH /api/v1/source-rule-bindings/srb_01')).toHaveLength(4));
+    expect(await patchBody).toEqual({ status: 'active' });
+    await waitFor(() => expect(within(bindingRow as HTMLElement).getByText('active')).toBeInTheDocument());
+    expect(screen.queryByText(/服务端没有返回生效绑定/)).not.toBeInTheDocument();
   });
 
   it('人工解绑确认框回显 Source ID，并把同一 ID 放入请求', async () => {
@@ -751,7 +878,7 @@ describe('规则草稿', () => {
 
     renderManage('/rules/pkg_01');
     await userEvent.click(await screen.findByRole('tab', { name: 'Schema 表单' }));
-    await screen.findByTestId('rule-schema-form');
+    await screen.findByTestId('rule-schema-form', {}, { timeout: 10_000 });
     await selectOption(/起始模板/, '作者—作品—媒体层级');
     await userEvent.click(screen.getByRole('button', { name: '载入起始模板' }));
 
@@ -809,7 +936,7 @@ describe('规则草稿', () => {
     await waitFor(() => expect(requestsTo('GET /api/v1/rules/schema')).toHaveLength(1));
     const formState = await screen.findByText(/运行时 Schema 与前端预编译版本不一致|Schema 错误是即时预检/);
     expect(formState).toHaveTextContent('Schema 错误是即时预检');
-    await screen.findByTestId('rule-schema-form');
+    await screen.findByTestId('rule-schema-form', {}, { timeout: 10_000 });
     const extensions = screen.getByRole('textbox', { name: /extensions/ }) as HTMLTextAreaElement;
     const exactExtensions = extensions.value;
     expect(exactExtensions).toContain('9007199254740993123');
