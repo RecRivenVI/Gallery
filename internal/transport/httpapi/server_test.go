@@ -256,10 +256,7 @@ func TestPersonalPairingIsSingleUseAndRevocationInvalidatesREST(t *testing.T) {
 	}
 	bindingResponse, err := client.CreateSourceRuleBindingWithResponse(context.Background(), &api.CreateSourceRuleBindingParams{
 		XGalleryCSRF: exchange.JSON201.CsrfToken,
-	}, api.SourceRuleBindingCreateRequest{
-		SourceId: sourceResponse.JSON201.Id, SemanticHash: ruleResponse.JSON201.SemanticHash,
-		Parameters: map[string]any{}, Priority: 0,
-	}, mutation)
+	}, api.NewDirectSourceRuleBindingCreateRequest(sourceResponse.JSON201.Id, ruleResponse.JSON201.SemanticHash, map[string]any{}, 0), mutation)
 	if err != nil || bindingResponse.JSON201 == nil {
 		t.Fatalf("通过公开 API 创建 SourceRuleBinding 失败: %v status=%d body=%s", err, bindingResponse.StatusCode(), bindingResponse.Body)
 	}
@@ -706,10 +703,7 @@ func TestScanProfileDefaultSelectionValidationConflictAndContentVerificationAPI(
 	}
 	if _, err := client.CreateSourceRuleBindingWithResponse(context.Background(), &api.CreateSourceRuleBindingParams{
 		XGalleryCSRF: exchange.JSON201.CsrfToken,
-	}, api.SourceRuleBindingCreateRequest{
-		SourceId: sourceResponse.JSON201.Id, SemanticHash: ruleResponse.JSON201.SemanticHash,
-		Parameters: map[string]any{}, Priority: 0,
-	}, mutation); err != nil {
+	}, api.NewDirectSourceRuleBindingCreateRequest(sourceResponse.JSON201.Id, ruleResponse.JSON201.SemanticHash, map[string]any{}, 0), mutation); err != nil {
 		t.Fatal(err)
 	}
 
@@ -966,7 +960,7 @@ func TestDerivedAssetThumbnailEndToEnd(t *testing.T) {
 		t.Fatalf("创建 RuleVersion 失败: %v body=%s", err, ruleResponse.Body)
 	}
 	if _, err := client.CreateSourceRuleBindingWithResponse(ctx, &api.CreateSourceRuleBindingParams{XGalleryCSRF: exchange.JSON201.CsrfToken},
-		api.SourceRuleBindingCreateRequest{SourceId: sourceResponse.JSON201.Id, SemanticHash: ruleResponse.JSON201.SemanticHash, Parameters: map[string]any{}, Priority: 0}, mutation); err != nil {
+		api.NewDirectSourceRuleBindingCreateRequest(sourceResponse.JSON201.Id, ruleResponse.JSON201.SemanticHash, map[string]any{}, 0), mutation); err != nil {
 		t.Fatal(err)
 	}
 	scanJob, err := client.CreateScanJobWithResponse(ctx, sourceResponse.JSON201.Id, &api.CreateScanJobParams{XGalleryCSRF: exchange.JSON201.CsrfToken}, api.ScanJobCreateRequest{}, mutation)

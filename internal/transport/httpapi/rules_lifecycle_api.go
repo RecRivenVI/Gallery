@@ -174,9 +174,10 @@ func (s *Server) saveRuleDraft(w http.ResponseWriter, r *http.Request) {
 		s.writeRequestError(w, fault.WithField(fault.CodeValidation, "content", err))
 		return
 	}
-	expected := ifMatchRevision(r)
-	if request.ExpectedRevision != nil {
-		expected = *request.ExpectedRevision
+	expected, err := requiredIfMatchRevision(r, request.ExpectedRevision, 0)
+	if err != nil {
+		s.writeRequestError(w, err)
+		return
 	}
 	draft, err := s.data.SaveRuleDraft(r.Context(), r.PathValue("packageId"), content, request.Format, request.BaseSemanticHash, expected, session.PrincipalID)
 	if err != nil {
@@ -197,7 +198,12 @@ func (s *Server) validateRuleDraft(w http.ResponseWriter, r *http.Request) {
 		s.writeRequestError(w, err)
 		return
 	}
-	result, err := s.data.ValidateRuleDraft(r.Context(), r.PathValue("packageId"), ifMatchRevision(r), session.PrincipalID)
+	expected, err := requiredIfMatchRevision(r, nil, 1)
+	if err != nil {
+		s.writeRequestError(w, err)
+		return
+	}
+	result, err := s.data.ValidateRuleDraft(r.Context(), r.PathValue("packageId"), expected, session.PrincipalID)
 	if err != nil {
 		s.writeRequestError(w, err)
 		return
@@ -219,16 +225,18 @@ func (s *Server) publishRuleDraft(w http.ResponseWriter, r *http.Request) {
 	var request struct {
 		ExpectedRevision *int   `json:"expectedRevision"`
 		Reason           string `json:"reason"`
+		ConfirmImpact    bool   `json:"confirmImpact"`
 	}
 	if err := decodeOptionalJSON(r, &request); err != nil {
 		s.writeRequestError(w, fault.WithField(fault.CodeValidation, "body", err))
 		return
 	}
-	expected := ifMatchRevision(r)
-	if request.ExpectedRevision != nil {
-		expected = *request.ExpectedRevision
+	expected, err := requiredIfMatchRevision(r, request.ExpectedRevision, 1)
+	if err != nil {
+		s.writeRequestError(w, err)
+		return
 	}
-	version, err := s.data.PublishRuleDraft(r.Context(), r.PathValue("packageId"), expected, session.PrincipalID, request.Reason)
+	version, err := s.data.PublishRuleDraft(r.Context(), r.PathValue("packageId"), expected, session.PrincipalID, request.Reason, request.ConfirmImpact)
 	if err != nil {
 		s.writeRequestError(w, err)
 		return
@@ -333,9 +341,10 @@ func (s *Server) rollbackRulePackage(w http.ResponseWriter, r *http.Request) {
 		s.writeRequestError(w, fault.WithField(fault.CodeValidation, "body", err))
 		return
 	}
-	expected := ifMatchRevision(r)
-	if request.ExpectedRevision != nil {
-		expected = *request.ExpectedRevision
+	expected, err := requiredIfMatchRevision(r, request.ExpectedRevision, 1)
+	if err != nil {
+		s.writeRequestError(w, err)
+		return
 	}
 	version, err := s.data.RollbackRulePackage(r.Context(), r.PathValue("packageId"), request.TargetSemanticHash, expected, session.PrincipalID, request.Reason, request.ConfirmImpact)
 	if err != nil {
@@ -800,25 +809,73 @@ func decodeRuleContent(raw json.RawMessage, format string) ([]byte, error) {
 }
 
 func ifMatchRevision(r *http.Request) int {
-	header := strings.TrimSpace(r.Header.Get("If-Match"))
-	if header == "" {
-		return -1
-	}
-	header = strings.Trim(header, "\"")
-	value, err := strconv.Atoi(header)
-	if err != nil || value < 0 {
+	value, err := parseIfMatchRevision(r.Header.Get("If-Match"))
+	if err != nil {
 		return -1
 	}
 	return value
 }
 
+func requiredIfMatchRevision(r *http.Request, body *int, minimum int) (int, error) {
+	values := r.Header.Values("If-Match")
+	if len(values) != 1 {
+		return 0, fault.WithField(fault.CodeValidation, "If-Match", errors.New("If-Match 必须且只能出现一次"))
+	}
+	value, err := parseIfMatchRevision(values[0])
+	if err != nil {
+		return 0, fault.WithField(fault.CodeValidation, "If-Match", err)
+	}
+	if value < minimum {
+		return 0, fault.WithField(fault.CodeValidation, "If-Match", fmt.Errorf("revision 必须不小于 %d", minimum))
+	}
+	if body != nil && *body != value {
+		return 0, fault.WithField(fault.CodeValidation, "expectedRevision", fmt.Errorf("body revision 与 If-Match 不一致"))
+	}
+	return value, nil
+}
+
+func parseIfMatchRevision(raw string) (int, error) {
+	header := strings.TrimSpace(raw)
+	if header == "" {
+		return 0, errors.New("缺少 If-Match")
+	}
+	if strings.HasPrefix(header, "\"") || strings.HasSuffix(header, "\"") {
+		if len(header) < 2 || !strings.HasPrefix(header, "\"") || !strings.HasSuffix(header, "\"") {
+			return 0, errors.New("If-Match 格式无效")
+		}
+		header = header[1 : len(header)-1]
+	}
+	if header == "" || strings.ContainsAny(header, "\" ,") {
+		return 0, errors.New("If-Match 格式无效")
+	}
+	for _, digit := range header {
+		if digit < '0' || digit > '9' {
+			return 0, errors.New("If-Match 必须是非负整数 revision")
+		}
+	}
+	value, err := strconv.Atoi(header)
+	if err != nil || value < 0 {
+		return 0, errors.New("If-Match 必须是非负整数 revision")
+	}
+	return value, nil
+}
+
 func rulePackageMap(value application.RulePackage) map[string]any {
-	return map[string]any{
+	result := map[string]any{
 		"id": value.ID, "ruleSetId": value.RuleSetID, "name": value.Name, "description": value.Description,
-		"status": value.Status, "currentSemanticHash": value.CurrentSemanticHash, "latestValidSemanticHash": value.LatestValidSemanticHash,
-		"draftId": value.DraftID, "extensionRequirements": json.RawMessage(defaultJSON(value.ExtensionRequirements, []byte("{}"))),
+		"status": value.Status, "extensionRequirements": json.RawMessage(defaultJSON(value.ExtensionRequirements, []byte("{}"))),
 		"createdBy": value.CreatedBy, "createdAt": value.CreatedAt, "updatedAt": value.UpdatedAt, "revision": value.Revision,
 	}
+	if value.CurrentSemanticHash != "" {
+		result["currentSemanticHash"] = value.CurrentSemanticHash
+	}
+	if value.LatestValidSemanticHash != "" {
+		result["latestValidSemanticHash"] = value.LatestValidSemanticHash
+	}
+	if value.DraftID != "" {
+		result["draftId"] = value.DraftID
+	}
+	return result
 }
 
 func ruleDraftMap(value application.RuleDraft) map[string]any {
@@ -826,12 +883,16 @@ func ruleDraftMap(value application.RuleDraft) map[string]any {
 	if value.SourceFormat == "json" && json.Valid(value.Content) {
 		content = json.RawMessage(value.Content)
 	}
-	return map[string]any{
-		"id": value.ID, "packageId": value.PackageID, "baseSemanticHash": value.BaseSemanticHash, "content": content,
+	result := map[string]any{
+		"id": value.ID, "packageId": value.PackageID, "content": content,
 		"format": value.SourceFormat, "validationStatus": value.ValidationStatus,
 		"diagnostics": json.RawMessage(defaultJSON(value.Diagnostics, []byte("[]"))), "revision": value.Revision,
 		"savedBy": value.SavedBy, "createdAt": value.CreatedAt, "updatedAt": value.UpdatedAt,
 	}
+	if value.BaseSemanticHash != "" {
+		result["baseSemanticHash"] = value.BaseSemanticHash
+	}
+	return result
 }
 
 func ruleVersionMap(value application.RuleVersion) map[string]any {

@@ -2560,7 +2560,7 @@ export interface components {
         RuleImpactRequest: {
             before: {
                 [key: string]: unknown;
-            };
+            } | null;
             after: {
                 [key: string]: unknown;
             };
@@ -2625,9 +2625,9 @@ export interface components {
         };
         SourceRuleBindingCreateRequest: {
             sourceId: components["schemas"]["SourceId"];
-            semanticHash: components["schemas"]["SHA256Digest"];
+            semanticHash?: components["schemas"]["SHA256Digest"];
             parameterId?: components["schemas"]["RuleParameterId"];
-            parameters: {
+            parameters?: {
                 [key: string]: unknown;
             };
             priority: number;
@@ -2637,7 +2637,17 @@ export interface components {
             condition?: {
                 [key: string]: unknown;
             };
-        };
+        } & ({
+            semanticHash: components["schemas"]["SHA256Digest"];
+            parameters: {
+                [key: string]: unknown;
+            };
+        } | {
+            parameterId: components["schemas"]["RuleParameterId"];
+            override?: {
+                [key: string]: unknown;
+            };
+        });
         SourceRuleBinding: {
             id: components["schemas"]["SourceRuleBindingId"];
             sourceId: components["schemas"]["SourceId"];
@@ -2747,6 +2757,8 @@ export interface components {
         RulePublishRequest: {
             expectedRevision?: number;
             reason?: string;
+            /** @default false */
+            confirmImpact: boolean;
         };
         RuleRollbackRequest: {
             targetSemanticHash: components["schemas"]["SHA256Digest"];
@@ -3140,6 +3152,7 @@ export interface components {
         CSRFHeader: string;
         IdempotencyKey: string;
         IfMatch: string;
+        RequiredIfMatch: string;
     };
     requestBodies: never;
     headers: never;
@@ -4445,7 +4458,7 @@ export interface operations {
             query?: never;
             header: {
                 "X-Gallery-CSRF": components["parameters"]["CSRFHeader"];
-                "If-Match"?: components["parameters"]["IfMatch"];
+                "If-Match": components["parameters"]["RequiredIfMatch"];
             };
             path: {
                 packageId: components["schemas"]["RulePackageId"];
@@ -4478,7 +4491,7 @@ export interface operations {
             query?: never;
             header: {
                 "X-Gallery-CSRF": components["parameters"]["CSRFHeader"];
-                "If-Match"?: components["parameters"]["IfMatch"];
+                "If-Match": components["parameters"]["RequiredIfMatch"];
             };
             path: {
                 packageId: components["schemas"]["RulePackageId"];
@@ -4507,7 +4520,7 @@ export interface operations {
             query?: never;
             header: {
                 "X-Gallery-CSRF": components["parameters"]["CSRFHeader"];
-                "If-Match"?: components["parameters"]["IfMatch"];
+                "If-Match": components["parameters"]["RequiredIfMatch"];
             };
             path: {
                 packageId: components["schemas"]["RulePackageId"];
@@ -4632,7 +4645,7 @@ export interface operations {
             query?: never;
             header: {
                 "X-Gallery-CSRF": components["parameters"]["CSRFHeader"];
-                "If-Match"?: components["parameters"]["IfMatch"];
+                "If-Match": components["parameters"]["RequiredIfMatch"];
             };
             path: {
                 packageId: components["schemas"]["RulePackageId"];

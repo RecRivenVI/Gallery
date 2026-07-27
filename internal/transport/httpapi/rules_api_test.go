@@ -67,6 +67,11 @@ func TestRuleLifecycleIsAvailableThroughAuthenticatedAPI(t *testing.T) {
 	if impact["fullRescan"] != true || impact["reproject"] != true {
 		t.Fatalf("Impact 响应错误: %+v", impact)
 	}
+	initialImpact := postRuleJSON(t, client, server.URL, csrf, "/api/v1/rules/impact", map[string]any{"before": nil, "after": packageValue})
+	if initialImpact["fullRescan"] != true || initialImpact["category"] != "RESCAN_FULL" {
+		t.Fatalf("首次 Impact 响应错误: %+v", initialImpact)
+	}
+	requestRuleJSON(t, client, server.URL, csrf, http.MethodPost, "/api/v1/rules/impact", map[string]any{"after": packageValue}, http.StatusBadRequest)
 }
 
 func TestRuleImportRejectsEmptyFormatAtTransportBoundary(t *testing.T) {
@@ -87,14 +92,31 @@ func TestPersistentRulePackageAPIUsesRevisionAndPublishCapability(t *testing.T) 
 	if err := json.Unmarshal(packageJSON, &packageValue); err != nil {
 		t.Fatal(err)
 	}
-	pkg := requestRuleJSON(t, client, server.URL, csrf, http.MethodPost, "/api/v1/rule-packages", map[string]any{"name": "API 规则包"}, http.StatusCreated)
-	draft := requestRuleJSON(t, client, server.URL, csrf, http.MethodPut, "/api/v1/rule-packages/"+pkg["id"].(string)+"/draft", map[string]any{"format": "json", "content": packageValue, "expectedRevision": 0}, http.StatusOK)
+	pkg := requestRuleJSON(t, client, server.URL, csrf, http.MethodPost, "/api/v1/rule-packages", map[string]any{"ruleSetId": packageValue["rule_set_id"], "name": "API 规则包"}, http.StatusCreated)
+	for _, absent := range []string{"currentSemanticHash", "latestValidSemanticHash", "draftId"} {
+		if value, exists := pkg[absent]; exists {
+			t.Fatalf("未建立对应事实时 %s 必须省略，不能返回空字符串: %v", absent, value)
+		}
+	}
+	draft := requestRuleJSONWithIfMatch(t, client, server.URL, csrf, http.MethodPut, "/api/v1/rule-packages/"+pkg["id"].(string)+"/draft", map[string]any{"format": "json", "content": packageValue, "expectedRevision": 0}, "\"0\"", http.StatusOK)
 	if draft["validationStatus"] != "validated" {
 		t.Fatalf("草稿未校验: %+v", draft)
 	}
-	version := requestRuleJSON(t, client, server.URL, csrf, http.MethodPost, "/api/v1/rule-packages/"+pkg["id"].(string)+"/publish", map[string]any{"expectedRevision": int(draft["revision"].(float64)), "reason": "API 发布"}, http.StatusCreated)
+	if value, exists := draft["baseSemanticHash"]; exists {
+		t.Fatalf("首次草稿的 baseSemanticHash 必须省略，不能返回空字符串: %v", value)
+	}
+	validation := requestRuleJSONWithIfMatch(t, client, server.URL, csrf, http.MethodPost, "/api/v1/rule-packages/"+pkg["id"].(string)+"/draft/validate", nil, "\"1\"", http.StatusOK)
+	validatedDraft := validation["draft"].(map[string]any)
+	if validatedDraft["revision"] != float64(2) {
+		t.Fatalf("校验未返回精确的新 revision: %+v", validation)
+	}
+	version := requestRuleJSONWithIfMatch(t, client, server.URL, csrf, http.MethodPost, "/api/v1/rule-packages/"+pkg["id"].(string)+"/publish", map[string]any{"expectedRevision": 2, "reason": "API 发布"}, "\"2\"", http.StatusCreated)
 	if version["semanticHash"] == "" {
 		t.Fatalf("发布响应缺少 semanticHash: %+v", version)
+	}
+	afterPublish := requestRuleJSON(t, client, server.URL, csrf, http.MethodGet, "/api/v1/rule-packages/"+pkg["id"].(string)+"/draft", nil, http.StatusOK)
+	if afterPublish["revision"] != float64(2) {
+		t.Fatalf("发布不应改变草稿 revision: %+v", afterPublish)
 	}
 	versions := requestRuleJSON(t, client, server.URL, csrf, http.MethodGet, "/api/v1/rule-packages/"+pkg["id"].(string)+"/versions", nil, http.StatusOK)
 	if len(versions["items"].([]any)) != 1 {
@@ -105,6 +127,127 @@ func TestPersistentRulePackageAPIUsesRevisionAndPublishCapability(t *testing.T) 
 	}, http.StatusOK)
 	if trace["trace"] == nil {
 		t.Fatalf("Trace 响应缺少 trace: %+v", trace)
+	}
+}
+
+func TestRuleLifecycleRevisionHeadersFailClosed(t *testing.T) {
+	server, client, csrf := pairedRuleServer(t)
+	packageJSON, err := os.ReadFile(filepath.Join("..", "..", "rules", "testdata", "minimal-rule-package.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var packageValue map[string]any
+	if err := json.Unmarshal(packageJSON, &packageValue); err != nil {
+		t.Fatal(err)
+	}
+	pkg := requestRuleJSON(t, client, server.URL, csrf, http.MethodPost, "/api/v1/rule-packages", map[string]any{
+		"ruleSetId": packageValue["rule_set_id"], "name": "revision header 规则包",
+	}, http.StatusCreated)
+	base := "/api/v1/rule-packages/" + pkg["id"].(string)
+	rollbackBody := map[string]any{
+		"targetSemanticHash": "0000000000000000000000000000000000000000000000000000000000000000",
+		"expectedRevision":   1,
+		"reason":             "header boundary",
+	}
+
+	for _, test := range []struct {
+		name, method, path string
+		body               any
+	}{
+		{name: "save", method: http.MethodPut, path: base + "/draft", body: map[string]any{"format": "json", "content": packageValue, "expectedRevision": 0}},
+		{name: "validate", method: http.MethodPost, path: base + "/draft/validate"},
+		{name: "publish", method: http.MethodPost, path: base + "/publish", body: map[string]any{"expectedRevision": 1}},
+		{name: "rollback", method: http.MethodPost, path: base + "/rollback", body: rollbackBody},
+	} {
+		t.Run(test.name+"_missing", func(t *testing.T) {
+			requestRuleJSONWithIfMatch(t, client, server.URL, csrf, test.method, test.path, test.body, "", http.StatusBadRequest)
+		})
+	}
+
+	repeatedBody, err := json.Marshal(map[string]any{"format": "json", "content": packageValue, "expectedRevision": 0})
+	if err != nil {
+		t.Fatal(err)
+	}
+	repeatedRequest, err := http.NewRequest(http.MethodPut, server.URL+base+"/draft", bytes.NewReader(repeatedBody))
+	if err != nil {
+		t.Fatal(err)
+	}
+	repeatedRequest.Header.Set("Content-Type", "application/json")
+	repeatedRequest.Header.Set("Origin", server.URL)
+	repeatedRequest.Header.Set("Sec-Fetch-Site", "same-origin")
+	repeatedRequest.Header.Set("X-Gallery-CSRF", csrf)
+	repeatedRequest.Header.Add("If-Match", "0")
+	repeatedRequest.Header.Add("If-Match", "1")
+	repeatedResponse, err := client.Do(repeatedRequest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer repeatedResponse.Body.Close()
+	if repeatedResponse.StatusCode != http.StatusBadRequest {
+		content, _ := io.ReadAll(repeatedResponse.Body)
+		t.Fatalf("重复 If-Match status=%d body=%s", repeatedResponse.StatusCode, content)
+	}
+
+	for _, test := range []struct {
+		name, method, path, ifMatch string
+		body                        any
+	}{
+		{name: "save_weak", method: http.MethodPut, path: base + "/draft", ifMatch: `W/"0"`, body: map[string]any{"format": "json", "content": packageValue, "expectedRevision": 0}},
+		{name: "validate_comma", method: http.MethodPost, path: base + "/draft/validate", ifMatch: "1,2"},
+		{name: "publish_unclosed_quote", method: http.MethodPost, path: base + "/publish", ifMatch: `"1`, body: map[string]any{"expectedRevision": 1}},
+		{name: "rollback_negative", method: http.MethodPost, path: base + "/rollback", ifMatch: "-1", body: rollbackBody},
+		{name: "save_signed_zero", method: http.MethodPut, path: base + "/draft", ifMatch: "+0", body: map[string]any{"format": "json", "content": packageValue, "expectedRevision": 0}},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			requestRuleJSONWithIfMatch(t, client, server.URL, csrf, test.method, test.path, test.body, test.ifMatch, http.StatusBadRequest)
+		})
+	}
+
+	for _, test := range []struct {
+		name, method, path, ifMatch string
+		body                        any
+	}{
+		{name: "save", method: http.MethodPut, path: base + "/draft", ifMatch: "0", body: map[string]any{"format": "json", "content": packageValue, "expectedRevision": 1}},
+		{name: "publish", method: http.MethodPost, path: base + "/publish", ifMatch: "1", body: map[string]any{"expectedRevision": 2}},
+		{name: "rollback", method: http.MethodPost, path: base + "/rollback", ifMatch: "1", body: map[string]any{
+			"targetSemanticHash": "0000000000000000000000000000000000000000000000000000000000000000", "expectedRevision": 2, "reason": "mismatch",
+		}},
+	} {
+		t.Run(test.name+"_body_mismatch", func(t *testing.T) {
+			requestRuleJSONWithIfMatch(t, client, server.URL, csrf, test.method, test.path, test.body, test.ifMatch, http.StatusBadRequest)
+		})
+	}
+}
+
+func TestSourceRuleBindingCreateModesRejectMissingAndMixedInputs(t *testing.T) {
+	server, client, csrf := pairedRuleServer(t)
+	const sourceID = "src_00000000-0000-7000-8000-000000000001"
+	const semanticHash = "0000000000000000000000000000000000000000000000000000000000000000"
+	const parameterID = "rparam_00000000-0000-7000-8000-000000000001"
+	for _, test := range []struct {
+		name string
+		body map[string]any
+	}{
+		{name: "missing mode", body: map[string]any{"sourceId": sourceID, "priority": 0}},
+		{name: "mixed parameter and direct", body: map[string]any{
+			"sourceId": sourceID, "semanticHash": semanticHash, "parameters": map[string]any{},
+			"parameterId": parameterID, "priority": 0,
+		}},
+		{name: "direct override", body: map[string]any{
+			"sourceId": sourceID, "semanticHash": semanticHash, "parameters": map[string]any{},
+			"override": map[string]any{}, "priority": 0,
+		}},
+		{name: "parameter with null semantic", body: map[string]any{
+			"sourceId": sourceID, "parameterId": parameterID, "semanticHash": nil, "priority": 0,
+		}},
+		{name: "direct with null parameter", body: map[string]any{
+			"sourceId": sourceID, "semanticHash": semanticHash, "parameters": map[string]any{},
+			"parameterId": nil, "priority": 0,
+		}},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			requestRuleJSON(t, client, server.URL, csrf, http.MethodPost, "/api/v1/source-rule-bindings", test.body, http.StatusBadRequest)
+		})
 	}
 }
 
@@ -200,6 +343,10 @@ func postRuleJSON(t *testing.T, client *http.Client, baseURL, csrf, path string,
 }
 
 func requestRuleJSON(t *testing.T, client *http.Client, baseURL, csrf, method, path string, body any, wantStatus int) map[string]any {
+	return requestRuleJSONWithIfMatch(t, client, baseURL, csrf, method, path, body, "", wantStatus)
+}
+
+func requestRuleJSONWithIfMatch(t *testing.T, client *http.Client, baseURL, csrf, method, path string, body any, ifMatch string, wantStatus int) map[string]any {
 	t.Helper()
 	var reader io.Reader
 	if body != nil {
@@ -218,6 +365,9 @@ func requestRuleJSON(t *testing.T, client *http.Client, baseURL, csrf, method, p
 	request.Header.Set("Sec-Fetch-Site", "same-origin")
 	if method != http.MethodGet {
 		request.Header.Set("X-Gallery-CSRF", csrf)
+	}
+	if ifMatch != "" {
+		request.Header.Set("If-Match", ifMatch)
 	}
 	response, err := client.Do(request)
 	if err != nil {

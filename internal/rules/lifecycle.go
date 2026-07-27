@@ -228,6 +228,24 @@ func (l *Lifecycle) EvaluateIR(ctx context.Context, ir RuleIR, parameters []byte
 }
 
 func (l *Lifecycle) Impact(before, after []byte) (ImpactResult, error) {
+	if trimmed := bytes.TrimSpace(before); len(trimmed) == 0 || bytes.Equal(trimmed, []byte("null")) {
+		right, err := l.compilePackage(after)
+		if err != nil {
+			return ImpactResult{}, err
+		}
+		return ImpactResult{
+			Category:        "RESCAN_FULL",
+			ReasonCodes:     []string{"initial_rule_version"},
+			Fields:          []string{"runtime_semantics"},
+			Actions:         []string{"full_rescan"},
+			AffectedSources: []string{},
+			EntityTypes:     []string{"creator", "media", "work"},
+			NewHash:         right.SemanticHash,
+			TraceSummary:    []string{"initial_rule_version"},
+			FullRescan:      true,
+			EstimatedJob:    "scan_all_sources",
+		}, nil
+	}
 	left, err := l.compilePackage(before)
 	if err != nil {
 		return ImpactResult{}, err
@@ -236,7 +254,10 @@ func (l *Lifecycle) Impact(before, after []byte) (ImpactResult, error) {
 	if err != nil {
 		return ImpactResult{}, err
 	}
-	result := ImpactResult{OldHash: left.SemanticHash, NewHash: right.SemanticHash, TraceSummary: []string{}}
+	result := ImpactResult{
+		ReasonCodes: []string{}, Fields: []string{}, Actions: []string{}, AffectedSources: []string{},
+		EntityTypes: []string{}, TraceSummary: []string{}, OldHash: left.SemanticHash, NewHash: right.SemanticHash,
+	}
 	if left.SemanticHash == right.SemanticHash {
 		result.Category = "NO_ACTION"
 		result.ReasonCodes = []string{"runtime_identity_unchanged"}

@@ -3148,8 +3148,8 @@ type RuleExplainResult struct {
 
 // RuleImpactRequest defines model for RuleImpactRequest.
 type RuleImpactRequest struct {
-	After  map[string]interface{} `json:"after"`
-	Before map[string]interface{} `json:"before"`
+	After  map[string]interface{}  `json:"after"`
+	Before *map[string]interface{} `json:"before"`
 }
 
 // RuleImpactResult defines model for RuleImpactResult.
@@ -3268,6 +3268,7 @@ type RuleParameterSetListResponse struct {
 
 // RulePublishRequest defines model for RulePublishRequest.
 type RulePublishRequest struct {
+	ConfirmImpact    *bool   `json:"confirmImpact,omitempty"`
 	ExpectedRevision *int    `json:"expectedRevision,omitempty"`
 	Reason           *string `json:"reason,omitempty"`
 }
@@ -3589,10 +3590,23 @@ type SourceRuleBindingCreateRequest struct {
 	Condition    *map[string]interface{} `json:"condition,omitempty"`
 	Override     *map[string]interface{} `json:"override,omitempty"`
 	ParameterId  *RuleParameterId        `json:"parameterId,omitempty"`
-	Parameters   map[string]interface{}  `json:"parameters"`
+	Parameters   *map[string]interface{} `json:"parameters,omitempty"`
 	Priority     int                     `json:"priority"`
-	SemanticHash SHA256Digest            `json:"semanticHash"`
+	SemanticHash *SHA256Digest           `json:"semanticHash,omitempty"`
 	SourceId     SourceId                `json:"sourceId"`
+	union        json.RawMessage
+}
+
+// SourceRuleBindingCreateRequest0 defines model for .
+type SourceRuleBindingCreateRequest0 struct {
+	Parameters   map[string]interface{} `json:"parameters"`
+	SemanticHash SHA256Digest           `json:"semanticHash"`
+}
+
+// SourceRuleBindingCreateRequest1 defines model for .
+type SourceRuleBindingCreateRequest1 struct {
+	Override    *map[string]interface{} `json:"override,omitempty"`
+	ParameterId RuleParameterId         `json:"parameterId"`
 }
 
 // SourceRuleBindingId defines model for SourceRuleBindingId.
@@ -3763,6 +3777,9 @@ type IdempotencyKey = string
 
 // IfMatch defines model for IfMatch.
 type IfMatch = string
+
+// RequiredIfMatch defines model for RequiredIfMatch.
+type RequiredIfMatch = string
 
 // ConflictError defines model for ConflictError.
 type ConflictError = ErrorEnvelope
@@ -4088,26 +4105,26 @@ type DeprecateRulePackageParams struct {
 
 // SaveRuleDraftParams defines parameters for SaveRuleDraft.
 type SaveRuleDraftParams struct {
-	XGalleryCSRF CSRFHeader `json:"X-Gallery-CSRF"`
-	IfMatch      *IfMatch   `json:"If-Match,omitempty"`
+	XGalleryCSRF CSRFHeader      `json:"X-Gallery-CSRF"`
+	IfMatch      RequiredIfMatch `json:"If-Match"`
 }
 
 // ValidateRuleDraftParams defines parameters for ValidateRuleDraft.
 type ValidateRuleDraftParams struct {
-	XGalleryCSRF CSRFHeader `json:"X-Gallery-CSRF"`
-	IfMatch      *IfMatch   `json:"If-Match,omitempty"`
+	XGalleryCSRF CSRFHeader      `json:"X-Gallery-CSRF"`
+	IfMatch      RequiredIfMatch `json:"If-Match"`
 }
 
 // PublishRuleDraftParams defines parameters for PublishRuleDraft.
 type PublishRuleDraftParams struct {
-	XGalleryCSRF CSRFHeader `json:"X-Gallery-CSRF"`
-	IfMatch      *IfMatch   `json:"If-Match,omitempty"`
+	XGalleryCSRF CSRFHeader      `json:"X-Gallery-CSRF"`
+	IfMatch      RequiredIfMatch `json:"If-Match"`
 }
 
 // RollbackRulePackageParams defines parameters for RollbackRulePackage.
 type RollbackRulePackageParams struct {
-	XGalleryCSRF CSRFHeader `json:"X-Gallery-CSRF"`
-	IfMatch      *IfMatch   `json:"If-Match,omitempty"`
+	XGalleryCSRF CSRFHeader      `json:"X-Gallery-CSRF"`
+	IfMatch      RequiredIfMatch `json:"If-Match"`
 }
 
 // ListRuleVersionsParams defines parameters for ListRuleVersions.
@@ -4504,6 +4521,183 @@ type CreateScanJobJSONRequestBody = ScanJobCreateRequest
 
 // PutWorkOverlayJSONRequestBody defines body for PutWorkOverlay for application/json ContentType.
 type PutWorkOverlayJSONRequestBody = WorkOverlayPutRequest
+
+// AsSourceRuleBindingCreateRequest0 returns the union data inside the SourceRuleBindingCreateRequest as a SourceRuleBindingCreateRequest0
+func (t SourceRuleBindingCreateRequest) AsSourceRuleBindingCreateRequest0() (SourceRuleBindingCreateRequest0, error) {
+	var body SourceRuleBindingCreateRequest0
+	err := json.Unmarshal(t.union, &body)
+	return body, err
+}
+
+// FromSourceRuleBindingCreateRequest0 overwrites any union data inside the SourceRuleBindingCreateRequest as the provided SourceRuleBindingCreateRequest0
+func (t *SourceRuleBindingCreateRequest) FromSourceRuleBindingCreateRequest0(v SourceRuleBindingCreateRequest0) error {
+	b, err := json.Marshal(v)
+	t.union = b
+	return err
+}
+
+// MergeSourceRuleBindingCreateRequest0 performs a merge with any union data inside the SourceRuleBindingCreateRequest, using the provided SourceRuleBindingCreateRequest0
+func (t *SourceRuleBindingCreateRequest) MergeSourceRuleBindingCreateRequest0(v SourceRuleBindingCreateRequest0) error {
+	b, err := json.Marshal(v)
+	if err != nil {
+		return err
+	}
+
+	merged, err := runtime.JSONMerge(t.union, b)
+	t.union = merged
+	return err
+}
+
+// AsSourceRuleBindingCreateRequest1 returns the union data inside the SourceRuleBindingCreateRequest as a SourceRuleBindingCreateRequest1
+func (t SourceRuleBindingCreateRequest) AsSourceRuleBindingCreateRequest1() (SourceRuleBindingCreateRequest1, error) {
+	var body SourceRuleBindingCreateRequest1
+	err := json.Unmarshal(t.union, &body)
+	return body, err
+}
+
+// FromSourceRuleBindingCreateRequest1 overwrites any union data inside the SourceRuleBindingCreateRequest as the provided SourceRuleBindingCreateRequest1
+func (t *SourceRuleBindingCreateRequest) FromSourceRuleBindingCreateRequest1(v SourceRuleBindingCreateRequest1) error {
+	b, err := json.Marshal(v)
+	t.union = b
+	return err
+}
+
+// MergeSourceRuleBindingCreateRequest1 performs a merge with any union data inside the SourceRuleBindingCreateRequest, using the provided SourceRuleBindingCreateRequest1
+func (t *SourceRuleBindingCreateRequest) MergeSourceRuleBindingCreateRequest1(v SourceRuleBindingCreateRequest1) error {
+	b, err := json.Marshal(v)
+	if err != nil {
+		return err
+	}
+
+	merged, err := runtime.JSONMerge(t.union, b)
+	t.union = merged
+	return err
+}
+
+func (t SourceRuleBindingCreateRequest) MarshalJSON() ([]byte, error) {
+	b, err := t.union.MarshalJSON()
+	if err != nil {
+		return nil, err
+	}
+	object := make(map[string]json.RawMessage)
+	if t.union != nil {
+		err = json.Unmarshal(b, &object)
+		if err != nil {
+			return nil, err
+		}
+	}
+
+	if t.Condition != nil {
+		object["condition"], err = json.Marshal(t.Condition)
+		if err != nil {
+			return nil, fmt.Errorf("error marshaling 'condition': %w", err)
+		}
+	}
+
+	if t.Override != nil {
+		object["override"], err = json.Marshal(t.Override)
+		if err != nil {
+			return nil, fmt.Errorf("error marshaling 'override': %w", err)
+		}
+	}
+
+	if t.ParameterId != nil {
+		object["parameterId"], err = json.Marshal(t.ParameterId)
+		if err != nil {
+			return nil, fmt.Errorf("error marshaling 'parameterId': %w", err)
+		}
+	}
+
+	if t.Parameters != nil {
+		object["parameters"], err = json.Marshal(t.Parameters)
+		if err != nil {
+			return nil, fmt.Errorf("error marshaling 'parameters': %w", err)
+		}
+	}
+
+	object["priority"], err = json.Marshal(t.Priority)
+	if err != nil {
+		return nil, fmt.Errorf("error marshaling 'priority': %w", err)
+	}
+
+	if t.SemanticHash != nil {
+		object["semanticHash"], err = json.Marshal(t.SemanticHash)
+		if err != nil {
+			return nil, fmt.Errorf("error marshaling 'semanticHash': %w", err)
+		}
+	}
+
+	object["sourceId"], err = json.Marshal(t.SourceId)
+	if err != nil {
+		return nil, fmt.Errorf("error marshaling 'sourceId': %w", err)
+	}
+
+	b, err = json.Marshal(object)
+	return b, err
+}
+
+func (t *SourceRuleBindingCreateRequest) UnmarshalJSON(b []byte) error {
+	err := t.union.UnmarshalJSON(b)
+	if err != nil {
+		return err
+	}
+	object := make(map[string]json.RawMessage)
+	err = json.Unmarshal(b, &object)
+	if err != nil {
+		return err
+	}
+
+	if raw, found := object["condition"]; found {
+		err = json.Unmarshal(raw, &t.Condition)
+		if err != nil {
+			return fmt.Errorf("error reading 'condition': %w", err)
+		}
+	}
+
+	if raw, found := object["override"]; found {
+		err = json.Unmarshal(raw, &t.Override)
+		if err != nil {
+			return fmt.Errorf("error reading 'override': %w", err)
+		}
+	}
+
+	if raw, found := object["parameterId"]; found {
+		err = json.Unmarshal(raw, &t.ParameterId)
+		if err != nil {
+			return fmt.Errorf("error reading 'parameterId': %w", err)
+		}
+	}
+
+	if raw, found := object["parameters"]; found {
+		err = json.Unmarshal(raw, &t.Parameters)
+		if err != nil {
+			return fmt.Errorf("error reading 'parameters': %w", err)
+		}
+	}
+
+	if raw, found := object["priority"]; found {
+		err = json.Unmarshal(raw, &t.Priority)
+		if err != nil {
+			return fmt.Errorf("error reading 'priority': %w", err)
+		}
+	}
+
+	if raw, found := object["semanticHash"]; found {
+		err = json.Unmarshal(raw, &t.SemanticHash)
+		if err != nil {
+			return fmt.Errorf("error reading 'semanticHash': %w", err)
+		}
+	}
+
+	if raw, found := object["sourceId"]; found {
+		err = json.Unmarshal(raw, &t.SourceId)
+		if err != nil {
+			return fmt.Errorf("error reading 'sourceId': %w", err)
+		}
+	}
+
+	return err
+}
 
 // RequestEditorFn  is the function signature for the RequestEditor callback function
 type RequestEditorFn func(ctx context.Context, req *http.Request) error
@@ -10655,16 +10849,14 @@ func NewSaveRuleDraftRequestWithBody(server string, packageId RulePackageId, par
 
 		req.Header.Set("X-Gallery-CSRF", headerParam0)
 
-		if params.IfMatch != nil {
-			var headerParam1 string
+		var headerParam1 string
 
-			headerParam1, err = runtime.StyleParamWithOptions("simple", false, "If-Match", *params.IfMatch, runtime.StyleParamOptions{ParamLocation: runtime.ParamLocationHeader, Type: "string", Format: ""})
-			if err != nil {
-				return nil, err
-			}
-
-			req.Header.Set("If-Match", headerParam1)
+		headerParam1, err = runtime.StyleParamWithOptions("simple", false, "If-Match", params.IfMatch, runtime.StyleParamOptions{ParamLocation: runtime.ParamLocationHeader, Type: "string", Format: ""})
+		if err != nil {
+			return nil, err
 		}
+
+		req.Header.Set("If-Match", headerParam1)
 
 	}
 
@@ -10713,16 +10905,14 @@ func NewValidateRuleDraftRequest(server string, packageId RulePackageId, params 
 
 		req.Header.Set("X-Gallery-CSRF", headerParam0)
 
-		if params.IfMatch != nil {
-			var headerParam1 string
+		var headerParam1 string
 
-			headerParam1, err = runtime.StyleParamWithOptions("simple", false, "If-Match", *params.IfMatch, runtime.StyleParamOptions{ParamLocation: runtime.ParamLocationHeader, Type: "string", Format: ""})
-			if err != nil {
-				return nil, err
-			}
-
-			req.Header.Set("If-Match", headerParam1)
+		headerParam1, err = runtime.StyleParamWithOptions("simple", false, "If-Match", params.IfMatch, runtime.StyleParamOptions{ParamLocation: runtime.ParamLocationHeader, Type: "string", Format: ""})
+		if err != nil {
+			return nil, err
 		}
+
+		req.Header.Set("If-Match", headerParam1)
 
 	}
 
@@ -10784,16 +10974,14 @@ func NewPublishRuleDraftRequestWithBody(server string, packageId RulePackageId, 
 
 		req.Header.Set("X-Gallery-CSRF", headerParam0)
 
-		if params.IfMatch != nil {
-			var headerParam1 string
+		var headerParam1 string
 
-			headerParam1, err = runtime.StyleParamWithOptions("simple", false, "If-Match", *params.IfMatch, runtime.StyleParamOptions{ParamLocation: runtime.ParamLocationHeader, Type: "string", Format: ""})
-			if err != nil {
-				return nil, err
-			}
-
-			req.Header.Set("If-Match", headerParam1)
+		headerParam1, err = runtime.StyleParamWithOptions("simple", false, "If-Match", params.IfMatch, runtime.StyleParamOptions{ParamLocation: runtime.ParamLocationHeader, Type: "string", Format: ""})
+		if err != nil {
+			return nil, err
 		}
+
+		req.Header.Set("If-Match", headerParam1)
 
 	}
 
@@ -10855,16 +11043,14 @@ func NewRollbackRulePackageRequestWithBody(server string, packageId RulePackageI
 
 		req.Header.Set("X-Gallery-CSRF", headerParam0)
 
-		if params.IfMatch != nil {
-			var headerParam1 string
+		var headerParam1 string
 
-			headerParam1, err = runtime.StyleParamWithOptions("simple", false, "If-Match", *params.IfMatch, runtime.StyleParamOptions{ParamLocation: runtime.ParamLocationHeader, Type: "string", Format: ""})
-			if err != nil {
-				return nil, err
-			}
-
-			req.Header.Set("If-Match", headerParam1)
+		headerParam1, err = runtime.StyleParamWithOptions("simple", false, "If-Match", params.IfMatch, runtime.StyleParamOptions{ParamLocation: runtime.ParamLocationHeader, Type: "string", Format: ""})
+		if err != nil {
+			return nil, err
 		}
+
+		req.Header.Set("If-Match", headerParam1)
 
 	}
 

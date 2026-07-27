@@ -75,7 +75,7 @@ const COPY: Record<string, string> = {
   RULE_PARAMETER_INVALID: '规则参数不合法。',
   RULE_PARAMETER_CONFLICT: '规则参数与已有绑定冲突。',
   RULE_DRAFT_CONFLICT: '草稿已被其他会话修改，请刷新后基于最新 revision 重试。',
-  RULE_PACKAGE_CONFLICT: '规则包标识冲突：同一标识已存在不同内容的版本。',
+  RULE_PACKAGE_CONFLICT: '规则包已被其他操作修改，请刷新后基于最新 revision 重试。',
   RULE_PUBLISH_BLOCKED: '发布被阻止：仍有未通过的校验或未确认的影响。',
   RULE_ROLLBACK_BLOCKED: '回滚被阻止：目标版本仍被使用或不满足回滚前置条件。',
   RULE_VERSION_IN_USE: '该规则版本仍被 Source 绑定使用，不能删除。',

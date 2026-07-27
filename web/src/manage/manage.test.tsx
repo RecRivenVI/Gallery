@@ -154,6 +154,78 @@ const SOURCE = {
   createdAt: '2026-07-20T00:00:00Z'
 };
 
+const OLD_RULE_HASH = 'a'.repeat(64);
+const NEW_RULE_HASH = 'b'.repeat(64);
+
+function rulePackage(overrides: Record<string, unknown> = {}): Record<string, unknown> {
+  return {
+    id: 'pkg_01',
+    ruleSetId: 'ruleset.synthetic',
+    name: '合成规则包',
+    description: '',
+    status: 'active',
+    createdBy: 'principal_manage',
+    revision: 5,
+    createdAt: '2026-07-20T00:00:00Z',
+    updatedAt: '2026-07-26T00:00:00Z',
+    ...overrides
+  };
+}
+
+function ruleDraft(overrides: Record<string, unknown> = {}): Record<string, unknown> {
+  return {
+    id: 'draft_01',
+    packageId: 'pkg_01',
+    content: { version: 1 },
+    format: 'json',
+    validationStatus: 'draft',
+    diagnostics: [],
+    revision: 3,
+    savedBy: 'principal_manage',
+    createdAt: '2026-07-26T00:00:00Z',
+    updatedAt: '2026-07-26T01:00:00Z',
+    ...overrides
+  };
+}
+
+function ruleVersion(overrides: Record<string, unknown> = {}): Record<string, unknown> {
+  return {
+    id: 'version_01',
+    packageId: 'pkg_01',
+    ruleSetId: 'ruleset.synthetic',
+    version: '1.0.0',
+    packageHash: 'c'.repeat(64),
+    semanticHash: NEW_RULE_HASH,
+    ruleIrHash: 'd'.repeat(64),
+    status: 'published',
+    createdBy: 'principal_manage',
+    publishedAt: '2026-07-27T05:00:00Z',
+    createdAt: '2026-07-27T05:00:00Z',
+    executable: true,
+    ...overrides
+  };
+}
+
+function ruleImpact(overrides: Record<string, unknown> = {}): Record<string, unknown> {
+  return {
+    category: 'NO_ACTION',
+    reasonCodes: [],
+    fields: [],
+    actions: [],
+    affectedSources: [],
+    entityTypes: [],
+    blockPublish: false,
+    manualConfirmation: false,
+    fullRescan: false,
+    partialRescan: false,
+    reproject: false,
+    rebuildSearch: false,
+    rebuildDerived: false,
+    bindingReview: false,
+    ...overrides
+  };
+}
+
 /* ————————————————————————————— 0. 新实例资源自举 ————————————————————————————— */
 
 describe('Library 与 Source 自举', () => {
@@ -507,10 +579,25 @@ describe('同名 Source 写入身份', () => {
     { ...SOURCE, id: 'src_b', displayName: '同名来源' }
   ];
 
-  it('规则绑定选择项显示稳定 ID，并把所选 Source ID 放入请求', async () => {
+  it('规则绑定在无 global rules.write 时仍按 Source scope 提交稳定 ID 和已发布版本', async () => {
     let body: Promise<unknown> | undefined;
+    route('GET /api/v1/bootstrap', () =>
+      jsonResponse({
+        ...BOOTSTRAP,
+        effectiveCapabilities: BOOTSTRAP.effectiveCapabilities.filter(
+          (capability) => capability !== 'rules.write'
+        )
+      })
+    );
     route('GET /api/v1/sources', () => jsonResponse({ sources: duplicateSources }));
-    route('GET /api/v1/rule-packages', () => jsonResponse({ items: [] }));
+    route('GET /api/v1/rule-packages', () =>
+      jsonResponse({
+        items: [
+          rulePackage({ currentSemanticHash: OLD_RULE_HASH }),
+          rulePackage({ id: 'pkg_unpublished', name: '未发布规则包', currentSemanticHash: '' })
+        ]
+      })
+    );
     route('GET /api/v1/source-rule-bindings', () => jsonResponse({ bindings: [] }));
     route('GET /api/v1/sources/src_b/effective-rule-binding', () =>
       faultResponse('RULE_BINDING_NOT_MATCHED', 409, 'corr-effective')
@@ -535,13 +622,15 @@ describe('同名 Source 写入身份', () => {
     renderManage('/rules');
     await screen.findByRole('button', { name: /来源/ });
     await selectOption(/来源/, '同名来源 · src_b');
-    await userEvent.type(screen.getByRole('textbox', { name: 'semanticHash' }), 'a'.repeat(64));
+    await userEvent.click(screen.getByRole('button', { name: /已发布版本/ }));
+    expect(screen.queryByRole('option', { name: /未发布规则包/ })).not.toBeInTheDocument();
+    await userEvent.click(screen.getByRole('option', { name: '合成规则包 · aaaaaaaaaaaa…' }));
     await userEvent.click(screen.getByRole('button', { name: '创建绑定' }));
 
     await waitFor(() => expect(requestsTo('POST /api/v1/source-rule-bindings')).toHaveLength(1));
     expect(await body).toEqual({
       sourceId: 'src_b',
-      semanticHash: 'a'.repeat(64),
+      semanticHash: OLD_RULE_HASH,
       priority: 100,
       parameters: {}
     });
@@ -575,33 +664,8 @@ describe('同名 Source 写入身份', () => {
 
 describe('规则草稿', () => {
   it('保存带 If-Match 修订号，冲突时报告 RULE_DRAFT_CONFLICT 且不覆盖服务端内容', async () => {
-    route('GET /api/v1/rule-packages/pkg_01', () =>
-      jsonResponse({
-        id: 'pkg_01',
-        ruleSetId: 'ruleset.synthetic',
-        name: '合成规则包',
-        description: '',
-        status: 'active',
-        createdBy: 'principal_manage',
-        revision: 5,
-        createdAt: '2026-07-20T00:00:00Z',
-        updatedAt: '2026-07-26T00:00:00Z'
-      })
-    );
-    route('GET /api/v1/rule-packages/pkg_01/draft', () =>
-      jsonResponse({
-        id: 'draft_01',
-        packageId: 'pkg_01',
-        content: { version: 1 },
-        format: 'json',
-        validationStatus: 'draft',
-        diagnostics: [],
-        revision: 3,
-        savedBy: 'principal_manage',
-        createdAt: '2026-07-26T00:00:00Z',
-        updatedAt: '2026-07-26T01:00:00Z'
-      })
-    );
+    route('GET /api/v1/rule-packages/pkg_01', () => jsonResponse(rulePackage()));
+    route('GET /api/v1/rule-packages/pkg_01/draft', () => jsonResponse(ruleDraft()));
     route('GET /api/v1/rule-packages/pkg_01/versions', () => jsonResponse({ items: [] }));
     route('GET /api/v1/rule-packages/pkg_01/audits', () => jsonResponse({ items: [] }));
     route('PUT /api/v1/rule-packages/pkg_01/draft', () =>
@@ -618,7 +682,7 @@ describe('规则草稿', () => {
       await userEvent.click(screen.getByRole('button', { name: /保存草稿/ }));
     });
 
-    await screen.findByText('草稿已被其他会话修改');
+    await screen.findByText('服务端草稿已经变化，本地编辑仍被保留');
     expect(screen.getAllByText(/RULE_DRAFT_CONFLICT/).length).toBeGreaterThan(0);
 
     const puts = requestsTo('PUT /api/v1/rule-packages/pkg_01/draft');
@@ -628,6 +692,300 @@ describe('规则草稿', () => {
 
     // 编辑器仍保留用户的内容：界面绝不静默丢弃它，也不自动覆盖服务端。
     expect(screen.getByRole('textbox', { name: /草稿内容/ })).toHaveValue('{"version":2}');
+  });
+
+  it('首次草稿从 revision 0 保存、吸收校验 revision，并以 before=null 评估', async () => {
+    let storedDraft: Record<string, unknown> | null = null;
+    let saveBody: Promise<unknown> | undefined;
+    let impactBody: Promise<unknown> | undefined;
+    // 防御旧服务端把 optional digest 错误编码为空字符串；前端不得把它回送为 baseSemanticHash。
+    route('GET /api/v1/rule-packages/pkg_01', () =>
+      jsonResponse(rulePackage({ currentSemanticHash: '', latestValidSemanticHash: '' }))
+    );
+    route('GET /api/v1/rule-packages/pkg_01/draft', () =>
+      storedDraft === null ? faultResponse('NOT_FOUND', 404, 'corr-no-draft') : jsonResponse(storedDraft)
+    );
+    route('GET /api/v1/rule-packages/pkg_01/versions', () => jsonResponse({ items: [] }));
+    route('GET /api/v1/rule-packages/pkg_01/audits', () => jsonResponse({ items: [] }));
+    route('PUT /api/v1/rule-packages/pkg_01/draft', (request) => {
+      saveBody = request.clone().json();
+      storedDraft = ruleDraft({ revision: 1, content: { version: 1 } });
+      return jsonResponse(storedDraft);
+    });
+    route('POST /api/v1/rule-packages/pkg_01/draft/validate', () => {
+      storedDraft = ruleDraft({ revision: 2, content: { version: 1 }, validationStatus: 'validated' });
+      return jsonResponse({ draft: storedDraft, valid: true, diagnostics: [], validation: {} });
+    });
+    route('POST /api/v1/rules/impact', (request) => {
+      impactBody = request.clone().json();
+      return jsonResponse(ruleImpact());
+    });
+
+    renderManage('/rules/pkg_01');
+    const editor = await screen.findByRole('textbox', { name: /草稿内容/ });
+    fireEvent.change(editor, { target: { value: '{"version":1}' } });
+    await userEvent.click(screen.getByRole('button', { name: '保存草稿' }));
+
+    await waitFor(() => expect(requestsTo('PUT /api/v1/rule-packages/pkg_01/draft')).toHaveLength(1));
+    expect(requestsTo('PUT /api/v1/rule-packages/pkg_01/draft')[0]?.ifMatch).toBe('"0"');
+    expect(await saveBody).toEqual({ content: { version: 1 }, format: 'json' });
+
+    await userEvent.click(await screen.findByRole('button', { name: '校验草稿' }));
+    await screen.findByText('校验通过');
+    expect(requestsTo('POST /api/v1/rule-packages/pkg_01/draft/validate')[0]?.ifMatch).toBe('"1"');
+
+    await userEvent.click(screen.getByRole('button', { name: '评估本次修改的影响' }));
+    await waitFor(() => expect(requestsTo('POST /api/v1/rules/impact')).toHaveLength(1));
+    expect(await impactBody).toEqual({ before: null, after: { version: 1 } });
+  });
+
+  it('保存请求期间的新编辑不会被成功响应覆盖，并推进到服务端新 revision', async () => {
+    let storedDraft = ruleDraft();
+    let resolveSave: ((response: Response) => void) | undefined;
+    route('GET /api/v1/rule-packages/pkg_01', () => jsonResponse(rulePackage()));
+    route('GET /api/v1/rule-packages/pkg_01/draft', () => jsonResponse(storedDraft));
+    route('GET /api/v1/rule-packages/pkg_01/versions', () => jsonResponse({ items: [] }));
+    route('GET /api/v1/rule-packages/pkg_01/audits', () => jsonResponse({ items: [] }));
+    route(
+      'PUT /api/v1/rule-packages/pkg_01/draft',
+      () =>
+        new Promise<Response>((resolve) => {
+          resolveSave = resolve;
+        })
+    );
+
+    renderManage('/rules/pkg_01');
+    const editor = await screen.findByRole('textbox', { name: /草稿内容/ });
+    fireEvent.change(editor, { target: { value: '{"version":2}' } });
+    await userEvent.click(screen.getByRole('button', { name: '保存草稿' }));
+    await waitFor(() => expect(requestsTo('PUT /api/v1/rule-packages/pkg_01/draft')).toHaveLength(1));
+
+    fireEvent.change(editor, { target: { value: '{"version":3}' } });
+    storedDraft = ruleDraft({ revision: 4, content: { version: 2 } });
+    await act(async () => {
+      resolveSave?.(jsonResponse(storedDraft));
+      await Promise.resolve();
+    });
+
+    await waitFor(() =>
+      expect(screen.getByText('服务端草稿 revision').nextElementSibling).toHaveTextContent('4')
+    );
+    expect(editor).toHaveValue('{"version":3}');
+    expect(screen.getByText('有未保存修改')).toBeInTheDocument();
+    expect(screen.getByText('本地编辑基于的 revision').nextElementSibling).toHaveTextContent('4');
+  });
+
+  it('校验请求期间的新编辑不会被规范化响应覆盖', async () => {
+    let storedDraft = ruleDraft();
+    let resolveValidation: ((response: Response) => void) | undefined;
+    route('GET /api/v1/rule-packages/pkg_01', () => jsonResponse(rulePackage()));
+    route('GET /api/v1/rule-packages/pkg_01/draft', () => jsonResponse(storedDraft));
+    route('GET /api/v1/rule-packages/pkg_01/versions', () => jsonResponse({ items: [] }));
+    route('GET /api/v1/rule-packages/pkg_01/audits', () => jsonResponse({ items: [] }));
+    route(
+      'POST /api/v1/rule-packages/pkg_01/draft/validate',
+      () =>
+        new Promise<Response>((resolve) => {
+          resolveValidation = resolve;
+        })
+    );
+
+    renderManage('/rules/pkg_01');
+    const editor = await screen.findByRole('textbox', { name: /草稿内容/ });
+    await userEvent.click(screen.getByRole('button', { name: '校验草稿' }));
+    await waitFor(() =>
+      expect(requestsTo('POST /api/v1/rule-packages/pkg_01/draft/validate')).toHaveLength(1)
+    );
+
+    fireEvent.change(editor, { target: { value: '{"version":2}' } });
+    storedDraft = ruleDraft({ revision: 4, validationStatus: 'validated' });
+    await act(async () => {
+      resolveValidation?.(jsonResponse({ draft: storedDraft, valid: true, diagnostics: [], validation: {} }));
+      await Promise.resolve();
+    });
+
+    await waitFor(() => expect(editor).toHaveValue('{"version":2}'));
+    expect(screen.getByText('有未保存修改')).toBeInTheDocument();
+  });
+
+  it('校验失败时吸收服务端 invalid 草稿并显示诊断', async () => {
+    route('GET /api/v1/rule-packages/pkg_01', () => jsonResponse(rulePackage()));
+    route('GET /api/v1/rule-packages/pkg_01/draft', () => jsonResponse(ruleDraft()));
+    route('GET /api/v1/rule-packages/pkg_01/versions', () => jsonResponse({ items: [] }));
+    route('GET /api/v1/rule-packages/pkg_01/audits', () => jsonResponse({ items: [] }));
+    route('POST /api/v1/rule-packages/pkg_01/draft/validate', () => {
+      const invalid = ruleDraft({
+        revision: 4,
+        validationStatus: 'invalid',
+        diagnostics: [{ path: '/rules/0', message: 'invalid-value' }]
+      });
+      return jsonResponse({ draft: invalid, valid: false, diagnostics: invalid.diagnostics });
+    });
+
+    renderManage('/rules/pkg_01');
+    await userEvent.click(await screen.findByRole('button', { name: '校验草稿' }));
+    await screen.findByText('校验未通过');
+    expect(screen.getByText(/invalid-value/)).toBeInTheDocument();
+    expect(requestsTo('POST /api/v1/rule-packages/pkg_01/draft/validate')[0]?.ifMatch).toBe('"3"');
+  });
+
+  it('未保存编辑使旧影响失效，刷新保留本地内容且只能显式覆盖', async () => {
+    let remoteDraft = ruleDraft({ validationStatus: 'validated' });
+    route('GET /api/v1/rule-packages/pkg_01', () =>
+      jsonResponse(rulePackage({ currentSemanticHash: OLD_RULE_HASH }))
+    );
+    route('GET /api/v1/rule-packages/pkg_01/draft', () => jsonResponse(remoteDraft));
+    route('GET /api/v1/rule-packages/pkg_01/versions', () => jsonResponse({ items: [] }));
+    route('GET /api/v1/rule-packages/pkg_01/audits', () => jsonResponse({ items: [] }));
+    route(`GET /api/v1/rule-versions/${OLD_RULE_HASH}/export`, () => jsonResponse({ version: 0 }));
+    route('POST /api/v1/rules/impact', () => jsonResponse(ruleImpact()));
+
+    renderManage('/rules/pkg_01');
+    await userEvent.click(await screen.findByRole('button', { name: '评估本次修改的影响' }));
+    await screen.findByText('结论');
+
+    const editor = screen.getByRole('textbox', { name: /草稿内容/ });
+    fireEvent.change(editor, { target: { value: '{"version":2}' } });
+    expect(screen.getByRole('button', { name: '校验草稿' })).toBeDisabled();
+    expect(screen.getByRole('button', { name: '评估本次修改的影响' })).toBeDisabled();
+    expect(screen.getByRole('button', { name: '发布草稿' })).toBeDisabled();
+    expect(screen.queryByText('结论')).not.toBeInTheDocument();
+
+    remoteDraft = ruleDraft({ revision: 4, content: { version: 4 }, validationStatus: 'validated' });
+    await userEvent.click(screen.getByRole('button', { name: '重新拉取快照' }));
+    await screen.findByText('服务端草稿已经变化，本地编辑仍被保留');
+    expect(editor).toHaveValue('{"version":2}');
+
+    fireEvent.change(editor, { target: { value: '{\n  "version": 4\n}' } });
+    expect(screen.getByText('服务端草稿已经变化，本地编辑仍被保留')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: '校验草稿' })).toBeDisabled();
+
+    await userEvent.click(screen.getByRole('button', { name: '用服务端最新草稿覆盖编辑器' }));
+    const dialog = await screen.findByRole('dialog', { name: '覆盖本地编辑' });
+    await userEvent.click(within(dialog).getByRole('button', { name: '确认覆盖' }));
+    await waitFor(() => expect(editor).toHaveValue('{\n  "version": 4\n}'));
+  });
+
+  it('人工影响确认解锁发布，刷新版本列表/审计并让下一次保存继承新 semanticHash', async () => {
+    let packageValue = rulePackage({ currentSemanticHash: OLD_RULE_HASH });
+    let draftValue = ruleDraft({ baseSemanticHash: OLD_RULE_HASH, validationStatus: 'validated' });
+    let versionsReads = 0;
+    let auditReads = 0;
+    let publishBody: Promise<unknown> | undefined;
+    let resolvePublish: ((response: Response) => void) | undefined;
+    let nextSaveBody: Promise<unknown> | undefined;
+    route('GET /api/v1/rule-packages/pkg_01', () => jsonResponse(packageValue));
+    route('GET /api/v1/rule-packages/pkg_01/draft', () => jsonResponse(draftValue));
+    route('GET /api/v1/rule-packages/pkg_01/versions', () => {
+      versionsReads += 1;
+      return jsonResponse({ items: [] });
+    });
+    route('GET /api/v1/rule-packages/pkg_01/audits', () => {
+      auditReads += 1;
+      return jsonResponse({ items: [] });
+    });
+    route(`GET /api/v1/rule-versions/${OLD_RULE_HASH}/export`, () => jsonResponse({ version: 0 }));
+    route(`GET /api/v1/rule-versions/${NEW_RULE_HASH}/export`, () => jsonResponse({ version: 1 }));
+    route('POST /api/v1/rules/impact', () =>
+      jsonResponse(
+        ruleImpact({
+          category: 'BINDING_REVIEW',
+          blockPublish: true,
+          manualConfirmation: false,
+          bindingReview: true
+        })
+      )
+    );
+    route(
+      'POST /api/v1/rule-packages/pkg_01/publish',
+      (request) =>
+        new Promise<Response>((resolve) => {
+          publishBody = request.clone().json();
+          packageValue = rulePackage({ revision: 6, currentSemanticHash: NEW_RULE_HASH });
+          resolvePublish = resolve;
+        })
+    );
+    route('PUT /api/v1/rule-packages/pkg_01/draft', (request) => {
+      nextSaveBody = request.clone().json();
+      draftValue = ruleDraft({
+        revision: 4,
+        content: { version: 2 },
+        validationStatus: 'draft',
+        baseSemanticHash: NEW_RULE_HASH
+      });
+      return jsonResponse(draftValue);
+    });
+
+    renderManage('/rules/pkg_01');
+    await userEvent.click(await screen.findByRole('button', { name: '评估本次修改的影响' }));
+    const publishTrigger = await screen.findByRole('button', { name: '发布草稿' });
+    expect(publishTrigger).toBeDisabled();
+    await userEvent.click(screen.getByRole('checkbox', { name: '我已阅读并确认本次影响评估要求的人工复核' }));
+    expect(publishTrigger).not.toBeDisabled();
+    await userEvent.click(publishTrigger);
+    const publishDialog = await screen.findByRole('dialog', { name: '发布规则草稿' });
+    await userEvent.click(within(publishDialog).getByRole('button', { name: '确认发布' }));
+
+    await waitFor(() => expect(requestsTo('POST /api/v1/rule-packages/pkg_01/publish')).toHaveLength(1));
+    const editor = screen.getByRole('textbox', { name: /草稿内容/ });
+    expect(editor).toBeDisabled();
+    await act(async () => {
+      resolvePublish?.(jsonResponse(ruleVersion({ parentSemanticHash: OLD_RULE_HASH }), 201));
+      await Promise.resolve();
+    });
+    expect(requestsTo('POST /api/v1/rule-packages/pkg_01/publish')[0]?.ifMatch).toBe('"3"');
+    expect(await publishBody).toEqual({ expectedRevision: 3, reason: '', confirmImpact: true });
+    await waitFor(() => {
+      expect(versionsReads).toBeGreaterThan(1);
+      expect(auditReads).toBeGreaterThan(1);
+    });
+
+    await waitFor(() => expect(editor).not.toBeDisabled());
+    fireEvent.change(editor, { target: { value: '{"version":2}' } });
+    await userEvent.click(screen.getByRole('button', { name: '保存草稿' }));
+    await waitFor(() => expect(requestsTo('PUT /api/v1/rule-packages/pkg_01/draft')).toHaveLength(1));
+    expect(requestsTo('PUT /api/v1/rule-packages/pkg_01/draft')[0]?.ifMatch).toBe('"3"');
+    expect(await nextSaveBody).toEqual({
+      content: { version: 2 },
+      format: 'json',
+      baseSemanticHash: NEW_RULE_HASH
+    });
+  });
+
+  it('回滚同时发送规则包 revision 的 If-Match 和 expectedRevision', async () => {
+    let rollbackBody: Promise<unknown> | undefined;
+    route('GET /api/v1/rule-packages/pkg_01', () =>
+      jsonResponse(rulePackage({ revision: 7, currentSemanticHash: NEW_RULE_HASH }))
+    );
+    route('GET /api/v1/rule-packages/pkg_01/draft', () =>
+      jsonResponse(ruleDraft({ baseSemanticHash: NEW_RULE_HASH, validationStatus: 'validated' }))
+    );
+    route('GET /api/v1/rule-packages/pkg_01/versions', () =>
+      jsonResponse({ items: [ruleVersion({ version: '0.9.0', semanticHash: OLD_RULE_HASH })] })
+    );
+    route('GET /api/v1/rule-packages/pkg_01/audits', () => jsonResponse({ items: [] }));
+    route(`GET /api/v1/rule-versions/${NEW_RULE_HASH}/export`, () => jsonResponse({ version: 1 }));
+    route('POST /api/v1/rule-packages/pkg_01/rollback', (request) => {
+      rollbackBody = request.clone().json();
+      return jsonResponse(ruleVersion({ semanticHash: OLD_RULE_HASH }));
+    });
+
+    renderManage('/rules/pkg_01');
+    await screen.findByRole('button', { name: /回滚到/ });
+    await selectOption(/回滚到/, '0.9.0（aaaaaaaaaaaa…）');
+    await userEvent.type(screen.getByRole('textbox', { name: '回滚理由' }), '恢复稳定版本');
+    await userEvent.click(screen.getByRole('button', { name: '回滚当前版本' }));
+    const dialog = await screen.findByRole('dialog', { name: '回滚规则包' });
+    await userEvent.click(within(dialog).getByRole('button', { name: '确认回滚' }));
+
+    await waitFor(() => expect(requestsTo('POST /api/v1/rule-packages/pkg_01/rollback')).toHaveLength(1));
+    expect(requestsTo('POST /api/v1/rule-packages/pkg_01/rollback')[0]?.ifMatch).toBe('"7"');
+    expect(await rollbackBody).toEqual({
+      targetSemanticHash: OLD_RULE_HASH,
+      expectedRevision: 7,
+      reason: '恢复稳定版本',
+      confirmImpact: false
+    });
   });
 });
 

@@ -622,7 +622,7 @@ export interface SaveRuleDraftInput {
   content: unknown;
   format: RuleDraft['format'];
   /** GET 草稿返回的 revision。服务端用它做 CAS，冲突返回 409 RULE_DRAFT_CONFLICT。 */
-  expectedRevision: number | null;
+  expectedRevision: number;
   baseSemanticHash?: string;
 }
 
@@ -640,10 +640,7 @@ export function useSaveRuleDraft(): UseMutationResult<RuleDraft, unknown, SaveRu
       expectData(
         await api.PUT('/api/v1/rule-packages/{packageId}/draft', {
           params: {
-            header:
-              input.expectedRevision === null
-                ? header
-                : { ...header, 'If-Match': `"${String(input.expectedRevision)}"` },
+            header: { ...header, 'If-Match': `"${String(input.expectedRevision)}"` },
             path: { packageId: input.packageId }
           },
           body: {
@@ -661,7 +658,7 @@ export function useSaveRuleDraft(): UseMutationResult<RuleDraft, unknown, SaveRu
 
 export interface RuleDraftRevisionInput {
   packageId: string;
-  expectedRevision: number | null;
+  expectedRevision: number;
 }
 
 /** 校验草稿。契约要求 `rules.write`——只读分析却要写权限，是已知的过度限制。 */
@@ -677,10 +674,7 @@ export function useValidateRuleDraft(): UseMutationResult<
       expectData(
         await api.POST('/api/v1/rule-packages/{packageId}/draft/validate', {
           params: {
-            header:
-              input.expectedRevision === null
-                ? header
-                : { ...header, 'If-Match': `"${String(input.expectedRevision)}"` },
+            header: { ...header, 'If-Match': `"${String(input.expectedRevision)}"` },
             path: { packageId: input.packageId }
           }
         })
@@ -693,8 +687,9 @@ export function useValidateRuleDraft(): UseMutationResult<
 
 export interface PublishRuleDraftInput {
   packageId: string;
-  expectedRevision: number | null;
+  expectedRevision: number;
   reason: string;
+  confirmImpact: boolean;
 }
 
 /** 发布草稿。仍有未通过的校验或未确认的影响时返回 409 RULE_PUBLISH_BLOCKED。 */
@@ -705,10 +700,14 @@ export function usePublishRuleDraft(): UseMutationResult<RuleVersion, unknown, P
     mutationFn: async (input: PublishRuleDraftInput) =>
       expectData(
         await api.POST('/api/v1/rule-packages/{packageId}/publish', {
-          params: { header, path: { packageId: input.packageId } },
+          params: {
+            header: { ...header, 'If-Match': `"${String(input.expectedRevision)}"` },
+            path: { packageId: input.packageId }
+          },
           body: {
             reason: input.reason,
-            ...(input.expectedRevision === null ? {} : { expectedRevision: input.expectedRevision })
+            expectedRevision: input.expectedRevision,
+            confirmImpact: input.confirmImpact
           }
         })
       ),
@@ -721,6 +720,7 @@ export function usePublishRuleDraft(): UseMutationResult<RuleVersion, unknown, P
 export interface RollbackInput {
   packageId: string;
   targetSemanticHash: string;
+  expectedRevision: number;
   reason: string;
   confirmImpact: boolean;
 }
@@ -733,9 +733,13 @@ export function useRollbackRulePackage(): UseMutationResult<RuleVersion, unknown
     mutationFn: async (input: RollbackInput) =>
       expectData(
         await api.POST('/api/v1/rule-packages/{packageId}/rollback', {
-          params: { header, path: { packageId: input.packageId } },
+          params: {
+            header: { ...header, 'If-Match': `"${String(input.expectedRevision)}"` },
+            path: { packageId: input.packageId }
+          },
           body: {
             targetSemanticHash: input.targetSemanticHash,
+            expectedRevision: input.expectedRevision,
             reason: input.reason,
             confirmImpact: input.confirmImpact
           }
@@ -776,7 +780,7 @@ export function useRuleAudits(packageId: string | undefined) {
 }
 
 export interface ImpactInput {
-  before: Record<string, unknown>;
+  before: Record<string, unknown> | null;
   after: Record<string, unknown>;
 }
 
@@ -785,7 +789,12 @@ export function useRuleImpact(): UseMutationResult<RuleImpactResult, unknown, Im
   const header = useCsrfHeaders();
   return useMutation({
     mutationFn: async (input: ImpactInput) =>
-      expectData(await api.POST('/api/v1/rules/impact', { params: { header }, body: input }))
+      expectData(
+        await api.POST('/api/v1/rules/impact', {
+          params: { header },
+          body: input
+        })
+      )
   });
 }
 

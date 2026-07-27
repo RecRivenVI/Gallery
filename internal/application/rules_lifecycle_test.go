@@ -1,6 +1,7 @@
 package application_test
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -40,10 +41,18 @@ func TestRuleLifecycleDraftPublishParameterAndRollback(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	pkg, err := resources.CreateRulePackage(ctx, "", "内置示例", "synthetic", "owner")
+	pkg, err := resources.CreateRulePackage(ctx, "rset_018f47d2-5c16-7a44-a8a0-000000000001", "内置示例", "synthetic", "owner")
 	if err != nil {
 		t.Fatal(err)
 	}
+	_, err = resources.SaveRuleDraft(ctx, pkg.ID, packageJSON, "json", "", -1, "owner")
+	requireRuleFaultCode(t, err, fault.CodeValidation)
+	_, err = resources.ValidateRuleDraft(ctx, pkg.ID, -1, "owner")
+	requireRuleFaultCode(t, err, fault.CodeValidation)
+	_, err = resources.PublishRuleDraft(ctx, pkg.ID, -1, "owner", "缺少 revision", false)
+	requireRuleFaultCode(t, err, fault.CodeValidation)
+	_, err = resources.RollbackRulePackage(ctx, pkg.ID, strings.Repeat("0", 64), -1, "owner", "缺少 revision", false)
+	requireRuleFaultCode(t, err, fault.CodeValidation)
 	draft, err := resources.SaveRuleDraft(ctx, pkg.ID, packageJSON, "json", "", 0, "owner")
 	if err != nil {
 		t.Fatal(err)
@@ -66,12 +75,16 @@ func TestRuleLifecycleDraftPublishParameterAndRollback(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	version, err := resources.PublishRuleDraft(ctx, pkg.ID, draft.Revision, "owner", "初始发布")
+	version, err := resources.PublishRuleDraft(ctx, pkg.ID, draft.Revision, "owner", "初始发布", false)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if version.SemanticHash == "" || version.PackageID != pkg.ID || version.Status != application.RuleVersionPublished {
 		t.Fatalf("发布版本错误: %+v", version)
+	}
+	afterPublish, err := resources.GetRuleDraft(ctx, pkg.ID)
+	if err != nil || afterPublish.Revision != draft.Revision || !bytes.Equal(afterPublish.Content, draft.Content) {
+		t.Fatalf("发布不应改变草稿 CAS 事实: before=%+v after=%+v err=%v", draft, afterPublish, err)
 	}
 	changed := []byte(string(packageJSON))
 	changed = []byte(strings.Replace(string(changed), `"version": "0.1.0"`, `"version": "0.2.0"`, 1))
@@ -79,19 +92,51 @@ func TestRuleLifecycleDraftPublishParameterAndRollback(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	draft, err = resources.SaveRuleDraft(ctx, pkg.ID, changed, "json", version.SemanticHash, draft.Revision, "owner")
+	draft, err = resources.SaveRuleDraft(ctx, pkg.ID, changed, "json", "", draft.Revision, "owner")
 	if err != nil {
 		t.Fatal(err)
 	}
-	secondVersion, err := resources.PublishRuleDraft(ctx, pkg.ID, draft.Revision, "owner", "测试第二版本")
+	if draft.BaseSemanticHash != version.SemanticHash {
+		t.Fatalf("省略 baseSemanticHash 未默认到当前版本: %+v", draft)
+	}
+	secondVersion, err := resources.PublishRuleDraft(ctx, pkg.ID, draft.Revision, "owner", "测试第二版本", false)
 	if err != nil {
 		t.Fatal(err)
 	}
+	if secondVersion.ParentSemanticHash != version.SemanticHash {
+		t.Fatalf("版本父链错误: %+v", secondVersion)
+	}
+	reviewChanged := []byte(strings.Replace(string(changed), `"version": "0.2.0"`, `"version": "0.3.0"`, 1))
+	reviewChanged = []byte(strings.Replace(string(reviewChanged),
+		`"scope": "work_directory", "glob": "*"`,
+		`"scope": "work_directory", "glob": "*/*"`, 1))
+	draft, err = resources.SaveRuleDraft(ctx, pkg.ID, reviewChanged, "json", "", draft.Revision, "owner")
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = resources.PublishRuleDraft(ctx, pkg.ID, draft.Revision, "owner", "需要影响确认", false)
+	requireRuleFaultCode(t, err, fault.CodeRulePublishBlocked)
+	confirmedVersion, err := resources.PublishRuleDraft(ctx, pkg.ID, draft.Revision, "owner", "确认影响", true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if confirmedVersion.ParentSemanticHash != secondVersion.SemanticHash {
+		t.Fatalf("确认发布后的父链错误: %+v", confirmedVersion)
+	}
+	mismatched := []byte(strings.Replace(string(reviewChanged),
+		`"rule_set_id": "rset_018f47d2-5c16-7a44-a8a0-000000000001"`,
+		`"rule_set_id": "rset_018f47d2-5c16-7a44-a8a0-000000000002"`, 1))
+	draft, err = resources.SaveRuleDraft(ctx, pkg.ID, mismatched, "json", "", draft.Revision, "owner")
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = resources.PublishRuleDraft(ctx, pkg.ID, draft.Revision, "owner", "错误规则族", true)
+	requireRuleFaultCode(t, err, fault.CodeRulePublishBlocked)
 	pkg, err = resources.GetRulePackage(ctx, pkg.ID)
 	if err != nil {
 		t.Fatal(err)
 	}
-	rolledBack, err := resources.RollbackRulePackage(ctx, pkg.ID, version.SemanticHash, pkg.Revision, "owner", "回滚测试", false)
+	rolledBack, err := resources.RollbackRulePackage(ctx, pkg.ID, version.SemanticHash, pkg.Revision, "owner", "回滚测试", true)
 	if err != nil || rolledBack.SemanticHash != version.SemanticHash {
 		t.Fatalf("回滚失败: %+v %v", rolledBack, err)
 	}
@@ -120,8 +165,49 @@ func TestRuleLifecycleDraftPublishParameterAndRollback(t *testing.T) {
 	if _, err := resources.DeprecateRuleVersion(ctx, version.SemanticHash, "owner", "测试旧版本"); err == nil {
 		t.Fatal("当前版本被错误允许弃用")
 	}
+	mediaRoot := filepath.Join(root, "media")
+	if err := os.MkdirAll(mediaRoot, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	library, err := resources.CreateLibrary(ctx, "弃用测试库")
+	if err != nil {
+		t.Fatal(err)
+	}
+	source, err := resources.CreateSource(ctx, library.ID, "弃用测试源", mediaRoot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	binding, err := resources.CreateSourceRuleBinding(ctx, source.ID, secondVersion.SemanticHash, []byte(`{}`), 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = resources.DeprecateRuleVersion(ctx, secondVersion.SemanticHash, "owner", "仍在使用")
+	requireRuleFaultCode(t, err, fault.CodeRuleVersionInUse)
+	if _, err := resources.SetSourceRuleBindingStatus(ctx, binding.ID, application.RuleBindingPaused); err != nil {
+		t.Fatal(err)
+	}
 	if deprecated, err := resources.DeprecateRuleVersion(ctx, secondVersion.SemanticHash, "owner", "回滚后弃用"); err != nil || deprecated.Status != application.RuleVersionDeprecated {
 		t.Fatalf("非当前版本弃用失败: %+v %v", deprecated, err)
+	}
+	_, err = resources.SetSourceRuleBindingStatus(ctx, binding.ID, application.RuleBindingActive)
+	requireRuleFaultCode(t, err, fault.CodeRuleVersionInUse)
+	draft, err = resources.SaveRuleDraft(ctx, pkg.ID, changed, "json", "", draft.Revision, "owner")
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = resources.PublishRuleDraft(ctx, pkg.ID, draft.Revision, "owner", "不得复用已弃用版本", true)
+	requireRuleFaultCode(t, err, fault.CodeRulePublishBlocked)
+	afterBlockedPublish, err := resources.GetRulePackage(ctx, pkg.ID)
+	if err != nil || afterBlockedPublish.CurrentSemanticHash != version.SemanticHash {
+		t.Fatalf("失败发布改变了 current: %+v err=%v", afterBlockedPublish, err)
+	}
+}
+
+func requireRuleFaultCode(t *testing.T, err error, code fault.Code) {
+	t.Helper()
+	var structured *fault.Error
+	if !errors.As(err, &structured) || structured.Code != code {
+		t.Fatalf("错误码=%v want=%s", err, code)
 	}
 }
 
@@ -151,7 +237,7 @@ func TestRuleParameterBindingRefreshAndDeterministicSelection(t *testing.T) {
 		t.Fatal(err)
 	}
 	packageJSON = []byte(strings.Replace(string(packageJSON), `"parameter_schema": {"type": "object", "additionalProperties": false}`, `"parameter_schema": {"type": "object", "properties": {"minimumSize": {"type": "integer", "minimum": 0}}, "additionalProperties": false}`, 1))
-	pkg, err := resources.CreateRulePackage(ctx, "", "参数绑定规则", "", "owner")
+	pkg, err := resources.CreateRulePackage(ctx, "rset_018f47d2-5c16-7a44-a8a0-000000000001", "参数绑定规则", "", "owner")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -159,7 +245,7 @@ func TestRuleParameterBindingRefreshAndDeterministicSelection(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	version, err := resources.PublishRuleDraft(ctx, pkg.ID, draft.Revision, "owner", "参数绑定测试")
+	version, err := resources.PublishRuleDraft(ctx, pkg.ID, draft.Revision, "owner", "参数绑定测试", false)
 	if err != nil {
 		t.Fatal(err)
 	}

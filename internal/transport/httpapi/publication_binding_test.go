@@ -78,7 +78,7 @@ func TestMediaVerificationJobScopedToTargetMediaViaAPI(t *testing.T) {
 		t.Fatalf("创建 RuleVersion 失败: %v", err)
 	}
 	if _, err := client.CreateSourceRuleBindingWithResponse(ctx, &api.CreateSourceRuleBindingParams{XGalleryCSRF: csrf},
-		api.SourceRuleBindingCreateRequest{SourceId: sourceResponse.JSON201.Id, SemanticHash: ruleResponse.JSON201.SemanticHash, Parameters: map[string]any{}, Priority: 0}, mutation); err != nil {
+		api.NewDirectSourceRuleBindingCreateRequest(sourceResponse.JSON201.Id, ruleResponse.JSON201.SemanticHash, map[string]any{}, 0), mutation); err != nil {
 		t.Fatal(err)
 	}
 	scanJob, err := client.CreateScanJobWithResponse(ctx, sourceResponse.JSON201.Id, &api.CreateScanJobParams{XGalleryCSRF: csrf}, api.ScanJobCreateRequest{}, mutation)
@@ -226,7 +226,7 @@ func TestMediaVerificationJobRejectsExplicitHistoricalPublication(t *testing.T) 
 		t.Fatalf("创建 RuleVersion 失败: %v", err)
 	}
 	if _, err := client.CreateSourceRuleBindingWithResponse(ctx, &api.CreateSourceRuleBindingParams{XGalleryCSRF: csrf},
-		api.SourceRuleBindingCreateRequest{SourceId: sourceResponse.JSON201.Id, SemanticHash: ruleResponse.JSON201.SemanticHash, Parameters: map[string]any{}, Priority: 0}, mutation); err != nil {
+		api.NewDirectSourceRuleBindingCreateRequest(sourceResponse.JSON201.Id, ruleResponse.JSON201.SemanticHash, map[string]any{}, 0), mutation); err != nil {
 		t.Fatal(err)
 	}
 
@@ -386,7 +386,7 @@ func TestDerivedAssetInputBindsToRequestedPublication(t *testing.T) {
 		t.Fatalf("创建 RuleVersion 失败: %v", err)
 	}
 	if _, err := client.CreateSourceRuleBindingWithResponse(ctx, &api.CreateSourceRuleBindingParams{XGalleryCSRF: csrf},
-		api.SourceRuleBindingCreateRequest{SourceId: sourceResponse.JSON201.Id, SemanticHash: ruleResponse.JSON201.SemanticHash, Parameters: map[string]any{}, Priority: 0}, mutation); err != nil {
+		api.NewDirectSourceRuleBindingCreateRequest(sourceResponse.JSON201.Id, ruleResponse.JSON201.SemanticHash, map[string]any{}, 0), mutation); err != nil {
 		t.Fatal(err)
 	}
 	scanJob, err := client.CreateScanJobWithResponse(ctx, sourceResponse.JSON201.Id, &api.CreateScanJobParams{XGalleryCSRF: csrf}, api.ScanJobCreateRequest{}, mutation)

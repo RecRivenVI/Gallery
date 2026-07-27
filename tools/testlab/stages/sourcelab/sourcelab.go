@@ -266,7 +266,7 @@ func ensureRegistration(rep *report.Report, sess *environment.Session, cfg Confi
 	bound := err == nil && bindings.JSON200 != nil && len(bindings.JSON200.Bindings) > 0
 	if !bound {
 		if _, err := sess.Client.CreateSourceRuleBindingWithResponse(ctx, &api.CreateSourceRuleBindingParams{XGalleryCSRF: sess.CSRF},
-			api.SourceRuleBindingCreateRequest{SourceId: state.SourceID, SemanticHash: semanticHash, Parameters: map[string]any{}, Priority: 0},
+			api.NewDirectSourceRuleBindingCreateRequest(state.SourceID, semanticHash, map[string]any{}, 0),
 			sess.SameOrigin); err != nil {
 			rep.Add("sourcelab/registration", false, sanitize(err.Error()))
 			return fmt.Errorf("绑定转换产出的规则失败: %w", err)

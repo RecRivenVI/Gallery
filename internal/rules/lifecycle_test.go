@@ -100,6 +100,23 @@ func TestLifecycleDryRunTraceCELAndImpact(t *testing.T) {
 	if !impact.FullRescan || !impact.Reproject || len(impact.Actions) == 0 {
 		t.Fatalf("RuleImpact 未识别媒体语义变化: %+v", impact)
 	}
+	initial, err := lifecycle.Impact(nil, packageJSON)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if initial.Category != "RESCAN_FULL" || !initial.FullRescan || initial.OldHash != "" || initial.NewHash == "" {
+		t.Fatalf("首次 RuleImpact 语义错误: %+v", initial)
+	}
+	if initial.ReasonCodes == nil || initial.Fields == nil || initial.Actions == nil || initial.AffectedSources == nil || initial.EntityTypes == nil || initial.TraceSummary == nil {
+		t.Fatalf("首次 RuleImpact required 数组不得为 nil: %+v", initial)
+	}
+	unchanged, err := lifecycle.Impact(packageJSON, packageJSON)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if unchanged.Fields == nil || unchanged.Actions == nil || unchanged.AffectedSources == nil || unchanged.EntityTypes == nil || unchanged.TraceSummary == nil {
+		t.Fatalf("普通 RuleImpact required 数组不得为 nil: %+v", unchanged)
+	}
 }
 
 func TestMediaOrderUsesNaturalSortForNumericFilenames(t *testing.T) {

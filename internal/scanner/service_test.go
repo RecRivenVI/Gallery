@@ -101,6 +101,25 @@ func TestWalkingSkeletonScanPublishesAndFailurePreservesOldPublication(t *testin
 	}
 }
 
+func TestCreateScanRejectsBindingWhoseVersionBecameUnavailable(t *testing.T) {
+	resources, _, _, service, source, store := setup(t, []byte("scanner version guard"))
+	defer store.Close()
+	binding, err := resources.BindingForSource(context.Background(), source.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// 绕过受支持的 Resources 写入边界模拟历史损坏；新扫描仍必须在冻结 Job 快照前防御。
+	if _, err := store.Control.SQL().ExecContext(context.Background(),
+		`UPDATE rule_versions SET status='deprecated', executable=0 WHERE semantic_hash=?`, binding.SemanticHash); err != nil {
+		t.Fatal(err)
+	}
+	_, err = service.CreateScan(context.Background(), source.ID, "personal-owner")
+	var structured *fault.Error
+	if !errors.As(err, &structured) || structured.Code != fault.CodeRuleVersionInUse {
+		t.Fatalf("不可执行版本仍被新扫描接受: %v", err)
+	}
+}
+
 func TestFantiaCreatorOccurrencesReuseCanonicalCreatorByStableRuleIdentity(t *testing.T) {
 	ctx := context.Background()
 	resources, jobStore, catalogStore, service, baselineSource, store := setup(t, []byte("unused baseline fixture"))

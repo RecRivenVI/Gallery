@@ -387,6 +387,14 @@ func (s *Server) analyzeRuleImpact(w http.ResponseWriter, r *http.Request) {
 		s.writeRequestError(w, fault.WithField(fault.CodeRuleImpact, "body", err))
 		return
 	}
+	if request.Before == nil {
+		s.writeRequestError(w, fault.WithField(fault.CodeRuleImpact, "before", errors.New("before 必须显式提供；首次版本使用 null")))
+		return
+	}
+	if request.After == nil {
+		s.writeRequestError(w, fault.WithField(fault.CodeRuleImpact, "after", errors.New("after 必须提供")))
+		return
+	}
 	result, err := s.rules.Impact(request.Before, request.After)
 	if err != nil {
 		s.writeRequestError(w, ruleRequestFault(fault.CodeRuleImpact, "after", err))
@@ -1362,10 +1370,10 @@ func (s *Server) createSourceRuleBinding(w http.ResponseWriter, r *http.Request)
 	}
 	var request struct {
 		SourceID     string          `json:"sourceId"`
-		SemanticHash string          `json:"semanticHash"`
+		SemanticHash json.RawMessage `json:"semanticHash"`
 		Parameters   json.RawMessage `json:"parameters"`
 		Priority     int             `json:"priority"`
-		ParameterID  string          `json:"parameterId"`
+		ParameterID  json.RawMessage `json:"parameterId"`
 		Override     json.RawMessage `json:"override"`
 		Condition    json.RawMessage `json:"condition"`
 	}
@@ -1377,11 +1385,48 @@ func (s *Server) createSourceRuleBinding(w http.ResponseWriter, r *http.Request)
 		s.writeRequestError(w, concealForbidden(err))
 		return
 	}
+	decodeModeID := func(field string, raw json.RawMessage) (string, bool) {
+		if raw == nil {
+			return "", true
+		}
+		if bytes.Equal(bytes.TrimSpace(raw), []byte("null")) {
+			s.writeRequestError(w, fault.WithField(fault.CodeValidation, field, fmt.Errorf("必须是非空字符串")))
+			return "", false
+		}
+		var value string
+		if err := json.Unmarshal(raw, &value); err != nil || strings.TrimSpace(value) == "" {
+			s.writeRequestError(w, fault.WithField(fault.CodeValidation, field, fmt.Errorf("必须是非空字符串")))
+			return "", false
+		}
+		return value, true
+	}
+	semanticHash, ok := decodeModeID("semanticHash", request.SemanticHash)
+	if !ok {
+		return
+	}
+	parameterID, ok := decodeModeID("parameterId", request.ParameterID)
+	if !ok {
+		return
+	}
 	var result application.SourceRuleBinding
-	if request.ParameterID != "" {
-		result, err = s.data.CreateSourceRuleBindingFromParameterSet(r.Context(), request.SourceID, request.ParameterID, request.Priority, request.Override, request.Condition)
-	} else {
-		result, err = s.data.CreateSourceRuleBinding(r.Context(), request.SourceID, request.SemanticHash, request.Parameters, request.Priority)
+	parameterMode := request.ParameterID != nil
+	directMode := request.SemanticHash != nil && len(request.Parameters) > 0
+	switch {
+	case parameterMode:
+		if request.SemanticHash != nil || len(request.Parameters) > 0 {
+			s.writeRequestError(w, fault.WithField(fault.CodeValidation, "body", fmt.Errorf("parameterId 与 semanticHash/parameters 互斥")))
+			return
+		}
+		result, err = s.data.CreateSourceRuleBindingFromParameterSet(r.Context(), request.SourceID, parameterID, request.Priority, request.Override, request.Condition)
+	case directMode:
+		if request.ParameterID != nil || len(request.Override) > 0 {
+			s.writeRequestError(w, fault.WithField(fault.CodeValidation, "body", fmt.Errorf("semanticHash/parameters 与 parameterId/override 互斥")))
+			return
+		}
+		result, err = s.data.CreateSourceRuleBindingWithCondition(r.Context(), request.SourceID, semanticHash, request.Parameters, request.Priority, request.Condition)
+	default:
+		s.writeRequestError(w, fault.WithField(fault.CodeValidation, "body", fmt.Errorf("必须提供 semanticHash+parameters 或 parameterId")))
+		return
 	}
 	if err != nil {
 		s.writeRequestError(w, err)

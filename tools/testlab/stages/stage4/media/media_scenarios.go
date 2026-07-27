@@ -122,7 +122,7 @@ func SetupMediaSource(rep *report.Report, sess *environment.Session, sourceRoot 
 		return "", "", 0, fmt.Errorf("创建 RuleVersion 失败: %v status=%d body=%s", err, environment.StatusOf(ruleResp), string(ruleResp.Body))
 	}
 	if _, err := sess.Client.CreateSourceRuleBindingWithResponse(ctx, &api.CreateSourceRuleBindingParams{XGalleryCSRF: sess.CSRF},
-		api.SourceRuleBindingCreateRequest{SourceId: sourceID, SemanticHash: ruleResp.JSON201.SemanticHash, Parameters: map[string]any{}, Priority: 0}, sess.SameOrigin); err != nil {
+		api.NewDirectSourceRuleBindingCreateRequest(sourceID, ruleResp.JSON201.SemanticHash, map[string]any{}, 0), sess.SameOrigin); err != nil {
 		return "", "", 0, fmt.Errorf("绑定规则失败: %v", err)
 	}
 

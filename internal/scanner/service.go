@@ -327,6 +327,9 @@ func (s *Service) createScan(ctx context.Context, sourceID, createdBy, idempoten
 	if err != nil {
 		return jobs.Job{}, err
 	}
+	if version.Status != application.RuleVersionPublished || !version.Executable {
+		return jobs.Job{}, fault.WithField(fault.CodeRuleVersionInUse, "ruleVersion", fmt.Errorf("SourceRuleBinding 引用的 RuleVersion 不可用于新扫描"))
+	}
 	snapshot := &jobs.RuleExecutionSnapshot{
 		SemanticHash: binding.SemanticHash, Parameters: append([]byte(nil), binding.Parameters...),
 		ParametersHash: application.RuleParameterHash(binding.Parameters), RuleIRHash: binding.RuleIRHash,

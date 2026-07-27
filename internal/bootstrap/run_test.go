@@ -132,7 +132,7 @@ func TestWalkingSkeletonPersistsAcrossRealGallerydRestart(t *testing.T) {
 	if err != nil || rule.JSON201 == nil {
 		t.Fatalf("rule: %v status=%d body=%s", err, rule.StatusCode(), rule.Body)
 	}
-	binding, err := client.CreateSourceRuleBindingWithResponse(context.Background(), &api.CreateSourceRuleBindingParams{XGalleryCSRF: csrf}, api.SourceRuleBindingCreateRequest{SourceId: sourceResponse.JSON201.Id, SemanticHash: rule.JSON201.SemanticHash, Parameters: map[string]any{}, Priority: 0}, editor)
+	binding, err := client.CreateSourceRuleBindingWithResponse(context.Background(), &api.CreateSourceRuleBindingParams{XGalleryCSRF: csrf}, api.NewDirectSourceRuleBindingCreateRequest(sourceResponse.JSON201.Id, rule.JSON201.SemanticHash, map[string]any{}, 0), editor)
 	if err != nil || binding.JSON201 == nil {
 		t.Fatalf("binding: %v status=%d body=%s", err, binding.StatusCode(), binding.Body)
 	}

@@ -323,27 +323,39 @@ VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`, compiled.SemanticHash, compiled.RuleSetID, 
 }
 
 func (r *Resources) GetRuleVersion(ctx context.Context, semanticHash string) (RuleVersion, error) {
+	result, err := scanRuleVersion(r.control.QueryRowContext(ctx, `
+SELECT semantic_hash, package_id, rule_set_id, version, package_hash, semantic_hash, rule_ir_hash,
+       canonical_json, compiled_ir_json, status, normalization_algorithm_version, cel_profile_version,
+       parameter_schema_json, tests_json, extensions_json, parent_semantic_hash, created_by,
+       published_at, deprecated_at, executable, compile_error, created_at
+FROM rule_versions WHERE semantic_hash = ?`, semanticHash))
+	if errors.Is(err, sql.ErrNoRows) {
+		return RuleVersion{}, fault.New(fault.CodeNotFound, false, nil)
+	}
+	if err != nil {
+		var structured *fault.Error
+		if errors.As(err, &structured) {
+			return RuleVersion{}, err
+		}
+		return RuleVersion{}, fault.New(fault.CodeInternal, true, err)
+	}
+	return result, nil
+}
+
+func scanRuleVersion(scanner interface{ Scan(...any) error }) (RuleVersion, error) {
 	var result RuleVersion
 	var packageID, status, normalizationVersion, celProfileVersion, parameterSchema, tests, extensions, parentHash, createdBy, compileError sql.NullString
 	var canonical, irJSON string
 	var createdAt, publishedAt, deprecatedAt sql.NullInt64
 	var executable int
-	err := r.control.QueryRowContext(ctx, `
-SELECT semantic_hash, package_id, rule_set_id, version, package_hash, semantic_hash, rule_ir_hash,
-       canonical_json, compiled_ir_json, status, normalization_algorithm_version, cel_profile_version,
-       parameter_schema_json, tests_json, extensions_json, parent_semantic_hash, created_by,
-       published_at, deprecated_at, executable, compile_error, created_at
-FROM rule_versions WHERE semantic_hash = ?`, semanticHash).Scan(
+	err := scanner.Scan(
 		&result.ID, &packageID, &result.RuleSetID, &result.Version, &result.PackageHash, &result.SemanticHash,
 		&result.RuleIRHash, &canonical, &irJSON, &status, &normalizationVersion, &celProfileVersion,
 		&parameterSchema, &tests, &extensions, &parentHash, &createdBy, &publishedAt, &deprecatedAt,
 		&executable, &compileError, &createdAt,
 	)
-	if errors.Is(err, sql.ErrNoRows) {
-		return RuleVersion{}, fault.New(fault.CodeNotFound, false, nil)
-	}
 	if err != nil {
-		return RuleVersion{}, fault.New(fault.CodeInternal, true, err)
+		return RuleVersion{}, err
 	}
 	result.IR, err = rules.DecodeIR([]byte(irJSON))
 	if err != nil {
@@ -371,21 +383,36 @@ func (r *Resources) CreateSourceRuleBinding(ctx context.Context, sourceID, seman
 	return r.createSourceRuleBinding(ctx, sourceID, semanticHash, parameters, priority, "", 0, "", []byte("{}"), []byte("{}"))
 }
 
+func (r *Resources) CreateSourceRuleBindingWithCondition(ctx context.Context, sourceID, semanticHash string, parameters []byte, priority int, condition []byte) (SourceRuleBinding, error) {
+	return r.createSourceRuleBinding(ctx, sourceID, semanticHash, parameters, priority, "", 0, "", []byte("{}"), condition)
+}
+
 func (r *Resources) createSourceRuleBinding(ctx context.Context, sourceID, semanticHash string, parameters []byte, priority int, parameterID string, parameterRevision int, baseParameterHash string, override, condition []byte) (SourceRuleBinding, error) {
 	if priority < 0 || priority > 10000 {
 		return SourceRuleBinding{}, fault.WithField(fault.CodeValidation, "priority", nil)
 	}
-	if _, err := r.GetSource(ctx, sourceID); err != nil {
-		return SourceRuleBinding{}, err
-	}
-	version, err := r.GetRuleVersion(ctx, semanticHash)
+	tx, err := r.control.BeginTx(ctx, nil)
 	if err != nil {
-		return SourceRuleBinding{}, err
+		return SourceRuleBinding{}, fault.New(fault.CodeInternal, true, err)
 	}
-	if version.Status == RuleVersionDeprecated || !version.Executable {
+	defer tx.Rollback()
+	var sourceExists int
+	if err := tx.QueryRowContext(ctx, `SELECT 1 FROM sources WHERE source_id=?`, sourceID).Scan(&sourceExists); errors.Is(err, sql.ErrNoRows) {
+		return SourceRuleBinding{}, fault.New(fault.CodeNotFound, false, nil)
+	} else if err != nil {
+		return SourceRuleBinding{}, fault.New(fault.CodeInternal, true, err)
+	}
+	var canonical, status string
+	var executable int
+	if err := tx.QueryRowContext(ctx, `SELECT canonical_json, status, executable FROM rule_versions WHERE semantic_hash=?`, semanticHash).Scan(&canonical, &status, &executable); errors.Is(err, sql.ErrNoRows) {
+		return SourceRuleBinding{}, fault.New(fault.CodeNotFound, false, nil)
+	} else if err != nil {
+		return SourceRuleBinding{}, fault.New(fault.CodeInternal, true, err)
+	}
+	if status != RuleVersionPublished || executable != 1 {
 		return SourceRuleBinding{}, fault.New(fault.CodeRuleVersionInUse, false, nil)
 	}
-	compiled, err := rules.CompilePackage(version.Canonical)
+	compiled, err := rules.CompilePackage([]byte(canonical))
 	if err != nil {
 		return SourceRuleBinding{}, fault.New(fault.CodeRuleSchemaInvalid, false, err)
 	}
@@ -417,7 +444,7 @@ func (r *Resources) createSourceRuleBinding(ctx context.Context, sourceID, seman
 		Status: RuleBindingActive, CreatedAt: r.clock.Now().UTC(),
 	}
 	result.UpdatedAt = result.CreatedAt
-	if _, err := r.control.ExecContext(ctx, `
+	if _, err := tx.ExecContext(ctx, `
 INSERT INTO source_rule_bindings
 (binding_id, source_id, semantic_hash, parameters_json, priority, rule_ir_hash, compiled_ir_json,
  parameter_id, parameter_revision, parameter_hash, override_json, condition_json, status, created_at, updated_at)
@@ -428,6 +455,9 @@ VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`, result.ID, result.SourceI
 			return SourceRuleBinding{}, fault.New(fault.CodeRuleBindingConflict, false, err)
 		}
 		return SourceRuleBinding{}, fault.New(fault.CodeConflict, false, err)
+	}
+	if err := tx.Commit(); err != nil {
+		return SourceRuleBinding{}, fault.New(fault.CodeInternal, true, err)
 	}
 	return result, nil
 }

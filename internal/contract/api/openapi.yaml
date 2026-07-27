@@ -911,7 +911,7 @@ paths:
           required: true
           schema: {$ref: "#/components/schemas/RulePackageId"}
         - $ref: "#/components/parameters/CSRFHeader"
-        - $ref: "#/components/parameters/IfMatch"
+        - $ref: "#/components/parameters/RequiredIfMatch"
       requestBody:
         required: true
         content:
@@ -937,7 +937,7 @@ paths:
           required: true
           schema: {$ref: "#/components/schemas/RulePackageId"}
         - $ref: "#/components/parameters/CSRFHeader"
-        - $ref: "#/components/parameters/IfMatch"
+        - $ref: "#/components/parameters/RequiredIfMatch"
       responses:
         "200":
           description: 校验结果
@@ -958,7 +958,7 @@ paths:
           required: true
           schema: {$ref: "#/components/schemas/RulePackageId"}
         - $ref: "#/components/parameters/CSRFHeader"
-        - $ref: "#/components/parameters/IfMatch"
+        - $ref: "#/components/parameters/RequiredIfMatch"
       requestBody:
         required: false
         content:
@@ -1067,7 +1067,7 @@ paths:
           required: true
           schema: {$ref: "#/components/schemas/RulePackageId"}
         - $ref: "#/components/parameters/CSRFHeader"
-        - $ref: "#/components/parameters/IfMatch"
+        - $ref: "#/components/parameters/RequiredIfMatch"
       requestBody:
         required: true
         content:
@@ -2862,6 +2862,13 @@ components:
       schema:
         type: string
         pattern: '^"?[0-9]+"?$'
+    RequiredIfMatch:
+      name: If-Match
+      in: header
+      required: true
+      schema:
+        type: string
+        pattern: '^"?[0-9]+"?$'
   responses:
     InternalError:
       description: 内部失败；不返回堆栈、路径或数据库文本
@@ -4430,7 +4437,7 @@ components:
       additionalProperties: false
       required: [before, after]
       properties:
-        before: {type: object, additionalProperties: true}
+        before: {type: object, nullable: true, additionalProperties: true}
         after: {type: object, additionalProperties: true}
     RuleImpactResult:
       type: object
@@ -4499,7 +4506,26 @@ components:
     SourceRuleBindingCreateRequest:
       type: object
       additionalProperties: false
-      required: [sourceId, semanticHash, parameters, priority]
+      required: [sourceId, priority]
+      oneOf:
+        - type: object
+          required: [semanticHash, parameters]
+          properties:
+            semanticHash: {$ref: "#/components/schemas/SHA256Digest"}
+            parameters: {type: object, additionalProperties: true}
+          not:
+            anyOf:
+              - required: [parameterId]
+              - required: [override]
+        - type: object
+          required: [parameterId]
+          properties:
+            parameterId: {$ref: "#/components/schemas/RuleParameterId"}
+            override: {type: object, additionalProperties: true}
+          not:
+            anyOf:
+              - required: [semanticHash]
+              - required: [parameters]
       properties:
         sourceId:
           $ref: "#/components/schemas/SourceId"
@@ -4614,9 +4640,9 @@ components:
         name: {type: string}
         description: {type: string}
         status: {type: string, enum: [active, deprecated, deleted]}
-        currentSemanticHash: {$ref: "#/components/schemas/SHA256Digest", nullable: true}
-        latestValidSemanticHash: {$ref: "#/components/schemas/SHA256Digest", nullable: true}
-        draftId: {$ref: "#/components/schemas/RuleDraftId", nullable: true}
+        currentSemanticHash: {$ref: "#/components/schemas/SHA256Digest"}
+        latestValidSemanticHash: {$ref: "#/components/schemas/SHA256Digest"}
+        draftId: {$ref: "#/components/schemas/RuleDraftId"}
         extensionRequirements: {type: object, additionalProperties: true}
         createdBy: {type: string}
         revision: {type: integer, minimum: 1}
@@ -4638,7 +4664,7 @@ components:
       properties:
         id: {$ref: "#/components/schemas/RuleDraftId"}
         packageId: {$ref: "#/components/schemas/RulePackageId"}
-        baseSemanticHash: {$ref: "#/components/schemas/SHA256Digest", nullable: true}
+        baseSemanticHash: {$ref: "#/components/schemas/SHA256Digest"}
         content: {}
         format: {type: string, enum: [json, yaml, toml]}
         validationStatus: {type: string, enum: [draft, validated, invalid]}
@@ -4662,6 +4688,7 @@ components:
       properties:
         expectedRevision: {type: integer, minimum: 1}
         reason: {type: string, maxLength: 4096}
+        confirmImpact: {type: boolean, default: false}
     RuleRollbackRequest:
       type: object
       additionalProperties: false

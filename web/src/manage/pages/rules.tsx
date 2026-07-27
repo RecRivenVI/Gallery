@@ -35,6 +35,12 @@ import {
   formatDateTime
 } from '../ui';
 
+const SEMANTIC_HASH_PATTERN = /^[a-f0-9]{64}$/;
+
+function isSemanticHash(value: string | undefined): value is string {
+  return value !== undefined && SEMANTIC_HASH_PATTERN.test(value);
+}
+
 function RulePackagesPanel() {
   const { show } = useToast();
   const packages = useRulePackages();
@@ -121,10 +127,10 @@ function RulePackagesPanel() {
                 id: 'current',
                 header: '当前版本',
                 render: (row) =>
-                  row.currentSemanticHash === undefined ? (
-                    <Absent>尚未发布</Absent>
-                  ) : (
+                  isSemanticHash(row.currentSemanticHash) ? (
                     <MonoId value={row.currentSemanticHash} label="semanticHash" />
+                  ) : (
+                    <Absent>尚未发布</Absent>
                   )
               },
               { id: 'revision', header: 'revision', render: (row) => row.revision },
@@ -140,12 +146,12 @@ function RulePackagesPanel() {
 function BindingsPanel() {
   const { show } = useToast();
   const sources = useSources();
+  const packages = useRulePackages();
   const [sourceId, setSourceId] = useState<string | null>(null);
   const bindings = useSourceRuleBindings(sourceId);
   const effective = useEffectiveRuleBinding(sourceId);
   const create = useCreateSourceRuleBinding();
-  const canWrite = useCapability('rules.write');
-  const [semanticHash, setSemanticHash] = useState('');
+  const [semanticHash, setSemanticHash] = useState<string | null>(null);
   const [priority, setPriority] = useState('100');
   const [parameters, setParameters] = useState('{}');
 
@@ -163,6 +169,17 @@ function BindingsPanel() {
   } catch {
     parameterError = '不是合法的 JSON';
   }
+  const publishedVersions =
+    packages.data?.items.flatMap((item) =>
+      item.status === 'active' && isSemanticHash(item.currentSemanticHash)
+        ? [
+            {
+              id: item.currentSemanticHash,
+              label: `${item.name} · ${item.currentSemanticHash.slice(0, 12)}…`
+            }
+          ]
+        : []
+    ) ?? [];
 
   return (
     <Section
@@ -227,54 +244,71 @@ function BindingsPanel() {
             )}
           </AsyncPanel>
 
-          {canWrite ? (
-            <div className="manage-form">
-              <h3 className="manage-section__title">新增绑定</h3>
-              <div className="manage-form__row">
-                <TextInput label="semanticHash" value={semanticHash} onChange={setSemanticHash} isRequired />
-                <TextInput
-                  label="priority"
-                  value={priority}
-                  onChange={setPriority}
-                  errorMessage={priorityValid ? undefined : '必须是整数'}
-                />
-              </div>
+          <div className="manage-form">
+            <h3 className="manage-section__title">新增绑定</h3>
+            <div className="manage-form__row">
+              <AsyncPanel query={packages}>
+                {() => (
+                  <Select
+                    label="已发布版本"
+                    placeholder="选择 active 规则包的当前版本"
+                    options={publishedVersions}
+                    selectedKey={semanticHash}
+                    onSelectionChange={setSemanticHash}
+                    description="只列出 active 规则包的当前 immutable RuleVersion。"
+                  />
+                )}
+              </AsyncPanel>
               <TextInput
-                label="参数（规范 JSON 对象）"
-                value={parameters}
-                onChange={setParameters}
-                isMultiline
-                rows={6}
-                errorMessage={parameterError}
+                label="priority"
+                value={priority}
+                onChange={setPriority}
+                errorMessage={priorityValid ? undefined : '必须是整数'}
               />
-              <div className="manage-form__actions">
-                <Button
-                  variant="primary"
-                  isPending={create.isPending}
-                  isDisabled={semanticHash.trim() === '' || !priorityValid || parsedParameters === null}
-                  onPress={() => {
-                    if (parsedParameters === null || !priorityValid) return;
-                    create.mutate(
-                      {
-                        sourceId,
-                        semanticHash: semanticHash.trim(),
-                        priority: priorityValue,
-                        parameters: parsedParameters
-                      },
-                      {
-                        onSuccess: () => {
-                          show({ title: '绑定已创建', tone: 'success' });
-                        }
-                      }
-                    );
-                  }}
-                >
-                  创建绑定
-                </Button>
-              </div>
-              <InlineError error={create.error} title="绑定未能创建" />
             </div>
-          ) : null}
+            <TextInput
+              label="参数（规范 JSON 对象）"
+              value={parameters}
+              onChange={setParameters}
+              isMultiline
+              rows={6}
+              errorMessage={parameterError}
+            />
+            <div className="manage-form__actions">
+              <Button
+                variant="primary"
+                isPending={create.isPending}
+                isDisabled={semanticHash === null || !priorityValid || parsedParameters === null}
+                onPress={() => {
+                  if (semanticHash === null || parsedParameters === null || !priorityValid) return;
+                  create.mutate(
+                    {
+                      sourceId,
+                      semanticHash,
+                      priority: priorityValue,
+                      parameters: parsedParameters
+                    },
+                    {
+                      onSuccess: () => {
+                        setSemanticHash(null);
+                        setPriority('100');
+                        setParameters('{}');
+                        void bindings.refetch();
+                        void effective.refetch();
+                        show({ title: '绑定已创建', tone: 'success' });
+                      }
+                    }
+                  );
+                }}
+              >
+                创建绑定
+              </Button>
+            </div>
+            <p className="manage-section__description">
+              Binding 按所选 Source 做资源作用域授权；global capability 仅用于提示，最终以服务端结果为准。
+            </p>
+            <InlineError error={create.error} title="绑定未能创建" />
+          </div>
         </>
       )}
     </Section>
