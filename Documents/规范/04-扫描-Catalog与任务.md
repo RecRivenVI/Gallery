@@ -189,6 +189,8 @@ catalog v10→v11 是一次有界例外：旧 Catalog 未持久化规则 `CoverP
 ## 取消、崩溃和离线
 
 - **构建中取消/崩溃**：旧 revision 元组继续服务；候选按 job ID 清理。
+- **取消与终态线性化**：queued/running 与仍在 retry backoff 的 failed/needs_repair 可接受持久取消；取消先于失败、维护完成或 `BeginPublishing` 提交时，Job 与 active Attempt 必须在同一 control 事务收敛 cancelled，清除逻辑重试计划且不得进入 publication。`publishing` 是 publication 提交边界，迟到取消返回 `JOB_STATE_CONFLICT`；Catalog 若已发布，则 `Complete`/`RecoverCompleted` 以 publication 权威事实收敛 completed，不能被取消或租约恢复覆盖。
+- **父子取消与进程关闭**：Scan 的显式持久取消必须传播至活动或 retry-backoff 的 Hash 子 Job；Hash 在读取前、长读取期间和提交摘要前复核父 Job，父已取消时停止正文读取并收敛 cancelled。只有执行 context 因 galleryd 关闭而中断、没有持久取消请求时，父子 Job 保存为 retryable `PROCESS_INTERRUPTED`，不得伪装成用户取消。
 - **发布事务中崩溃**：重启后只能看到旧或新的完整 revision 元组，由 SQLite 原子性决定。
 - **发布后 control 更新前崩溃**：reconciliation 补写 completed。
 - **Source 暂不可达**：本次扫描失败或标记离线，不发布“全部删除”的 revision。
