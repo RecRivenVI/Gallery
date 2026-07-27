@@ -11,14 +11,17 @@
 
 import { useState } from 'react';
 import { Link } from 'react-router-dom';
-import { Badge, Button, Select, useToast } from '../../design';
+import { Badge, Button, Select, TextInput, useToast } from '../../design';
 import { errorCode } from '../../shared/errors';
-import { useAnyCapability, JOB_MUTATION_CAPABILITIES } from '../../shared/session';
+import { useAnyCapability, useCapability, JOB_MUTATION_CAPABILITIES } from '../../shared/session';
 import {
   newIdempotencyKey,
   useCancelJob,
+  useCreateLibrary,
   useCreateScanJob,
+  useCreateSource,
   useJobs,
+  useLibraries,
   useRetryJob,
   useSourceScanStatus,
   useSources,
@@ -67,6 +70,201 @@ const JOB_STATUS_FILTERS = [
   { id: 'superseded', label: '已被取代' },
   { id: 'needs_repair', label: '需要修复' }
 ] as const;
+
+/** JSON Schema 的 min/maxLength 按 Unicode code point，不按 UTF-16 code unit。 */
+function codePointLength(value: string): number {
+  return Array.from(value).length;
+}
+
+function SourceCreationExplanation({ error }: { error: unknown }) {
+  const code = errorCode(error);
+  if (code === 'SOURCE_PATH_INVALID') {
+    return (
+      <p className="manage-section__description">
+        根路径必须是 galleryd 所在机器上已经存在、可解析的绝对目录。浏览器所在机器与服务端不是同一台时，
+        请填写服务端看到的路径；本界面不会把它转换成浏览器本机路径。
+      </p>
+    );
+  }
+  if (code === 'APPDIRS_SOURCE_OVERLAP' || code === 'SOURCE_ROOTS_OVERLAP') {
+    return (
+      <p className="manage-section__description">
+        Source 不能与 Gallery 的 AppDirs 或其他 Source 互相包含。该隔离同时保护媒体根只读与 Catalog
+        可重建边界，不能通过界面放宽。
+      </p>
+    );
+  }
+  return null;
+}
+
+/**
+ * 新实例的资源自举入口。
+ *
+ * 创建 Library 需要 global library.write，因此可以用 bootstrap capability 隐藏必然失败的入口；
+ * 创建 Source 则按所选 Library 授权，bootstrap 不含 scoped grant，必须把最终裁决交给服务端。
+ */
+function ResourceBootstrap() {
+  const { show } = useToast();
+  const libraries = useLibraries();
+  const createLibrary = useCreateLibrary();
+  const createSource = useCreateSource();
+  const canCreateLibrary = useCapability('library.write');
+  const [libraryName, setLibraryName] = useState('');
+  const [libraryId, setLibraryId] = useState<string | null>(null);
+  const [sourceName, setSourceName] = useState('');
+  const [rootPath, setRootPath] = useState('');
+
+  const normalizedLibraryName = libraryName.trim();
+  const normalizedSourceName = sourceName.trim();
+  const libraryNameError =
+    codePointLength(normalizedLibraryName) > 256 ? '名称不能超过 256 个字符' : undefined;
+  const sourceNameError =
+    codePointLength(normalizedSourceName) > 256 ? '显示名不能超过 256 个字符' : undefined;
+  const rootPathError = codePointLength(rootPath) > 32768 ? '路径不能超过 32768 个字符' : undefined;
+
+  return (
+    <Section
+      title="Library 与 Source"
+      description="先创建资料库，再登记只读媒体根。当前契约只支持创建；提交前请确认名称与服务端绝对路径。"
+    >
+      <ContractNoteList area="resources" only={['resources-create-only']} />
+
+      {canCreateLibrary ? (
+        <div className="manage-form">
+          <div className="manage-form__row">
+            <TextInput
+              label="Library 名称"
+              value={libraryName}
+              onChange={setLibraryName}
+              errorMessage={libraryNameError}
+              isDisabled={createLibrary.isPending}
+              isRequired
+            />
+            <div className="manage-form__actions">
+              <Button
+                variant="primary"
+                isPending={createLibrary.isPending}
+                isDisabled={normalizedLibraryName === '' || libraryNameError !== undefined}
+                onPress={() => {
+                  createLibrary.mutate(
+                    { name: normalizedLibraryName },
+                    {
+                      onSuccess: (library) => {
+                        setLibraryName('');
+                        setLibraryId(library.id);
+                        show({ title: `Library ${library.name} 已创建`, tone: 'success' });
+                      }
+                    }
+                  );
+                }}
+              >
+                创建 Library
+              </Button>
+            </div>
+          </div>
+          <InlineError error={createLibrary.error} title="Library 未能创建" />
+        </div>
+      ) : (
+        <p className="manage-section__description">
+          当前主体在 global scope 没有 library.write，无法创建新的 Library；已有 Library 下的 Source 仍可能由
+          scoped grant 授权，最终以服务端响应为准。
+        </p>
+      )}
+
+      <AsyncPanel query={libraries}>
+        {(data) => (
+          <>
+            <DataTable
+              caption="Library"
+              rows={data.libraries}
+              rowKey={(row) => row.id}
+              emptyTitle="还没有创建任何 Library"
+              emptyDescription="新实例必须先创建 Library，随后才能登记 Source。"
+              columns={[
+                { id: 'name', header: '名称', render: (row) => row.name },
+                {
+                  id: 'id',
+                  header: 'Library ID',
+                  render: (row) => <MonoId value={row.id} label="Library ID" />
+                },
+                { id: 'createdAt', header: '创建时间', render: (row) => formatDateTime(row.createdAt) }
+              ]}
+            />
+
+            {data.libraries.length === 0 ? null : (
+              <div className="manage-form">
+                <div className="manage-form__row">
+                  <Select
+                    label="所属 Library"
+                    placeholder="选择资料库"
+                    options={data.libraries.map((item) => ({
+                      id: item.id,
+                      label: `${item.name} · ${item.id}`
+                    }))}
+                    selectedKey={libraryId}
+                    onSelectionChange={setLibraryId}
+                    isDisabled={createSource.isPending}
+                    isRequired
+                  />
+                  <TextInput
+                    label="Source 显示名"
+                    value={sourceName}
+                    onChange={setSourceName}
+                    errorMessage={sourceNameError}
+                    isDisabled={createSource.isPending}
+                    isRequired
+                  />
+                </div>
+                <TextInput
+                  label="Source 根路径"
+                  value={rootPath}
+                  onChange={setRootPath}
+                  errorMessage={rootPathError}
+                  isDisabled={createSource.isPending}
+                  description="galleryd 所在机器上已存在的绝对目录。路径只在创建请求中发送，Source 列表不会回显。"
+                  isMultiline
+                  rows={2}
+                  isRequired
+                />
+                <div className="manage-form__actions">
+                  <Button
+                    variant="primary"
+                    isPending={createSource.isPending}
+                    isDisabled={
+                      libraryId === null ||
+                      normalizedSourceName === '' ||
+                      rootPath === '' ||
+                      sourceNameError !== undefined ||
+                      rootPathError !== undefined
+                    }
+                    onPress={() => {
+                      if (libraryId === null) return;
+                      createSource.mutate(
+                        { libraryId, displayName: normalizedSourceName, rootPath },
+                        {
+                          onSuccess: (source) => {
+                            setSourceName('');
+                            setRootPath('');
+                            createSource.reset();
+                            show({ title: `Source ${source.displayName} 已登记`, tone: 'success' });
+                          }
+                        }
+                      );
+                    }}
+                  >
+                    登记 Source
+                  </Button>
+                </div>
+                <InlineError error={createSource.error} title="Source 未能登记" />
+                <SourceCreationExplanation error={createSource.error} />
+              </div>
+            )}
+          </>
+        )}
+      </AsyncPanel>
+    </Section>
+  );
+}
 
 function canCancel(job: Job): boolean {
   return job.status === 'queued' || job.status === 'running';
@@ -127,7 +325,7 @@ function ScanLauncher() {
                 placeholder="选择要扫描的来源"
                 options={data.sources.map((item) => ({
                   id: item.id,
-                  label: `${item.displayName}${item.available ? '' : '（离线）'}`
+                  label: `${item.displayName} · ${item.id}${item.available ? '' : '（离线）'}`
                 }))}
                 selectedKey={sourceId}
                 onSelectionChange={setSourceId}
@@ -456,8 +654,9 @@ export function ScansPage() {
     <>
       <PageHeader
         title="扫描与任务"
-        lead="发起扫描、观察任务、取消或重试。任务状态永远以 HTTP 快照为准；实时通道断开只影响你多快看到变化，不影响这里显示的数据是否有效。"
+        lead="创建 Library、登记只读 Source、发起扫描并观察任务。任务状态永远以 HTTP 快照为准；实时通道断开只影响你多快看到变化，不影响这里显示的数据是否有效。"
       />
+      <ResourceBootstrap />
       <ScanLauncher />
       <SourceTable />
       <JobTable />

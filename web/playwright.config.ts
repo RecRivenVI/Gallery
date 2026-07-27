@@ -16,19 +16,23 @@ function pickPreviewPort(): number {
 }
 
 const previewPort = pickPreviewPort();
+const realMode = Boolean(process.env.GALLERY_REAL_BASE_URL ?? process.env.GALLERY_REAL_LAN_BASE_URL);
 
 export default defineConfig({
   testDir: './e2e',
-  fullyParallel: true,
+  fullyParallel: !realMode,
   forbidOnly: true,
-  retries: 1,
+  retries: realMode ? 0 : 1,
+  workers: realMode ? 1 : undefined,
   reporter: [['list'], ['html', { open: 'never' }]],
   use: {
     baseURL:
       process.env.GALLERY_REAL_BASE_URL ??
       process.env.GALLERY_REAL_LAN_BASE_URL ??
       `http://127.0.0.1:${previewPort}`,
-    trace: 'retain-on-failure',
+    // 真实后端完成 Personal 配对后网络录制会包含 Cookie/Set-Cookie；禁止把这类凭据写进
+    // trace。mock smoke 不持有真实 Session，仍保留失败 trace 供本地诊断。
+    trace: realMode ? 'off' : 'retain-on-failure',
     screenshot: 'only-on-failure',
     video: 'retain-on-failure'
   },
@@ -42,7 +46,15 @@ export default defineConfig({
         },
   projects: [
     { name: 'chromium', use: { ...devices['Desktop Chrome'] } },
-    { name: 'chrome', use: { ...devices['Desktop Chrome'], channel: 'chrome' } },
-    { name: 'edge', use: { ...devices['Desktop Edge'], channel: 'msedge' } }
+    {
+      name: 'chrome',
+      testIgnore: realMode ? /real-bootstrap\.spec\.ts/ : undefined,
+      use: { ...devices['Desktop Chrome'], channel: 'chrome' }
+    },
+    {
+      name: 'edge',
+      testIgnore: realMode ? /real-bootstrap\.spec\.ts/ : undefined,
+      use: { ...devices['Desktop Edge'], channel: 'msedge' }
+    }
   ]
 });

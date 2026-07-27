@@ -174,7 +174,10 @@ function BindingsPanel() {
           <Select
             label="来源"
             placeholder="选择一个来源"
-            options={data.sources.map((item) => ({ id: item.id, label: item.displayName }))}
+            options={data.sources.map((item) => ({
+              id: item.id,
+              label: `${item.displayName} · ${item.id}`
+            }))}
             selectedKey={sourceId}
             onSelectionChange={setSourceId}
           />

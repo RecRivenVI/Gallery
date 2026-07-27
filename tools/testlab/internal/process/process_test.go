@@ -1,9 +1,13 @@
 package process
 
 import (
+	"context"
+	"errors"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
+	"strings"
 	"testing"
 	"time"
 )
@@ -21,6 +25,20 @@ func TestTestlabProcessHelper(t *testing.T) {
 		os.Exit(3)
 	case "sleep-without-descriptor":
 		time.Sleep(5 * time.Second)
+		os.Exit(0)
+	case "spawn-tree-child":
+		child := exec.Command(os.Args[0], "-test.run=TestTestlabProcessHelper")
+		child.Env = append(os.Environ(), "TESTLAB_PROCESS_HELPER=tree-child")
+		if err := child.Start(); err != nil {
+			os.Exit(4)
+		}
+		if err := os.WriteFile(os.Getenv("TESTLAB_TREE_CHILD_PID"), []byte(strconv.Itoa(child.Process.Pid)), 0o600); err != nil {
+			os.Exit(5)
+		}
+		time.Sleep(30 * time.Second)
+		os.Exit(0)
+	case "tree-child":
+		time.Sleep(30 * time.Second)
 		os.Exit(0)
 	default:
 		t.Fatalf("未知 TESTLAB_PROCESS_HELPER: %s", os.Getenv("TESTLAB_PROCESS_HELPER"))
@@ -107,7 +125,14 @@ func TestStartGenericTimesOutAndKillsProcess(t *testing.T) {
 	}
 }
 
-func TestStopOnAlreadyExitedProcessReportsGraceful(t *testing.T) {
+func TestStartGallerydWithSourceRootsRejectsEmptyRootBeforeStarting(t *testing.T) {
+	_, err := StartGallerydWithSourceRoots("not-executed", t.TempDir(), filepath.Join(t.TempDir(), "log"), time.Second, "")
+	if err == nil {
+		t.Fatal("空 Source 根必须在启动子进程前被拒绝")
+	}
+}
+
+func TestStopOnAlreadyExitedNonzeroProcessReportsFailure(t *testing.T) {
 	appRoot := t.TempDir()
 	logPath := filepath.Join(t.TempDir(), "helper.log")
 	cmd := helperCommand(t, "exit-immediately")
@@ -128,7 +153,51 @@ func TestStopOnAlreadyExitedProcessReportsGraceful(t *testing.T) {
 	}()
 	<-proc.exited
 	outcome := proc.Stop()
-	if !outcome.ExitedGracefully || outcome.ForcedKill {
-		t.Fatalf("Stop() on an already-exited process should report ExitedGracefully without forcing a kill, got %+v", outcome)
+	if outcome.ExitedGracefully || outcome.ForcedKill || outcome.Err == nil {
+		t.Fatalf("非零退出不能被报告为优雅停止: %+v", outcome)
+	}
+}
+
+func TestRunCommandContextCancelsEntireProcessTree(t *testing.T) {
+	pidPath := filepath.Join(t.TempDir(), "child.pid")
+	cmd := helperCommand(t, "spawn-tree-child")
+	cmd.Env = append(cmd.Env, "TESTLAB_TREE_CHILD_PID="+pidPath)
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() { done <- RunCommandContext(ctx, cmd) }()
+
+	var childPID int
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		content, err := os.ReadFile(pidPath)
+		if err == nil {
+			childPID, err = strconv.Atoi(strings.TrimSpace(string(content)))
+			if err != nil {
+				t.Fatal(err)
+			}
+			break
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	if childPID == 0 {
+		cancel()
+		t.Fatal("父进程没有登记派生子进程 PID")
+	}
+	cancel()
+	select {
+	case err := <-done:
+		if !errors.Is(err, context.Canceled) {
+			t.Fatalf("取消命令树错误 = %v，期望 context.Canceled", err)
+		}
+	case <-time.After(12 * time.Second):
+		t.Fatal("取消命令树超时")
+	}
+
+	deadline = time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) && processStillActive(childPID) {
+		time.Sleep(20 * time.Millisecond)
+	}
+	if processStillActive(childPID) {
+		t.Fatalf("派生子进程 %d 在命令树取消后仍存活", childPID)
 	}
 }

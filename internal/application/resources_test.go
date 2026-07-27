@@ -5,6 +5,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -78,5 +79,52 @@ func TestLibrarySourceRuleVersionAndBindingArePersistent(t *testing.T) {
 	_, err = resources.CreateSource(context.Background(), library.ID, "overlap", filepath.Join(dirs.Data, "inside"))
 	if !errors.As(err, &structured) || structured.Code != fault.CodeAppDirsOverlap {
 		t.Fatalf("Source/AppDirs 重叠未拒绝: %v", err)
+	}
+}
+
+func TestLibraryAndSourceTextLimitsCountUnicodeCharacters(t *testing.T) {
+	root := t.TempDir()
+	dirs := appdirs.UnderRoot(filepath.Join(root, "app"))
+	if err := dirs.Ensure(filesystem.OS{}); err != nil {
+		t.Fatal(err)
+	}
+	store, err := storage.Open(context.Background(), dirs)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	fixedClock := clock.Fixed{Time: time.Date(2026, 7, 27, 0, 0, 0, 0, time.UTC)}
+	resources, err := application.NewResources(store.Control.SQL(), dirs, filesystem.OS{}, fixedClock, identity.NewGenerator(fixedClock))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	library, err := resources.CreateLibrary(context.Background(), strings.Repeat("库", 256))
+	if err != nil {
+		t.Fatalf("OpenAPI 允许的 256 个 Unicode 字符被拒绝: %v", err)
+	}
+	_, err = resources.CreateLibrary(context.Background(), strings.Repeat("库", 257))
+	assertFaultField(t, err, fault.CodeValidation, "name")
+
+	sourceRoot := filepath.Join(root, "source")
+	if err := os.MkdirAll(sourceRoot, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := resources.CreateSource(context.Background(), library.ID, strings.Repeat("源", 256), sourceRoot); err != nil {
+		t.Fatalf("OpenAPI 允许的 256 个 Unicode 字符被拒绝: %v", err)
+	}
+	_, err = resources.CreateSource(context.Background(), library.ID, strings.Repeat("源", 257), sourceRoot)
+	assertFaultField(t, err, fault.CodeValidation, "displayName")
+
+	overlongRoot := string(filepath.Separator) + strings.Repeat("r", 32768)
+	_, err = resources.CreateSource(context.Background(), library.ID, "root-limit", overlongRoot)
+	assertFaultField(t, err, fault.CodeSourcePathInvalid, "rootPath")
+}
+
+func assertFaultField(t *testing.T, err error, code fault.Code, field string) {
+	t.Helper()
+	var structured *fault.Error
+	if !errors.As(err, &structured) || structured.Code != code || structured.Field != field {
+		t.Fatalf("错误 = %v，期望 code=%s field=%s", err, code, field)
 	}
 }

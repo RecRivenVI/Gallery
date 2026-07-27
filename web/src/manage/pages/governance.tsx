@@ -269,7 +269,10 @@ function BindingIssuesPanel() {
                 placeholder="全部来源"
                 options={[
                   { id: '', label: '全部来源' },
-                  ...data.sources.map((item) => ({ id: item.id, label: item.displayName }))
+                  ...data.sources.map((item) => ({
+                    id: item.id,
+                    label: `${item.displayName} · ${item.id}`
+                  }))
                 ]}
                 selectedKey={sourceId ?? ''}
                 onSelectionChange={(key) => setSourceId(key === null || key === '' ? null : key)}
@@ -663,6 +666,12 @@ function BindingActionsPanel() {
   const [sourceKey, setSourceKey] = useState('');
 
   const current = BINDING_ACTIONS.find((item) => item.id === kind);
+  const selectedSource = sources.data?.sources.find((item) => item.id === sourceId);
+  const confirmationDescription = `${current?.description ?? ''}${
+    selectedSource === undefined
+      ? ''
+      : ` 目标 Source：${selectedSource.displayName}（${selectedSource.id}）。`
+  }`;
 
   return (
     <Section
@@ -685,7 +694,10 @@ function BindingActionsPanel() {
                 <Select
                   label="来源"
                   placeholder="选择来源"
-                  options={data.sources.map((item) => ({ id: item.id, label: item.displayName }))}
+                  options={data.sources.map((item) => ({
+                    id: item.id,
+                    label: `${item.displayName} · ${item.id}`
+                  }))}
                   selectedKey={sourceId}
                   onSelectionChange={setSourceId}
                 />
@@ -701,7 +713,7 @@ function BindingActionsPanel() {
               confirmLabel="确认执行"
               isDisabled={sourceId === null || sourceKey.trim() === ''}
               isPending={action.isPending}
-              description={current?.description ?? ''}
+              description={confirmationDescription}
               onConfirm={() => {
                 if (sourceId === null) return;
                 action.mutate(

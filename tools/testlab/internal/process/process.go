@@ -4,7 +4,10 @@
 package process
 
 import (
+	"bytes"
+	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -14,7 +17,10 @@ import (
 
 // GracefulStopTimeout 是等待 galleryd 响应正常停止信号的上限；超时后回退到强制
 // 终止，并把这次回退记录在返回结果里，不得把回退悄悄当成正常路径。
-const GracefulStopTimeout = 15 * time.Second
+const (
+	GracefulStopTimeout = 15 * time.Second
+	ForceKillTimeout    = 5 * time.Second
+)
 
 // descriptor 镜像 internal/platform/descriptor.Descriptor 的 JSON 形状；本工具不
 // 导入 internal/* 包，因此在这里独立声明公开可见的字段子集。
@@ -37,12 +43,21 @@ type Process struct {
 // BuildGalleryd 用当前固定 Go 工具链编译一份独立的 galleryd 可执行文件，供本轮全部
 // 场景复用，避免每次启动都重新编译。
 func BuildGalleryd(goBin, repoRoot, outPath string) error {
+	return BuildGallerydContext(context.Background(), goBin, repoRoot, outPath)
+}
+
+// BuildGallerydContext 与 BuildGalleryd 相同，但允许验证运行器在超时或收到终止信号时
+// 取消编译，避免 CI 或本地中断后遗留无界等待的 go 子进程。
+func BuildGallerydContext(ctx context.Context, goBin, repoRoot, outPath string) error {
 	cmd := exec.Command(goBin, "build", "-o", outPath, "./cmd/galleryd")
 	cmd.Dir = repoRoot
 	cmd.Env = append(os.Environ(), "GOTOOLCHAIN=local", "CGO_ENABLED=0")
-	output, err := cmd.CombinedOutput()
+	var output bytes.Buffer
+	cmd.Stdout = &output
+	cmd.Stderr = &output
+	err := RunCommandContext(ctx, cmd)
 	if err != nil {
-		return fmt.Errorf("build galleryd: %w: %s", err, string(output))
+		return fmt.Errorf("build galleryd: %w: %s", err, output.String())
 	}
 	return nil
 }
@@ -53,7 +68,37 @@ func BuildGalleryd(goBin, repoRoot, outPath string) error {
 // 由调用者指定，必须位于授权测试根的 logs/ 目录内；本函数只负责创建并在返回的
 // Process 生命周期内持有该文件句柄，Stop() 会正确关闭它。
 func StartGalleryd(binPath, appRoot, logPath string, timeout time.Duration) (*Process, error) {
-	cmd := exec.Command(binPath, "-mode=personal", "-listen=127.0.0.1:0", "-app-root="+appRoot)
+	return StartGallerydWithSourceRootsContext(context.Background(), binPath, appRoot, logPath, timeout)
+}
+
+// StartGallerydWithSourceRoots 与 StartGalleryd 相同，并把调用方拥有的临时合成 Source
+// 加入启动重叠守卫。具名参数刻意只接受 Source 根，不能覆盖这里固定的 Personal、loopback
+// 自动端口与临时 AppDirs。
+func StartGallerydWithSourceRoots(binPath, appRoot, logPath string, timeout time.Duration, sourceRoots ...string) (*Process, error) {
+	return StartGallerydWithSourceRootsContext(
+		context.Background(), binPath, appRoot, logPath, timeout, sourceRoots...,
+	)
+}
+
+// StartGallerydWithSourceRootsContext 与 StartGallerydWithSourceRoots 相同，但启动等待受 ctx
+// 约束；取消或超时后会强制终止尚未完成启动的 galleryd，并以独立二级上限等待退出。
+func StartGallerydWithSourceRootsContext(
+	ctx context.Context,
+	binPath, appRoot, logPath string,
+	timeout time.Duration,
+	sourceRoots ...string,
+) (*Process, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, fmt.Errorf("启动 galleryd 已取消: %w", err)
+	}
+	args := []string{"-mode=personal", "-listen=127.0.0.1:0", "-app-root=" + appRoot}
+	for _, root := range sourceRoots {
+		if root == "" {
+			return nil, fmt.Errorf("source root 不能为空")
+		}
+		args = append(args, "-source-root="+root)
+	}
+	cmd := exec.Command(binPath, args...)
 	configureProcessGroup(cmd)
 	logFile, err := os.Create(logPath)
 	if err != nil {
@@ -73,29 +118,37 @@ func StartGalleryd(binPath, appRoot, logPath string, timeout time.Duration) (*Pr
 	}()
 
 	descriptorPath := filepath.Join(appRoot, "run", "galleryd.json")
-	deadline := time.Now().Add(timeout)
+	startupCtx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+	ticker := time.NewTicker(50 * time.Millisecond)
+	defer ticker.Stop()
 	var desc descriptor
-	for time.Now().Before(deadline) {
+	for {
 		select {
 		case <-proc.exited:
 			logFile.Close()
 			return nil, fmt.Errorf("galleryd 在建立 descriptor 前提前退出: %v", proc.waitErr)
-		default:
-		}
-		content, readErr := os.ReadFile(descriptorPath)
-		if readErr == nil {
-			if err := json.Unmarshal(content, &desc); err == nil && desc.Address != "" {
-				proc.BaseURL = "http://" + desc.Address
-				proc.descriptor = desc
-				return proc, nil
+		case <-ticker.C:
+			content, readErr := os.ReadFile(descriptorPath)
+			if readErr == nil {
+				if err := json.Unmarshal(content, &desc); err == nil && desc.Address != "" {
+					proc.BaseURL = "http://" + desc.Address
+					proc.descriptor = desc
+					return proc, nil
+				}
 			}
+		case <-startupCtx.Done():
+			killErr := proc.forceKill()
+			if !proc.waitForExit(ForceKillTimeout) {
+				killErr = errors.Join(killErr, fmt.Errorf("强制终止 galleryd 后等待退出超时（%s）", ForceKillTimeout))
+			}
+			logFile.Close()
+			if ctx.Err() != nil {
+				return nil, errors.Join(fmt.Errorf("启动 galleryd 已取消: %w", ctx.Err()), killErr)
+			}
+			return nil, errors.Join(fmt.Errorf("等待 galleryd runtime descriptor 超时（%s）", timeout), killErr)
 		}
-		time.Sleep(50 * time.Millisecond)
 	}
-	proc.forceKill()
-	<-proc.exited
-	logFile.Close()
-	return nil, fmt.Errorf("等待 galleryd runtime descriptor 超时（%s）", timeout)
 }
 
 // StopOutcome 描述一次 Stop() 调用实际采用的路径，供调用方在最终报告中如实记录
@@ -112,18 +165,21 @@ type StopOutcome struct {
 // syscall.SIGTERM) 关闭路径一致），等待其在 GracefulStopTimeout 内自行退出；
 // 只有请求失败或超时才回退到强制终止，并在返回值中如实标记这次回退。
 func (p *Process) Stop() StopOutcome {
+	if p == nil {
+		return StopOutcome{}
+	}
 	defer func() {
 		if p.logFile != nil {
 			p.logFile.Close()
 		}
 	}()
-	if p == nil || p.cmd == nil || p.cmd.Process == nil {
+	if p.cmd == nil || p.cmd.Process == nil {
 		return StopOutcome{}
 	}
 
 	select {
 	case <-p.exited:
-		return StopOutcome{ExitedGracefully: true}
+		return p.finishOutcome(StopOutcome{})
 	default:
 	}
 
@@ -131,25 +187,57 @@ func (p *Process) Stop() StopOutcome {
 	if err := requestGracefulStop(p.cmd); err != nil {
 		outcome.Err = err
 		outcome.ForcedKill = true
-		p.forceKill()
-		<-p.exited
-		return outcome
+		outcome.Err = errors.Join(outcome.Err, p.forceKill())
+		if !p.waitForExit(ForceKillTimeout) {
+			outcome.Err = errors.Join(outcome.Err, fmt.Errorf("强杀后等待退出超时（%s）", ForceKillTimeout))
+			return outcome
+		}
+		return p.finishOutcome(outcome)
 	}
 
 	select {
 	case <-p.exited:
-		outcome.ExitedGracefully = true
-		return outcome
+		return p.finishOutcome(outcome)
 	case <-time.After(GracefulStopTimeout):
 		outcome.ForcedKill = true
-		p.forceKill()
-		<-p.exited
-		return outcome
+		outcome.Err = errors.Join(outcome.Err, p.forceKill())
+		if !p.waitForExit(ForceKillTimeout) {
+			outcome.Err = errors.Join(outcome.Err, fmt.Errorf("强杀后等待退出超时（%s）", ForceKillTimeout))
+			return outcome
+		}
+		return p.finishOutcome(outcome)
 	}
 }
 
-func (p *Process) forceKill() {
-	if p.cmd.Process != nil {
-		_ = p.cmd.Process.Kill()
+func (p *Process) finishOutcome(outcome StopOutcome) StopOutcome {
+	if p.waitErr != nil {
+		outcome.Err = errors.Join(outcome.Err, p.waitErr)
 	}
+	outcome.ExitedGracefully = !outcome.ForcedKill && p.waitErr == nil
+	return outcome
+}
+
+func (p *Process) waitForExit(timeout time.Duration) bool {
+	select {
+	case <-p.exited:
+		return true
+	case <-time.After(timeout):
+		return false
+	}
+}
+
+func (p *Process) forceKill() error {
+	if p.cmd == nil || p.cmd.Process == nil {
+		return nil
+	}
+	select {
+	case <-p.exited:
+		return nil
+	default:
+	}
+	err := p.cmd.Process.Kill()
+	if errors.Is(err, os.ErrProcessDone) {
+		return nil
+	}
+	return err
 }

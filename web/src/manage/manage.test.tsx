@@ -26,13 +26,14 @@ import { ManageApp } from './app';
 
 /* ————————————————————————————— HTTP 桩 ————————————————————————————— */
 
-type RouteHandler = (request: Request, url: URL) => Response;
+type RouteHandler = (request: Request, url: URL) => Response | Promise<Response>;
 
 interface RecordedRequest {
   method: string;
   path: string;
   ifMatch: string | null;
   idempotencyKey: string | null;
+  csrf: string | null;
 }
 
 let routes: Map<string, RouteHandler>;
@@ -64,13 +65,15 @@ beforeEach(() => {
   routes = new Map();
   recorded = [];
   route('GET /api/v1/bootstrap', () => jsonResponse(BOOTSTRAP));
+  route('GET /api/v1/libraries', () => jsonResponse({ libraries: [] }));
   setFetchHandler((request) => {
     const url = new URL(request.url);
     recorded.push({
       method: request.method,
       path: url.pathname,
       ifMatch: request.headers.get('If-Match'),
-      idempotencyKey: request.headers.get('Idempotency-Key')
+      idempotencyKey: request.headers.get('Idempotency-Key'),
+      csrf: request.headers.get('X-Gallery-CSRF')
     });
     const handler = routes.get(`${request.method} ${url.pathname}`);
     if (handler === undefined) return faultResponse('NOT_FOUND', 404, 'corr-unrouted');
@@ -150,6 +153,212 @@ const SOURCE = {
   available: true,
   createdAt: '2026-07-20T00:00:00Z'
 };
+
+/* ————————————————————————————— 0. 新实例资源自举 ————————————————————————————— */
+
+describe('Library 与 Source 自举', () => {
+  it('名称长度按 Unicode code point 计算，并在创建未完成时锁定输入', async () => {
+    let complete: ((response: Response) => void) | undefined;
+    route(
+      'POST /api/v1/libraries',
+      () =>
+        new Promise<Response>((resolve) => {
+          complete = resolve;
+        })
+    );
+    route('GET /api/v1/sources', () => jsonResponse({ sources: [] }));
+    route('GET /api/v1/jobs', () => jsonResponse({ jobs: [] }));
+
+    renderManage('/scans');
+    const input = await screen.findByRole('textbox', { name: /Library 名称/ });
+    const submit = screen.getByRole('button', { name: '创建 Library' });
+
+    fireEvent.change(input, { target: { value: '😀'.repeat(256) } });
+    expect(submit).not.toBeDisabled();
+    fireEvent.change(input, { target: { value: '😀'.repeat(257) } });
+    expect(screen.getByText('名称不能超过 256 个字符')).toBeInTheDocument();
+    expect(submit).toBeDisabled();
+
+    fireEvent.change(input, { target: { value: '待完成创建' } });
+    await userEvent.click(submit);
+    await waitFor(() => {
+      expect(input).toBeDisabled();
+    });
+    act(() => {
+      complete?.(
+        jsonResponse({ id: 'lib_pending', name: '待完成创建', createdAt: '2026-07-27T02:00:00Z' }, 201)
+      );
+    });
+    await waitFor(() => {
+      expect(input).toHaveValue('');
+      expect(input).not.toBeDisabled();
+    });
+    expect(requestsTo('POST /api/v1/libraries')).toHaveLength(1);
+  });
+
+  it('Source 创建未完成时锁定所属 Library、显示名和根路径', async () => {
+    let complete: ((response: Response) => void) | undefined;
+    route('GET /api/v1/libraries', () =>
+      jsonResponse({ libraries: [{ id: 'lib_01', name: '资料库', createdAt: '2026-07-27T02:00:00Z' }] })
+    );
+    route('GET /api/v1/sources', () => jsonResponse({ sources: [] }));
+    route('GET /api/v1/jobs', () => jsonResponse({ jobs: [] }));
+    route(
+      'POST /api/v1/sources',
+      () =>
+        new Promise<Response>((resolve) => {
+          complete = resolve;
+        })
+    );
+
+    renderManage('/scans');
+    await screen.findByRole('textbox', { name: /Source 显示名/ });
+    await selectOption(/所属 Library/, '资料库 · lib_01');
+    const library = screen.getByRole('button', { name: /所属 Library/ });
+    const name = screen.getByRole('textbox', { name: /Source 显示名/ });
+    const root = screen.getByRole('textbox', { name: /Source 根路径/ });
+    await userEvent.type(name, '待完成来源');
+    await userEvent.type(root, 'D:\\Pending');
+    await userEvent.click(screen.getByRole('button', { name: '登记 Source' }));
+
+    await waitFor(() => {
+      expect(library).toBeDisabled();
+      expect(name).toBeDisabled();
+      expect(root).toBeDisabled();
+    });
+    act(() => {
+      complete?.(
+        jsonResponse(
+          {
+            ...SOURCE,
+            displayName: '待完成来源'
+          },
+          201
+        )
+      );
+    });
+    await waitFor(() => {
+      expect(name).toHaveValue('');
+      expect(root).toHaveValue('');
+      expect(name).not.toBeDisabled();
+      expect(root).not.toBeDisabled();
+    });
+    expect(requestsTo('POST /api/v1/sources')).toHaveLength(1);
+  });
+
+  it('可以从空实例创建首个 Library、登记 Source，并且不把根路径回显到列表', async () => {
+    const library = {
+      id: 'lib_01',
+      name: 'Pixiv 归档',
+      createdAt: '2026-07-27T02:00:00Z'
+    };
+    let libraryItems: (typeof library)[] = [];
+    let sourceItems: (typeof SOURCE)[] = [];
+    let libraryBody: Promise<unknown> | undefined;
+    let sourceBody: Promise<unknown> | undefined;
+
+    route('GET /api/v1/libraries', () => jsonResponse({ libraries: libraryItems }));
+    route('GET /api/v1/sources', () => jsonResponse({ sources: sourceItems }));
+    route('GET /api/v1/jobs', () => jsonResponse({ jobs: [] }));
+    route('POST /api/v1/libraries', (request) => {
+      libraryBody = request.clone().json();
+      libraryItems = [library];
+      return jsonResponse(library, 201);
+    });
+    route('POST /api/v1/sources', (request) => {
+      sourceBody = request.clone().json();
+      sourceItems = [{ ...SOURCE, displayName: 'Pixiv' }];
+      return jsonResponse(sourceItems[0], 201);
+    });
+
+    renderManage('/scans');
+    await screen.findByText('还没有创建任何 Library');
+
+    await userEvent.type(screen.getByRole('textbox', { name: /Library 名称/ }), '  Pixiv 归档  ');
+    await userEvent.click(screen.getByRole('button', { name: '创建 Library' }));
+
+    await waitFor(() => {
+      expect(screen.getAllByText('Pixiv 归档').length).toBeGreaterThan(0);
+    });
+    expect(await libraryBody).toEqual({ name: 'Pixiv 归档' });
+    expect(requestsTo('POST /api/v1/libraries')).toHaveLength(1);
+    expect(requestsTo('POST /api/v1/libraries')[0]?.csrf).toBe(BOOTSTRAP.csrfToken);
+
+    await selectOption(/所属 Library/, 'Pixiv 归档 · lib_01');
+    await userEvent.type(screen.getByRole('textbox', { name: /Source 显示名/ }), 'Pixiv');
+    const root = screen.getByRole('textbox', { name: /Source 根路径/ });
+    await userEvent.type(root, 'D:\\ReadOnly\\Pixiv');
+    await userEvent.click(screen.getByRole('button', { name: '登记 Source' }));
+
+    await waitFor(() => {
+      expect(screen.getAllByText('Pixiv').length).toBeGreaterThan(0);
+    });
+    expect(await sourceBody).toEqual({
+      libraryId: 'lib_01',
+      displayName: 'Pixiv',
+      rootPath: 'D:\\ReadOnly\\Pixiv'
+    });
+    expect(requestsTo('POST /api/v1/sources')).toHaveLength(1);
+    expect(requestsTo('POST /api/v1/sources')[0]?.csrf).toBe(BOOTSTRAP.csrfToken);
+    expect(screen.queryByText('D:\\ReadOnly\\Pixiv')).not.toBeInTheDocument();
+    expect(root).toHaveValue('');
+  });
+
+  it('Source 根重叠时保留输入、解释安全边界且不自动重试', async () => {
+    route('GET /api/v1/libraries', () =>
+      jsonResponse({ libraries: [{ id: 'lib_01', name: '资料库', createdAt: '2026-07-27T02:00:00Z' }] })
+    );
+    route('GET /api/v1/sources', () => jsonResponse({ sources: [] }));
+    route('GET /api/v1/jobs', () => jsonResponse({ jobs: [] }));
+    route('POST /api/v1/sources', () => faultResponse('SOURCE_ROOTS_OVERLAP', 409, 'corr-overlap'));
+
+    renderManage('/scans');
+    await screen.findByRole('textbox', { name: /Source 显示名/ });
+    await selectOption(/所属 Library/, '资料库 · lib_01');
+    await userEvent.type(screen.getByRole('textbox', { name: /Source 显示名/ }), '重叠来源');
+    const root = screen.getByRole('textbox', { name: /Source 根路径/ });
+    await userEvent.type(root, 'D:\\Media');
+    await userEvent.click(screen.getByRole('button', { name: '登记 Source' }));
+
+    await screen.findByText(/Source 不能与 Gallery 的 AppDirs 或其他 Source 互相包含/);
+    expect(screen.getAllByText(/SOURCE_ROOTS_OVERLAP/).length).toBeGreaterThan(0);
+    expect(screen.getAllByText(/corr-overlap/).length).toBeGreaterThan(0);
+    expect(screen.getByRole('textbox', { name: /Source 显示名/ })).toHaveValue('重叠来源');
+    expect(root).toHaveValue('D:\\Media');
+    expect(requestsTo('POST /api/v1/sources')).toHaveLength(1);
+  });
+
+  it('没有 global library.write 时隐藏 Library 创建，但仍允许 scoped Source 请求由服务端裁决', async () => {
+    route('GET /api/v1/bootstrap', () =>
+      jsonResponse({ ...BOOTSTRAP, effectiveCapabilities: ['library.read'] })
+    );
+    route('GET /api/v1/libraries', () =>
+      jsonResponse({
+        libraries: [{ id: 'lib_01', name: 'Scoped 资料库', createdAt: '2026-07-27T02:00:00Z' }]
+      })
+    );
+    route('GET /api/v1/sources', () => jsonResponse({ sources: [] }));
+    route('GET /api/v1/jobs', () => jsonResponse({ jobs: [] }));
+    route('POST /api/v1/sources', () => faultResponse('NOT_FOUND', 404, 'corr-scoped'));
+
+    renderManage('/scans');
+    await screen.findByRole('textbox', { name: /Source 显示名/ });
+    expect(screen.queryByRole('button', { name: '创建 Library' })).not.toBeInTheDocument();
+
+    await selectOption(/所属 Library/, 'Scoped 资料库 · lib_01');
+    const name = screen.getByRole('textbox', { name: /Source 显示名/ });
+    const root = screen.getByRole('textbox', { name: /Source 根路径/ });
+    await userEvent.type(name, 'Scoped 来源');
+    await userEvent.type(root, 'D:\\Scoped');
+    await userEvent.click(screen.getByRole('button', { name: '登记 Source' }));
+
+    await screen.findByText('不存在，或当前账户无权查看');
+    expect(screen.getAllByText(/corr-scoped/).length).toBeGreaterThan(0);
+    expect(name).toHaveValue('Scoped 来源');
+    expect(root).toHaveValue('D:\\Scoped');
+    expect(requestsTo('POST /api/v1/sources')).toHaveLength(1);
+  });
+});
 
 /* ————————————————————————————— 1. capability 不是授权判断 ————————————————————————————— */
 
@@ -269,7 +478,7 @@ describe('扫描档案', () => {
     renderManage('/scans');
     await screen.findByRole('button', { name: /发起扫描/ });
 
-    await selectOption(/来源/, '合成来源');
+    await selectOption(/来源/, '合成来源 · src_01');
     await selectOption(/扫描档案/, 'index（仅首次扫描）');
 
     await act(async () => {
@@ -290,7 +499,79 @@ describe('扫描档案', () => {
   });
 });
 
-/* ————————————————————————————— 4. 草稿 If-Match 冲突 ————————————————————————————— */
+/* ————————————————————————————— 4. 同名 Source 写入身份 ————————————————————————————— */
+
+describe('同名 Source 写入身份', () => {
+  const duplicateSources = [
+    { ...SOURCE, id: 'src_a', displayName: '同名来源' },
+    { ...SOURCE, id: 'src_b', displayName: '同名来源' }
+  ];
+
+  it('规则绑定选择项显示稳定 ID，并把所选 Source ID 放入请求', async () => {
+    let body: Promise<unknown> | undefined;
+    route('GET /api/v1/sources', () => jsonResponse({ sources: duplicateSources }));
+    route('GET /api/v1/rule-packages', () => jsonResponse({ items: [] }));
+    route('GET /api/v1/source-rule-bindings', () => jsonResponse({ bindings: [] }));
+    route('GET /api/v1/sources/src_b/effective-rule-binding', () =>
+      faultResponse('RULE_BINDING_NOT_MATCHED', 409, 'corr-effective')
+    );
+    route('POST /api/v1/source-rule-bindings', (request) => {
+      body = request.clone().json();
+      return jsonResponse(
+        {
+          id: 'binding_01',
+          sourceId: 'src_b',
+          semanticHash: 'a'.repeat(64),
+          ruleIrHash: 'b'.repeat(64),
+          parameters: {},
+          priority: 100,
+          status: 'active',
+          createdAt: '2026-07-27T03:00:00Z'
+        },
+        201
+      );
+    });
+
+    renderManage('/rules');
+    await screen.findByRole('button', { name: /来源/ });
+    await selectOption(/来源/, '同名来源 · src_b');
+    await userEvent.type(screen.getByRole('textbox', { name: 'semanticHash' }), 'a'.repeat(64));
+    await userEvent.click(screen.getByRole('button', { name: '创建绑定' }));
+
+    await waitFor(() => expect(requestsTo('POST /api/v1/source-rule-bindings')).toHaveLength(1));
+    expect(await body).toEqual({
+      sourceId: 'src_b',
+      semanticHash: 'a'.repeat(64),
+      priority: 100,
+      parameters: {}
+    });
+  });
+
+  it('人工解绑确认框回显 Source ID，并把同一 ID 放入请求', async () => {
+    let body: Promise<unknown> | undefined;
+    route('GET /api/v1/sources', () => jsonResponse({ sources: duplicateSources }));
+    route('GET /api/v1/binding-issues', () => jsonResponse({ issues: [] }));
+    route('POST /api/v1/binding-actions/unbind-work', (request) => {
+      body = request.clone().json();
+      return jsonResponse({ entityKind: 'work', canonicalId: 'work_01' });
+    });
+
+    renderManage('/governance');
+    await userEvent.click(await screen.findByRole('tab', { name: '人工解绑' }));
+    await selectOption(/来源/, '同名来源 · src_b');
+    await userEvent.type(screen.getByRole('textbox', { name: 'sourceKey' }), 'work/source-key');
+    await userEvent.click(screen.getByRole('button', { name: '解绑作品' }));
+
+    const dialog = await screen.findByRole('dialog', { name: '解绑作品' });
+    expect(within(dialog).getByText(/目标 Source：同名来源（src_b）/)).toBeInTheDocument();
+    await userEvent.click(within(dialog).getByRole('button', { name: '确认执行' }));
+
+    await waitFor(() => expect(requestsTo('POST /api/v1/binding-actions/unbind-work')).toHaveLength(1));
+    expect(await body).toEqual({ sourceId: 'src_b', sourceKey: 'work/source-key' });
+  });
+});
+
+/* ————————————————————————————— 5. 草稿 If-Match 冲突 ————————————————————————————— */
 
 describe('规则草稿', () => {
   it('保存带 If-Match 修订号，冲突时报告 RULE_DRAFT_CONFLICT 且不覆盖服务端内容', async () => {
@@ -350,7 +631,7 @@ describe('规则草稿', () => {
   });
 });
 
-/* ————————————————————————————— 5. 密文只显示一次 ————————————————————————————— */
+/* ————————————————————————————— 6. 密文只显示一次 ————————————————————————————— */
 
 describe('分享密文', () => {
   it('创建后只显示一次，关闭对话框即从界面消失且没有再次查看的入口', async () => {

@@ -136,11 +136,13 @@ export function useSourceScanStatus(sourceId: string | null) {
   });
 }
 
-export function useCreateLibrary(): UseMutationResult<Library, unknown, { name: string }> {
+export type CreateLibraryInput = Schemas['LibraryCreateRequest'];
+
+export function useCreateLibrary(): UseMutationResult<Library, unknown, CreateLibraryInput> {
   const header = useCsrfHeaders();
   const invalidate = useInvalidate();
   return useMutation({
-    mutationFn: async (input: { name: string }) =>
+    mutationFn: async (input: CreateLibraryInput) =>
       expectData(await api.POST('/api/v1/libraries', { params: { header }, body: input })),
     onSuccess: () => {
       invalidate(['libraries', 'sources']);
@@ -148,16 +150,13 @@ export function useCreateLibrary(): UseMutationResult<Library, unknown, { name: 
   });
 }
 
-export interface CreateSourceInput {
-  libraryId: string;
-  displayName: string;
-  rootPath: string;
-}
+export type CreateSourceInput = Schemas['SourceCreateRequest'];
 
 export function useCreateSource(): UseMutationResult<Source, unknown, CreateSourceInput> {
   const header = useCsrfHeaders();
   const invalidate = useInvalidate();
   return useMutation({
+    gcTime: 0,
     mutationFn: async (input: CreateSourceInput) =>
       expectData(await api.POST('/api/v1/sources', { params: { header }, body: input })),
     onSuccess: () => {

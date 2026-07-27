@@ -11,6 +11,7 @@ import (
 	"runtime"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/RecRivenVI/gallery/internal/contract/fault"
 	"github.com/RecRivenVI/gallery/internal/creators"
@@ -25,6 +26,11 @@ type Library struct {
 	Name      string
 	CreatedAt time.Time
 }
+
+const (
+	resourceNameMaxRunes = 256
+	sourceRootMaxRunes   = 32768
+)
 
 type Source struct {
 	ID          string
@@ -146,7 +152,7 @@ func NewResources(control *sql.DB, dirs appdirs.Dirs, fileSystem ports.FileSyste
 
 func (r *Resources) CreateLibrary(ctx context.Context, name string) (Library, error) {
 	name = strings.TrimSpace(name)
-	if name == "" || len(name) > 256 {
+	if name == "" || utf8.RuneCountInString(name) > resourceNameMaxRunes {
 		return Library{}, fault.WithField(fault.CodeValidation, "name", nil)
 	}
 	id, err := r.ids.New(domain.IDLibrary)
@@ -209,7 +215,7 @@ func (r *Resources) CreateSource(ctx context.Context, libraryID, displayName, ro
 		return Source{}, err
 	}
 	displayName = strings.TrimSpace(displayName)
-	if displayName == "" || len(displayName) > 256 {
+	if displayName == "" || utf8.RuneCountInString(displayName) > resourceNameMaxRunes {
 		return Source{}, fault.WithField(fault.CodeValidation, "displayName", nil)
 	}
 	canonical, key, err := r.canonicalSourceRoot(root)
@@ -1081,7 +1087,7 @@ func (r *Resources) sourceRoots(ctx context.Context) ([]string, error) {
 }
 
 func (r *Resources) canonicalSourceRoot(root string) (string, string, error) {
-	if root == "" || !filepath.IsAbs(root) {
+	if root == "" || utf8.RuneCountInString(root) > sourceRootMaxRunes || !filepath.IsAbs(root) {
 		return "", "", fault.WithField(fault.CodeSourcePathInvalid, "rootPath", nil)
 	}
 	abs, err := r.fs.Abs(root)
