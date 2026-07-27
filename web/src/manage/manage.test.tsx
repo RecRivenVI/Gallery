@@ -24,6 +24,7 @@ import { ToastProvider } from '../design';
 import { faultResponse, jsonResponse, setFetchHandler } from '../../tests/http';
 import { ManageApp } from './app';
 import RULE_SCHEMA from '../../../internal/rules/rule-package.schema.json';
+import { formatDateTime } from './ui';
 
 /* ————————————————————————————— HTTP 桩 ————————————————————————————— */
 
@@ -564,6 +565,7 @@ describe('任务状态的事实源', () => {
   });
 
   it('失败后等待自动重试的 Job 可以取消，取消终态不会错误提供重试入口', async () => {
+    const nextAttemptAt = '2026-07-27T02:00:00Z';
     let current = job({
       id: 'job_01BACKOFF',
       type: 'catalog_gc',
@@ -572,7 +574,7 @@ describe('任务状态的事实源', () => {
       stage: 'retry_backoff',
       issueCode: 'E2E_TRANSIENT',
       failureRetryable: true,
-      nextAttemptAt: '2026-07-27T02:00:00Z'
+      nextAttemptAt
     });
     route('GET /api/v1/sources', () => jsonResponse({ sources: [SOURCE] }));
     route('GET /api/v1/jobs', () => jsonResponse({ jobs: [current] }));
@@ -593,7 +595,7 @@ describe('任务状态的事实源', () => {
     const row = link.closest('tr');
     expect(row).not.toBeNull();
     expect(within(row as HTMLElement).getByText('已失败')).toBeInTheDocument();
-    expect(within(row as HTMLElement).getByText('2026-07-27 10:00:00')).toBeInTheDocument();
+    expect(within(row as HTMLElement).getByText(formatDateTime(nextAttemptAt))).toBeInTheDocument();
 
     await userEvent.click(within(row as HTMLElement).getByRole('button', { name: '取消' }));
     const dialog = await screen.findByRole('dialog', { name: '取消任务' });
