@@ -2,6 +2,7 @@ package catalog_test
 
 import (
 	"context"
+	"strings"
 	"testing"
 
 	"github.com/RecRivenVI/gallery/internal/catalog"
@@ -18,6 +19,123 @@ func aggregateWork(sourceID, libraryID, workID, creatorID, creatorName string, p
 		RuleCoverMediaSourceKey: workID + "/01.jpg", RuleCoverMediaID: workID + "-m1",
 		PublishedAtNanos: publishedAtNanos, PublishedAtRaw: "raw", PublishedAtParser: "gallery-work-date-v1",
 	}
+}
+
+// TestAggregateCoversKeepSourceMediaWithinSource 锁定跨 Source 资源边界：同一 CanonicalCreator
+// 可以横跨多个 Source，Creator 的全局代表封面可以来自最新作品所在 Source；但每个 Source 的
+// 聚合封面必须来自自身媒体。否则只获 Source A 授权的列表 DTO 会携带 Source B 的 Media ID，且
+// 仅含该共享 Creator 的 Source A 会错误丢失自身封面。
+func TestAggregateCoversKeepSourceMediaWithinSource(t *testing.T) {
+	ctx := context.Background()
+	catalogStore, _ := newCandidateTestStore(t)
+	stage := func(jobID, sourceID string, watermark int64, work catalog.WorkFact, media catalog.MediaFact) catalog.Publication {
+		t.Helper()
+		candidate, err := catalogStore.BeginCandidate(ctx, jobID, sourceID, watermark)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := catalogStore.Stage(ctx, candidate, []catalog.WorkFact{work}, []catalog.MediaFact{media}); err != nil {
+			t.Fatal(err)
+		}
+		if err := catalogStore.ValidateCandidate(ctx, candidate); err != nil {
+			t.Fatal(err)
+		}
+		return publishCandidate(t, catalogStore, candidate)
+	}
+
+	stage("job-shared-a", "source-a", 1,
+		aggregateWork("source-a", "library-a", "work-a", "creator-shared", "共享作者", 1000),
+		coverMediaFact("source-a", "work-a", "work-a/01.jpg", "work-a-m1", 0, candidateDigestA))
+	publication := stage("job-shared-b", "source-b", 2,
+		aggregateWork("source-b", "library-a", "work-b", "creator-shared", "共享作者", 9000),
+		coverMediaFact("source-b", "work-b", "work-b/01.jpg", "work-b-m1", 0, candidateDigestB))
+
+	assertCover := func(scopeKind, scopeID, want string) {
+		t.Helper()
+		_, cover, err := catalogStore.AggregateCoverAt(ctx, publication.ID, scopeKind, scopeID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if cover.CoverMediaID != want {
+			t.Fatalf("%s/%s 聚合封面 = %q want %q", scopeKind, scopeID, cover.CoverMediaID, want)
+		}
+	}
+
+	// Creator 是跨 Source 的全局实体，取全局最新作品。
+	assertCover(catalog.AggregateScopeCreator, "creator-shared", "work-b-m1")
+	// Source 是授权资源边界，只能引用自身媒体。
+	assertCover(catalog.AggregateScopeSource, "source-a", "work-a-m1")
+	assertCover(catalog.AggregateScopeSource, "source-b", "work-b-m1")
+	// Library 复用 Source 代表时刻，仍取更新的 source-b。
+	assertCover(catalog.AggregateScopeLibrary, "library-a", "work-b-m1")
+}
+
+// TestAggregateCreatorSourcePlanMaterializesCandidatesOnce 对生产 SQL 建立结构性计划门禁：
+// Work/Creator 关系与 WorkProjection 的基础连接只能出现在 candidate_covers 物化阶段一次，Creator
+// 和 Source 两个窗口随后各自扫描这份窄结果。固定墙钟不适合作为可移植单元测试，因此这里只锁定
+// 渐进结构，不对执行毫秒数作断言。
+func TestAggregateCreatorSourcePlanMaterializesCandidatesOnce(t *testing.T) {
+	ctx := context.Background()
+	_, store := newCandidateTestStore(t)
+	statement := "EXPLAIN QUERY PLAN " + catalog.AggregateCreatorSourceStatementForTest()
+	rows, err := store.Catalog.SQL().QueryContext(ctx, statement, "cat-plan", "ovr-plan")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer rows.Close()
+
+	var details []string
+	for rows.Next() {
+		var id, parent, unused int
+		var detail string
+		if err := rows.Scan(&id, &parent, &unused, &detail); err != nil {
+			t.Fatal(err)
+		}
+		details = append(details, detail)
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatal(err)
+	}
+	plan := strings.Join(details, "\n")
+
+	countMatching := func(needle string) int {
+		count := 0
+		for _, detail := range details {
+			if strings.Contains(detail, needle) {
+				count++
+			}
+		}
+		return count
+	}
+	if countMatching("MATERIALIZE candidate_covers") != 1 {
+		t.Fatalf("候选集未恰好物化一次:\n%s", plan)
+	}
+	if got := countTableAccess(details, "r"); got != 1 {
+		t.Fatalf("work_creator_relations 访问次数 = %d want 1:\n%s", got, plan)
+	}
+	if got := countTableAccess(details, "w"); got != 1 {
+		t.Fatalf("work_projections 访问次数 = %d want 1:\n%s", got, plan)
+	}
+	if countMatching("SCAN candidate_covers") != 2 {
+		t.Fatalf("两个窗口未各自复用物化候选集:\n%s", plan)
+	}
+	if strings.Contains(catalog.AggregateCreatorSourceStatementForTest(), "aggregate_cover_projections AS a") {
+		t.Fatal("生产 SQL 恢复了从 Creator 聚合行向全部作品二次扇出的路径")
+	}
+}
+
+func countTableAccess(details []string, alias string) int {
+	count := 0
+	for _, detail := range details {
+		fields := strings.Fields(detail)
+		if len(fields) < 2 || (fields[0] != "SCAN" && fields[0] != "SEARCH") {
+			continue
+		}
+		if fields[1] == alias {
+			count++
+		}
+	}
+	return count
 }
 
 // TestAggregateCoversCascadeThroughCreatorSourceAndLibrary 覆盖三级聚合的核心语义：
