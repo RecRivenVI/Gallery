@@ -247,7 +247,15 @@ export function WorkPage() {
         )}
       </section>
 
-      {canEditOverlay ? <OverlayEditor workId={workId} media={items} /> : null}
+      {canEditOverlay ? (
+        <OverlayEditor
+          key={workId}
+          workId={workId}
+          queryPublicationId={publicationId}
+          media={items}
+          mediaReady={media.isSuccess}
+        />
+      ) : null}
 
       <p className="gal-snapshot">
         本页内容来自快照 <code>{publicationId}</code>

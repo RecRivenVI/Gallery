@@ -115,6 +115,19 @@ func TestPersistentJobTransitionsAndActiveScanConflict(t *testing.T) {
 	if err != nil || reloaded.PublicationID != publication.String() {
 		t.Fatalf("Reload: %+v %v", reloaded, err)
 	}
+	idempotent, err := jobStore.Complete(context.Background(), job.ID, publication.String())
+	if err != nil || idempotent.Status != jobs.StatusCompleted || idempotent.PublicationID != publication.String() {
+		t.Fatalf("相同 publication 重复完成未幂等: %+v %v", idempotent, err)
+	}
+	otherPublication, err := generator.New(domain.IDQueryPublication)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = jobStore.Complete(context.Background(), job.ID, otherPublication.String())
+	structured = nil
+	if !errors.As(err, &structured) || structured.Code != fault.CodeJobStateConflict {
+		t.Fatalf("不同 publication 重复完成未拒绝: %v", err)
+	}
 }
 
 func TestScanJobPersistsRuleExecutionSnapshot(t *testing.T) {

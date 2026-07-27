@@ -101,8 +101,11 @@ func run() (exitCode int) {
 	if err := os.Remove(filepath.Join(sourceRoot, "work-one", "media.bin")); err != nil {
 		return fail("移除占位合成媒体", err)
 	}
-	if err := writeSyntheticPNG(filepath.Join(sourceRoot, "work-one", "media.png")); err != nil {
-		return fail("写入可解码合成媒体", err)
+	if err := writeSyntheticPNG(filepath.Join(sourceRoot, "work-one", "01-rule.png"), 2, 2, 8); err != nil {
+		return fail("写入规则封面合成媒体", err)
+	}
+	if err := writeSyntheticPNG(filepath.Join(sourceRoot, "work-one", "02-custom.png"), 3, 2, 97); err != nil {
+		return fail("写入自定义封面合成媒体", err)
 	}
 	metadata := []byte("{\"creator\":{\"name\":\"Synthetic Creator\"}}\n")
 	if err := os.WriteFile(filepath.Join(sourceRoot, "work-one", "metadata.json"), metadata, 0o600); err != nil {
@@ -185,6 +188,11 @@ func run() (exitCode int) {
 	}
 	if testErr == nil {
 		testErr = command(runCtx, 2*time.Minute, webRoot, env, nodeBin, playwright, "test",
+			"e2e/real-custom-cover.spec.ts",
+			"--project=chromium", "--workers=1", "--retries=0")
+	}
+	if testErr == nil {
+		testErr = command(runCtx, 2*time.Minute, webRoot, env, nodeBin, playwright, "test",
 			"e2e/real-gallery.spec.ts",
 			"--project=chromium", "--workers=1", "--retries=0")
 	}
@@ -207,16 +215,22 @@ func run() (exitCode int) {
 	return 0
 }
 
-func writeSyntheticPNG(path string) error {
+func writeSyntheticPNG(path string, width, height int, seed uint8) error {
 	file, err := os.Create(path)
 	if err != nil {
 		return err
 	}
-	imageData := image.NewNRGBA(image.Rect(0, 0, 2, 2))
-	imageData.Set(0, 0, color.NRGBA{R: 8, G: 127, B: 104, A: 255})
-	imageData.Set(1, 0, color.NRGBA{R: 245, G: 158, B: 11, A: 255})
-	imageData.Set(0, 1, color.NRGBA{R: 37, G: 99, B: 235, A: 255})
-	imageData.Set(1, 1, color.NRGBA{R: 225, G: 29, B: 72, A: 255})
+	imageData := image.NewNRGBA(image.Rect(0, 0, width, height))
+	for y := range height {
+		for x := range width {
+			imageData.Set(x, y, color.NRGBA{
+				R: uint8((int(seed) + x*61 + y*29) % 256),
+				G: uint8((int(seed) + x*17 + y*83) % 256),
+				B: uint8((int(seed) + x*97 + y*11) % 256),
+				A: 255,
+			})
+		}
+	}
 	encodeErr := png.Encode(file, imageData)
 	closeErr := file.Close()
 	return errors.Join(encodeErr, closeErr)

@@ -306,7 +306,10 @@ export function useWorkOverlay(workId: string, enabled: boolean) {
   return useQuery({
     enabled,
     queryKey: overlayQueryKey(workId),
-    queryFn: async ({ signal }) => fetchOverlay(workId, signal)
+    queryFn: async ({ signal }) => fetchOverlay(workId, signal),
+    // publication 事件只是提示，可能丢失；而且写入返回时投影本来就尚未完成。
+    // 仅在 pending 期间轮询，直到服务端明确收敛为 published/failed 后立即停止。
+    refetchInterval: (query) => (query.state.data?.projectionStatus === 'pending' ? 1_000 : false)
   });
 }
 

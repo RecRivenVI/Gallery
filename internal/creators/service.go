@@ -219,6 +219,8 @@ func (s *Service) Merge(ctx context.Context, createdBy, targetID string, absorbe
 		}
 		seen[id] = struct{}{}
 	}
+	releaseEnqueue := s.jobs.AcquireOverlayEnqueue()
+	defer releaseEnqueue()
 	current, currentErr := s.catalog.Current(ctx)
 	if currentErr != nil && !isCode(currentErr, fault.CodeNotFound) {
 		return MergeResult{}, currentErr
@@ -291,6 +293,8 @@ func (s *Service) Undo(ctx context.Context, createdBy, mergeID string) (MergeRes
 	if _, err := domain.ParseID(domain.IDCreatorMerge, mergeID); err != nil {
 		return MergeResult{}, fault.New(fault.CodeNotFound, false, nil)
 	}
+	releaseEnqueue := s.jobs.AcquireOverlayEnqueue()
+	defer releaseEnqueue()
 	current, currentErr := s.catalog.Current(ctx)
 	if currentErr != nil && !isCode(currentErr, fault.CodeNotFound) {
 		return MergeResult{}, currentErr

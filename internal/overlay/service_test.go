@@ -33,6 +33,230 @@ const (
 	testMissingMedia = "med_018f47d2-5c16-7a44-a8a0-000000000004"
 )
 
+type publicationStateObserver struct {
+	service *Service
+	state   State
+	err     error
+	count   int
+}
+
+func (*publicationStateObserver) JobChanged(jobs.Job) {}
+
+func (observer *publicationStateObserver) PublicationPublished(catalog.Publication) {
+	observer.count++
+	observer.state, observer.err = observer.service.Get(context.Background(), testWorkID)
+}
+
+func TestPublicationNotificationObservesPublishedOverlayState(t *testing.T) {
+	ctx, _, service, _, _ := newFixture(t)
+	observer := &publicationStateObserver{service: service}
+	service.notifier = observer
+	queued, err := service.Put(ctx, testWorkID, "owner", Input{CustomCoverMediaID: testMedia2ID})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := service.Execute(ctx, queued.ProjectionJobID); err != nil {
+		t.Fatal(err)
+	}
+	if observer.err != nil || observer.count != 1 || observer.state.ProjectionStatus != "published" ||
+		observer.state.PublishedQueryPublicationID == "" {
+		t.Fatalf("publication 事件早于 Overlay published 状态: count=%d state=%+v err=%v",
+			observer.count, observer.state, observer.err)
+	}
+}
+
+func TestPublishedOverlayBeforeJobCompletionGapRecovers(t *testing.T) {
+	ctx, _, service, _, _ := newFixture(t)
+	observer := &publicationStateObserver{service: service}
+	service.notifier = observer
+	queued, err := service.Put(ctx, testWorkID, "owner", Input{CustomCoverMediaID: testMedia2ID})
+	if err != nil {
+		t.Fatal(err)
+	}
+	service.faultInjector = func(stage string) error {
+		if stage == "after_overlay_published" {
+			return errors.New("simulate process death after Overlay commit")
+		}
+		return nil
+	}
+	if err := service.Execute(ctx, queued.ProjectionJobID); err == nil {
+		t.Fatal("Overlay published/Job completion gap 未注入")
+	}
+	job, err := service.jobs.Get(ctx, queued.ProjectionJobID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	state, err := service.Get(ctx, testWorkID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if job.Status != jobs.StatusPublishing || state.ProjectionStatus != "published" ||
+		state.PublishedQueryPublicationID == "" {
+		t.Fatalf("故障点必须保留可恢复的 publication-first 状态: job=%+v state=%+v", job, state)
+	}
+	if observer.count != 0 {
+		t.Fatalf("故障发生在通知前，不应已收到 publication 事件: %d", observer.count)
+	}
+
+	service.faultInjector = nil
+	if err := service.ReconcileActive(ctx); err != nil {
+		t.Fatal(err)
+	}
+	job, err = service.jobs.Get(ctx, queued.ProjectionJobID)
+	if err != nil || job.Status != jobs.StatusCompleted {
+		t.Fatalf("publication-first gap 未恢复 completed: job=%+v err=%v", job, err)
+	}
+	state, err = service.Get(ctx, testWorkID)
+	if err != nil || state.ProjectionStatus != "published" || state.PublishedQueryPublicationID != job.PublicationID {
+		t.Fatalf("恢复后 Overlay/Job publication 未对齐: job=%+v state=%+v err=%v", job, state, err)
+	}
+	if observer.err != nil || observer.count != 1 || observer.state.PublishedQueryPublicationID != job.PublicationID {
+		t.Fatalf("恢复未补发 publication 缓存失效事件: count=%d state=%+v err=%v",
+			observer.count, observer.state, observer.err)
+	}
+}
+
+func TestPutDuringFinalPublicationCreatesSuccessor(t *testing.T) {
+	ctx, _, service, _, queryService := newFixture(t)
+	first, err := service.Put(ctx, testWorkID, "owner", Input{TitleOverride: "第一版"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	type putOutcome struct {
+		result PutResult
+		err    error
+	}
+	commitReached := make(chan struct{})
+	resumeCommit := make(chan struct{})
+	injected := false
+	service.faultInjector = func(stage string) error {
+		if stage != "before_overlay_publication" || injected {
+			return nil
+		}
+		injected = true
+		close(commitReached)
+		<-resumeCommit
+		return nil
+	}
+
+	executeDone := make(chan error, 1)
+	go func() { executeDone <- service.Execute(ctx, first.ProjectionJobID) }()
+	select {
+	case <-commitReached:
+	case <-time.After(2 * time.Second):
+		t.Fatal("未进入最终 publication 线性化边界")
+	}
+	putDone := make(chan putOutcome, 1)
+	go func() {
+		result, err := service.Put(ctx, testWorkID, "owner", Input{TitleOverride: "第二版"})
+		putDone <- putOutcome{result: result, err: err}
+	}()
+	select {
+	case outcome := <-putDone:
+		t.Fatalf("最终 target 复核后的 Put 未等待 publication 收敛: %+v %v", outcome.result, outcome.err)
+	case <-time.After(50 * time.Millisecond):
+	}
+	close(resumeCommit)
+	if err := <-executeDone; err != nil {
+		t.Fatalf("旧 Execute 未完成最终 publication: %v", err)
+	}
+	outcome := <-putDone
+	second := outcome.result
+	if outcome.err != nil {
+		t.Fatal(outcome.err)
+	}
+	if !injected || !second.StartJob || second.ProjectionJobID == "" || second.ProjectionJobID == first.ProjectionJobID {
+		t.Fatalf("新事实未建立独立后继 Job: first=%+v second=%+v", first, second)
+	}
+	completed, err := service.jobs.Get(ctx, first.ProjectionJobID)
+	if err != nil || completed.Status != jobs.StatusCompleted || completed.PublicationID == "" {
+		t.Fatalf("旧 publication Job 未收敛 completed: job=%+v err=%v", completed, err)
+	}
+	successor, err := service.jobs.Get(ctx, second.ProjectionJobID)
+	if err != nil || successor.Status != jobs.StatusQueued || successor.BasePublicationID != completed.PublicationID {
+		t.Fatalf("后继 Job 未基于旧 Job 产生的 publication: job=%+v err=%v", successor, err)
+	}
+	state, err := service.Get(ctx, testWorkID)
+	if err != nil || state.ProjectionStatus != "pending" || state.ProjectionJobID != successor.ID {
+		t.Fatalf("第二次写入未保持 pending 写后屏障: state=%+v err=%v", state, err)
+	}
+
+	service.faultInjector = nil
+	if err := service.Execute(ctx, successor.ID); err != nil {
+		t.Fatal(err)
+	}
+	result, err := queryService.Search(ctx, galleryquery.Request{
+		Search: "第二版", Limit: 20, AuthorizationScope: "owner", AuthorizeSources: allowAllQuerySources,
+	})
+	if err != nil || len(result.Items) != 1 || result.Items[0].Title != "第二版" {
+		t.Fatalf("后继 Job 未发布最新 Overlay 事实: result=%+v err=%v", result, err)
+	}
+}
+
+func TestPutBeforeRecoveryRepairsCompletedPublicationGap(t *testing.T) {
+	ctx, store, service, _, _ := newFixture(t)
+	if _, err := store.Control.SQL().ExecContext(ctx, `INSERT INTO canonical_works
+(work_id, title, created_at) VALUES (?, '源标题二', 1)`, testOtherWork); err != nil {
+		t.Fatal(err)
+	}
+	first, err := service.Put(ctx, testWorkID, "owner", Input{TitleOverride: "第一作品"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	injected := false
+	service.faultInjector = func(stage string) error {
+		if stage != "after_publication" || injected {
+			return nil
+		}
+		injected = true
+		return errors.New("simulate process death before markPublished")
+	}
+
+	if err := service.Execute(ctx, first.ProjectionJobID); err == nil {
+		t.Fatal("publication 提交后、markPublished 前的故障未注入")
+	}
+	if !injected {
+		t.Fatal("未到达 publication 已提交而 Overlay 未标记的故障点")
+	}
+	service.faultInjector = nil
+	second, err := service.Put(ctx, testOtherWork, "owner", Input{TitleOverride: "第二作品"})
+	if err != nil || !second.StartJob || second.ProjectionJobID == first.ProjectionJobID {
+		t.Fatalf("恢复前写入未收敛旧 Job 并建立后继 Job: first=%+v second=%+v err=%v", first, second, err)
+	}
+	oldJob, err := service.jobs.Get(ctx, first.ProjectionJobID)
+	if err != nil || oldJob.Status != jobs.StatusCompleted || oldJob.PublicationID == "" {
+		t.Fatalf("并发 Put 未收敛已发布的旧 Job: job=%+v err=%v", oldJob, err)
+	}
+	firstState, err := service.Get(ctx, testWorkID)
+	if err != nil || firstState.ProjectionStatus != "pending" || firstState.ProjectionJobID != oldJob.ID {
+		t.Fatalf("未构造出 completed Job + pending Overlay 窗口: state=%+v err=%v", firstState, err)
+	}
+	secondState, err := service.Get(ctx, testOtherWork)
+	if err != nil || secondState.ProjectionStatus != "pending" || secondState.ProjectionJobID != second.ProjectionJobID {
+		t.Fatalf("后继 Overlay 状态错误: state=%+v err=%v", secondState, err)
+	}
+
+	if err := service.ReconcileActive(ctx); err != nil {
+		t.Fatal(err)
+	}
+	firstState, err = service.Get(ctx, testWorkID)
+	if err != nil || firstState.ProjectionStatus != "published" ||
+		firstState.PublishedQueryPublicationID != oldJob.PublicationID {
+		t.Fatalf("周期对账未修复 completed Job + pending Overlay: state=%+v err=%v", firstState, err)
+	}
+	secondState, err = service.Get(ctx, testOtherWork)
+	if err != nil || secondState.ProjectionStatus != "pending" || secondState.ProjectionJobID != second.ProjectionJobID {
+		t.Fatalf("修复旧 Job 时误标记了后继 Overlay: state=%+v err=%v", secondState, err)
+	}
+	if err := service.Execute(ctx, second.ProjectionJobID); err != nil {
+		t.Fatal(err)
+	}
+	secondState, err = service.Get(ctx, testOtherWork)
+	if err != nil || secondState.ProjectionStatus != "published" {
+		t.Fatalf("后继 Overlay 未最终发布: state=%+v err=%v", secondState, err)
+	}
+}
+
 func TestOverlayFactProjectionAndLiveState(t *testing.T) {
 	ctx, store, service, catalogStore, queryService := newFixture(t)
 	input := Input{TitleOverride: "覆盖标题", ManualTags: []string{"手工", "手工"}, CustomCoverMediaID: testMedia2ID, Favorite: true, Progress: 0.5}

@@ -31,14 +31,21 @@ async function pair(page: Page, destination: string): Promise<void> {
   expect((await exchange).status()).toBe(201);
 }
 
-async function expectSyntheticImage(image: Locator): Promise<void> {
+async function expectSyntheticImage(image: Locator, width = 2, height = 2): Promise<void> {
   await expect(image).toBeVisible();
   await expect
     .poll(() =>
-      image.evaluate((element) => {
-        const value = element as HTMLImageElement;
-        return value.complete && value.naturalWidth === 2 && value.naturalHeight === 2;
-      })
+      image.evaluate(
+        (element, dimensions) => {
+          const value = element as HTMLImageElement;
+          return (
+            value.complete &&
+            value.naturalWidth === dimensions.width &&
+            value.naturalHeight === dimensions.height
+          );
+        },
+        { width, height }
+      )
     )
     .toBe(true);
 }
@@ -83,17 +90,18 @@ test('真实 publication 贯穿浏览、详情、确认、查看与 Range @real-
     media: Array<{ id: string; contentVerificationState: string }>;
   };
   expect(initialMediaBody.queryPublicationId).toBe(initialPublication);
-  expect(initialMediaBody.media).toHaveLength(1);
+  expect(initialMediaBody.media).toHaveLength(2);
   const initialMediaItem = initialMediaBody.media.at(0);
   expect(initialMediaItem?.contentVerificationState).toBe('located_unverified');
-  await expect(page.getByText('内容未确认', { exact: true })).toBeVisible();
+  expect(initialMediaBody.media.at(1)?.contentVerificationState).toBe('located_unverified');
+  await expect(page.getByText('内容未确认', { exact: true }).first()).toBeVisible();
 
   const mediaId = initialMediaItem?.id;
   if (mediaId === undefined) throw new Error('媒体列表缺少第一项 ID');
   const verificationPromise = page.waitForResponse((response) =>
     pathIs(response, `/api/v1/media/${mediaId}/verification-jobs`, 'POST')
   );
-  await page.getByRole('button', { name: '确认内容' }).click();
+  await page.getByRole('button', { name: '确认内容' }).first().click();
   const verification = await verificationPromise;
   expect(verification.status()).toBe(202);
   expect(new URL(verification.url()).searchParams.get('queryPublicationId')).toBe(initialPublication);
@@ -123,7 +131,7 @@ test('真实 publication 贯穿浏览、详情、确认、查看与 Range @real-
   if (verifiedPublication === undefined) throw new Error('确认任务没有返回新 publication ID');
 
   // 新 publication 发布后，当前历史页仍必须绑定 P1，不能静默漂移到 P2。
-  await expect(page.getByText('内容未确认', { exact: true })).toBeVisible();
+  await expect(page.getByText('内容未确认', { exact: true }).first()).toBeVisible();
   const historicalContent = await page.evaluate(
     async ({ targetMediaId, publication }) => {
       const response = await fetch(
@@ -170,6 +178,7 @@ test('真实 publication 贯穿浏览、详情、确认、查看与 Range @real-
   const verifiedMediaItem = mediaBody.media.at(0);
   expect(verifiedMediaItem?.id).toBe(mediaId);
   expect(verifiedMediaItem?.contentVerificationState).toBe('content_verified');
+  expect(mediaBody.media.at(1)?.contentVerificationState).toBe('located_unverified');
   const mediaSize = verifiedMediaItem?.sizeBytes;
   if (mediaSize === undefined) throw new Error('已确认媒体缺少 sizeBytes');
   await expectSyntheticImage(page.getByRole('img', { name: '第 1 项媒体' }));

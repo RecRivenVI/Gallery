@@ -760,6 +760,7 @@ func (s *Service) reconcile(ctx context.Context, includeLegacy bool) error {
 			if recoverErr != nil {
 				return recoverErr
 			}
+			s.notifier.PublicationPublished(publication)
 			s.notifier.JobChanged(recovered)
 			continue
 		}
@@ -896,8 +897,8 @@ func (s *Service) verifyObservationUnchanged(ctx context.Context, sourceID strin
 
 // recoverAlreadyPublished 处理 BeginCandidate 检测到的 Saga gap：该 Job 已经真正完成过
 // Catalog 发布，只是 control 侧尚未收到 completed。不得再次构建或再次发布，只把已有
-// publication 对账为 control 侧 completed，且不重复发出 PublicationPublished 事件——那是
-// 首次发布时已经交付过的依赖通知。
+// publication 对账为 control 侧 completed。恢复无法证明首次进程已经来得及
+// 广播，因此再发一次可幂等的 PublicationPublished 失效信号。
 func (s *Service) recoverAlreadyPublished(ctx context.Context, jobID string) error {
 	publication, err := s.catalog.PublicationForJob(ctx, jobID)
 	if err != nil {
@@ -910,6 +911,7 @@ func (s *Service) recoverAlreadyPublished(ctx context.Context, jobID string) err
 	if err != nil {
 		return err
 	}
+	s.notifier.PublicationPublished(publication)
 	s.notifier.JobChanged(job)
 	return nil
 }

@@ -13,7 +13,7 @@
 import { QueryClientProvider } from '@tanstack/react-query';
 import { render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
-import { MemoryRouter, Route, Routes } from 'react-router-dom';
+import { Link, MemoryRouter, Route, Routes } from 'react-router-dom';
 import { beforeEach, describe, expect, it } from 'vitest';
 import type { ReactNode } from 'react';
 import { faultResponse, jsonResponse, setFetchHandler } from '../../tests/http';
@@ -102,6 +102,21 @@ function overlayState(overrides: Record<string, unknown> = {}) {
     projectionStatus: 'published',
     publishedQueryPublicationId: PUBLICATION,
     ...overrides
+  };
+}
+
+function publishedMedia(id: string, ordinal: number) {
+  return {
+    id,
+    workId: 'work_1',
+    kind: 'image',
+    mimeType: 'image/png',
+    sizeBytes: 80,
+    blob: null,
+    available: true,
+    ordinal,
+    queryPublicationId: PUBLICATION,
+    contentVerificationState: 'located_unverified'
   };
 }
 
@@ -445,5 +460,237 @@ describe('收藏与 live overlay 调和', () => {
 
     // 调和：卡片显示服务端返回的 live 值，而不是列表快照里的 false。
     expect(await within(card).findByRole('button', { name: '取消收藏' })).toBeInTheDocument();
+  });
+});
+
+describe('CustomCover 写后快照', () => {
+  it('路由复用时不把前一作品的未保存草稿串入新作品', async () => {
+    setFetchHandler((request) => {
+      const url = new URL(request.url);
+      if (url.pathname === '/api/v1/bootstrap') return jsonResponse(BOOTSTRAP);
+      const workMatch = /^\/api\/v1\/works\/(work_[12])$/.exec(url.pathname);
+      if (workMatch) {
+        const id = workMatch[1];
+        return jsonResponse(work({ id, title: id === 'work_1' ? '作品 A' : '作品 B' }));
+      }
+      const mediaMatch = /^\/api\/v1\/works\/(work_[12])\/media$/.exec(url.pathname);
+      if (mediaMatch) return jsonResponse({ queryPublicationId: PUBLICATION, media: [] });
+      const overlayMatch = /^\/api\/v1\/works\/(work_[12])\/overlay$/.exec(url.pathname);
+      if (overlayMatch) {
+        const id = overlayMatch[1];
+        return jsonResponse(
+          overlayState({ workId: id, titleOverride: id === 'work_1' ? '覆盖 A' : '覆盖 B' })
+        );
+      }
+      return faultResponse('NOT_FOUND', 404);
+    });
+
+    renderGallery(
+      <>
+        <nav>
+          <Link to={`/works/work_1?queryPublicationId=${PUBLICATION}`}>打开作品 A</Link>
+          <Link to={`/works/work_2?queryPublicationId=${PUBLICATION}`}>打开作品 B</Link>
+        </nav>
+        <Routes>
+          <Route path="/works/:workId" element={<WorkPage />} />
+        </Routes>
+      </>,
+      `/works/work_2?queryPublicationId=${PUBLICATION}`
+    );
+
+    await screen.findByRole('heading', { name: '作品 B' });
+    expect(await screen.findByRole('textbox', { name: '标题覆盖' })).toHaveValue('覆盖 B');
+    await userEvent.click(screen.getByRole('link', { name: '打开作品 A' }));
+    await screen.findByRole('heading', { name: '作品 A' });
+    const title = await screen.findByRole('textbox', { name: '标题覆盖' });
+    await userEvent.clear(title);
+    await userEvent.type(title, '未保存 A');
+
+    await userEvent.click(screen.getByRole('link', { name: '打开作品 B' }));
+    await screen.findByRole('heading', { name: '作品 B' });
+    expect(await screen.findByRole('textbox', { name: '标题覆盖' })).toHaveValue('覆盖 B');
+  });
+
+  it('选择封面时整体 PUT，并保留其余用户事实', async () => {
+    let stored = overlayState();
+    const media = [publishedMedia('media_1', 0), publishedMedia('media_2', 1)];
+    setFetchHandler(async (request) => {
+      const url = new URL(request.url);
+      if (url.pathname === '/api/v1/bootstrap') return jsonResponse(BOOTSTRAP);
+      if (url.pathname === '/api/v1/works/work_1') return jsonResponse(work());
+      if (url.pathname === '/api/v1/works/work_1/media') {
+        return jsonResponse({ queryPublicationId: PUBLICATION, media });
+      }
+      if (url.pathname === '/api/v1/works/work_1/overlay') {
+        if (request.method === 'PUT') {
+          const body: unknown = await request.json();
+          recorded.push({ method: 'PUT', path: url.pathname, cursor: null, body });
+          stored = overlayState({
+            customCoverMediaId: 'media_2',
+            projectionStatus: 'pending',
+            projectionJobId: 'job_overlay_1'
+          });
+          return jsonResponse(stored);
+        }
+        return jsonResponse(stored);
+      }
+      return faultResponse('NOT_FOUND', 404);
+    });
+
+    renderGallery(
+      <Routes>
+        <Route path="/works/:workId" element={<WorkPage />} />
+      </Routes>,
+      `/works/work_1?queryPublicationId=${PUBLICATION}`
+    );
+
+    await screen.findByRole('heading', { name: '合成作品' });
+    await userEvent.click(await screen.findByRole('button', { name: /自定义封面/ }));
+    await userEvent.click(await screen.findByRole('option', { name: '第 2 项 · image/png' }));
+    await userEvent.click(screen.getByRole('button', { name: '保存' }));
+
+    await waitFor(() => expect(recorded.filter((entry) => entry.method === 'PUT')).toHaveLength(1));
+    expect(recorded.find((entry) => entry.method === 'PUT')?.body).toEqual({
+      titleOverride: '我的标题',
+      manualTags: ['我的标签'],
+      hidden: false,
+      favorite: false,
+      progress: 0.25,
+      customCoverMediaId: 'media_2'
+    });
+    expect(await screen.findByText(/重新投影排队中/)).toBeInTheDocument();
+  });
+
+  it('pending 状态自行收敛，并提供显式打开新 publication 的入口', async () => {
+    let reads = 0;
+    const nextPublication = 'qpub_after_overlay';
+    setFetchHandler((request) => {
+      const url = new URL(request.url);
+      if (url.pathname === '/api/v1/bootstrap') return jsonResponse(BOOTSTRAP);
+      if (url.pathname === '/api/v1/works/work_1') return jsonResponse(work());
+      if (url.pathname === '/api/v1/works/work_1/media') {
+        return jsonResponse({ queryPublicationId: PUBLICATION, media: [publishedMedia('media_1', 0)] });
+      }
+      if (url.pathname === '/api/v1/works/work_1/overlay') {
+        reads += 1;
+        return jsonResponse(
+          reads === 1
+            ? overlayState({ projectionStatus: 'pending', projectionJobId: 'job_overlay_1' })
+            : overlayState({ publishedQueryPublicationId: nextPublication })
+        );
+      }
+      return faultResponse('NOT_FOUND', 404);
+    });
+
+    renderGallery(
+      <Routes>
+        <Route path="/works/:workId" element={<WorkPage />} />
+      </Routes>,
+      `/works/work_1?queryPublicationId=${PUBLICATION}`
+    );
+
+    expect(await screen.findByText(/重新投影排队中/)).toBeInTheDocument();
+    const title = screen.getByRole('textbox', { name: '标题覆盖' });
+    await userEvent.clear(title);
+    await userEvent.type(title, '尚未保存的标题');
+    const link = await screen.findByRole('link', { name: '打开已投影版本' }, { timeout: 2_500 });
+    expect(reads).toBeGreaterThanOrEqual(2);
+    expect(title).toHaveValue('尚未保存的标题');
+    expect(screen.getByRole('status')).toHaveTextContent('已生成新快照，可通过下方链接打开');
+    expect(link).toHaveAttribute('href', `/works/work_1?queryPublicationId=${nextPublication}`);
+  });
+
+  it('失效的当前选择有明确提示并仍可清除', async () => {
+    setFetchHandler((request) => {
+      const url = new URL(request.url);
+      if (url.pathname === '/api/v1/bootstrap') return jsonResponse(BOOTSTRAP);
+      if (url.pathname === '/api/v1/works/work_1') return jsonResponse(work());
+      if (url.pathname === '/api/v1/works/work_1/media') {
+        return jsonResponse({ queryPublicationId: PUBLICATION, media: [publishedMedia('media_1', 0)] });
+      }
+      if (url.pathname === '/api/v1/works/work_1/overlay') {
+        return jsonResponse(overlayState({ customCoverMediaId: 'media_missing' }));
+      }
+      return faultResponse('NOT_FOUND', 404);
+    });
+
+    renderGallery(
+      <Routes>
+        <Route path="/works/:workId" element={<WorkPage />} />
+      </Routes>,
+      `/works/work_1?queryPublicationId=${PUBLICATION}`
+    );
+
+    expect(await screen.findByText(/当前选择已经不在本快照的媒体中/)).toBeInTheDocument();
+    await userEvent.click(screen.getByRole('button', { name: /自定义封面/ }));
+    expect(
+      await screen.findByRole('option', { name: '当前自定义封面已失效（请选择替代项或清除）' })
+    ).toHaveAttribute('aria-disabled', 'true');
+    expect(screen.getByRole('option', { name: '不指定（使用规则解析的封面）' })).toBeInTheDocument();
+  });
+
+  it('历史快照缺少当前有效封面时不误报失效', async () => {
+    const nextPublication = 'qpub_after_overlay';
+    setFetchHandler((request) => {
+      const url = new URL(request.url);
+      if (url.pathname === '/api/v1/bootstrap') return jsonResponse(BOOTSTRAP);
+      if (url.pathname === '/api/v1/works/work_1') return jsonResponse(work());
+      if (url.pathname === '/api/v1/works/work_1/media') {
+        return jsonResponse({ queryPublicationId: PUBLICATION, media: [publishedMedia('media_1', 0)] });
+      }
+      if (url.pathname === '/api/v1/works/work_1/overlay') {
+        return jsonResponse(
+          overlayState({
+            customCoverMediaId: 'media_new_snapshot',
+            publishedQueryPublicationId: nextPublication
+          })
+        );
+      }
+      return faultResponse('NOT_FOUND', 404);
+    });
+
+    renderGallery(
+      <Routes>
+        <Route path="/works/:workId" element={<WorkPage />} />
+      </Routes>,
+      `/works/work_1?queryPublicationId=${PUBLICATION}`
+    );
+
+    expect(await screen.findByText(/当前选择属于另一个已投影快照/)).toBeInTheDocument();
+    expect(screen.queryByText(/展示已回退到规则封面/)).not.toBeInTheDocument();
+    await userEvent.click(screen.getByRole('button', { name: /自定义封面/ }));
+    expect(
+      await screen.findByRole('option', { name: '当前自定义封面属于另一快照（可打开新版本查看）' })
+    ).toHaveAttribute('aria-disabled', 'true');
+    await userEvent.keyboard('{Escape}');
+    expect(screen.getByRole('link', { name: '打开已投影版本' })).toHaveAttribute(
+      'href',
+      `/works/work_1?queryPublicationId=${nextPublication}`
+    );
+  });
+
+  it('媒体列表读取失败时不把同快照 CustomCover 误报为失效', async () => {
+    setFetchHandler((request) => {
+      const url = new URL(request.url);
+      if (url.pathname === '/api/v1/bootstrap') return jsonResponse(BOOTSTRAP);
+      if (url.pathname === '/api/v1/works/work_1') return jsonResponse(work());
+      if (url.pathname === '/api/v1/works/work_1/media') return faultResponse('FORBIDDEN', 403);
+      if (url.pathname === '/api/v1/works/work_1/overlay') {
+        return jsonResponse(overlayState({ customCoverMediaId: 'media_valid_but_unavailable' }));
+      }
+      return faultResponse('NOT_FOUND', 404);
+    });
+
+    renderGallery(
+      <Routes>
+        <Route path="/works/:workId" element={<WorkPage />} />
+      </Routes>,
+      `/works/work_1?queryPublicationId=${PUBLICATION}`
+    );
+
+    expect(await screen.findByText(/媒体列表尚未加载/)).toBeInTheDocument();
+    expect(screen.queryByText(/展示已回退到规则封面/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/当前自定义封面已失效/)).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /自定义封面/ })).toBeDisabled();
   });
 });

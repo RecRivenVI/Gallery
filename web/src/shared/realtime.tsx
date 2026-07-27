@@ -88,6 +88,20 @@ export type RealtimeEffect =
   | 'none';
 
 /**
+ * 新 publication 会同时改变作品、媒体和三个聚合浏览面；Overlay 状态也必须重取，
+ * 否则写入返回的 pending 会一直留在缓存里。集中列出这些前缀，避免新增浏览面后只刷新一半。
+ */
+export const PUBLICATION_QUERY_PREFIXES = [
+  'publication',
+  'works',
+  'media',
+  'creators',
+  'libraries',
+  'sources',
+  'overlay'
+] as const;
+
+/**
  * 事件 → 本地动作。switch 覆盖全部 14 个类型，缺一个就是编译错误
  * （末尾的 never 断言 + tsconfig 的 noFallthroughCasesInSwitch）。
  */
@@ -332,9 +346,9 @@ export function RealtimeProvider({ children, transport = browserTransport, url }
               void queryClient.invalidateQueries({ queryKey: ['jobs'] });
               break;
             case 'publication':
-              void queryClient.invalidateQueries({ queryKey: ['publication'] });
-              void queryClient.invalidateQueries({ queryKey: ['works'] });
-              void queryClient.invalidateQueries({ queryKey: ['media'] });
+              for (const prefix of PUBLICATION_QUERY_PREFIXES) {
+                void queryClient.invalidateQueries({ queryKey: [prefix] });
+              }
               break;
             case 'session':
               // 认证或授权发生变化：bootstrap 是唯一事实源，必须重新拉。

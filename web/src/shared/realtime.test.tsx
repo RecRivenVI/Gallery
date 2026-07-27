@@ -16,6 +16,7 @@ import { jsonResponse, setFetchHandler } from '../../tests/http';
 import { createQueryClient } from './query';
 import {
   ACTIVE_REALTIME_EVENT_TYPES,
+  PUBLICATION_QUERY_PREFIXES,
   REALTIME_EVENT_TYPES,
   RealtimeProvider,
   backoffDelayMs,
@@ -103,9 +104,17 @@ function Probe() {
   );
 }
 
-function Harness({ transport, children }: { transport: FakeTransport; children?: ReactNode }) {
+function Harness({
+  transport,
+  children,
+  queryClient = createQueryClient()
+}: {
+  transport: FakeTransport;
+  children?: ReactNode;
+  queryClient?: ReturnType<typeof createQueryClient>;
+}) {
   return (
-    <QueryClientProvider client={createQueryClient()}>
+    <QueryClientProvider client={queryClient}>
       <SessionProvider>
         <RealtimeProvider transport={transport.connect} url="ws://test.invalid/ws/v1">
           <Probe />
@@ -234,6 +243,22 @@ describe('RealtimeProvider', () => {
     // 缺口意味着有事件没收到，必须回到 HTTP 快照重新对齐。
     expect(epoch()).toBeGreaterThan(before);
     expect(screen.getByTestId('last-sequence')).toHaveTextContent('5');
+  });
+
+  it('publication 同时失效详情、媒体、聚合浏览面与 Overlay', async () => {
+    const transport = new FakeTransport();
+    const queryClient = createQueryClient();
+    const invalidate = vi.spyOn(queryClient, 'invalidateQueries');
+    render(<Harness transport={transport} queryClient={queryClient} />);
+    await screen.findByTestId('status');
+    transport.open();
+    invalidate.mockClear();
+
+    transport.send(envelope('query.publication.published', 1));
+
+    expect(invalidate.mock.calls.map(([filters]) => filters?.queryKey?.[0])).toEqual([
+      ...PUBLICATION_QUERY_PREFIXES
+    ]);
   });
 
   it('重复 sequence 被忽略且不推进游标', async () => {

@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/RecRivenVI/gallery/internal/contract/fault"
@@ -135,9 +136,10 @@ type OverlayEnqueueResult struct {
 }
 
 type Store struct {
-	db    *sql.DB
-	clock ports.Clock
-	ids   ports.IDGenerator
+	db        *sql.DB
+	clock     ports.Clock
+	ids       ports.IDGenerator
+	overlayMu sync.RWMutex
 }
 
 func NewStore(db *sql.DB, clock ports.Clock, ids ports.IDGenerator) (*Store, error) {
@@ -145,6 +147,21 @@ func NewStore(db *sql.DB, clock ports.Clock, ids ports.IDGenerator) (*Store, err
 		return nil, fmt.Errorf("Job Store 缺少依赖")
 	}
 	return &Store{db: db, clock: clock, ids: ids}, nil
+}
+
+// AcquireOverlayEnqueue 线性化会改变 Overlay target watermark 的 control 写入。
+// 调用方必须在读取 Catalog current 和开启 control 事务之前取得，
+// 避免持有 SQLite 写事务时等待最终 publication 线性化锁。
+func (s *Store) AcquireOverlayEnqueue() func() {
+	s.overlayMu.RLock()
+	return s.overlayMu.RUnlock
+}
+
+// AcquireOverlayCommit 从最后一次 target 复核到 Catalog publication、Overlay
+// published 标记和 Job completed 全部收敛前禁止新 watermark 合并。
+func (s *Store) AcquireOverlayCommit() func() {
+	s.overlayMu.Lock()
+	return s.overlayMu.Unlock
 }
 
 func (s *Store) CreateScan(ctx context.Context, sourceID, createdBy, retryOf string) (Job, error) {
@@ -438,28 +455,46 @@ WHERE job_id=? AND status='queued'`, string(payload), s.clock.Now().UTC().Unix()
 	return s.Get(ctx, id)
 }
 
-// EnqueueOverlayProjectionTx 与 Overlay fact 使用同一个 control.db 事务：同一 Catalog
-// 上的连续写入合并为更高 watermark，Catalog 已切换时显式 supersede 旧请求。
+// EnqueueOverlayProjectionTx 与 Overlay fact 使用同一个 control.db 事务：只有同一
+// Catalog 且基于同一 publication 的连续写入才合并为更高 watermark。
+// Catalog 或 base publication 已切换时必须建立后继 Job，不能把新事实合并进
+// 已经产生 publication 的 publishing Job。
 func (s *Store) EnqueueOverlayProjectionTx(ctx context.Context, tx *sql.Tx, createdBy, catalogRevisionID, basePublicationID string, targetWatermark int64) (OverlayEnqueueResult, error) {
 	if tx == nil || strings.TrimSpace(createdBy) == "" || catalogRevisionID == "" || basePublicationID == "" || targetWatermark < 1 {
 		return OverlayEnqueueResult{}, fault.New(fault.CodeValidation, false, nil)
 	}
-	var activeID, activeCatalog string
-	err := tx.QueryRowContext(ctx, `SELECT job_id, target_catalog_revision_id FROM jobs
+	var activeID, activeCatalog, activeStatus string
+	var activeBase sql.NullString
+	err := tx.QueryRowContext(ctx, `SELECT job_id, target_catalog_revision_id, base_query_publication_id, status FROM jobs
 WHERE job_type='overlay_projection' AND status IN ('queued', 'running', 'publishing')
-ORDER BY created_at, job_id LIMIT 1`).Scan(&activeID, &activeCatalog)
+ORDER BY created_at, job_id LIMIT 1`).Scan(&activeID, &activeCatalog, &activeBase, &activeStatus)
 	if err != nil && !errors.Is(err, sql.ErrNoRows) {
 		return OverlayEnqueueResult{}, fault.New(fault.CodeInternal, true, err)
 	}
 	now := s.clock.Now().UTC()
-	if err == nil && activeCatalog == catalogRevisionID {
+	if err == nil && activeCatalog == catalogRevisionID && activeBase.Valid && activeBase.String == basePublicationID {
 		if _, err := tx.ExecContext(ctx, `UPDATE jobs SET target_watermark=max(target_watermark, ?),
 progress_sequence=progress_sequence+1, updated_at=? WHERE job_id=?`, targetWatermark, now.Unix(), activeID); err != nil {
 			return OverlayEnqueueResult{}, fault.New(fault.CodeInternal, true, err)
 		}
 		return OverlayEnqueueResult{JobID: activeID}, nil
 	}
-	if err == nil {
+	finalizedPublished := false
+	if err == nil && activeCatalog == catalogRevisionID && activeBase.Valid && activeBase.String != basePublicationID && Status(activeStatus) == StatusPublishing {
+		// PublishOverlay 已把新 publication 设为 Catalog 当前快照，但旧 Execute
+		// 还没来得及把 control Job 收敛为 completed。此时 Put 持有同一
+		// control IMMEDIATE 事务，先线性化完成旧 Job，再插入基于新
+		// publication 的后继 Job，避免唯一活动 Job 索引与新 watermark 丢失。
+		updated, completeErr := completePublishingTx(ctx, tx, activeID, basePublicationID, now)
+		if completeErr != nil {
+			return OverlayEnqueueResult{}, completeErr
+		}
+		if !updated {
+			return OverlayEnqueueResult{}, fault.New(fault.CodeJobStateConflict, true, nil)
+		}
+		finalizedPublished = true
+	}
+	if err == nil && !finalizedPublished {
 		if _, err := tx.ExecContext(ctx, `UPDATE jobs SET status='cancelled', stage='superseded',
 issue_code='OVERLAY_SUPERSEDED', finished_at=?, progress_sequence=progress_sequence+1, updated_at=?
 WHERE job_id=?`, now.Unix(), now.Unix(), activeID); err != nil {
@@ -895,27 +930,60 @@ func (s *Store) Complete(ctx context.Context, id, publicationID string) (Job, er
 		return Job{}, fault.New(fault.CodeInternal, true, err)
 	}
 	defer tx.Rollback()
-	result, err := tx.ExecContext(ctx, `UPDATE jobs SET status='completed', stage='completed', publication_id=?, finished_at=?,
-heartbeat_at=NULL, lease_expires_at=NULL, progress_sequence=progress_sequence+1, updated_at=?
-WHERE job_id=? AND status='publishing'`, publicationID, now.Unix(), now.Unix(), id)
+	updated, err := completePublishingTx(ctx, tx, id, publicationID, now)
 	if err != nil {
-		return Job{}, fault.New(fault.CodeInternal, true, err)
-	}
-	if err := requireOne(result); err != nil {
 		return Job{}, err
 	}
-	attemptResult, err := tx.ExecContext(ctx, `UPDATE job_attempts SET status='completed', finished_at=?, updated_at=?
-WHERE job_id=? AND status='running'`, now.Unix(), now.Unix(), id)
-	if err != nil {
-		return Job{}, fault.New(fault.CodeInternal, true, err)
-	}
-	if err := requireOne(attemptResult); err != nil {
-		return Job{}, err
+	if !updated {
+		// EnqueueOverlayProjectionTx 可在 publication-first 窗口内为创建后继
+		// Job 而先完成本 Job。旧 Execute 稍后到达时，相同 publication
+		// 的 completed 是幂等成功；任何其他终态或 publication 都是真冲突。
+		var status Status
+		var persistedPublication sql.NullString
+		if queryErr := tx.QueryRowContext(ctx, `SELECT status, publication_id FROM jobs WHERE job_id=?`, id).Scan(&status, &persistedPublication); queryErr != nil {
+			if errors.Is(queryErr, sql.ErrNoRows) {
+				return Job{}, fault.New(fault.CodeJobStateConflict, false, nil)
+			}
+			return Job{}, fault.New(fault.CodeInternal, true, queryErr)
+		}
+		if status != StatusCompleted || !persistedPublication.Valid || persistedPublication.String != publicationID {
+			return Job{}, fault.New(fault.CodeJobStateConflict, false, nil)
+		}
 	}
 	if err := tx.Commit(); err != nil {
 		return Job{}, fault.New(fault.CodeInternal, true, err)
 	}
 	return s.Get(ctx, id)
+}
+
+// completePublishingTx 把 Job 与当前 Attempt 作为一个原子终态写入。
+// updated=false 只表示 Job 不再是 publishing，由调用方判定是幂等完成还是冲突。
+func completePublishingTx(ctx context.Context, tx *sql.Tx, id, publicationID string, now time.Time) (bool, error) {
+	result, err := tx.ExecContext(ctx, `UPDATE jobs SET status='completed', stage='completed', publication_id=?, finished_at=?,
+heartbeat_at=NULL, lease_expires_at=NULL, progress_sequence=progress_sequence+1, updated_at=?
+WHERE job_id=? AND status='publishing'`, publicationID, now.Unix(), now.Unix(), id)
+	if err != nil {
+		return false, fault.New(fault.CodeInternal, true, err)
+	}
+	count, err := result.RowsAffected()
+	if err != nil {
+		return false, fault.New(fault.CodeInternal, true, err)
+	}
+	if count == 0 {
+		return false, nil
+	}
+	if count != 1 {
+		return false, fault.New(fault.CodeJobStateConflict, false, nil)
+	}
+	attemptResult, err := tx.ExecContext(ctx, `UPDATE job_attempts SET status='completed', finished_at=?, updated_at=?
+WHERE job_id=? AND status='running'`, now.Unix(), now.Unix(), id)
+	if err != nil {
+		return false, fault.New(fault.CodeInternal, true, err)
+	}
+	if err := requireOne(attemptResult); err != nil {
+		return false, err
+	}
+	return true, nil
 }
 
 func (s *Store) RecoverCompleted(ctx context.Context, id, publicationID string) (Job, error) {

@@ -211,6 +211,8 @@ func (s *Service) Put(ctx context.Context, workID, createdBy string, input Input
 	if err != nil {
 		return PutResult{}, err
 	}
+	releaseEnqueue := s.jobs.AcquireOverlayEnqueue()
+	defer releaseEnqueue()
 	current, currentErr := s.catalog.Current(ctx)
 	if currentErr != nil && !isCode(currentErr, fault.CodeNotFound) {
 		return PutResult{}, currentErr
@@ -324,6 +326,8 @@ ON CONFLICT(work_id) DO UPDATE SET
 // active publication（全新安装或从未成功扫描过任何 Source）视为无需回填，返回
 // created=false 而不是错误。
 func (s *Service) TriggerReprojection(ctx context.Context, createdBy string) (jobs.Job, bool, error) {
+	releaseEnqueue := s.jobs.AcquireOverlayEnqueue()
+	defer releaseEnqueue()
 	current, err := s.catalog.Current(ctx)
 	if err != nil {
 		if isCode(err, fault.CodeNotFound) {
@@ -506,11 +510,14 @@ func (s *Service) Execute(ctx context.Context, jobID string) error {
 				return s.fail(ctx, job, err)
 			}
 		}
+		releaseOverlayCommit := s.jobs.AcquireOverlayCommit()
 		latest, err = s.jobs.Get(ctx, job.ID)
 		if err != nil {
+			releaseOverlayCommit()
 			return err
 		}
 		if latest.TargetWatermark != candidate.ControlWatermark || latest.TargetCatalogID != candidate.CatalogRevisionID {
+			releaseOverlayCommit()
 			_ = s.catalog.FinishOverlayCandidate(ctx, candidate, "superseded")
 			job, err = s.jobs.ResumeOverlayProjection(ctx, job.ID)
 			if err != nil {
@@ -519,10 +526,18 @@ func (s *Service) Execute(ctx context.Context, jobID string) error {
 			s.notifier.JobChanged(job)
 			continue
 		}
+		if s.faultInjector != nil {
+			if err := s.faultInjector("before_overlay_publication"); err != nil {
+				releaseOverlayCommit()
+				_ = s.catalog.FinishOverlayCandidate(ctx, candidate, "aborted")
+				return s.fail(ctx, job, err)
+			}
+		}
 		releasePublication := s.maintenance.AcquirePublication()
 		publication, err := s.catalog.PublishOverlay(ctx, candidate)
 		releasePublication()
 		if err != nil {
+			releaseOverlayCommit()
 			_ = s.catalog.FinishOverlayCandidate(ctx, candidate, "superseded")
 			if isCode(err, fault.CodeConflict) {
 				job, resumeErr := s.jobs.ResumeOverlayProjection(ctx, job.ID)
@@ -536,18 +551,30 @@ func (s *Service) Execute(ctx context.Context, jobID string) error {
 		}
 		if s.faultInjector != nil {
 			if err := s.faultInjector("after_publication"); err != nil {
+				releaseOverlayCommit()
 				return err
 			}
 		}
-		s.notifier.PublicationPublished(publication)
 		commitCtx := context.WithoutCancel(ctx)
+		if err := s.markPublished(commitCtx, job.ID, publication.ControlWatermark, publication.ID); err != nil {
+			releaseOverlayCommit()
+			return err
+		}
+		if s.faultInjector != nil {
+			if err := s.faultInjector("after_overlay_published"); err != nil {
+				releaseOverlayCommit()
+				return err
+			}
+		}
 		job, err = s.jobs.Complete(commitCtx, job.ID, publication.ID)
 		if err != nil {
+			releaseOverlayCommit()
 			return err
 		}
-		if err := s.markPublished(commitCtx, job.ID, publication.ControlWatermark, publication.ID); err != nil {
-			return err
-		}
+		releaseOverlayCommit()
+		// HTTP 快照是 WebSocket 事件后的事实源。先持久化 Overlay 的 published 状态再广播，
+		// 避免客户端收到 publication 后重取时仍读到 pending。
+		s.notifier.PublicationPublished(publication)
 		s.notifier.JobChanged(job)
 		return nil
 	}
@@ -587,6 +614,9 @@ func (s *Service) reconcile(ctx context.Context, includeLegacy bool) error {
 					return err
 				}
 			}
+			// 恢复时不能假设首次进程已经来得及广播；重复 publication
+			// 事件是可幂等的缓存失效信号，遗漏则会让已连接客户端停留在旧快照。
+			s.notifier.PublicationPublished(publication)
 			s.notifier.JobChanged(job)
 			continue
 		}
@@ -596,6 +626,9 @@ func (s *Service) reconcile(ctx context.Context, includeLegacy bool) error {
 		// 无 publication 的 queued Job 只由中央 Recovery Service 的 ListRunnable/Submit 领取，
 		// 与 scanner.Reconcile 对齐；这里不再自行 Start，避免与中央循环对同一 Job 形成竞争
 		// 领取窗口。running/publishing Job 必须等租约过期后再形成同一 Job 的新 Attempt。
+	}
+	if err := s.reconcileCompletedPublicationGaps(ctx); err != nil {
+		return err
 	}
 	if !includeLegacy {
 		return nil
@@ -616,6 +649,58 @@ func (s *Service) reconcile(ctx context.Context, includeLegacy bool) error {
 			s.notifier.JobChanged(repaired)
 		} else if err != nil {
 			return err
+		}
+	}
+	return nil
+}
+
+// reconcileCompletedPublicationGaps 只读取仍被 pending Overlay 引用的 completed Job，
+// 用于收敛 PublishOverlay 已提交、并发 Put 已为后继 Job 腾出唯一索引，
+// 但旧 Execute 还没来得及 markPublished 的窗口。这个窄查询可在周期
+// ReconcileActive 中执行，不需要反复遍历全部历史 completed Job。
+func (s *Service) reconcileCompletedPublicationGaps(ctx context.Context) error {
+	rows, err := s.control.QueryContext(ctx, `SELECT DISTINCT work_overlays.projection_job_id
+FROM work_overlays
+JOIN jobs ON jobs.job_id=work_overlays.projection_job_id
+WHERE work_overlays.projection_status='pending'
+  AND jobs.job_type='overlay_projection'
+  AND jobs.status='completed'
+ORDER BY work_overlays.projection_job_id`)
+	if err != nil {
+		return fault.New(fault.CodeInternal, true, err)
+	}
+	var jobIDs []string
+	for rows.Next() {
+		var jobID string
+		if err := rows.Scan(&jobID); err != nil {
+			_ = rows.Close()
+			return fault.New(fault.CodeInternal, true, err)
+		}
+		jobIDs = append(jobIDs, jobID)
+	}
+	if err := rows.Err(); err != nil {
+		_ = rows.Close()
+		return fault.New(fault.CodeInternal, true, err)
+	}
+	if err := rows.Close(); err != nil {
+		return fault.New(fault.CodeInternal, true, err)
+	}
+	for _, jobID := range jobIDs {
+		publication, err := s.catalog.PublicationForJob(ctx, jobID)
+		if isCode(err, fault.CodeNotFound) {
+			// 启动时的 includeLegacy 分支会把缺 publication 的 completed Job
+			// 标记为 needs_repair；周期对账不伪造 publication 事实。
+			continue
+		}
+		if err != nil {
+			return err
+		}
+		updated, err := s.markPublishedRows(ctx, jobID, publication.ControlWatermark, publication.ID)
+		if err != nil {
+			return err
+		}
+		if updated {
+			s.notifier.PublicationPublished(publication)
 		}
 	}
 	return nil
@@ -671,14 +756,23 @@ issue_code=?, updated_at=? WHERE projection_job_id=? AND query_watermark<=? AND 
 }
 
 func (s *Service) markPublished(ctx context.Context, jobID string, target int64, publicationID string) error {
-	_, err := s.control.ExecContext(ctx, `UPDATE work_overlays SET projection_status='published',
+	_, err := s.markPublishedRows(ctx, jobID, target, publicationID)
+	return err
+}
+
+func (s *Service) markPublishedRows(ctx context.Context, jobID string, target int64, publicationID string) (bool, error) {
+	result, err := s.control.ExecContext(ctx, `UPDATE work_overlays SET projection_status='published',
 projected_watermark=query_watermark, published_query_publication_id=?, issue_code=NULL, updated_at=?
 WHERE projection_job_id=? AND query_watermark<=? AND projection_status='pending'`,
 		publicationID, s.clock.Now().UTC().Unix(), jobID, target)
 	if err != nil {
-		return fault.New(fault.CodeInternal, true, err)
+		return false, fault.New(fault.CodeInternal, true, err)
 	}
-	return nil
+	count, err := result.RowsAffected()
+	if err != nil {
+		return false, fault.New(fault.CodeInternal, true, err)
+	}
+	return count > 0, nil
 }
 
 func readStateTx(ctx context.Context, tx *sql.Tx, workID string) (State, bool, error) {

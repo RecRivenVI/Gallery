@@ -24,6 +24,16 @@ import (
 	"github.com/RecRivenVI/gallery/internal/storage"
 )
 
+type publicationRecorder struct {
+	publications []string
+}
+
+func (*publicationRecorder) JobChanged(jobs.Job) {}
+
+func (recorder *publicationRecorder) PublicationPublished(publication catalog.Publication) {
+	recorder.publications = append(recorder.publications, publication.ID)
+}
+
 func TestWalkingSkeletonScanPublishesAndFailurePreservesOldPublication(t *testing.T) {
 	fixture, err := os.ReadFile(filepath.Join("..", "..", "tests", "fixtures", "walking-skeleton", "work-one", "media.bin"))
 	if err != nil {
@@ -191,8 +201,13 @@ WHERE source_id=? AND status='active' ORDER BY source_key`, source.ID)
 
 func TestReconciliationRepairsBothCrossDatabaseStates(t *testing.T) {
 	fixture := []byte("reconciliation fixture")
-	_, jobStore, catalogStore, service, source, store := setup(t, fixture)
+	resources, jobStore, catalogStore, _, source, store := setup(t, fixture)
 	defer store.Close()
+	recorder := &publicationRecorder{}
+	service, err := scanner.New(context.Background(), resources, jobStore, catalogStore, recorder)
+	if err != nil {
+		t.Fatal(err)
+	}
 
 	publishedJob, err := jobStore.CreateScan(context.Background(), source.ID, "personal-owner", "")
 	if err != nil {
@@ -237,6 +252,9 @@ func TestReconciliationRepairsBothCrossDatabaseStates(t *testing.T) {
 	if err != nil || recovered.Status != jobs.StatusCompleted || recovered.PublicationID != publication.ID ||
 		recovered.HeartbeatAt != nil || recovered.LeaseExpiresAt != nil {
 		t.Fatalf("已发布 Job 未恢复 completed: %+v %v", recovered, err)
+	}
+	if len(recorder.publications) != 1 || recorder.publications[0] != publication.ID {
+		t.Fatalf("恢复未补发 publication 缓存失效事件: %+v", recorder.publications)
 	}
 
 	missingJob, err := jobStore.CreateScan(context.Background(), source.ID, "personal-owner", "")
