@@ -5,7 +5,7 @@ Gallery（画廊）是一个本地优先、只读来源、规则驱动的个人�
 媒体文件始终留在用户自己的目录里：Gallery 不改名、不移动、不删除原文件，只读取内容并建立一个可以随时删除重建的目录数据库（Catalog）。收藏、阅读进度和人工整理结果单独保存，不会因为重新扫描而丢失。内嵌 Web/PWA、CLI、未来桌面壳和第三方客户端均基于同一套 API 契约。
 
 > [!IMPORTANT]
-> Gallery 当前仍处于 pre-alpha 开发阶段。阶段 0～4 后端主线、阶段 5 安全代码基线及阶段 6 Web/PWA 页面代码基线均已实现；Chrome/Edge 已完成合成 smoke 与真实后端认证主路径验证，但阶段 5 Security Gate 和阶段 6 Web Gate 均未通过。2026-07-23 的独立审计（[验证记录 EV-39](Documents/证据/验证记录.md)）发现实时 WebSocket 与权限名阻断；这些缺陷已由 [EV-40](Documents/证据/验证记录.md) 修复。[EV-54～EV-57](Documents/证据/验证记录.md) 随后以隔离 Chromium/真实 `galleryd` 打通管理自举、publication-bound 画廊/媒体、CustomCover 与规则草稿→发布→Binding→扫描；[EV-58](Documents/证据/验证记录.md) 又加入无损规则文本契约、CSP 兼容 RJSF/AJV 表单、模板选择和同一真实链的表单→文本验证。这些仍不等于真实媒体或完整业务闭环，任意规则的完整可视化构建与其余规则/管理写路径尚未覆盖。当前没有安装发行版本或完整使用教程，也尚未完成真实全量性能、SMB/NAS、真实 LAN 多设备、目标低端设备、Firefox/真实移动设备和跨平台发行门禁。
+> Gallery 当前仍处于 pre-alpha 开发阶段。阶段 0～4 后端主线、阶段 5 安全代码基线及阶段 6 Web/PWA 页面代码基线均已实现；Chrome/Edge 已完成合成 smoke 与真实后端认证主路径验证，但阶段 5 Security Gate 和阶段 6 Web Gate 均未通过。2026-07-23 的独立审计（[验证记录 EV-39](Documents/证据/验证记录.md)）发现实时 WebSocket 与权限名阻断；这些缺陷已由 [EV-40](Documents/证据/验证记录.md) 修复。[EV-54～EV-58](Documents/证据/验证记录.md) 随后以隔离 Chromium/真实 `galleryd` 打通管理自举、publication-bound 画廊/媒体、CustomCover、规则草稿→发布→Binding→扫描、无损规则文本和模板驱动 Schema 表单；[EV-59](Documents/证据/验证记录.md) 又补齐规则回滚、Package/Version/ParameterSet 弃用、共享参数 CAS/Impact 与 Binding/Job 快照不变量。这些仍不等于真实媒体或完整业务闭环，任意规则的完整可视化构建与其余管理写路径尚未覆盖。当前没有安装发行版本或完整使用教程，也尚未完成真实全量性能、SMB/NAS、真实 LAN 多设备、目标低端设备、Firefox/真实移动设备和跨平台发行门禁。
 
 ## 特色功能
 
@@ -65,7 +65,7 @@ Gallery（画廊）是一个本地优先、只读来源、规则驱动的个人�
 | 阶段 3：扫描、任务与目录库 | ✅（代码与模拟数据层面） | 🟡（真实大盘抽样通过，全量未完成） | 真实 SSD/HDD 各完成几十万文件规模抽样验收 | 真实全量扫描性能门禁尚未跑完；网络共享盘尚未验证 | 阶段 4 正式压力测试 |
 | 阶段 4：查询与媒体 | 🟡（主线完成，部分参数未冻结） | 🟡（正确性收口完成，500,000 规模正式压力测试已执行） | 搜索、排序、分页、显式规则/有效封面、媒体读取、缩略图生成均有代码闭环；500,000 规模 Correctness/Cursor 通过 | 排序权重、结果总数、租约时长等仍是暂定值；500,000 规模下部分查询类别仍有已知未修复的架构性延迟 | 性能优化候选评估与接口冻结 |
 | 阶段 5：账户、安全与多客户端 | 🟠（代码与合成安全收尾已实现） | 🟡（Chrome/Edge 同机主路径补证，正式 Gate 未通过） | LAN 本地账户、Argon2id、Session、API Token、资源 Grant、匿名 Share 与 WS 防滥用已形成代码闭环 | 真实 LAN 多设备、目标设备 Argon2id 与真实恶意输入资源门禁未完成 | 完成外部设备安全门禁 |
-| 阶段 6：Web/PWA 界面 | 🟠（页面代码基线与首批真实业务链路已实现） | 🟡（隔离 Chromium/真实后端 E2E 已建立；正式 Gate 未通过） | 同源 Web/PWA 覆盖浏览与管理页面；空实例管理自举、扫描 publication、真实 WS→HTTP snapshot、同快照画廊/媒体、CustomCover、规则草稿→发布→Binding 与模板驱动 Schema 表单已有持续 E2E | 任意规则的完整可视化构建、规则回滚/弃用/参数集与其余写路径、Firefox、真实移动设备/屏幕阅读器及窄屏焦点陷阱未完成 | 扩大真实业务与可访问性门禁，不进入桌面壳 |
+| 阶段 6：Web/PWA 界面 | 🟠（页面代码基线与首批真实业务链路已实现） | 🟡（隔离 Chromium/真实后端 E2E 已建立；正式 Gate 未通过） | 同源 Web/PWA 覆盖浏览与管理页面；空实例管理自举、扫描 publication、真实 WS→HTTP snapshot、同快照画廊/媒体、CustomCover、规则草稿/发布/回滚/弃用、ParameterSet 与模板驱动 Schema 表单已有持续 E2E | 任意规则的完整可视化构建、其余写路径、WS gap/重连、Firefox、真实移动设备/屏幕阅读器及窄屏焦点陷阱未完成 | 扩大真实业务与可访问性门禁，不进入桌面壳 |
 | 阶段 7：平台适配与正式发行 | ⏳ | ⛔ | 无 | 安装包、签名、跨平台支持均未开始 | 最后阶段 |
 
 状态图例、每个阶段的详细功能清单、测试与门禁证据，见完整项目状态文档：
@@ -75,7 +75,7 @@ Gallery（画廊）是一个本地优先、只读来源、规则驱动的个人�
 
 ## 项目当前处于什么位置
 
-阶段 0～4 的后端主线已经完成代码实现与合成正确性验证（Correctness，即在模拟/构造数据下验证逻辑是否正确，不代表真实规模下的性能表现）。阶段 4 的正式性能与 API Freeze 尚未完成。阶段 5 已增加 Chrome/Edge 同机双上下文、Session 吊销、LAN 模式登录和当前工作站 Argon2id 证据，但真实跨设备与目标设备门禁仍缺，完整 Security Gate 未通过。阶段 6 已形成可由 `galleryd` 直接提供的 Web/PWA 页面代码基线；EV-39 发现、EV-40 修复的实时通道与权限阻断不再回归完成度表述，EV-54～EV-57 用隔离 Chromium/真实后端建立 Library/Source 管理自举、扫描 publication、真实 WS→HTTP snapshot、publication-bound 画廊/媒体、CustomCover 与规则生命周期门禁，EV-58 再补齐无损规则文本、CSP 兼容 RJSF/AJV 表单、模板选择和表单→文本→保存验证。这五轮仍使用合成 Source；任意规则的完整可视化构建、其余规则/业务写路径、完整浏览器/真实移动设备和可访问性 Gate 均未完成。当前仍没有面向普通用户的安装包；真实机械硬盘全量扫描、SMB/NAS、原生平台文件身份和正式发行门禁均尚未完成。
+阶段 0～4 的后端主线已经完成代码实现与合成正确性验证（Correctness，即在模拟/构造数据下验证逻辑是否正确，不代表真实规模下的性能表现）。阶段 4 的正式性能与 API Freeze 尚未完成。阶段 5 已增加 Chrome/Edge 同机双上下文、Session 吊销、LAN 模式登录和当前工作站 Argon2id 证据，但真实跨设备与目标设备门禁仍缺，完整 Security Gate 未通过。阶段 6 已形成可由 `galleryd` 直接提供的 Web/PWA 页面代码基线；EV-39 发现、EV-40 修复的实时通道与权限阻断不再回归完成度表述，EV-54～EV-58 用隔离 Chromium/真实后端建立 Library/Source 管理自举、扫描 publication、真实 WS→HTTP snapshot、publication-bound 画廊/媒体、CustomCover、规则发布首链、无损文本和模板驱动 Schema 表单，EV-59 再补齐规则回滚/弃用、ParameterSet CAS/Impact 与执行快照不变量。这六轮仍使用合成 Source；任意规则的完整可视化构建、其余业务写路径、完整浏览器/真实移动设备和可访问性 Gate 均未完成。当前仍没有面向普通用户的安装包；真实机械硬盘全量扫描、SMB/NAS、原生平台文件身份和正式发行门禁均尚未完成。
 
 详细依据见 [PROJECT_STATUS.md](./PROJECT_STATUS.md)。
 
