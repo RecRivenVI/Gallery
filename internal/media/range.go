@@ -26,7 +26,7 @@ func ParseSingleRange(header string, size int64) (ByteRange, bool, error) {
 	var start, end int64
 	var err error
 	if startText == "" {
-		suffix, parseErr := strconv.ParseInt(endText, 10, 64)
+		suffix, parseErr := parseDecimalPosition(endText)
 		if parseErr != nil || suffix <= 0 {
 			return ByteRange{}, false, fault.New(fault.CodeRangeInvalid, false, nil)
 		}
@@ -35,14 +35,14 @@ func ParseSingleRange(header string, size int64) (ByteRange, bool, error) {
 		}
 		start, end = size-suffix, size-1
 	} else {
-		start, err = strconv.ParseInt(startText, 10, 64)
+		start, err = parseDecimalPosition(startText)
 		if err != nil || start < 0 || start >= size {
 			return ByteRange{}, false, fault.New(fault.CodeRangeInvalid, false, nil)
 		}
 		if endText == "" {
 			end = size - 1
 		} else {
-			end, err = strconv.ParseInt(endText, 10, 64)
+			end, err = parseDecimalPosition(endText)
 			if err != nil || end < start {
 				return ByteRange{}, false, fault.New(fault.CodeRangeInvalid, false, nil)
 			}
@@ -52,4 +52,16 @@ func ParseSingleRange(header string, size int64) (ByteRange, bool, error) {
 		}
 	}
 	return ByteRange{Start: start, End: end}, true, nil
+}
+
+func parseDecimalPosition(input string) (int64, error) {
+	if input == "" {
+		return 0, strconv.ErrSyntax
+	}
+	for _, char := range input {
+		if char < '0' || char > '9' {
+			return 0, strconv.ErrSyntax
+		}
+	}
+	return strconv.ParseInt(input, 10, 64)
 }

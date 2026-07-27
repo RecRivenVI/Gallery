@@ -21,7 +21,7 @@ func TestSingleRangeSemantics(t *testing.T) {
 			t.Fatalf("%s => %+v %t %v", header, actual, present, err)
 		}
 	}
-	for _, header := range []string{"bytes=", "bytes=10-", "bytes=4-2", "bytes=0-1,3-4", "items=0-1"} {
+	for _, header := range []string{"bytes=", "bytes=10-", "bytes=4-2", "bytes=0-1,3-4", "items=0-1", "bytes=+5-", "bytes=5-+9", "bytes=-+5"} {
 		_, _, err := media.ParseSingleRange(header, 10)
 		var structured *fault.Error
 		if !errors.As(err, &structured) || structured.Code != fault.CodeRangeInvalid {

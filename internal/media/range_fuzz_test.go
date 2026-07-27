@@ -87,26 +87,19 @@ func FuzzParseSingleRange(f *testing.F) {
 	})
 }
 
-// TestParseSingleRangeAcceptsSignedPositions 固定审计指出的 RFC 7233 偏差：
-// first-byte-pos / last-byte-pos / suffix-length 的语法都是 1*DIGIT，不允许符号，
-// 但实现直接用 strconv.ParseInt，因此 `+` 前缀被接受。
-//
-// 这不是越界读——`bytes=+5-` 解析出的区间仍满足全部安全不变量——但它让同一段
-// 字节存在多种 Range 头写法，任何以 Range 头原文为键的缓存或审计日志都会因此分裂。
-// 与 ADS 那条一样，这里断言的是**当前行为**，修复后本测试会立即失败并提示改写。
-func TestParseSingleRangeAcceptsSignedPositions(t *testing.T) {
+func TestParseSingleRangeRejectsSignedPositions(t *testing.T) {
 	const size = 100
 	cases := []string{"bytes=+5-", "bytes=+5-+9", "bytes=-+5", "bytes=5-+9"}
-	var accepted []string
 	for _, header := range cases {
-		if _, partial, err := media.ParseSingleRange(header, size); err == nil && partial {
-			accepted = append(accepted, header)
+		interval, partial, err := media.ParseSingleRange(header, size)
+		if err == nil || partial || interval != (media.ByteRange{}) {
+			t.Fatalf("带符号 Range 位置未拒绝: %q -> %+v partial=%v err=%v", header, interval, partial, err)
+		}
+		var structured *fault.Error
+		if !errors.As(err, &structured) || structured.Code != fault.CodeRangeInvalid || structured.Retryable {
+			t.Fatalf("带符号 Range 位置必须返回不可重试 RANGE_INVALID: %q -> %v", header, err)
 		}
 	}
-	if len(accepted) == 0 {
-		t.Fatalf("带符号的 Range 位置已被全部拒绝，请把本测试改写成正向断言")
-	}
-	t.Logf("已知偏差：ParseSingleRange 接受 RFC 7233 不允许的带符号位置 %q", accepted)
 }
 
 func rangeHeaderSeeds() []string {
