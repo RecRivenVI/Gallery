@@ -537,49 +537,32 @@ func (s *Service) baseFilter(ctx context.Context, pub publication, authorization
 	return where, fromSuffix, args, nil
 }
 
-func (s *Service) query(ctx context.Context, pub publication, authorization sourceAuthorization, request Request, plan querytext.SearchPlan, filterNode *FilterNode, claims contractquery.CursorClaims) ([]Work, bool, error) {
+// mediaCountExpr 是可见媒体计数的相关子查询：它对携带它的那一行求值一次，成本随
+// 求值行数线性增长。因此它只能出现在**分页之后**的投影阶段，绝不能进入排序器的输入。
+const mediaCountExpr = "(SELECT count(*) FROM media_projections m WHERE m.catalog_revision_id=w.catalog_revision_id AND m.overlay_revision_id=w.overlay_revision_id AND m.work_id=w.work_id AND m.hidden=0)"
+
+// buildPageStatement 构建一页结果的完整语句与实参。列顺序必须与 query 中 rows.Scan 的
+// 顺序保持一致。
+//
+// 搜索形态采用两阶段：排序阶段只携带排序真正需要的窄列（work_id、sort_title_key 与四个
+// 档位列），分页之后再按主键 JOIN 回 work_projections 取宽负载。原因是
+// `ORDER BY rank_tier DESC` 是依赖运行期查询串的计算表达式，不可能有索引，所以通过
+// WHERE 的全部候选行都必须进排序器，LIMIT 只限制排序器的输出而不限制它的输入。既然排序器
+// 规模无法降低，唯一可做的就是缩小它每条记录的宽度，并把 mediaCountExpr 这类逐行代价从
+// "逐候选行"降到"逐输出行"（limit+1 次）。
+//
+// 这是纯粹的等价改写：tiers/scored 的档位计算、keyset 谓词、ORDER BY 元组与 LIMIT 全部
+// 不变；JOIN 回表用的是 (catalog_revision_id, overlay_revision_id, work_id) 主键，而
+// baseFilter 恒定把同一对 revision 作为前两个条件，因此回表对每个分页行恰好命中一行，
+// 既不丢行也不增行，游标三元组 (rank_tier, sort_title_key, work_id) 的取值与来源都不变。
+//
+// 无搜索的浏览形态不走这条改写：它的 ORDER BY 由 work_projections_query_idx 直接满足，
+// 既没有排序器也本来就能提前终止，mediaCountExpr 只对输出行求值；套一层两阶段只会多一次
+// 物化而没有任何收益。
+func (s *Service) buildPageStatement(ctx context.Context, pub publication, authorization sourceAuthorization, request Request, plan querytext.SearchPlan, filterNode *FilterNode, claims contractquery.CursorClaims) (string, []any, error) {
 	where, join, fromArgs, err := s.baseFilter(ctx, pub, authorization, request, plan, filterNode, false)
 	if err != nil {
-		return nil, false, err
-	}
-
-	mediaCountExpr := "(SELECT count(*) FROM media_projections m WHERE m.catalog_revision_id=w.catalog_revision_id AND m.overlay_revision_id=w.overlay_revision_id AND m.work_id=w.work_id AND m.hidden=0)"
-	var cte string
-	var selectArgs []any
-	if plan.NormalizedQuery != "" {
-		// 字段级 ranking：标题/Creator/Tag/文件名各自在内层 tiers CTE 算出 0..3 的
-		// match_class，外层 scored CTE 用 combinedFieldScoreSQL 合成 match_class*10+
-		// field_priority 后取 max()，保证"完全匹配优于前缀，前缀优于中缀"对全部四个
-		// 字段一致成立，且同一 match_class 下按字段优先级排列（标题>Creator>Tag>
-		// 文件名）。无搜索词时完全跳过这层，rank_tier 恒为 0，与不带 ranking 时行为
-		// 一致。
-		titleTierSQL := singleFieldTierSQL("w.search_title_norm")
-		creatorTierSQL := singleFieldTierSQL("w.search_creator_norm")
-		tagTierSQL := multiFieldTierSQL("w.search_tags_norm")
-		filenameTierSQL := multiFieldTierSQL("w.search_filenames_norm")
-		cte = fmt.Sprintf(`WITH tiers AS (
-SELECT w.work_id, w.title, w.creator, w.tags_json, w.filenames_text, w.sort_title_key, w.favorite, w.progress, w.cover_media_id, w.badges_json, w.description, w.source_url, w.published_at_ns,
-%s AS media_count,
-(%s) AS title_tier, (%s) AS creator_tier, (%s) AS tag_tier, (%s) AS filename_tier
-FROM work_projections w%s WHERE %s
-),
-scored AS (
-SELECT *, max(%s, %s, %s, %s) AS rank_tier FROM tiers
-)`, mediaCountExpr, titleTierSQL, creatorTierSQL, tagTierSQL, filenameTierSQL, join, strings.Join(where, " AND "),
-			combinedFieldScoreSQL("title_tier", fieldPriorityTitle), combinedFieldScoreSQL("creator_tier", fieldPriorityCreator),
-			combinedFieldScoreSQL("tag_tier", fieldPriorityTag), combinedFieldScoreSQL("filename_tier", fieldPriorityFilename))
-		selectArgs = []any{
-			plan.NormalizedQuery, plan.NormalizedQuery, plan.NormalizedQuery, // title
-			plan.NormalizedQuery, plan.NormalizedQuery, plan.NormalizedQuery, // creator
-			plan.NormalizedQuery, plan.NormalizedQuery, plan.NormalizedQuery, // tag
-			plan.NormalizedQuery, plan.NormalizedQuery, plan.NormalizedQuery, // filename
-		}
-	} else {
-		cte = fmt.Sprintf(`WITH scored AS (
-SELECT w.work_id, w.title, w.creator, w.tags_json, w.filenames_text, w.sort_title_key, w.favorite, w.progress, w.cover_media_id, w.badges_json, w.description, w.source_url, w.published_at_ns,
-%s AS media_count, 0 AS rank_tier
-FROM work_projections w%s WHERE %s
-)`, mediaCountExpr, join, strings.Join(where, " AND "))
+		return "", nil, err
 	}
 
 	operator, direction := ">", "ASC"
@@ -587,37 +570,81 @@ FROM work_projections w%s WHERE %s
 		operator, direction = "<", "DESC"
 	}
 
-	var outerWhere []string
-	var outerArgs []any
-	if claims.LastSortKey != "" {
-		if plan.NormalizedQuery == "" {
+	if plan.NormalizedQuery == "" {
+		statement := fmt.Sprintf(`WITH scored AS (
+SELECT w.work_id, w.title, w.creator, w.tags_json, w.filenames_text, w.sort_title_key, w.favorite, w.progress, w.cover_media_id, w.badges_json, w.description, w.source_url, w.published_at_ns,
+%s AS media_count, 0 AS rank_tier
+FROM work_projections w%s WHERE %s
+)
+SELECT work_id, title, creator, tags_json, filenames_text, sort_title_key, favorite, progress, cover_media_id, badges_json, description, source_url, published_at_ns, media_count, rank_tier FROM scored`,
+			mediaCountExpr, join, strings.Join(where, " AND "))
+		args := append([]any{}, fromArgs...)
+		if claims.LastSortKey != "" {
 			// 无搜索时 rank_tier 恒为 0；把它保留在 keyset 谓词会阻止 SQLite
 			// 直接利用 sort_title_key/work_id 的索引顺序，并诱发整批排序。
-			outerWhere = append(outerWhere, fmt.Sprintf(
-				"(sort_title_key %s ? OR (sort_title_key = ? AND work_id %s ?))", operator, operator))
-			outerArgs = append(outerArgs, claims.LastSortKey, claims.LastSortKey, claims.LastCanonicalWorkID)
-		} else {
-			outerWhere = append(outerWhere, fmt.Sprintf(
-				"(rank_tier < ? OR (rank_tier = ? AND (sort_title_key %s ? OR (sort_title_key = ? AND work_id %s ?))))",
-				operator, operator))
-			outerArgs = append(outerArgs, claims.LastRankTier, claims.LastRankTier, claims.LastSortKey, claims.LastSortKey, claims.LastCanonicalWorkID)
+			statement += fmt.Sprintf(" WHERE (sort_title_key %s ? OR (sort_title_key = ? AND work_id %s ?))", operator, operator)
+			args = append(args, claims.LastSortKey, claims.LastSortKey, claims.LastCanonicalWorkID)
 		}
-	}
-
-	statement := cte + `
-SELECT work_id, title, creator, tags_json, filenames_text, sort_title_key, favorite, progress, cover_media_id, badges_json, description, source_url, published_at_ns, media_count, rank_tier FROM scored`
-
-	args := append(append([]any{}, selectArgs...), fromArgs...)
-	if len(outerWhere) > 0 {
-		statement += " WHERE " + strings.Join(outerWhere, " AND ")
-		args = append(args, outerArgs...)
-	}
-	if plan.NormalizedQuery == "" {
 		statement += fmt.Sprintf(" ORDER BY sort_title_key %s, work_id %s LIMIT ?", direction, direction)
-	} else {
-		statement += fmt.Sprintf(" ORDER BY rank_tier DESC, sort_title_key %s, work_id %s LIMIT ?", direction, direction)
+		return statement, append(args, request.Limit+1), nil
 	}
-	args = append(args, request.Limit+1)
+
+	// 字段级 ranking：标题/Creator/Tag/文件名各自在内层 tiers CTE 算出 0..3 的
+	// match_class，scored CTE 用 combinedFieldScoreSQL 合成 match_class*10+
+	// field_priority 后取 max()，保证"完全匹配优于前缀，前缀优于中缀"对全部四个
+	// 字段一致成立，且同一 match_class 下按字段优先级排列（标题>Creator>Tag>
+	// 文件名）。无搜索词时完全跳过这层，rank_tier 恒为 0，与不带 ranking 时行为一致。
+	titleTierSQL := singleFieldTierSQL("w.search_title_norm")
+	creatorTierSQL := singleFieldTierSQL("w.search_creator_norm")
+	tagTierSQL := multiFieldTierSQL("w.search_tags_norm")
+	filenameTierSQL := multiFieldTierSQL("w.search_filenames_norm")
+
+	keysetSQL := ""
+	var keysetArgs []any
+	if claims.LastSortKey != "" {
+		keysetSQL = fmt.Sprintf(
+			" WHERE (rank_tier < ? OR (rank_tier = ? AND (sort_title_key %s ? OR (sort_title_key = ? AND work_id %s ?))))",
+			operator, operator)
+		keysetArgs = []any{claims.LastRankTier, claims.LastRankTier, claims.LastSortKey, claims.LastSortKey, claims.LastCanonicalWorkID}
+	}
+
+	statement := fmt.Sprintf(`WITH tiers AS (
+SELECT w.work_id AS work_id, w.sort_title_key AS sort_title_key,
+(%s) AS title_tier, (%s) AS creator_tier, (%s) AS tag_tier, (%s) AS filename_tier
+FROM work_projections w%s WHERE %s
+),
+scored AS (
+SELECT work_id, sort_title_key, max(%s, %s, %s, %s) AS rank_tier FROM tiers
+),
+page AS (
+SELECT work_id, sort_title_key, rank_tier FROM scored%s ORDER BY rank_tier DESC, sort_title_key %s, work_id %s LIMIT ?
+)
+SELECT p.work_id, w.title, w.creator, w.tags_json, w.filenames_text, p.sort_title_key, w.favorite, w.progress, w.cover_media_id, w.badges_json, w.description, w.source_url, w.published_at_ns,
+%s AS media_count, p.rank_tier
+FROM page p JOIN work_projections w ON w.catalog_revision_id = ? AND w.overlay_revision_id = ? AND w.work_id = p.work_id
+ORDER BY p.rank_tier DESC, p.sort_title_key %s, p.work_id %s`,
+		titleTierSQL, creatorTierSQL, tagTierSQL, filenameTierSQL, join, strings.Join(where, " AND "),
+		combinedFieldScoreSQL("title_tier", fieldPriorityTitle), combinedFieldScoreSQL("creator_tier", fieldPriorityCreator),
+		combinedFieldScoreSQL("tag_tier", fieldPriorityTag), combinedFieldScoreSQL("filename_tier", fieldPriorityFilename),
+		keysetSQL, direction, direction, mediaCountExpr, direction, direction)
+
+	args := []any{
+		plan.NormalizedQuery, plan.NormalizedQuery, plan.NormalizedQuery, // title
+		plan.NormalizedQuery, plan.NormalizedQuery, plan.NormalizedQuery, // creator
+		plan.NormalizedQuery, plan.NormalizedQuery, plan.NormalizedQuery, // tag
+		plan.NormalizedQuery, plan.NormalizedQuery, plan.NormalizedQuery, // filename
+	}
+	args = append(args, fromArgs...)
+	args = append(args, keysetArgs...)
+	args = append(args, request.Limit+1, pub.CatalogRevision, pub.OverlayRevision)
+	return statement, args, nil
+}
+
+func (s *Service) query(ctx context.Context, pub publication, authorization sourceAuthorization, request Request, plan querytext.SearchPlan, filterNode *FilterNode, claims contractquery.CursorClaims) ([]Work, bool, error) {
+	statement, args, err := s.buildPageStatement(ctx, pub, authorization, request, plan, filterNode, claims)
+	if err != nil {
+		return nil, false, err
+	}
 
 	rows, err := s.catalog.QueryContext(ctx, statement, args...)
 	if err != nil {
