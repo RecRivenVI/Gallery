@@ -47,6 +47,9 @@ func TestImportFormatsAndExactNumberIdentity(t *testing.T) {
 	if _, err := rules.ImportRulePackage("toml", []byte("value = 1.5\n")); err == nil {
 		t.Fatal("TOML 浮点精度风险未拒绝")
 	}
+	if _, err := rules.ImportRulePackage("", jsonInput); err == nil || !strings.Contains(err.Error(), "格式不能为空") {
+		t.Fatalf("空导入格式未显式拒绝: %v", err)
+	}
 }
 
 func TestRuleDiffExplainAndSemanticExtensionExecution(t *testing.T) {

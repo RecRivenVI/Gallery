@@ -719,6 +719,10 @@ func canonicalObject(object map[string]json.RawMessage) ([]byte, error) {
 }
 
 func writeCanonical(output *bytes.Buffer, value any) error {
+	return writeCanonicalAtDepth(output, value, 0)
+}
+
+func writeCanonicalAtDepth(output *bytes.Buffer, value any, depth int) error {
 	switch typed := value.(type) {
 	case nil:
 		output.WriteString("null")
@@ -738,17 +742,23 @@ func writeCanonical(output *bytes.Buffer, value any) error {
 		}
 		output.WriteString(normalized)
 	case []any:
+		if depth >= MaxRuleNestingDepth {
+			return ruleNestingDepthError()
+		}
 		output.WriteByte('[')
 		for index, item := range typed {
 			if index > 0 {
 				output.WriteByte(',')
 			}
-			if err := writeCanonical(output, item); err != nil {
+			if err := writeCanonicalAtDepth(output, item, depth+1); err != nil {
 				return err
 			}
 		}
 		output.WriteByte(']')
 	case map[string]any:
+		if depth >= MaxRuleNestingDepth {
+			return ruleNestingDepthError()
+		}
 		keys := make([]string, 0, len(typed))
 		for key := range typed {
 			keys = append(keys, key)
@@ -762,7 +772,7 @@ func writeCanonical(output *bytes.Buffer, value any) error {
 			encoded, _ := json.Marshal(key)
 			output.Write(encoded)
 			output.WriteByte(':')
-			if err := writeCanonical(output, typed[key]); err != nil {
+			if err := writeCanonicalAtDepth(output, typed[key], depth+1); err != nil {
 				return err
 			}
 		}

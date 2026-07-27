@@ -69,6 +69,14 @@ func TestRuleLifecycleIsAvailableThroughAuthenticatedAPI(t *testing.T) {
 	}
 }
 
+func TestRuleImportRejectsEmptyFormatAtTransportBoundary(t *testing.T) {
+	server, client, csrf := pairedRuleServer(t)
+	requestRuleJSON(t, client, server.URL, csrf, http.MethodPost, "/api/v1/rules/import", map[string]any{
+		"format":  "",
+		"content": map[string]any{"schemaVersion": "1"},
+	}, http.StatusBadRequest)
+}
+
 func TestPersistentRulePackageAPIUsesRevisionAndPublishCapability(t *testing.T) {
 	server, client, csrf := pairedRuleServer(t)
 	packageJSON, err := os.ReadFile(filepath.Join("..", "..", "rules", "testdata", "minimal-rule-package.json"))

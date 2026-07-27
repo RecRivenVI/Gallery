@@ -779,11 +779,22 @@ func decodeRuleContent(raw json.RawMessage, format string) ([]byte, error) {
 	if len(raw) == 0 {
 		return nil, errors.New("content 不能为空")
 	}
-	if strings.ToLower(strings.TrimSpace(format)) != "json" {
-		var text string
-		if json.Unmarshal(raw, &text) == nil {
-			return []byte(text), nil
+	normalizedFormat := strings.ToLower(strings.TrimSpace(format))
+	switch normalizedFormat {
+	case "json":
+	case "yaml", "toml":
+	default:
+		if normalizedFormat == "" {
+			return nil, errors.New("format 不能为空")
 		}
+		return nil, fmt.Errorf("不支持的规则导入格式 %q", normalizedFormat)
+	}
+	if normalizedFormat != "json" {
+		var text string
+		if err := json.Unmarshal(raw, &text); err != nil {
+			return nil, errors.New("YAML/TOML content 必须是字符串")
+		}
+		return []byte(text), nil
 	}
 	return append([]byte(nil), raw...), nil
 }

@@ -33,27 +33,9 @@ import (
 // 因此语义比对与紧凑形态比对只在该深度以内进行。
 const referenceDepthLimit = 10000
 
-// harnessDepthLimit 是**夹具自身的**栈安全上限，不是被测代码的安全上限。
-//
-// 已确认缺陷：internal/rules/normalize.go 的 decodeStrictValue 用 json.Decoder.Token()
-// 而不是 Decode()，Token() 走自己的 tokenStack，**完全绕过** encoding/json 在 scanner 里
-// 的 maxNestingDepth=10000 守卫；normalizeValue、cloneJSONValue 与 package.go 的
-// writeCanonical 同样没有任何深度计数。实测在本工具链上约 1.3×10^6 层嵌套即触发
-// `fatal error: stack overflow`（Go 的栈溢出是 fatal error，recover 无法拦截，整个
-// galleryd 进程直接死亡）。
-//
-// 夹具在此处提前放弃，只是为了不让 fuzz worker 被不可恢复的 fatal error 杀死而丢失
-// 语料；它**不代表被测代码在该深度以内是安全的**。一旦 decodeStrictValue 与
-// writeCanonical 补上显式深度计数，应当删除这道 skip，并把它换成
-// 「深度超过 N 必须返回结构化错误」的正向断言。
-const harnessDepthLimit = 200000
-
 func FuzzCanonicalJSON(f *testing.F) {
 	addCanonicalSeeds(f)
 	f.Fuzz(func(t *testing.T, input []byte) {
-		if jsonNestingDepth(input) > harnessDepthLimit {
-			t.Skip("超出夹具栈安全上限，见 harnessDepthLimit 注释")
-		}
 		original := append([]byte(nil), input...)
 		output, err := rules.CanonicalJSON(input)
 		if !bytes.Equal(original, input) {
@@ -106,9 +88,6 @@ func FuzzCanonicalJSON(f *testing.F) {
 func FuzzNormalizeWithSchema(f *testing.F) {
 	addNormalizeSeeds(f)
 	f.Fuzz(func(t *testing.T, input, schemaJSON []byte) {
-		if jsonNestingDepth(input) > harnessDepthLimit || jsonNestingDepth(schemaJSON) > harnessDepthLimit {
-			t.Skip("超出夹具栈安全上限，见 harnessDepthLimit 注释")
-		}
 		originalInput := append([]byte(nil), input...)
 		originalSchema := append([]byte(nil), schemaJSON...)
 		output, err := rules.NormalizeWithSchema(input, schemaJSON)
@@ -153,16 +132,12 @@ func FuzzNormalizeWithSchema(f *testing.F) {
 //
 // 这条路径值得单独 fuzz 的原因是：YAML/TOML 内容以 **JSON 字符串**形式承载，
 // 因此 transport 层 decodeJSON 的 encoding/json scanner 深度守卫对它不生效；
-// 解析结果又经 json.Marshal（无深度守卫）回到 decodeAny。它是 decodeStrictValue
-// 缺失深度计数在真实入口上唯一未被外层守卫遮蔽的到达路径。
+// 三种格式必须由规则管线自己的 MaxRuleNestingDepth 给出一致边界。
 func FuzzImportRulePackage(f *testing.F) {
 	addImportSeeds(f)
 	f.Fuzz(func(t *testing.T, format string, content []byte) {
 		if len(content) > rules.MaxRulePackageBytes {
 			t.Skip("超出规则包大小上限")
-		}
-		if jsonNestingDepth(content) > harnessDepthLimit || bracketNestingDepth(content) > harnessDepthLimit {
-			t.Skip("超出夹具栈安全上限，见 harnessDepthLimit 注释")
 		}
 		result, err := rules.ImportRulePackage(format, content)
 		if err != nil {
@@ -258,9 +233,7 @@ func addImportSeeds(f *testing.F) {
 // canonicalSeedInputs 是审计要求的定向探针语料：嵌套、重复键、转义后碰撞、
 // 数字边界、Unicode 规范化形式、孤立代理与尾随垃圾。
 //
-// 嵌套深度刻意只到 10000：更深的输入会让 encoding/json 参照实现失效，且
-// decodeStrictValue 在缺少深度计数的当前实现下最终会 fatal 栈溢出（见
-// harnessDepthLimit 注释），把它写进种子语料等于让 `go test ./...` 直接崩掉。
+// 嵌套种子同时覆盖显式 Gallery 深度边界与 encoding/json 参照实现边界。
 func canonicalSeedInputs() []string {
 	seeds := []string{
 		// 结构基线
@@ -287,7 +260,7 @@ func canonicalSeedInputs() []string {
 		// 非法与截断
 		`{`, `[`, `{"a"}`, `{"a":}`, `[,]`, `[1,]`, `{"a":1,}`, `'x'`, `NaN`, `Infinity`, `+1`, `01`, `.1`, `1.`,
 	}
-	for _, depth := range []int{1, 2, 100, 1000, referenceDepthLimit} {
+	for _, depth := range []int{1, 2, 100, rules.MaxRuleNestingDepth, rules.MaxRuleNestingDepth + 1, 1000, referenceDepthLimit} {
 		seeds = append(seeds,
 			strings.Repeat("[", depth)+strings.Repeat("]", depth),
 			strings.Repeat(`{"a":`, depth)+`1`+strings.Repeat("}", depth),
@@ -472,24 +445,6 @@ func jsonNestingDepth(input []byte) int {
 		switch char {
 		case '"':
 			inString = true
-		case '{', '[':
-			depth++
-			if depth > maximum {
-				maximum = depth
-			}
-		case '}', ']':
-			depth--
-		}
-	}
-	return maximum
-}
-
-// bracketNestingDepth 忽略字符串边界，直接统计括号嵌套。YAML/TOML 的流式序列
-// 与内联数组同样用方括号表达，但它们不受 JSON 字符串规则约束。
-func bracketNestingDepth(input []byte) int {
-	depth, maximum := 0, 0
-	for _, char := range input {
-		switch char {
 		case '{', '[':
 			depth++
 			if depth > maximum {

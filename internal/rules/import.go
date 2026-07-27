@@ -33,7 +33,7 @@ type ImportResult struct {
 func ImportRulePackage(format string, input []byte) (ImportResult, error) {
 	format = strings.ToLower(strings.TrimSpace(format))
 	if format == "" {
-		format = "json"
+		return ImportResult{}, fmt.Errorf("规则导入格式不能为空")
 	}
 	if len(input) == 0 || len(input) > MaxRulePackageBytes {
 		return ImportResult{}, fmt.Errorf("规则包大小超限")
@@ -83,10 +83,10 @@ func decodeYAML(input []byte) (any, error) {
 	} else if err != io.EOF {
 		return nil, fmt.Errorf("解析 YAML 尾部: %w", err)
 	}
-	return yamlNodeValue(document.Content[0], "")
+	return yamlNodeValue(document.Content[0], "", 0)
 }
 
-func yamlNodeValue(node *yaml.Node, pointer string) (any, error) {
+func yamlNodeValue(node *yaml.Node, pointer string, depth int) (any, error) {
 	if node == nil {
 		return nil, fmt.Errorf("YAML 节点为空")
 	}
@@ -98,8 +98,11 @@ func yamlNodeValue(node *yaml.Node, pointer string) (any, error) {
 		if len(node.Content) != 1 {
 			return nil, fmt.Errorf("YAML 文档结构无效")
 		}
-		return yamlNodeValue(node.Content[0], pointer)
+		return yamlNodeValue(node.Content[0], pointer, depth)
 	case yaml.MappingNode:
+		if depth >= MaxRuleNestingDepth {
+			return nil, ruleNestingDepthError()
+		}
 		result := make(map[string]any, len(node.Content)/2)
 		seen := make(map[string]struct{}, len(node.Content)/2)
 		for index := 0; index < len(node.Content); index += 2 {
@@ -113,7 +116,7 @@ func yamlNodeValue(node *yaml.Node, pointer string) (any, error) {
 			}
 			seen[name] = struct{}{}
 			childPointer := pointer + "/" + escapePointer(name)
-			value, err := yamlNodeValue(node.Content[index+1], childPointer)
+			value, err := yamlNodeValue(node.Content[index+1], childPointer, depth+1)
 			if err != nil {
 				return nil, err
 			}
@@ -121,9 +124,12 @@ func yamlNodeValue(node *yaml.Node, pointer string) (any, error) {
 		}
 		return result, nil
 	case yaml.SequenceNode:
+		if depth >= MaxRuleNestingDepth {
+			return nil, ruleNestingDepthError()
+		}
 		result := make([]any, 0, len(node.Content))
 		for index, child := range node.Content {
-			value, err := yamlNodeValue(child, fmt.Sprintf("%s/%d", pointer, index))
+			value, err := yamlNodeValue(child, fmt.Sprintf("%s/%d", pointer, index), depth+1)
 			if err != nil {
 				return nil, err
 			}
@@ -167,10 +173,10 @@ func decodeTOML(input []byte) (any, error) {
 	if err := toml.Unmarshal(input, &value); err != nil {
 		return nil, fmt.Errorf("解析 TOML: %w", err)
 	}
-	return tomlJSONValue(value, "")
+	return tomlJSONValue(value, "", 0)
 }
 
-func tomlJSONValue(value any, pointer string) (any, error) {
+func tomlJSONValue(value any, pointer string, depth int) (any, error) {
 	switch typed := value.(type) {
 	case nil, bool, string:
 		return typed, nil
@@ -186,9 +192,12 @@ func tomlJSONValue(value any, pointer string) (any, error) {
 	case time.Time:
 		return nil, fmt.Errorf("TOML 日期/时间类型不允许隐式转换: %s", pointer)
 	case []any:
+		if depth >= MaxRuleNestingDepth {
+			return nil, ruleNestingDepthError()
+		}
 		result := make([]any, len(typed))
 		for index, item := range typed {
-			converted, err := tomlJSONValue(item, fmt.Sprintf("%s/%d", pointer, index))
+			converted, err := tomlJSONValue(item, fmt.Sprintf("%s/%d", pointer, index), depth+1)
 			if err != nil {
 				return nil, err
 			}
@@ -196,9 +205,12 @@ func tomlJSONValue(value any, pointer string) (any, error) {
 		}
 		return result, nil
 	case map[string]any:
+		if depth >= MaxRuleNestingDepth {
+			return nil, ruleNestingDepthError()
+		}
 		result := make(map[string]any, len(typed))
 		for key, item := range typed {
-			converted, err := tomlJSONValue(item, pointer+"/"+escapePointer(key))
+			converted, err := tomlJSONValue(item, pointer+"/"+escapePointer(key), depth+1)
 			if err != nil {
 				return nil, err
 			}
