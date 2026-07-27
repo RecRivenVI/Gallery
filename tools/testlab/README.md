@@ -61,6 +61,9 @@ Cursor 与 20 项媒体/DerivedAsset finding。测试使用临时 AppDirs 和合
 & $env:GALLERY_GO run ./tools/testlab/cmd/seed -approot <root>/appdirs/query-1k -scale 1000 -tier smoke -manifest-out <root>/manifests/query-1k.json
 & $env:GALLERY_GO run ./tools/testlab/cmd/probe -go $env:GALLERY_GO -repo . -approot <root>/appdirs/query-1k -log <root>/logs/query-1k.log -scenario all -manifest <root>/manifests/query-1k.json -results-out <root>/reports/query-1k.json -tier smoke
 
+# 多 Source preflight（100k；显式覆盖 cloneUnchangedSources）
+& $env:GALLERY_GO run ./tools/testlab/cmd/seed -approot <root>/appdirs/query-100k -scale 100000 -sources 10 -tier preflight -manifest-out <root>/manifests/query-100k.json
+
 # ≥1,000,000（非推荐诊断场景，必须显式确认）
 & $env:GALLERY_GO run ./tools/testlab/cmd/seed -approot <root>/appdirs/query-nonrec -scale 2000000 -allow-nonrecommended-scale -tier nonrecommended -manifest-out <root>/manifests/query-nonrec.json
 ```
@@ -147,6 +150,9 @@ $common = @(
 - `Report.Save` 在临时文件 rename 前增加显式 `fsync`。
 - `testlabseed`/`testlabprobe` 新增 `-tier`/`-allow-nonrecommended-scale` 显式规模保护，默认拒绝
   `>=1,000,000`。
+- `testlabseed -sources N` 让每个 Source 依次走生产 `BeginCandidate/Stage/Overlay/Validate/Publish`；
+  Manifest 与 probe 的 `corpus` 区段分别记录逐 Source Begin clone、完整 Validate 与短 Publish 耗时。
+  `GALLERY_TESTLAB_SEED_SOURCES` 只保留为旧脚本兼容入口。
 
 ### Source guard 的三处安全修复
 

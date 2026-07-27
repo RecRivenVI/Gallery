@@ -58,7 +58,7 @@ Gallery 是一个"本地优先"（数据主要放在自己电脑上，不依赖�
 | 阶段 1：领域和数据所有权 | ✅ | ✅（限定范围内） | 备份/恢复、目录库整体重建、作者合并/撤销合并、文件"孤儿"处理等全部完成并通过验证 | 真实网络共享盘（SMB/NAS）、Windows/Linux 底层文件身份识别等留待以后阶段 | 已完成 |
 | 阶段 2：规则系统 | ✅（正确性层面） | ✅（限定范围内） | 规则生命周期、编译执行、参数/绑定和影响调度已形成闭环 | 正式性能/平台测试尚未完成 | 已完成 |
 | 阶段 3：扫描、任务与目录库 | ✅（代码与模拟数据层面） | 🟡（真实大盘抽样通过，全量未完成） | 真实固态硬盘（SSD）、机械硬盘（HDD）各完成几十万文件规模的抽样验收，发现并修复了 2 个真实 bug | 真实全量扫描被主动叫停，正式性能门禁尚未跑完；网络共享盘尚未验证 | 阶段 4 正式压力测试 |
-| 阶段 4：查询与媒体 | 🟡（主线代码完成，部分参数未冻结） | 🟡（正确性收口完成，500,000 规模正式压力测试已执行） | 搜索、排序、分页、显式规则/有效封面、媒体读取/下载、缩略图生成全部有代码闭环；500,000 规模 Correctness/Cursor 通过，EV-44 关闭逐 Source 授权缺口，EV-45 把 1k smoke 接入持续门禁，EV-51 用 catalog v18 窄候选把当前工作站 500k 单并发 CJK/文件名搜索 P95 降至 10.40/94.43 ms | 新基准不是完整 Reference/Degradation 矩阵；排序权重、Total、租约仍为暂定值，Creator/Library 聚合授权和正式 API Freeze 尚未完成 | 完成聚合授权、正式性能矩阵与接口冻结 |
+| 阶段 4：查询与媒体 | 🟡（主线代码完成，部分参数未冻结） | 🟡（正确性收口完成，500,000 规模正式压力测试已执行） | 搜索、排序、分页、显式规则/有效封面、媒体读取/下载、缩略图生成全部有代码闭环；EV-51 用 catalog v18 窄候选降低搜索开销，EV-52 用 catalog v19 验证封印把完整候选验证与 publication 指针切换分离，当前工作站最终版 500k/10 Source 微基准指针切换为 0.539 ms | 新基准与 100k/10 Source 生产预检都不是完整 500k Reference/Degradation 矩阵；排序权重、Total、租约仍为暂定值，Creator/Library 聚合授权和正式 API Freeze 尚未完成 | 完成聚合授权、正式性能矩阵与接口冻结 |
 | 阶段 5：账户、安全与多客户端 | 🟠（代码与合成安全收尾已实现；恶意输入缺陷已收口） | 🟡（Chrome/Edge 同机主路径补证，正式 Gate 未通过） | EV-37/EV-38/EV-44 之外，已修复登录路径 Argon2id 内存放大、两处资源存在性预言机、规则参数模式任意本地文件读取、日志键进程崩溃、外部工具进程树失控；EV-48 又为全部规则递归路径建立统一 256 层上限，并收紧空导入格式、NTFS 备用数据流/控制台设备、带符号 Range 与非规范 Cursor | 真实 LAN 多设备、目标低端设备 Argon2id、真实恶意资源和外部安全测试门禁仍未完成；修复代码与合成 fuzz 不能替代正式 Security Gate | 完成外部设备与恶意资源门禁 |
 | 阶段 6：Web/PWA 界面 | 🟠（**前端已从零重写为双入口**：旧单入口基线全部删除，画廊端与管理端各自实现） | 🟡（**仍只有合成证据**，真实后端浏览器覆盖未建立，正式 Gate 未通过） | 共享设计系统（三套主题、密度、reduced motion）、画廊端（发现/作品/全屏查看/文件根/Overlay、媒体并发自律与缩略图克制）、管理端（扫描任务/诊断/安全/规则/治理，并如实呈现服务端能力边界）；服务端按路径前缀选外壳，消除管理端深链落入画廊 | **两端均无真实后端验证**——证据只到 vitest 与浏览器内合成 API；真实媒体、真实 `MEDIA_READ_BUSY`、真实 WebSocket 重连、Firefox、触摸设备与屏幕阅读器全未验证；画廊端无 DOM 虚拟化，数千张卡片时 DOM 会变重；配置编辑器（M6d）未实现 | 真实后端完整写路径 E2E 并纳入 CI，不进入桌面壳 |
 | 阶段 7：平台适配与正式发行 | ⏳（仅早期实验代码涉及，不属于正式产品） | ⛔ | 无 | Windows 之外的平台、安装包、签名、升级等均尚未开始 | 最后阶段 |
@@ -119,7 +119,7 @@ Gallery 是一个"本地优先"（数据主要放在自己电脑上，不依赖�
 | `galleryd`（后端主程序） | 唯一真正运行业务逻辑的独立进程，负责数据处理和对外接口 | ✅ 完整实现，能启动、能自愈（重启后自动恢复未完成的任务） |
 | `galleryctl`（命令行工具） | 通过命令行操作 Gallery 的工具 | 🟠 当前只提供 `version`（查看版本）和 `health`（查看健康状态）两个命令，尚未覆盖后端已有的约 70 个接口对应的管理能力 |
 | `control.db`（控制数据库） | 存放不能凭空重建的数据：用户的收藏、备注、账号、规则配置等 | ✅ 有完整的备份/恢复机制，验证过删库重建不会丢失用户数据 |
-| `catalog.db`（目录数据库） | 存放扫描出来、可以随时重新生成的数据：作品列表、搜索索引、规则/有效封面投影等 | ✅ 支持整体删除后重新扫描重建；v11～v14 增加显式封面、revision 成员、mtime、规则隐藏/角标，v15～v17 增加 Work 标量、聚合封面与排序协议 v2，v18 增加 FTS 同 rowid 搜索窄候选 |
+| `catalog.db`（目录数据库） | 存放扫描出来、可以随时重新生成的数据：作品列表、搜索索引、规则/有效封面投影等 | ✅ 支持整体删除后重新扫描重建；v11～v14 增加显式封面、revision 成员、mtime、规则隐藏/角标，v15～v17 增加 Work 标量、聚合封面与排序协议 v2，v18 增加 FTS 同 rowid 搜索窄候选，v19 增加候选验证封印与 Overlay candidate 创建基线 |
 | 规则系统 | 让用户自定义"什么样的文件夹结构算一个作品"的规则引擎 | ✅ 规则的编写、检查、试运行、影响分析、上线、回滚全部完成 |
 | 任务系统（Job/Attempt） | 后台长时间任务（比如扫描、计算哈希）的排队和进度追踪系统 | ✅ 支持取消、重试、断点恢复，有 6 个独立的任务池（一种任务卡住不会影响其他任务） |
 | 扫描（Scanner） | 读取用户文件夹、识别文件的模块 | ✅ 支持"索引/增量/校验"三种模式，真实几十万文件规模的抽样测试通过 |
@@ -276,7 +276,7 @@ Gallery 是一个"本地优先"（数据主要放在自己电脑上，不依赖�
 | 测试项目 | 所属阶段/门禁 | 测试代码位置 | 正式记录 | 状态 | 环境与样本 | 不能扩大解释的局限 |
 |---|---|---|---|---|---|---|
 | 全部 Go 测试（371 个 `Test*`/`Benchmark*`/`Example*` 函数，覆盖 44 个目录/包） | 贯穿各阶段 | `cmd`/`internal`/`pkg`/`tools` 共 102 个 `*_test.go` 文件 | `scripts/Check.ps1` 每次运行 | ✅（在 CI 上持续运行并要求全部通过） | Windows + Ubuntu（GitHub Actions） | 全部是模拟/合成数据，不是真实媒体库；Argon2id benchmark 需手动 `-bench`，CI 从不执行 |
-| 数据库迁移（control 21 个迁移文件，catalog 18 个迁移文件） | 阶段 0-5 | `internal/storage/migrations/{control,catalog}` | EV-12 及各阶段收尾记录、EV-37、EV-42、EV-44、EV-46、EV-51 | ✅ | 空库/旧库升级单元测试；v10→v14 覆盖封面/成员/mtime/规则呈现，v17→v18 覆盖 Work/FTS/candidate 三方一致、坏历史数据原子拒绝与 VACUUM rowid 稳定 | 最终物理 Schema 仍未冻结；旧规则封面只能近似回填，需重扫精确恢复；规则隐藏/角标只能通过重扫获得；v12/v18 投影宽度仍待完整 Reference Gate |
+| 数据库迁移（control 21 个迁移文件，catalog 19 个迁移文件） | 阶段 0-5 | `internal/storage/migrations/{control,catalog}` | EV-12 及各阶段收尾记录、EV-37、EV-42、EV-44、EV-46、EV-51、EV-52 | ✅ | 空库/旧库升级单元测试；v10→v14 覆盖封面/成员/mtime/规则呈现，v17→v18 覆盖 Work/FTS/candidate 三方一致，v18→v19 覆盖封印约束、Overlay persisted base、外键级联与封印后候选写拒绝 | 最终物理 Schema 仍未冻结；旧规则封面只能近似回填，需重扫精确恢复；规则隐藏/角标只能通过重扫获得；v12/v18 投影宽度与 v19 正式变化 publication 仍待完整 Reference Gate |
 | 契约/OpenAPI/WebSocket/游标/错误码 Schema 一致性 | 阶段 0、4、5 | `internal/contract/{api,fault,query,realtime}/*_test.go` | EV-12、EV-30、EV-37 | ✅（生成一致性） | 单元测试 | 当前 `0.6.0-pre-alpha`，尚未正式冻结 |
 | 集成/端到端（使用固定的小型合成文件夹样例） | Walking Skeleton、Architecture Proof | `internal/bootstrap/run_test.go`、`internal/scanner/{service_test.go,discovery_test.go}`，样例文件在 `tests/fixtures/` | EV-13、EV-14 | ✅（限定范围内） | 单个/几个文件规模，非大规模 | 不能代表大规模真实场景 |
 | 强制终止/恢复（8 个关键时间点） | Architecture Proof | `internal/recovery/killpoints_test.go`（真实拉起子进程并终止） | EV-14 | ✅ | Windows + WSL | 只覆盖这 8 个预设场景 |
@@ -284,7 +284,7 @@ Gallery 是一个"本地优先"（数据主要放在自己电脑上，不依赖�
 | 只读 Source（媒体来源文件夹零写入保证） | 全局不变量 | `Test-Bench/cleanroom-lab-real/cmd/realprobe`（原型工具，非正式测试） | EV-01：真实约 628.6 GiB、37.9 万文件，前后指纹一致 | 🟡（仅原型验证，非正式自动化测试） | 真实 Windows 媒体库（3 个真实文件夹） | 只验证过 Windows 可见磁盘卷，未验证网络盘；由原型工具执行，不是产品自带的持续测试 |
 | 查询/搜索/游标/Overlay/封面/逐成员授权正确性 | 阶段 4 | `internal/query/*_test.go`、`internal/catalog/*_test.go`、`internal/querytext/*_test.go` | EV-30～34、EV-42、EV-44 | ✅（合成正确性收口） | 单元+黄金样例+合成 migration；授权在 total/keyset/limit 前生效 | 不代表真实 Source、正式规模性能或 API Freeze |
 | 媒体 Range 请求/DerivedAsset（缩略图）正确性 | 阶段 4 | `internal/media/*_test.go`、`internal/derived*/**_test.go` | EV-30/32/33 | ✅ | 单元+端到端 | 无 |
-| 性能测试（Reference Performance） | 阶段 3、4 | `internal/query/reference_performance_test.go`（默认跳过，需手动设置环境变量开启，最多合成 100 万条记录） | EV-23 明确写"不构成正式 Reference/Degradation Performance Gate 的结论" | 🟡 | 单台参考机器，最多合成 100 万行 | 明确不能当作正式性能门禁结论 |
+| 性能测试（Reference Performance） | 阶段 3、4 | `internal/query/reference_performance_test.go` 微基准与 `tools/testlab` 生产 Store/HTTP 矩阵（均需显式运行） | EV-23/35/36/51/52 均明确区分方向性测量与正式 Gate | 🟡 | 当前补证含 500k/10 Source 窄候选和 100k/10 Source 完整候选预检 | 尚无完整 500k、1%/10%/50% 变化、多样本 P95、并发、空间、维护、哈希和 Degradation 矩阵，不能当作正式门禁结论 |
 | HDD/SMB/NAS 真实场景 | 阶段 3、7 | 无正式代码测试；早期实验里有相关原型 | EV-25 明确写"全量扫描未完成，正式全量性能 Gate 仍未通过" | 🟡（仅抽样） / ⏳（全量与网络盘） | 真实 SSD ~36.6 万文件、真实 HDD ~63.2 万文件（均为抽样，非全量） | 抽样结果不能当作全量场景的性能保证；网络共享盘尚未验证 |
 | Windows/Linux/macOS/Docker 平台支持 | 阶段 7 | CI 只有 Windows + Ubuntu 两个系统 | ADR-007 四级支持成熟度表 | 🟡（Windows/Linux 停在"CI 能运行"层级）/ ⏳（macOS/Docker） | GitHub Actions | 未达到"发行候选"或"正式支持"级别；CI 上的 Linux 也不是原生 Linux 全部行为的完整验证 |
 | 安全（认证、授权、Web 边界、路径穿越、恶意元数据/媒体、限流） | 阶段 5 | 正式生产包覆盖账户/Token/Grant/Session/WS/Web 与合成攻击；Work 查询逐成员授权；真实 Chrome/Edge 已覆盖 Personal/LAN 主路径和吊销 | EV-09、EV-37、EV-38、EV-44 | 🟡 | Windows 合成与浏览器；WSL race | 真实物理 LAN 多设备、目标低端设备与真实恶意资源门禁未完成，整体 Gate 未通过 |
@@ -312,12 +312,12 @@ Gallery 是一个"本地优先"（数据主要放在自己电脑上，不依赖�
 
 | 项目 | 数量/情况 | 说明 |
 |---|---|---|
-| `control.db` 迁移文件总数 | 20 个（`00001_initialize.sql` 到 `00020_phase5_security.sql`） | 新增 Principal、local user、Role/capability、Grant、双过期 Session、API Token、分享、安全审计和限流状态；旧 Session 因历史明文 CSRF 结构被主动失效 |
-| `catalog.db` 迁移文件总数 | 18 个（`00001_initialize.sql` 到 `00018_search_candidate_projection.sql`） | 除既有发布/快照/稳定引用/派生/媒体/封面/成员事实外，增加发布 mtime、规则呈现、Work 标量、三级聚合封面、排序协议 v2 与 FTS 同 rowid 搜索窄候选 |
+| `control.db` 迁移文件总数 | 21 个（`00001_initialize.sql` 到 `00021_file_browse_capability.sql`） | 新增 Principal、local user、Role/capability、Grant、双过期 Session、API Token、分享、安全审计、限流状态与文件浏览 capability；旧 Session 因历史明文 CSRF 结构被主动失效 |
+| `catalog.db` 迁移文件总数 | 19 个（`00001_initialize.sql` 到 `00019_candidate_validation_seals.sql`） | 除既有发布/快照/稳定引用/派生/媒体/封面/成员事实外，增加发布 mtime、规则呈现、Work 标量、三级聚合封面、排序协议 v2、FTS 同 rowid 搜索窄候选、候选验证封印与 Overlay candidate 创建基线 |
 | 阶段 1 Schema Freeze（领域模型冻结） | 已执行（`00016_schema_freeze_phase1.sql`） | 冻结了作品/作者/媒体的唯一性约束、稳定引用规则；文件在网络共享盘环境下的最终唯一约束、大文件哈希计算的持久任务等仍属"兼容演进基线"，未最终冻结 |
 | 阶段 2 规则生命周期迁移 | 已执行（`00017_rules_lifecycle.sql`） | 固化了规则包的不可变发布、草稿乐观锁等；单一生效绑定规则仍属"兼容演进基线" |
 | 阶段 3 任务/正确性迁移 | 已执行（`00018`、`00019`） | 固化了任务/尝试模型、6 个资源池调度；真实大规模性能门禁未随迁移一起完成 |
-| 阶段 4 Catalog 兼容迁移 | 已执行 `00010_query_dependency_fields.sql`、`00011_rule_cover_projection.sql`、`00012_catalog_revision_sources.sql` | v9→v10 查询依赖回填的提前完成缺陷已由 EV-33 修复；v10→v11 封面迁移见 EV-42；v11→v12 成员回填、歧义拒绝与发布完整性见 EV-44，物理 Schema 仍未 Freeze |
+| 阶段 4 Catalog 兼容迁移 | 已执行 `00010_query_dependency_fields.sql`～`00019_candidate_validation_seals.sql` | v9→v10 查询依赖回填的提前完成缺陷已由 EV-33 修复；v10→v14 封面/成员/mtime/规则呈现见 EV-42/44/46；v15→v19 的 Work 标量、聚合封面、排序协议、窄候选与验证封印见 EV-50/51/52，物理 Schema 仍未 Freeze |
 | 阶段 5 安全迁移 | 已执行（`00020_phase5_security.sql`） | 方向登记为 COMPATIBILITY_BASELINE；Argon2id、Session 时长等数值保持 PRE_FREEZE；空库和 v19 有数据升级有自动测试 |
 | "已冻结"与"兼容演进基线"与"暂定（PRE_FREEZE）"的区别 | 见状态图例 | **已冻结**＝以后只能兼容式扩展，不能推翻重来；**兼容演进基线**＝方向已定，具体数值/边界还能调整；**暂定/PRE_FREEZE**＝连方向都可能因压力测试结果而调整 |
 
