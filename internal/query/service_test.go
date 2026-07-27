@@ -575,10 +575,7 @@ VALUES (?, ?, 1, 'published', 1, 1)`, ov, cat); err != nil {
 		if err != nil {
 			t.Fatal(err)
 		}
-		_, err = store.Catalog.SQL().ExecContext(ctx, "INSERT INTO work_search VALUES (?, ?, ?, ?, ?, ?)", cat, ov, id, document.NormalizedOriginal, document.CJKTokens, document.LatinTokens)
-		if err != nil {
-			t.Fatal(err)
-		}
+		insertSearchFixtureDocument(t, store.Catalog.SQL(), cat, ov, id)
 	}
 	if _, err := store.Catalog.SQL().ExecContext(ctx, `INSERT INTO active_query_publication VALUES (1, ?) ON CONFLICT(singleton) DO UPDATE SET query_publication_id=excluded.query_publication_id`, pub); err != nil {
 		t.Fatal(err)

@@ -201,7 +201,14 @@ applied_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))) STRICT
 INSERT INTO catalog_revisions VALUES ('cat_old', 'job_old', 'src_a', 'published', 1, 2);
 INSERT INTO overlay_projection_revisions
 (overlay_revision_id, catalog_revision_id, control_watermark, status, created_at, published_at)
-VALUES ('ovr_old', 'cat_old', 0, 'published', 1, 2);`+projections); err != nil {
+VALUES ('ovr_old', 'cat_old', 0, 'published', 1, 2);`+projections+`
+INSERT INTO work_search
+(catalog_revision_id, overlay_revision_id, work_id,
+ normalized_original_text, cjk_bigram_token_text, latin_trigram_token_text)
+SELECT catalog_revision_id, overlay_revision_id, work_id,
+       normalized_original_text, cjk_bigram_token_text, latin_trigram_token_text
+FROM work_projections
+WHERE catalog_revision_id='cat_old' AND overlay_revision_id='ovr_old';`); err != nil {
 			db.Close()
 			t.Fatal(err)
 		}
@@ -306,7 +313,14 @@ INSERT INTO work_projections
 (catalog_revision_id, overlay_revision_id, work_id, source_id, source_key, library_id, title, creator,
  tags_json, filenames_text, normalized_original_text, cjk_bigram_token_text, latin_trigram_token_text,
  sort_title_key, hidden)
-VALUES ('cat_old', 'ovr_old', 'work-a', 'src_a', 'work-a', 'lib_a', 'A', '', '[]', '', 'a', '', '', 'a', 0);`); err != nil {
+VALUES ('cat_old', 'ovr_old', 'work-a', 'src_a', 'work-a', 'lib_a', 'A', '', '[]', '', 'a', '', '', 'a', 0);
+INSERT INTO work_search
+(catalog_revision_id, overlay_revision_id, work_id,
+ normalized_original_text, cjk_bigram_token_text, latin_trigram_token_text)
+SELECT catalog_revision_id, overlay_revision_id, work_id,
+       normalized_original_text, cjk_bigram_token_text, latin_trigram_token_text
+FROM work_projections
+WHERE catalog_revision_id='cat_old' AND overlay_revision_id='ovr_old';`); err != nil {
 		db.Close()
 		t.Fatal(err)
 	}
@@ -560,6 +574,13 @@ INSERT INTO work_projections
  search_filenames_norm)
 VALUES ('cat_old', 'ovr_old', 'work-old', 'src_old', 'work-key', 'lib-old', '旧标题', '',
  '[]', '["01.jpg","02.jpg"]', '旧标题', '', '', '旧标题', 0, 0, 0, '旧标题', '', '', '');
+INSERT INTO work_search
+(catalog_revision_id, overlay_revision_id, work_id,
+ normalized_original_text, cjk_bigram_token_text, latin_trigram_token_text)
+SELECT catalog_revision_id, overlay_revision_id, work_id,
+       normalized_original_text, cjk_bigram_token_text, latin_trigram_token_text
+FROM work_projections
+WHERE catalog_revision_id='cat_old' AND overlay_revision_id='ovr_old';
 INSERT INTO media_projections
 (catalog_revision_id, overlay_revision_id, media_id, work_id, source_id, source_key, relative_path,
  media_kind, mime_type, size_bytes, algorithm, digest, location_status, ordinal, hidden, base_ordinal)

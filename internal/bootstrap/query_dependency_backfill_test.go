@@ -89,9 +89,26 @@ VALUES ('cat_018f47d2-5c16-7a44-a8a0-00000000ba0f', 'src_legacy', 'legacy-work',
 VALUES ('cat_018f47d2-5c16-7a44-a8a0-00000000ba0f', 'ovr_018f47d2-5c16-7a44-a8a0-00000000ba0f', ?, 'src_legacy', 'legacy-work',
  'lib_legacy', 'legacy title', 'legacy creator', ?, ?, ?, ?, ?, ?, 0)`,
 			[]any{backfillTestWorkID, string(tags), string(files), document.NormalizedOriginal, document.CJKTokens, document.LatinTokens, document.SortTitleKey}},
-		{"catalog", `INSERT INTO work_search VALUES
-('cat_018f47d2-5c16-7a44-a8a0-00000000ba0f', 'ovr_018f47d2-5c16-7a44-a8a0-00000000ba0f', ?, ?, ?, ?)`,
-			[]any{backfillTestWorkID, document.NormalizedOriginal, document.CJKTokens, document.LatinTokens}},
+		{"catalog", `INSERT INTO work_search_candidates
+(catalog_revision_id, overlay_revision_id, work_id, source_id, source_key, library_id,
+ tags_json, normalized_original_text, sort_title_key, published_at_ns, hidden, favorite, progress,
+ search_title_norm, search_creator_norm, search_tags_norm, search_filenames_norm)
+SELECT catalog_revision_id, overlay_revision_id, work_id, source_id, source_key, library_id,
+       tags_json, normalized_original_text, sort_title_key, published_at_ns, hidden, favorite, progress,
+       search_title_norm, search_creator_norm, search_tags_norm, search_filenames_norm
+FROM work_projections
+WHERE catalog_revision_id='cat_018f47d2-5c16-7a44-a8a0-00000000ba0f'
+  AND overlay_revision_id='ovr_018f47d2-5c16-7a44-a8a0-00000000ba0f' AND work_id=?`,
+			[]any{backfillTestWorkID}},
+		{"catalog", `INSERT INTO work_search
+(rowid, catalog_revision_id, overlay_revision_id, work_id,
+ normalized_original_text, cjk_bigram_token_text, latin_trigram_token_text)
+VALUES ((SELECT search_rowid FROM work_search_candidates
+         WHERE catalog_revision_id='cat_018f47d2-5c16-7a44-a8a0-00000000ba0f'
+           AND overlay_revision_id='ovr_018f47d2-5c16-7a44-a8a0-00000000ba0f' AND work_id=?),
+        'cat_018f47d2-5c16-7a44-a8a0-00000000ba0f',
+        'ovr_018f47d2-5c16-7a44-a8a0-00000000ba0f', ?, ?, ?, ?)`,
+			[]any{backfillTestWorkID, backfillTestWorkID, document.NormalizedOriginal, document.CJKTokens, document.LatinTokens}},
 		{"control", `INSERT INTO work_overlays
 (work_id, title_override, manual_tags_json, hidden, custom_cover_media_id, favorite, progress,
  fact_watermark, query_watermark, projected_watermark, projection_status, projection_job_id,

@@ -44,6 +44,18 @@ func ensureNaturalSortKeyEncoding(ctx context.Context, db *sql.DB) error {
 			return err
 		}
 	}
+	// catalog v18 把分页前使用的 sort_title_key 同步物化到搜索窄候选表。迁移顺序保证
+	// 该表在本函数运行前存在；必须与 WorkProjection 在同一事务内更新，不能让版本标记
+	// 已推进而候选仍保留 v1 编码，否则同一 publication 的 browse/search 会产生不同顺序。
+	if _, err := tx.ExecContext(ctx, `UPDATE work_search_candidates AS c
+SET sort_title_key = (
+  SELECT w.sort_title_key FROM work_projections AS w
+  WHERE w.catalog_revision_id=c.catalog_revision_id
+    AND w.overlay_revision_id=c.overlay_revision_id
+    AND w.work_id=c.work_id
+)`); err != nil {
+		return err
+	}
 	if _, err := tx.ExecContext(ctx,
 		"UPDATE gallery_catalog_meta SET value=? WHERE key='natural_sort_key_encoding'",
 		strconv.Itoa(naturalSortKeyEncodingVersion)); err != nil {

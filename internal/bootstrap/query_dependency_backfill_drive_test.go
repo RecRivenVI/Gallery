@@ -69,8 +69,24 @@ VALUES (?, ?, ?, 'src_test', 'work-key', 'lib_test', '源标题', '作者', '["s
 			driveTestCatalogID, driveTestOverlayID, driveTestWorkID,
 			document.NormalizedOriginal, document.CJKTokens, document.LatinTokens, document.SortTitleKey,
 		}},
-		{`INSERT INTO work_search VALUES (?, ?, ?, ?, ?, ?)`, []any{
-			driveTestCatalogID, driveTestOverlayID, driveTestWorkID, document.NormalizedOriginal, document.CJKTokens, document.LatinTokens,
+		{`INSERT INTO work_search_candidates
+(catalog_revision_id, overlay_revision_id, work_id, source_id, source_key, library_id,
+ tags_json, normalized_original_text, sort_title_key, published_at_ns, hidden, favorite, progress,
+ search_title_norm, search_creator_norm, search_tags_norm, search_filenames_norm)
+SELECT catalog_revision_id, overlay_revision_id, work_id, source_id, source_key, library_id,
+       tags_json, normalized_original_text, sort_title_key, published_at_ns, hidden, favorite, progress,
+       search_title_norm, search_creator_norm, search_tags_norm, search_filenames_norm
+FROM work_projections WHERE catalog_revision_id=? AND overlay_revision_id=? AND work_id=?`, []any{
+			driveTestCatalogID, driveTestOverlayID, driveTestWorkID,
+		}},
+		{`INSERT INTO work_search
+(rowid, catalog_revision_id, overlay_revision_id, work_id,
+ normalized_original_text, cjk_bigram_token_text, latin_trigram_token_text)
+VALUES ((SELECT search_rowid FROM work_search_candidates
+         WHERE catalog_revision_id=? AND overlay_revision_id=? AND work_id=?), ?, ?, ?, ?, ?, ?)`, []any{
+			driveTestCatalogID, driveTestOverlayID, driveTestWorkID,
+			driveTestCatalogID, driveTestOverlayID, driveTestWorkID,
+			document.NormalizedOriginal, document.CJKTokens, document.LatinTokens,
 		}},
 	}
 	for _, statement := range statements {

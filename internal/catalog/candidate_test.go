@@ -143,6 +143,12 @@ func TestBeginCandidateResetsPartialStagingCandidate(t *testing.T) {
 	if got := countRows(t, store, `SELECT count(*) FROM source_works WHERE catalog_revision_id=?`, first.CatalogRevisionID); got != 1 {
 		t.Fatalf("partial candidate 未写入预期 staging 数据: %d", got)
 	}
+	if got := countRows(t, store, `SELECT count(*) FROM work_search WHERE catalog_revision_id=?`, first.CatalogRevisionID); got != 1 {
+		t.Fatalf("partial candidate 的 FTS 行数=%d", got)
+	}
+	if got := countRows(t, store, `SELECT count(*) FROM work_search_candidates WHERE catalog_revision_id=?`, first.CatalogRevisionID); got != 1 {
+		t.Fatalf("partial candidate 的窄候选行数=%d", got)
+	}
 	second, err := catalogStore.BeginCandidate(ctx, "job-partial", "source-a", 2)
 	if err != nil {
 		t.Fatalf("partial candidate 重建失败: %v", err)
@@ -152,6 +158,12 @@ func TestBeginCandidateResetsPartialStagingCandidate(t *testing.T) {
 	}
 	if got := countRows(t, store, `SELECT count(*) FROM catalog_revision_sources WHERE catalog_revision_id=?`, first.CatalogRevisionID); got != 0 {
 		t.Fatalf("旧 partial staging membership 未被清理: %d", got)
+	}
+	if got := countRows(t, store, `SELECT count(*) FROM work_search WHERE catalog_revision_id=?`, first.CatalogRevisionID); got != 0 {
+		t.Fatalf("旧 partial staging FTS 未被清理: %d", got)
+	}
+	if got := countRows(t, store, `SELECT count(*) FROM work_search_candidates WHERE catalog_revision_id=?`, first.CatalogRevisionID); got != 0 {
+		t.Fatalf("旧 partial staging 窄候选未被清理: %d", got)
 	}
 	works, mediaFacts := minimalCandidateFacts("source-a", "work-1", "media-1", candidateDigestA)
 	if err := catalogStore.Stage(ctx, second, works, mediaFacts); err != nil {
@@ -176,6 +188,9 @@ func TestBeginCandidateResetsValidatedCandidate(t *testing.T) {
 	}
 	if got := countRows(t, store, `SELECT count(*) FROM work_search WHERE catalog_revision_id=?`, first.CatalogRevisionID); got != 0 {
 		t.Fatalf("旧 validated candidate 的 FTS 行未被清理: %d", got)
+	}
+	if got := countRows(t, store, `SELECT count(*) FROM work_search_candidates WHERE catalog_revision_id=?`, first.CatalogRevisionID); got != 0 {
+		t.Fatalf("旧 validated candidate 的窄候选行未被清理: %d", got)
 	}
 	if second.CatalogRevisionID == first.CatalogRevisionID {
 		t.Fatal("重建后仍复用旧 catalog_revision_id")
@@ -427,7 +442,13 @@ func TestBeginCandidateRecoversAcrossRepeatedInterruptions(t *testing.T) {
 func TestGarbageCollectSkipsActiveJobCandidate(t *testing.T) {
 	catalogStore, store := newCandidateTestStore(t)
 	ctx := context.Background()
-	stageValidCandidate(t, catalogStore, "job-active-attempt", "source-a", "work-1", "media-1", candidateDigestA, false)
+	candidate := stageValidCandidate(t, catalogStore, "job-active-attempt", "source-a", "work-1", "media-1", candidateDigestA, false)
+	var beforeCandidateRowID, beforeFTSRowID int64
+	if err := store.Catalog.SQL().QueryRow(`SELECT c.search_rowid, s.rowid
+FROM work_search_candidates c JOIN work_search s ON s.rowid=c.search_rowid
+WHERE c.catalog_revision_id=?`, candidate.CatalogRevisionID).Scan(&beforeCandidateRowID, &beforeFTSRowID); err != nil {
+		t.Fatal(err)
+	}
 
 	result, err := catalogStore.GarbageCollectWithOptions(ctx, catalog.GCOptions{
 		Retention: 0, ActiveJobIDs: []string{"job-active-attempt"},
@@ -441,6 +462,16 @@ func TestGarbageCollectSkipsActiveJobCandidate(t *testing.T) {
 	if got := countRows(t, store, `SELECT count(*) FROM catalog_revisions WHERE job_id=? AND status='staging'`, "job-active-attempt"); got != 1 {
 		t.Fatalf("活动 Job 的 staging candidate 被 GC 误删: %d", got)
 	}
+	var afterCandidateRowID, afterFTSRowID int64
+	if err := store.Catalog.SQL().QueryRow(`SELECT c.search_rowid, s.rowid
+FROM work_search_candidates c JOIN work_search s ON s.rowid=c.search_rowid
+WHERE c.catalog_revision_id=?`, candidate.CatalogRevisionID).Scan(&afterCandidateRowID, &afterFTSRowID); err != nil {
+		t.Fatal(err)
+	}
+	if afterCandidateRowID != beforeCandidateRowID || afterFTSRowID != beforeFTSRowID {
+		t.Fatalf("活动 Candidate 的搜索映射被 GC 改写: before=%d/%d after=%d/%d",
+			beforeCandidateRowID, beforeFTSRowID, afterCandidateRowID, afterFTSRowID)
+	}
 }
 
 // 14. GC 最终能清理 abandoned staging：不在 ActiveJobIDs 中、超过保留期的 staging candidate
@@ -448,7 +479,7 @@ func TestGarbageCollectSkipsActiveJobCandidate(t *testing.T) {
 func TestGarbageCollectReclaimsAbandonedStagingCandidate(t *testing.T) {
 	catalogStore, store := newCandidateTestStore(t)
 	ctx := context.Background()
-	stageValidCandidate(t, catalogStore, "job-abandoned", "source-a", "work-1", "media-1", candidateDigestA, false)
+	candidate := stageValidCandidate(t, catalogStore, "job-abandoned", "source-a", "work-1", "media-1", candidateDigestA, false)
 
 	result, err := catalogStore.GarbageCollectWithOptions(ctx, catalog.GCOptions{Retention: 0})
 	if err != nil {
@@ -459,5 +490,144 @@ func TestGarbageCollectReclaimsAbandonedStagingCandidate(t *testing.T) {
 	}
 	if got := countRows(t, store, `SELECT count(*) FROM catalog_revisions WHERE job_id=?`, "job-abandoned"); got != 0 {
 		t.Fatalf("遗弃 staging 未被彻底删除: %d", got)
+	}
+	if got := countRows(t, store, `SELECT count(*) FROM work_search WHERE catalog_revision_id=?`, candidate.CatalogRevisionID); got != 0 {
+		t.Fatalf("遗弃 staging 的 FTS 行残留: %d", got)
+	}
+	if got := countRows(t, store, `SELECT count(*) FROM work_search_candidates WHERE catalog_revision_id=?`, candidate.CatalogRevisionID); got != 0 {
+		t.Fatalf("遗弃 staging 的窄候选行残留: %d", got)
+	}
+}
+
+func TestPublishRevalidatesSearchProjectionInsidePublicationTransaction(t *testing.T) {
+	tests := []struct {
+		name    string
+		corrupt func(*testing.T, *storage.Store, catalog.Candidate)
+	}{
+		{name: "missing-candidate", corrupt: func(t *testing.T, store *storage.Store, candidate catalog.Candidate) {
+			if _, err := store.Catalog.SQL().Exec(`DELETE FROM work_search_candidates WHERE catalog_revision_id=?`, candidate.CatalogRevisionID); err != nil {
+				t.Fatal(err)
+			}
+		}},
+		{name: "missing-fts", corrupt: func(t *testing.T, store *storage.Store, candidate catalog.Candidate) {
+			if _, err := store.Catalog.SQL().Exec(`DELETE FROM work_search WHERE catalog_revision_id=?`, candidate.CatalogRevisionID); err != nil {
+				t.Fatal(err)
+			}
+		}},
+		{name: "candidate-fact-drift", corrupt: func(t *testing.T, store *storage.Store, candidate catalog.Candidate) {
+			if _, err := store.Catalog.SQL().Exec(`UPDATE work_search_candidates SET source_key='drift' WHERE catalog_revision_id=?`, candidate.CatalogRevisionID); err != nil {
+				t.Fatal(err)
+			}
+		}},
+		{name: "fts-text-drift", corrupt: func(t *testing.T, store *storage.Store, candidate catalog.Candidate) {
+			if _, err := store.Catalog.SQL().Exec(`UPDATE work_search SET normalized_original_text='drift' WHERE catalog_revision_id=?`, candidate.CatalogRevisionID); err != nil {
+				t.Fatal(err)
+			}
+		}},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			catalogStore, store := newCandidateTestStore(t)
+			candidate := stageValidCandidate(t, catalogStore, "job-publish-revalidate", "source-a",
+				"work-1", "media-1", candidateDigestA, true)
+			test.corrupt(t, store, candidate)
+			if _, err := catalogStore.Publish(context.Background(), candidate); !hasFaultCode(err, fault.CodeCatalogCandidateInvalid) {
+				t.Fatalf("Publish 未拒绝验证后的搜索投影漂移: %v", err)
+			}
+			if got := countRows(t, store, `SELECT count(*) FROM query_publications WHERE job_id=?`, candidate.JobID); got != 0 {
+				t.Fatalf("损坏 Candidate 仍创建了 publication: %d", got)
+			}
+		})
+	}
+}
+
+func TestPublishOverlayRevalidatesSearchProjectionInsidePublicationTransaction(t *testing.T) {
+	catalogStore, store := newCandidateTestStore(t)
+	ctx := context.Background()
+	base := stageValidCandidate(t, catalogStore, "job-overlay-base", "source-a", "work-1", "media-1", candidateDigestA, true)
+	publishCandidate(t, catalogStore, base)
+	overlay, err := catalogStore.BeginOverlayCandidate(ctx, "job-overlay-revalidate", base.CatalogRevisionID, 2)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := catalogStore.ApplyOverlayFacts(ctx, overlay, map[string]catalog.OverlayFact{}); err != nil {
+		t.Fatal(err)
+	}
+	if err := catalogStore.ValidateOverlayCandidate(ctx, overlay); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.Catalog.SQL().Exec(`DELETE FROM work_search_candidates
+WHERE catalog_revision_id=? AND overlay_revision_id=?`, overlay.CatalogRevisionID, overlay.OverlayRevisionID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := catalogStore.PublishOverlay(ctx, overlay); !hasFaultCode(err, fault.CodeCatalogCandidateInvalid) {
+		t.Fatalf("PublishOverlay 未拒绝验证后的搜索投影漂移: %v", err)
+	}
+	if got := countRows(t, store, `SELECT count(*) FROM query_publications WHERE job_id=?`, overlay.JobID); got != 0 {
+		t.Fatalf("损坏 Overlay Candidate 仍创建了 publication: %d", got)
+	}
+}
+
+func TestGarbageCollectReclaimsTerminalOverlaySearchProjection(t *testing.T) {
+	tests := []struct {
+		name   string
+		finish func(context.Context, *catalog.Store, catalog.OverlayCandidate) error
+	}{
+		{name: "aborted", finish: func(ctx context.Context, store *catalog.Store, candidate catalog.OverlayCandidate) error {
+			return store.FinishOverlayCandidate(ctx, candidate, "aborted")
+		}},
+		{name: "superseded", finish: func(ctx context.Context, store *catalog.Store, candidate catalog.OverlayCandidate) error {
+			return store.FinishOverlayCandidate(ctx, candidate, "superseded")
+		}},
+		{name: "aborted-by-job", finish: func(ctx context.Context, store *catalog.Store, candidate catalog.OverlayCandidate) error {
+			return store.AbortOverlayCandidatesForJob(ctx, candidate.JobID)
+		}},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			catalogStore, storageStore := newCandidateTestStore(t)
+			ctx := context.Background()
+			base := stageValidCandidate(t, catalogStore, "job-terminal-base", "source-a", "work-1", "media-1", candidateDigestA, true)
+			publishCandidate(t, catalogStore, base)
+			overlay, err := catalogStore.BeginOverlayCandidate(ctx, "job-terminal-overlay", base.CatalogRevisionID, 2)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := catalogStore.ApplyOverlayFacts(ctx, overlay, map[string]catalog.OverlayFact{}); err != nil {
+				t.Fatal(err)
+			}
+			if got := countRows(t, storageStore, `SELECT count(*) FROM work_search_candidates
+WHERE catalog_revision_id=? AND overlay_revision_id=?`, overlay.CatalogRevisionID, overlay.OverlayRevisionID); got != 1 {
+				t.Fatalf("terminal 前窄候选=%d", got)
+			}
+			if got := countRows(t, storageStore, `SELECT count(*) FROM work_search
+WHERE catalog_revision_id=? AND overlay_revision_id=?`, overlay.CatalogRevisionID, overlay.OverlayRevisionID); got != 1 {
+				t.Fatalf("terminal 前 FTS=%d", got)
+			}
+			if err := test.finish(ctx, catalogStore, overlay); err != nil {
+				t.Fatal(err)
+			}
+			result, err := catalogStore.GarbageCollect(ctx, 0)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if result.OverlayRevisions != 1 || result.CatalogRevisions != 0 || result.Publications != 0 {
+				t.Fatalf("terminal Overlay GC 结果错误: %+v", result)
+			}
+			for _, table := range []string{"overlay_projection_revisions", "work_projections", "work_search_candidates", "work_search"} {
+				if got := countRows(t, storageStore, `SELECT count(*) FROM `+table+`
+WHERE catalog_revision_id=? AND overlay_revision_id=?`, overlay.CatalogRevisionID, overlay.OverlayRevisionID); got != 0 {
+					t.Fatalf("%s 残留 terminal Overlay 行=%d", table, got)
+				}
+			}
+			if got := countRows(t, storageStore, `SELECT count(*) FROM work_search_candidates
+WHERE catalog_revision_id=? AND overlay_revision_id=?`, base.CatalogRevisionID, base.OverlayRevisionID); got != 1 {
+				t.Fatalf("活动 publication 窄候选被误删: %d", got)
+			}
+			if got := countRows(t, storageStore, `SELECT count(*) FROM work_search
+WHERE catalog_revision_id=? AND overlay_revision_id=?`, base.CatalogRevisionID, base.OverlayRevisionID); got != 1 {
+				t.Fatalf("活动 publication FTS 被误删: %d", got)
+			}
+		})
 	}
 }

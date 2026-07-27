@@ -53,7 +53,7 @@ func TestGarbageCollectHonorsCursorAndBlobReadLeases(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	seedGCPublication(t, store, 2, false)
+	_, activeCatalog, _ := seedGCPublication(t, store, 2, false)
 	if _, err := store.Catalog.SQL().ExecContext(ctx,
 		"INSERT INTO catalog_revisions VALUES ('cat_018f47d2-5c16-7a44-a8a0-999999999999', 'job_018f47d2-5c16-7a44-a8a0-999999999999', 'src_gc', 'staging', 1, NULL)"); err != nil {
 		t.Fatal(err)
@@ -100,6 +100,18 @@ func TestGarbageCollectHonorsCursorAndBlobReadLeases(t *testing.T) {
 	if err := store.Catalog.SQL().QueryRowContext(ctx,
 		"SELECT count(*) FROM work_search WHERE catalog_revision_id=?", oldCatalog).Scan(&count); err != nil || count != 0 {
 		t.Fatalf("旧 FTS 行残留: count=%d err=%v", count, err)
+	}
+	if err := store.Catalog.SQL().QueryRowContext(ctx,
+		"SELECT count(*) FROM work_search_candidates WHERE catalog_revision_id=?", oldCatalog).Scan(&count); err != nil || count != 0 {
+		t.Fatalf("旧窄候选行残留: count=%d err=%v", count, err)
+	}
+	if err := store.Catalog.SQL().QueryRowContext(ctx,
+		"SELECT count(*) FROM work_search_candidates WHERE catalog_revision_id=?", activeCatalog).Scan(&count); err != nil || count != 1 {
+		t.Fatalf("活动 publication 窄候选被误删: count=%d err=%v", count, err)
+	}
+	if err := store.Catalog.SQL().QueryRowContext(ctx,
+		"SELECT count(*) FROM pragma_foreign_key_check").Scan(&count); err != nil || count != 0 {
+		t.Fatalf("GC 后 foreign_key_check: count=%d err=%v", count, err)
 	}
 	_, err = queryService.Search(ctx, galleryquery.Request{Limit: 1, Cursor: page.NextCursor, AuthorizationScope: scope, AuthorizeSources: allowAllQuerySources})
 	assertFaultCode(t, err, fault.CodeCursorExpired)
@@ -158,8 +170,26 @@ VALUES (?, ?, ?, 'src_gc', ?, 'lib_gc', ?, '', ?, '[]', ?, ?, ?, ?, 0)`,
 			document.CJKTokens, document.LatinTokens, document.SortTitleKey); err != nil {
 			t.Fatal(err)
 		}
-		if _, err := store.Catalog.SQL().ExecContext(ctx,
-			"INSERT INTO work_search VALUES (?, ?, ?, ?, ?, ?)", catalogID, overlayID, workID,
+		result, err := store.Catalog.SQL().ExecContext(ctx, `INSERT INTO work_search_candidates
+(catalog_revision_id, overlay_revision_id, work_id, source_id, source_key, library_id,
+ tags_json, normalized_original_text, sort_title_key, published_at_ns, hidden, favorite, progress,
+ search_title_norm, search_creator_norm, search_tags_norm, search_filenames_norm)
+SELECT catalog_revision_id, overlay_revision_id, work_id, source_id, source_key, library_id,
+       tags_json, normalized_original_text, sort_title_key, published_at_ns, hidden, favorite, progress,
+       search_title_norm, search_creator_norm, search_tags_norm, search_filenames_norm
+FROM work_projections WHERE catalog_revision_id=? AND overlay_revision_id=? AND work_id=?`,
+			catalogID, overlayID, workID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		searchRowID, err := result.LastInsertId()
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := store.Catalog.SQL().ExecContext(ctx, `INSERT INTO work_search
+(rowid, catalog_revision_id, overlay_revision_id, work_id,
+ normalized_original_text, cjk_bigram_token_text, latin_trigram_token_text)
+VALUES (?, ?, ?, ?, ?, ?, ?)`, searchRowID, catalogID, overlayID, workID,
 			document.NormalizedOriginal, document.CJKTokens, document.LatinTokens); err != nil {
 			t.Fatal(err)
 		}

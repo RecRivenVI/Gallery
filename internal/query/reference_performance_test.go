@@ -144,15 +144,9 @@ VALUES (?, ?, 0, 'staging', 1)`, overlayID, catalogID); err != nil {
 	projection, err := tx.PrepareContext(ctx, `INSERT INTO work_projections
 (catalog_revision_id, overlay_revision_id, work_id, source_id, source_key, library_id, title, creator,
  tags_json, filenames_text, normalized_original_text, cjk_bigram_token_text, latin_trigram_token_text,
- sort_title_key, hidden)
-VALUES (?, ?, ?, ?, ?, ?, ?, ?, '["reference"]', ?, ?, ?, ?, ?, 0)`)
+ sort_title_key, hidden, search_title_norm, search_creator_norm, search_tags_norm, search_filenames_norm)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, '["reference"]', ?, ?, ?, ?, ?, 0, ?, ?, ?, ?)`)
 	if err != nil {
-		tx.Rollback()
-		t.Fatal(err)
-	}
-	search, err := tx.PrepareContext(ctx, "INSERT INTO work_search VALUES (?, ?, ?, ?, ?, ?)")
-	if err != nil {
-		projection.Close()
 		tx.Rollback()
 		t.Fatal(err)
 	}
@@ -169,22 +163,38 @@ VALUES (?, ?, ?, ?, ?, ?, ?, ?, '["reference"]', ?, ?, ?, ?, ?, 0)`)
 		if _, err := projection.ExecContext(ctx, catalogID, overlayID, workID,
 			referenceSourceID(sourceIndex), title, referenceLibraryID(sourceIndex), title, "Creator",
 			filename, document.NormalizedOriginal, document.CJKTokens, document.LatinTokens,
-			document.SortTitleKey); err != nil {
+			document.SortTitleKey, document.TitleNorm, document.CreatorNorm, document.TagsNorm,
+			document.FilenamesNorm); err != nil {
 			projection.Close()
-			search.Close()
-			tx.Rollback()
-			t.Fatal(err)
-		}
-		if _, err := search.ExecContext(ctx, catalogID, overlayID, workID, document.NormalizedOriginal,
-			document.CJKTokens, document.LatinTokens); err != nil {
-			projection.Close()
-			search.Close()
 			tx.Rollback()
 			t.Fatal(err)
 		}
 	}
 	projection.Close()
-	search.Close()
+	if _, err := tx.ExecContext(ctx, `INSERT INTO work_search_candidates
+(catalog_revision_id, overlay_revision_id, work_id, source_id, source_key, library_id,
+ tags_json, normalized_original_text, sort_title_key, published_at_ns, hidden, favorite, progress,
+ search_title_norm, search_creator_norm, search_tags_norm, search_filenames_norm)
+SELECT catalog_revision_id, overlay_revision_id, work_id, source_id, source_key, library_id,
+       tags_json, normalized_original_text, sort_title_key, published_at_ns, hidden, favorite, progress,
+       search_title_norm, search_creator_norm, search_tags_norm, search_filenames_norm
+FROM work_projections WHERE catalog_revision_id=? AND overlay_revision_id=?`, catalogID, overlayID); err != nil {
+		tx.Rollback()
+		t.Fatal(err)
+	}
+	if _, err := tx.ExecContext(ctx, `INSERT INTO work_search
+(rowid, catalog_revision_id, overlay_revision_id, work_id,
+ normalized_original_text, cjk_bigram_token_text, latin_trigram_token_text)
+SELECT c.search_rowid, w.catalog_revision_id, w.overlay_revision_id, w.work_id,
+       w.normalized_original_text, w.cjk_bigram_token_text, w.latin_trigram_token_text
+FROM work_search_candidates c JOIN work_projections w
+  ON w.catalog_revision_id=c.catalog_revision_id
+ AND w.overlay_revision_id=c.overlay_revision_id
+ AND w.work_id=c.work_id
+WHERE c.catalog_revision_id=? AND c.overlay_revision_id=?`, catalogID, overlayID); err != nil {
+		tx.Rollback()
+		t.Fatal(err)
+	}
 	if err := tx.Commit(); err != nil {
 		t.Fatal(err)
 	}

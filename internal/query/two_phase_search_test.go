@@ -121,6 +121,26 @@ func TestSearchQueryPlanSortsNarrowRowsAndProjectsAfterPagination(t *testing.T) 
 				t.Fatalf("SQLite 把 page 分页 CTE 展平了，两阶段改写未生效:\n%s", plan)
 			}
 			pageSubtree := subtreeOf(nodes, pageNode)
+			ftsScans, candidateLookups, payloadLookups := 0, 0, 0
+			for _, node := range nodes {
+				if pageSubtree[node.id] {
+					if strings.Contains(node.detail, "work_search VIRTUAL TABLE INDEX") {
+						ftsScans++
+					}
+					if strings.Contains(node.detail, "SEARCH w USING INTEGER PRIMARY KEY") {
+						candidateLookups++
+					}
+					if strings.Contains(node.detail, "work_projections") {
+						t.Fatalf("分页前候选阶段退回宽 WorkProjection:\n%s", plan)
+					}
+				} else if strings.Contains(node.detail, "SEARCH payload USING INDEX") {
+					payloadLookups++
+				}
+			}
+			if ftsScans != 1 || candidateLookups != 1 || payloadLookups != 1 {
+				t.Fatalf("搜索驱动计划不再是 FTS→candidate rowid→分页后 payload: fts=%d candidate=%d payload=%d\n%s",
+					ftsScans, candidateLookups, payloadLookups, plan)
+			}
 
 			sorters := 0
 			for _, node := range nodes {
@@ -151,6 +171,31 @@ func TestSearchQueryPlanSortsNarrowRowsAndProjectsAfterPagination(t *testing.T) 
 			}
 		})
 	}
+
+	t.Run("total-uses-fts-rowid-candidate-without-wide-payload", func(t *testing.T) {
+		statement, args, err := galleryquery.BuildTotalStatementForTest(ctx, "cat", "ovr", sources, sources,
+			galleryquery.Request{Search: "title-005000", Sort: "title_asc", Limit: 100})
+		if err != nil {
+			t.Fatal(err)
+		}
+		nodes := explainPlanNodes(t, db, statement, args...)
+		plan := formatPlanNodes(nodes)
+		ftsScans, candidateLookups := 0, 0
+		for _, node := range nodes {
+			if strings.Contains(node.detail, "work_search VIRTUAL TABLE INDEX") {
+				ftsScans++
+			}
+			if strings.Contains(node.detail, "SEARCH w USING INTEGER PRIMARY KEY") {
+				candidateLookups++
+			}
+			if strings.Contains(node.detail, "work_projections") {
+				t.Fatalf("搜索 Total 回到了宽 WorkProjection:\n%s", plan)
+			}
+		}
+		if ftsScans != 1 || candidateLookups != 1 {
+			t.Fatalf("搜索 Total 驱动计划错误: fts=%d candidate=%d\n%s", ftsScans, candidateLookups, plan)
+		}
+	})
 
 	// 反向对照：改写前的单阶段形态没有 page 分页阶段，media_count 相关子查询与排序器
 	// 同处一层，即逐候选行求值。它证明上面的结构判据不是恒真——如果有人把生产语句改回
@@ -474,17 +519,28 @@ func twoPhaseCorpus() []seedWork {
 	}
 }
 
-// seedPlanSearchDocuments 为计划测试补上 work_search 行，使 FTS 驱动关系与生产形态一致。
+// seedPlanSearchDocuments 为计划测试补上窄候选与同 rowid 的 FTS 行，使驱动关系与生产形态一致。
 func seedPlanSearchDocuments(t *testing.T, db *sql.DB) {
 	t.Helper()
-	_, err := db.ExecContext(context.Background(), `
-WITH RECURSIVE seq(n) AS (
-  VALUES(0) UNION ALL SELECT n+1 FROM seq WHERE n<9999
-)
+	_, err := db.ExecContext(context.Background(), `INSERT INTO work_search_candidates
+(catalog_revision_id, overlay_revision_id, work_id, source_id, source_key, library_id,
+ tags_json, normalized_original_text, sort_title_key, published_at_ns, hidden, favorite, progress,
+ search_title_norm, search_creator_norm, search_tags_norm, search_filenames_norm)
+SELECT catalog_revision_id, overlay_revision_id, work_id, source_id, source_key, library_id,
+       tags_json, normalized_original_text, sort_title_key, published_at_ns, hidden, favorite, progress,
+       search_title_norm, search_creator_norm, search_tags_norm, search_filenames_norm
+FROM work_projections WHERE catalog_revision_id='cat' AND overlay_revision_id='ovr';
+
 INSERT INTO work_search
-(catalog_revision_id, overlay_revision_id, work_id, normalized_original_text, cjk_bigram_token_text, latin_trigram_token_text)
-SELECT 'cat', 'ovr', printf('work-%06d', n), printf('title-%06d', n), '', ''
-FROM seq;`)
+(rowid, catalog_revision_id, overlay_revision_id, work_id,
+ normalized_original_text, cjk_bigram_token_text, latin_trigram_token_text)
+SELECT c.search_rowid, w.catalog_revision_id, w.overlay_revision_id, w.work_id,
+       w.normalized_original_text, w.cjk_bigram_token_text, w.latin_trigram_token_text
+FROM work_search_candidates c JOIN work_projections w
+  ON w.catalog_revision_id=c.catalog_revision_id
+ AND w.overlay_revision_id=c.overlay_revision_id
+ AND w.work_id=c.work_id
+WHERE c.catalog_revision_id='cat' AND c.overlay_revision_id='ovr';`)
 	if err != nil {
 		t.Fatal(err)
 	}

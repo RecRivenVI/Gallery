@@ -93,7 +93,7 @@ VALUES (?, ?, ?, ?, ?, 'lib_test', ?, '', '[]', '', ?, ?, ?, ?, ?, ?, ?, ?, '', 
 			cat, ov, spec.id, spec.sourceID, spec.sourceKey, spec.title,
 			document.NormalizedOriginal, document.CJKTokens, document.LatinTokens, document.SortTitleKey,
 			hidden, favorite, spec.progress, document.TitleNorm, coverMediaID)
-		exec("INSERT INTO work_search VALUES (?, ?, ?, ?, ?, ?)", cat, ov, spec.id, document.NormalizedOriginal, document.CJKTokens, document.LatinTokens)
+		insertSearchFixtureDocument(t, catalogDB, cat, ov, spec.id)
 		exec(`INSERT OR IGNORE INTO creator_projections (catalog_revision_id, overlay_revision_id, creator_id, name, sort_name_key)
 VALUES (?, ?, ?, 'creator', 'creator')`, cat, ov, spec.creatorID)
 		exec(`INSERT INTO work_creator_relations (catalog_revision_id, overlay_revision_id, work_id, creator_id, role, ordinal)

@@ -108,7 +108,7 @@ func TestBaseFilterSearchDoesNotForceBrowseIndex(t *testing.T) {
 		CandidateSourceIDs: []string{"src_a"},
 		AllowedSourceIDs:   []string{"src_a"},
 	}
-	_, fromSuffix, _, err := service.baseFilter(context.Background(), publication{
+	where, fromSuffix, _, err := service.baseFilter(context.Background(), publication{
 		CatalogRevision: "cat", OverlayRevision: "ovr",
 	}, authorization, Request{}, querytext.PlanSearch("特别作品"), nil, false)
 	if err != nil {
@@ -117,7 +117,19 @@ func TestBaseFilterSearchDoesNotForceBrowseIndex(t *testing.T) {
 	if strings.Contains(fromSuffix, "INDEXED BY") {
 		t.Fatalf("FTS 搜索不得继承无搜索 browse 的强制索引: %s", fromSuffix)
 	}
-	if !strings.Contains(fromSuffix, "JOIN work_search") {
-		t.Fatalf("FTS 搜索缺少 work_search 驱动关系: %s", fromSuffix)
+	if fromSuffix != "" {
+		t.Fatalf("FTS 窄候选搜索不应再给投影源追加 JOIN: %s", fromSuffix)
+	}
+	joined := strings.Join(where, " AND ")
+	for _, predicate := range []string{
+		"work_search.rowid=w.search_rowid",
+		"work_search.catalog_revision_id=w.catalog_revision_id",
+		"work_search.overlay_revision_id=w.overlay_revision_id",
+		"work_search.work_id=w.work_id",
+		"work_search MATCH ?",
+	} {
+		if !strings.Contains(joined, predicate) {
+			t.Fatalf("FTS 搜索缺少窄候选 fail-closed 谓词 %q: %s", predicate, joined)
+		}
 	}
 }

@@ -443,6 +443,13 @@ func authorizationHash(scope string, authorization sourceAuthorization) string {
 // baseFilter 构建结构化过滤、图书馆/来源/标签快捷参数与搜索召回共用的 WHERE 片段，
 // 供分页查询与 total 统计复用同一语义，避免两处判据分叉。
 func (s *Service) baseFilter(ctx context.Context, pub publication, authorization sourceAuthorization, request Request, plan querytext.SearchPlan, filterNode *FilterNode, forTotal bool) ([]string, string, []any, error) {
+	return s.baseFilterWithProjection(ctx, pub, authorization, request, plan, filterNode, forTotal, true)
+}
+
+// baseFilterWithProjection 的 false 分支只供差分测试保留旧 work_projections+三文本键 FTS
+// 参照路径；生产一律使用 work_search_candidates。两条路径共享授权、过滤和查询参数语义，
+// 差分因此能直接证明窄候选改写没有改变行集合、排序或 keyset。
+func (s *Service) baseFilterWithProjection(ctx context.Context, pub publication, authorization sourceAuthorization, request Request, plan querytext.SearchPlan, filterNode *FilterNode, forTotal, useSearchCandidates bool) ([]string, string, []any, error) {
 	args := []any{pub.CatalogRevision, pub.OverlayRevision}
 	where := []string{"w.catalog_revision_id = ?", "w.overlay_revision_id = ?"}
 	positiveAllowedFilter := false
@@ -560,7 +567,18 @@ func (s *Service) baseFilter(ctx context.Context, pub publication, authorization
 		where = append(where, "instr(w.normalized_original_text, ?) > 0")
 		args = append(args, plan.NormalizedQuery)
 		if plan.FTSQuery != "" {
-			fromSuffix += " JOIN work_search ON work_search.catalog_revision_id=w.catalog_revision_id AND work_search.overlay_revision_id=w.overlay_revision_id AND work_search.work_id=w.work_id"
+			if useSearchCandidates {
+				// FROM 以 work_search CROSS JOIN 开头，锁定 FTS MATCH 先召回 rowid，再按
+				// INTEGER PRIMARY KEY 查窄候选；三业务键复核使虚表/候选映射损坏时
+				// fail-closed，不能仅凭裸 rowid 串到另一 Work 或快照。
+				where = append(where,
+					"work_search.rowid=w.search_rowid",
+					"work_search.catalog_revision_id=w.catalog_revision_id",
+					"work_search.overlay_revision_id=w.overlay_revision_id",
+					"work_search.work_id=w.work_id")
+			} else {
+				fromSuffix += " JOIN work_search ON work_search.catalog_revision_id=w.catalog_revision_id AND work_search.overlay_revision_id=w.overlay_revision_id AND work_search.work_id=w.work_id"
+			}
 			where = append(where, "work_search MATCH ?")
 			args = append(args, plan.FTSQuery)
 		}
@@ -568,9 +586,24 @@ func (s *Service) baseFilter(ctx context.Context, pub publication, authorization
 	return where, fromSuffix, args, nil
 }
 
+func projectionSource(plan querytext.SearchPlan, useSearchCandidates bool) string {
+	if plan.NormalizedQuery == "" || !useSearchCandidates {
+		return "work_projections w"
+	}
+	if plan.FTSQuery != "" {
+		return "work_search CROSS JOIN work_search_candidates w"
+	}
+	return "work_search_candidates w"
+}
+
 // mediaCountExpr 是可见媒体计数的相关子查询：它对携带它的那一行求值一次，成本随
 // 求值行数线性增长。因此它只能出现在**分页之后**的投影阶段，绝不能进入排序器的输入。
 const mediaCountExpr = "(SELECT count(*) FROM media_projections m WHERE m.catalog_revision_id=w.catalog_revision_id AND m.overlay_revision_id=w.overlay_revision_id AND m.work_id=w.work_id AND m.hidden=0)"
+
+func mediaCountExpression(projectionAlias string) string {
+	// projectionAlias 只由本文件的封闭 SQL builder 常量传入，不接收外部输入。
+	return fmt.Sprintf("(SELECT count(*) FROM media_projections m WHERE m.catalog_revision_id=%[1]s.catalog_revision_id AND m.overlay_revision_id=%[1]s.overlay_revision_id AND m.work_id=%[1]s.work_id AND m.hidden=0)", projectionAlias)
+}
 
 // buildPageStatement 构建一页结果的完整语句与实参。列顺序必须与 query 中 rows.Scan 的
 // 顺序保持一致。
@@ -649,7 +682,7 @@ func (s *Service) buildPageStatement(ctx context.Context, pub publication, autho
 	statement := fmt.Sprintf(`WITH tiers AS (
 	SELECT w.work_id AS work_id, %s AS sort_key,
 (%s) AS title_tier, (%s) AS creator_tier, (%s) AS tag_tier, (%s) AS filename_tier
-FROM work_projections w%s WHERE %s
+FROM %s%s WHERE %s
 ),
 scored AS (
 	SELECT work_id, sort_key, max(%s, %s, %s, %s) AS rank_tier FROM tiers
@@ -657,14 +690,15 @@ scored AS (
 page AS (
 	SELECT work_id, sort_key, rank_tier FROM scored%s ORDER BY rank_tier DESC, %s LIMIT ?
 )
-	SELECT p.work_id, w.title, w.creator, w.tags_json, w.filenames_text, p.sort_key, w.favorite, w.progress, w.cover_media_id, w.badges_json, w.description, w.source_url, w.published_at_ns,
+	SELECT p.work_id, payload.title, payload.creator, payload.tags_json, payload.filenames_text, p.sort_key, payload.favorite, payload.progress, payload.cover_media_id, payload.badges_json, payload.description, payload.source_url, payload.published_at_ns,
 %s AS media_count, p.rank_tier
-FROM page p JOIN work_projections w ON w.catalog_revision_id = ? AND w.overlay_revision_id = ? AND w.work_id = p.work_id
+FROM page p JOIN work_projections payload ON payload.catalog_revision_id = ? AND payload.overlay_revision_id = ? AND payload.work_id = p.work_id
 	ORDER BY p.rank_tier DESC, %s`,
-		sortColumn, titleTierSQL, creatorTierSQL, tagTierSQL, filenameTierSQL, join, strings.Join(where, " AND "),
+		sortColumn, titleTierSQL, creatorTierSQL, tagTierSQL, filenameTierSQL,
+		projectionSource(plan, true), join, strings.Join(where, " AND "),
 		combinedFieldScoreSQL("title_tier", fieldPriorityTitle), combinedFieldScoreSQL("creator_tier", fieldPriorityCreator),
 		combinedFieldScoreSQL("tag_tier", fieldPriorityTag), combinedFieldScoreSQL("filename_tier", fieldPriorityFilename),
-		keysetSQL, sortSpec.orderBy("sort_key", "work_id"), mediaCountExpr, sortSpec.orderBy("p.sort_key", "p.work_id"))
+		keysetSQL, sortSpec.orderBy("sort_key", "work_id"), mediaCountExpression("payload"), sortSpec.orderBy("p.sort_key", "p.work_id"))
 
 	args := []any{
 		plan.NormalizedQuery, plan.NormalizedQuery, plan.NormalizedQuery, // title
@@ -806,12 +840,10 @@ func (s *Service) computeTotal(ctx context.Context, pub publication, authorizati
 	if request.OmitTotal {
 		return TotalInfo{Mode: TotalModeOmitted, ProtocolVersion: TotalProtocolVersion}, nil
 	}
-	where, join, args, err := s.baseFilter(ctx, pub, authorization, request, plan, filterNode, true)
+	statement, args, err := s.buildTotalStatement(ctx, pub, authorization, request, plan, filterNode)
 	if err != nil {
 		return TotalInfo{}, err
 	}
-	statement := "SELECT count(*) FROM (SELECT 1 FROM work_projections w" + join + " WHERE " + strings.Join(where, " AND ") + " LIMIT ?)"
-	args = append(args, TotalBudget+1)
 	var count int64
 	if err := s.catalog.QueryRowContext(ctx, statement, args...).Scan(&count); err != nil {
 		return TotalInfo{}, fault.New(fault.CodeInternal, true, err)
@@ -821,6 +853,16 @@ func (s *Service) computeTotal(ctx context.Context, pub publication, authorizati
 		return TotalInfo{Mode: TotalModeLowerBound, Value: &value, ProtocolVersion: TotalProtocolVersion}, nil
 	}
 	return TotalInfo{Mode: TotalModeExact, Value: &count, ProtocolVersion: TotalProtocolVersion}, nil
+}
+
+func (s *Service) buildTotalStatement(ctx context.Context, pub publication, authorization sourceAuthorization, request Request, plan querytext.SearchPlan, filterNode *FilterNode) (string, []any, error) {
+	where, join, args, err := s.baseFilter(ctx, pub, authorization, request, plan, filterNode, true)
+	if err != nil {
+		return "", nil, err
+	}
+	statement := "SELECT count(*) FROM (SELECT 1 FROM " + projectionSource(plan, true) + join + " WHERE " + strings.Join(where, " AND ") + " LIMIT ?)"
+	args = append(args, TotalBudget+1)
+	return statement, args, nil
 }
 
 func (s *Service) currentPublication(ctx context.Context) (publication, error) {

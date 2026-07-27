@@ -49,6 +49,21 @@ func BuildPageStatementForTest(ctx context.Context, catalogRevision, overlayRevi
 		querytext.PlanSearch(request.Search), filterNode, claims)
 }
 
+// BuildTotalStatementForTest 返回生产 Total 预算语句，供 EXPLAIN 锁定搜索统计同样只读取
+// 窄候选，不会在命中集合上回到宽 WorkProjection。
+func BuildTotalStatementForTest(ctx context.Context, catalogRevision, overlayRevision string,
+	candidateSourceIDs, allowedSourceIDs []string, request Request) (string, []any, error) {
+	filterNode, err := ParseFilter(request.Filter)
+	if err != nil {
+		return "", nil, err
+	}
+	service := &Service{}
+	return service.buildTotalStatement(ctx,
+		publication{CatalogRevision: catalogRevision, OverlayRevision: overlayRevision},
+		testAuthorization(candidateSourceIDs, allowedSourceIDs), request,
+		querytext.PlanSearch(request.Search), filterNode)
+}
+
 // EmptyCursorClaimsForTest 返回第一页构建使用的空 claims，避免外部测试为了调用生产 SQL
 // builder 直接依赖 contract/query 的具体类型。
 func EmptyCursorClaimsForTest() contractquery.CursorClaims { return contractquery.CursorClaims{} }
@@ -76,9 +91,9 @@ func BuildSinglePhaseSearchStatementForTest(ctx context.Context, catalogRevision
 		return "", nil, fmt.Errorf("单阶段参照实现只覆盖搜索形态")
 	}
 	service := &Service{}
-	where, join, fromArgs, err := service.baseFilter(ctx,
+	where, join, fromArgs, err := service.baseFilterWithProjection(ctx,
 		publication{CatalogRevision: catalogRevision, OverlayRevision: overlayRevision},
-		testAuthorization(candidateSourceIDs, allowedSourceIDs), request, plan, filterNode, false)
+		testAuthorization(candidateSourceIDs, allowedSourceIDs), request, plan, filterNode, false, false)
 	if err != nil {
 		return "", nil, err
 	}

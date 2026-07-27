@@ -321,8 +321,8 @@ func (s *Store) BeginCandidate(ctx context.Context, jobID, sourceID string, cont
 // resetCandidateRevision 删除一个尚未发布（staging 或 aborted）的 catalog_revisions 行。
 // 外键级联清理 overlay_projection_revisions、source_works/source_media/source_creators、
 // content_blobs/file_locations、work_projections/media_projections/creator_projections、
-// work_creator_relations；work_search 是 FTS5 虚表，SQLite 不对其应用外键级联，必须在同一
-// 事务内显式删除，否则会残留孤儿全文索引行。调用方必须保证该 revision 从未进入
+// work_creator_relations 与 work_search_candidates；work_search 是 FTS5 虚表，SQLite 不对其
+// 应用外键级联，必须在同一事务内显式删除，否则会残留孤儿全文索引行。调用方必须保证该 revision 从未进入
 // published 状态——已发布 revision 由 query_publications 的 ON DELETE RESTRICT 外键保护，
 // 误删会直接失败而不是静默丢失数据。
 func resetCandidateRevision(ctx context.Context, tx *sql.Tx, catalogRevisionID string) error {
@@ -333,6 +333,65 @@ func resetCandidateRevision(ctx context.Context, tx *sql.Tx, catalogRevisionID s
 		return err
 	}
 	return nil
+}
+
+const searchCandidateProjectionColumns = `(catalog_revision_id, overlay_revision_id, work_id,
+source_id, source_key, library_id, tags_json, normalized_original_text, sort_title_key, published_at_ns,
+hidden, favorite, progress, search_title_norm, search_creator_norm, search_tags_norm, search_filenames_norm)`
+
+const searchCandidateProjectionSelect = `SELECT w.catalog_revision_id, w.overlay_revision_id, w.work_id,
+w.source_id, w.source_key, w.library_id, w.tags_json, w.normalized_original_text, w.sort_title_key, w.published_at_ns,
+w.hidden, w.favorite, w.progress, w.search_title_norm, w.search_creator_norm,
+w.search_tags_norm, w.search_filenames_norm
+FROM work_projections AS w`
+
+// insertSearchCandidateForWork 先由普通表分配 INTEGER PRIMARY KEY，再让 FTS5 显式使用同一
+// docid。这样不依赖虚表 LastInsertId，也让 Candidate↔FTS 的一对一关系由写入端决定。
+func insertSearchCandidateForWork(ctx context.Context, tx *sql.Tx, catalogRevisionID, overlayRevisionID, workID string) (int64, error) {
+	result, err := tx.ExecContext(ctx, "INSERT INTO work_search_candidates "+searchCandidateProjectionColumns+" "+
+		searchCandidateProjectionSelect+" WHERE w.catalog_revision_id=? AND w.overlay_revision_id=? AND w.work_id=?",
+		catalogRevisionID, overlayRevisionID, workID)
+	if err != nil {
+		return 0, err
+	}
+	count, err := result.RowsAffected()
+	if err != nil {
+		return 0, err
+	}
+	if count != 1 {
+		return 0, fmt.Errorf("WorkProjection %s/%s/%s 未唯一映射搜索候选", catalogRevisionID, overlayRevisionID, workID)
+	}
+	rowID, err := result.LastInsertId()
+	if err != nil {
+		return 0, err
+	}
+	if rowID <= 0 {
+		return 0, fmt.Errorf("搜索候选未返回有效 rowid")
+	}
+	return rowID, nil
+}
+
+// insertSearchCandidatesForRevision 服务批量 FTS 构建（Overlay 全量重投影与跨 Source clone）。
+// 调用前目标 revision 的候选行必须为空，唯一约束会拒绝重复/混代写入。
+func insertSearchCandidatesForRevision(ctx context.Context, tx *sql.Tx, catalogRevisionID, overlayRevisionID string) error {
+	_, err := tx.ExecContext(ctx, "INSERT INTO work_search_candidates "+searchCandidateProjectionColumns+" "+
+		searchCandidateProjectionSelect+" WHERE w.catalog_revision_id=? AND w.overlay_revision_id=?",
+		catalogRevisionID, overlayRevisionID)
+	return err
+}
+
+func insertSearchDocumentsForRevision(ctx context.Context, tx *sql.Tx, catalogRevisionID, overlayRevisionID string) error {
+	_, err := tx.ExecContext(ctx, `INSERT INTO work_search
+(rowid, catalog_revision_id, overlay_revision_id, work_id,
+ normalized_original_text, cjk_bigram_token_text, latin_trigram_token_text)
+SELECT c.search_rowid, w.catalog_revision_id, w.overlay_revision_id, w.work_id,
+       w.normalized_original_text, w.cjk_bigram_token_text, w.latin_trigram_token_text
+FROM work_search_candidates AS c JOIN work_projections AS w
+  ON w.catalog_revision_id=c.catalog_revision_id
+ AND w.overlay_revision_id=c.overlay_revision_id
+ AND w.work_id=c.work_id
+WHERE c.catalog_revision_id=? AND c.overlay_revision_id=?`, catalogRevisionID, overlayRevisionID)
+	return err
 }
 
 // validateSearchFieldValues 拒绝 Tag/文件名中出现 querytext.FieldSeparator（U+001F）：
@@ -376,19 +435,20 @@ func (s *Store) Stage(ctx context.Context, candidate Candidate, works []WorkFact
 }
 
 func (s *Store) ValidateCandidate(ctx context.Context, candidate Candidate) error {
-	var workCount, mediaCount, invalidBlob, searchCount int
+	var workCount, mediaCount, invalidBlob int
 	if err := s.db.QueryRowContext(ctx, `SELECT
   (SELECT count(*) FROM source_works WHERE catalog_revision_id = ? AND source_id = ?),
   (SELECT count(*) FROM source_media WHERE catalog_revision_id = ? AND source_id = ?),
-  (SELECT count(*) FROM content_blobs WHERE catalog_revision_id = ? AND (algorithm <> 'sha256-v1' OR length(digest) <> 64)),
-  (SELECT count(*) FROM work_search WHERE catalog_revision_id = ? AND overlay_revision_id = ?)`,
+	  (SELECT count(*) FROM content_blobs WHERE catalog_revision_id = ? AND (algorithm <> 'sha256-v1' OR length(digest) <> 64))`,
 		candidate.CatalogRevisionID, candidate.SourceID, candidate.CatalogRevisionID, candidate.SourceID, candidate.CatalogRevisionID,
-		candidate.CatalogRevisionID, candidate.OverlayRevisionID,
-	).Scan(&workCount, &mediaCount, &invalidBlob, &searchCount); err != nil {
+	).Scan(&workCount, &mediaCount, &invalidBlob); err != nil {
 		return fault.New(fault.CodeInternal, true, err)
 	}
-	if workCount == 0 || mediaCount == 0 || invalidBlob != 0 || searchCount < workCount {
+	if workCount == 0 || mediaCount == 0 || invalidBlob != 0 {
 		return fault.New(fault.CodeCatalogCandidateInvalid, false, nil)
+	}
+	if err := validateSearchProjection(ctx, s.db, candidate.CatalogRevisionID, candidate.OverlayRevisionID); err != nil {
+		return err
 	}
 	var orphan, orphanCreator int
 	if err := s.db.QueryRowContext(ctx, `SELECT count(*) FROM media_projections m
@@ -429,6 +489,64 @@ WHERE r.catalog_revision_id=? AND (w.work_id IS NULL OR c.creator_id IS NULL)`,
 // 对每个 Work 重复探测成员表。
 type queryRower interface {
 	QueryRowContext(context.Context, string, ...any) *sql.Row
+}
+
+const validateSearchProjectionSQL = `SELECT
+(SELECT count(*) FROM work_projections
+ WHERE catalog_revision_id=? AND overlay_revision_id=?),
+(SELECT count(*) FROM work_search
+ WHERE catalog_revision_id=? AND overlay_revision_id=?),
+(SELECT count(*) FROM work_search_candidates
+ WHERE catalog_revision_id=? AND overlay_revision_id=?),
+(SELECT count(*) FROM work_search_candidates AS c
+ LEFT JOIN work_search AS s ON s.rowid=c.search_rowid
+ LEFT JOIN work_projections AS w
+   ON w.catalog_revision_id=c.catalog_revision_id
+  AND w.overlay_revision_id=c.overlay_revision_id
+  AND w.work_id=c.work_id
+ WHERE c.catalog_revision_id=? AND c.overlay_revision_id=? AND (
+      s.rowid IS NULL
+   OR s.catalog_revision_id IS NOT c.catalog_revision_id
+   OR s.overlay_revision_id IS NOT c.overlay_revision_id
+   OR s.work_id IS NOT c.work_id
+   OR w.work_id IS NULL
+   OR c.source_id IS NOT w.source_id
+   OR c.source_key IS NOT w.source_key
+   OR c.library_id IS NOT w.library_id
+   OR c.tags_json IS NOT w.tags_json
+   OR c.normalized_original_text IS NOT w.normalized_original_text
+   OR c.sort_title_key IS NOT w.sort_title_key
+   OR c.published_at_ns IS NOT w.published_at_ns
+   OR c.hidden IS NOT w.hidden
+   OR c.favorite IS NOT w.favorite
+   OR c.progress IS NOT w.progress
+   OR c.search_title_norm IS NOT w.search_title_norm
+   OR c.search_creator_norm IS NOT w.search_creator_norm
+   OR c.search_tags_norm IS NOT w.search_tags_norm
+   OR c.search_filenames_norm IS NOT w.search_filenames_norm
+   OR s.normalized_original_text IS NOT w.normalized_original_text
+   OR s.cjk_bigram_token_text IS NOT w.cjk_bigram_token_text
+   OR s.latin_trigram_token_text IS NOT w.latin_trigram_token_text
+ ))`
+
+// validateSearchProjection 是 Catalog/Overlay Candidate 共用的发布前 fail-closed 门禁。
+// 数量相等还不够：一缺一多会抵消，因此同时逐行复核 FTS docid、业务键、候选窄事实与
+// WorkProjection/FTS 文本。任何漂移都禁止 publication 对外可见。
+func validateSearchProjection(ctx context.Context, queryer queryRower, catalogRevisionID, overlayRevisionID string) error {
+	var projections, searchDocuments, candidates, mismatches int
+	err := queryer.QueryRowContext(ctx, validateSearchProjectionSQL,
+		catalogRevisionID, overlayRevisionID,
+		catalogRevisionID, overlayRevisionID,
+		catalogRevisionID, overlayRevisionID,
+		catalogRevisionID, overlayRevisionID).Scan(
+		&projections, &searchDocuments, &candidates, &mismatches)
+	if err != nil {
+		return fault.New(fault.CodeInternal, true, err)
+	}
+	if projections != searchDocuments || projections != candidates || mismatches != 0 {
+		return fault.New(fault.CodeCatalogCandidateInvalid, false, nil)
+	}
+	return nil
 }
 
 const validateSourceMembershipSQL = `WITH projection_sources AS MATERIALIZED (
@@ -522,6 +640,11 @@ WHERE c.catalog_revision_id = ? AND o.overlay_revision_id = ?`, candidate.Catalo
 	}
 	if catalogStatus != "staging" || overlayStatus != "staging" {
 		return Publication{}, fault.New(fault.CodeCatalogCandidateInvalid, false, nil)
+	}
+	// ValidateCandidate 与 Publish 之间可能隔着 Job/Saga 调度；publication 事务必须再次
+	// fail-closed，禁止在验证后发生候选/FTS 漂移时仍把损坏快照切为 active。
+	if err := validateSearchProjection(ctx, tx, candidate.CatalogRevisionID, candidate.OverlayRevisionID); err != nil {
+		return Publication{}, err
 	}
 	if err := validateSourceMembership(ctx, tx, candidate.CatalogRevisionID, candidate.OverlayRevisionID); err != nil {
 		return Publication{}, err
@@ -692,11 +815,20 @@ WHERE catalog_revision_id=? AND overlay_revision_id=? AND work_id=?`,
 			return fault.New(fault.CodeInternal, true, err)
 		}
 	}
-	if _, err := tx.ExecContext(ctx, `INSERT INTO work_search
-(catalog_revision_id, overlay_revision_id, work_id, normalized_original_text, cjk_bigram_token_text, latin_trigram_token_text)
-SELECT catalog_revision_id, overlay_revision_id, work_id, normalized_original_text,
-cjk_bigram_token_text, latin_trigram_token_text FROM work_projections
+	// 同一事务内替换 FTS 与窄候选：Scan Candidate 已有基础索引，Overlay Candidate 则为空。
+	// 先删候选再删 FTS，避免提交任何只更新一侧的中间状态。
+	if _, err := tx.ExecContext(ctx, `DELETE FROM work_search_candidates
 WHERE catalog_revision_id=? AND overlay_revision_id=?`, candidate.CatalogRevisionID, candidate.OverlayRevisionID); err != nil {
+		return fault.New(fault.CodeInternal, true, err)
+	}
+	if _, err := tx.ExecContext(ctx, `DELETE FROM work_search
+WHERE catalog_revision_id=? AND overlay_revision_id=?`, candidate.CatalogRevisionID, candidate.OverlayRevisionID); err != nil {
+		return fault.New(fault.CodeInternal, true, err)
+	}
+	if err := insertSearchCandidatesForRevision(ctx, tx, candidate.CatalogRevisionID, candidate.OverlayRevisionID); err != nil {
+		return fault.New(fault.CodeInternal, true, err)
+	}
+	if err := insertSearchDocumentsForRevision(ctx, tx, candidate.CatalogRevisionID, candidate.OverlayRevisionID); err != nil {
 		return fault.New(fault.CodeInternal, true, err)
 	}
 	if err := tx.Commit(); err != nil {
@@ -706,10 +838,6 @@ WHERE catalog_revision_id=? AND overlay_revision_id=?`, candidate.CatalogRevisio
 }
 
 func (s *Store) ApplyCatalogCandidateOverlays(ctx context.Context, candidate Candidate, facts map[string]OverlayFact) error {
-	if _, err := s.db.ExecContext(ctx, `DELETE FROM work_search
-WHERE catalog_revision_id=? AND overlay_revision_id=?`, candidate.CatalogRevisionID, candidate.OverlayRevisionID); err != nil {
-		return fault.New(fault.CodeInternal, true, err)
-	}
 	return s.ApplyOverlayFacts(ctx, OverlayCandidate{
 		CatalogRevisionID: candidate.CatalogRevisionID, OverlayRevisionID: candidate.OverlayRevisionID,
 		JobID: candidate.JobID, ControlWatermark: candidate.ControlWatermark,
@@ -764,20 +892,31 @@ WHERE r.catalog_revision_id=? AND r.overlay_revision_id=? AND r.creator_id=? AND
 		_ = json.Unmarshal([]byte(item.filenames), &filenames)
 		document := querytext.BuildDocument(item.title, item.creator, tags, filenames)
 		if _, err := tx.ExecContext(ctx, `UPDATE work_projections SET creator=?,
-normalized_original_text=?, cjk_bigram_token_text=?, latin_trigram_token_text=?, sort_title_key=?
+normalized_original_text=?, cjk_bigram_token_text=?, latin_trigram_token_text=?, sort_title_key=?,
+search_creator_norm=?
 WHERE catalog_revision_id=? AND overlay_revision_id=? AND work_id=?`,
 			item.creator, document.NormalizedOriginal, document.CJKTokens, document.LatinTokens,
-			document.SortTitleKey, catalogRevisionID, overlayRevisionID, item.workID); err != nil {
+			document.SortTitleKey, document.CreatorNorm, catalogRevisionID, overlayRevisionID, item.workID); err != nil {
 			return fault.New(fault.CodeInternal, true, err)
 		}
-		if _, err := tx.ExecContext(ctx, `DELETE FROM work_search
+		var searchRowID int64
+		if err := tx.QueryRowContext(ctx, `SELECT search_rowid FROM work_search_candidates
 WHERE catalog_revision_id=? AND overlay_revision_id=? AND work_id=?`,
-			catalogRevisionID, overlayRevisionID, item.workID); err != nil {
+			catalogRevisionID, overlayRevisionID, item.workID).Scan(&searchRowID); err != nil {
+			return fault.New(fault.CodeInternal, true, err)
+		}
+		if _, err := tx.ExecContext(ctx, `UPDATE work_search_candidates SET
+normalized_original_text=?, search_creator_norm=?
+WHERE search_rowid=?`, document.NormalizedOriginal, document.CreatorNorm, searchRowID); err != nil {
+			return fault.New(fault.CodeInternal, true, err)
+		}
+		if _, err := tx.ExecContext(ctx, `DELETE FROM work_search WHERE rowid=?`, searchRowID); err != nil {
 			return fault.New(fault.CodeInternal, true, err)
 		}
 		if _, err := tx.ExecContext(ctx, `INSERT INTO work_search
-(catalog_revision_id, overlay_revision_id, work_id, normalized_original_text, cjk_bigram_token_text, latin_trigram_token_text)
-VALUES (?, ?, ?, ?, ?, ?)`, catalogRevisionID, overlayRevisionID, item.workID,
+(rowid, catalog_revision_id, overlay_revision_id, work_id,
+ normalized_original_text, cjk_bigram_token_text, latin_trigram_token_text)
+VALUES (?, ?, ?, ?, ?, ?, ?)`, searchRowID, catalogRevisionID, overlayRevisionID, item.workID,
 			document.NormalizedOriginal, document.CJKTokens, document.LatinTokens); err != nil {
 			return fault.New(fault.CodeInternal, true, err)
 		}
@@ -789,7 +928,7 @@ VALUES (?, ?, ?, ?, ?, ?)`, catalogRevisionID, overlayRevisionID, item.workID,
 }
 
 func (s *Store) ValidateOverlayCandidate(ctx context.Context, candidate OverlayCandidate) error {
-	var baseWorks, works, baseMedia, media, baseCreators, creators, baseRelations, relations, search int
+	var baseWorks, works, baseMedia, media, baseCreators, creators, baseRelations, relations int
 	err := s.db.QueryRowContext(ctx, `SELECT
 (SELECT count(*) FROM work_projections WHERE catalog_revision_id=? AND overlay_revision_id=?),
 (SELECT count(*) FROM work_projections WHERE catalog_revision_id=? AND overlay_revision_id=?),
@@ -798,8 +937,7 @@ func (s *Store) ValidateOverlayCandidate(ctx context.Context, candidate OverlayC
 (SELECT count(*) FROM creator_projections WHERE catalog_revision_id=? AND overlay_revision_id=?),
 (SELECT count(*) FROM creator_projections WHERE catalog_revision_id=? AND overlay_revision_id=?),
 (SELECT count(*) FROM work_creator_relations WHERE catalog_revision_id=? AND overlay_revision_id=?),
-(SELECT count(*) FROM work_creator_relations WHERE catalog_revision_id=? AND overlay_revision_id=?),
-(SELECT count(*) FROM work_search WHERE catalog_revision_id=? AND overlay_revision_id=?)`,
+(SELECT count(*) FROM work_creator_relations WHERE catalog_revision_id=? AND overlay_revision_id=?)`,
 		candidate.CatalogRevisionID, candidate.BaseOverlayRevisionID,
 		candidate.CatalogRevisionID, candidate.OverlayRevisionID,
 		candidate.CatalogRevisionID, candidate.BaseOverlayRevisionID,
@@ -807,14 +945,16 @@ func (s *Store) ValidateOverlayCandidate(ctx context.Context, candidate OverlayC
 		candidate.CatalogRevisionID, candidate.BaseOverlayRevisionID,
 		candidate.CatalogRevisionID, candidate.OverlayRevisionID,
 		candidate.CatalogRevisionID, candidate.BaseOverlayRevisionID,
-		candidate.CatalogRevisionID, candidate.OverlayRevisionID,
 		candidate.CatalogRevisionID, candidate.OverlayRevisionID).Scan(
-		&baseWorks, &works, &baseMedia, &media, &baseCreators, &creators, &baseRelations, &relations, &search)
+		&baseWorks, &works, &baseMedia, &media, &baseCreators, &creators, &baseRelations, &relations)
 	if err != nil {
 		return fault.New(fault.CodeInternal, true, err)
 	}
-	if works != baseWorks || media != baseMedia || creators != baseCreators || relations != baseRelations || search != works {
+	if works != baseWorks || media != baseMedia || creators != baseCreators || relations != baseRelations {
 		return fault.New(fault.CodeCatalogCandidateInvalid, false, nil)
+	}
+	if err := validateSearchProjection(ctx, s.db, candidate.CatalogRevisionID, candidate.OverlayRevisionID); err != nil {
+		return err
 	}
 	if err := validateSourceMembership(ctx, s.db, candidate.CatalogRevisionID, candidate.OverlayRevisionID); err != nil {
 		return err
@@ -851,6 +991,9 @@ WHERE a.singleton=1`, candidate.OverlayRevisionID).Scan(&activeCatalog, &activeO
 	if activeCatalog != candidate.CatalogRevisionID || activeOverlay != candidate.BaseOverlayRevisionID ||
 		activeWatermark >= candidate.ControlWatermark || candidateStatus != "staging" || catalogStatus != "published" {
 		return Publication{}, fault.New(fault.CodeConflict, true, nil)
+	}
+	if err := validateSearchProjection(ctx, tx, candidate.CatalogRevisionID, candidate.OverlayRevisionID); err != nil {
+		return Publication{}, err
 	}
 	if err := validateSourceMembership(ctx, tx, candidate.CatalogRevisionID, candidate.OverlayRevisionID); err != nil {
 		return Publication{}, err
@@ -1281,17 +1424,85 @@ ORDER BY q.created_at, q.query_publication_id`, append([]any{cutoff, now, now}, 
 		}
 	}
 
+	// Overlay 构建可能在 publication 创建前因冲突、取消或失败进入 aborted/superseded。
+	// 这类 revision 没有 query_publications 行，所以上面的快照循环永远看不到它们；超过保留期后
+	// 必须显式删除 FTS，再由 Overlay 外键级联清理普通投影与窄候选。
+	overlayProtectedClause, overlayProtectedArgs := protectedBlobClause("o.catalog_revision_id", protectedBlobs)
+	rows, err = tx.QueryContext(ctx, `SELECT o.catalog_revision_id, o.overlay_revision_id
+FROM overlay_projection_revisions o
+WHERE o.status IN ('aborted', 'superseded') AND o.created_at<=?
+AND NOT EXISTS (
+  SELECT 1 FROM query_publications q
+  WHERE q.catalog_revision_id=o.catalog_revision_id AND q.overlay_revision_id=o.overlay_revision_id
+)
+AND NOT EXISTS (
+  SELECT 1 FROM content_blobs b JOIN blob_read_leases l
+    ON l.blob_algorithm=b.algorithm AND l.blob_digest=b.digest
+  WHERE b.catalog_revision_id=o.catalog_revision_id AND l.expires_at>?
+)`+overlayProtectedClause+`
+ORDER BY o.created_at, o.overlay_revision_id`, append([]any{cutoff, now}, overlayProtectedArgs...)...)
+	if err != nil {
+		return GCResult{}, fault.New(fault.CodeInternal, true, err)
+	}
+	var standaloneOverlays []snapshot
+	for rows.Next() {
+		var item snapshot
+		if err := rows.Scan(&item.catalog, &item.overlay); err != nil {
+			rows.Close()
+			return GCResult{}, fault.New(fault.CodeInternal, true, err)
+		}
+		standaloneOverlays = append(standaloneOverlays, item)
+	}
+	if err := rows.Close(); err != nil {
+		return GCResult{}, fault.New(fault.CodeInternal, true, err)
+	}
+	for _, item := range standaloneOverlays {
+		if _, err := tx.ExecContext(ctx, `DELETE FROM work_search
+WHERE catalog_revision_id=? AND overlay_revision_id=?`, item.catalog, item.overlay); err != nil {
+			return GCResult{}, fault.New(fault.CodeInternal, true, err)
+		}
+		count, err := deleteCount(ctx, tx, `DELETE FROM overlay_projection_revisions
+WHERE catalog_revision_id=? AND overlay_revision_id=?`, item.catalog, item.overlay)
+		if err != nil {
+			return GCResult{}, fault.New(fault.CodeInternal, true, err)
+		}
+		result.OverlayRevisions += count
+	}
+
 	revisionProtectedClause, revisionProtectedArgs := protectedBlobClause("catalog_revisions.catalog_revision_id", protectedBlobs)
-	result.CatalogRevisions, err = deleteCount(ctx, tx, `DELETE FROM catalog_revisions
+	rows, err = tx.QueryContext(ctx, `SELECT catalog_revision_id FROM catalog_revisions
 WHERE status IN ('published', 'aborted') AND created_at<=?
 AND NOT EXISTS (SELECT 1 FROM query_publications q WHERE q.catalog_revision_id=catalog_revisions.catalog_revision_id)
 AND NOT EXISTS (
   SELECT 1 FROM content_blobs b JOIN blob_read_leases l
     ON l.blob_algorithm=b.algorithm AND l.blob_digest=b.digest
   WHERE b.catalog_revision_id=catalog_revisions.catalog_revision_id AND l.expires_at>?
-)`+revisionProtectedClause, append([]any{cutoff, now}, revisionProtectedArgs...)...)
+)`+revisionProtectedClause+` ORDER BY created_at, catalog_revision_id`, append([]any{cutoff, now}, revisionProtectedArgs...)...)
 	if err != nil {
 		return GCResult{}, fault.New(fault.CodeInternal, true, err)
+	}
+	var staleCatalogRevisions []string
+	for rows.Next() {
+		var catalogRevisionID string
+		if err := rows.Scan(&catalogRevisionID); err != nil {
+			rows.Close()
+			return GCResult{}, fault.New(fault.CodeInternal, true, err)
+		}
+		staleCatalogRevisions = append(staleCatalogRevisions, catalogRevisionID)
+	}
+	if err := rows.Close(); err != nil {
+		return GCResult{}, fault.New(fault.CodeInternal, true, err)
+	}
+	for _, catalogRevisionID := range staleCatalogRevisions {
+		// catalog_revisions 的普通表子树受外键管理，FTS5 不受；必须先清 FTS 再删根行。
+		if _, err := tx.ExecContext(ctx, `DELETE FROM work_search WHERE catalog_revision_id=?`, catalogRevisionID); err != nil {
+			return GCResult{}, fault.New(fault.CodeInternal, true, err)
+		}
+		count, err := deleteCount(ctx, tx, `DELETE FROM catalog_revisions WHERE catalog_revision_id=?`, catalogRevisionID)
+		if err != nil {
+			return GCResult{}, fault.New(fault.CodeInternal, true, err)
+		}
+		result.CatalogRevisions += count
 	}
 	if err := tx.Commit(); err != nil {
 		return GCResult{}, fault.New(fault.CodeInternal, true, err)
@@ -1479,9 +1690,16 @@ VALUES (?, ?, ?, ?, 'primary', 0)`, candidate.CatalogRevisionID, candidate.Overl
 				return fault.New(fault.CodeInternal, true, err)
 			}
 		}
+		searchRowID, err := insertSearchCandidateForWork(ctx, tx,
+			candidate.CatalogRevisionID, candidate.OverlayRevisionID, work.WorkID)
+		if err != nil {
+			return fault.New(fault.CodeInternal, true, err)
+		}
 		if _, err := tx.ExecContext(ctx, `INSERT INTO work_search
-(catalog_revision_id, overlay_revision_id, work_id, normalized_original_text, cjk_bigram_token_text, latin_trigram_token_text)
-VALUES (?, ?, ?, ?, ?, ?)`, candidate.CatalogRevisionID, candidate.OverlayRevisionID, work.WorkID, document.NormalizedOriginal, document.CJKTokens, document.LatinTokens); err != nil {
+(rowid, catalog_revision_id, overlay_revision_id, work_id,
+ normalized_original_text, cjk_bigram_token_text, latin_trigram_token_text)
+VALUES (?, ?, ?, ?, ?, ?, ?)`, searchRowID, candidate.CatalogRevisionID, candidate.OverlayRevisionID,
+			work.WorkID, document.NormalizedOriginal, document.CJKTokens, document.LatinTokens); err != nil {
 			return fault.New(fault.CodeInternal, true, err)
 		}
 	}
@@ -1772,11 +1990,6 @@ WHERE c.catalog_revision_id=q.catalog_revision_id AND c.overlay_revision_id=q.ov
 SELECT ?, ?, m.media_id, m.work_id, m.source_id, m.source_key, m.relative_path, m.media_kind, m.mime_type, m.size_bytes, m.algorithm, m.digest, m.location_status, m.base_ordinal, m.hidden, m.base_ordinal, m.content_verification_state, m.verified_at, m.mtime_ns, m.rule_hidden FROM media_projections m
 JOIN active_query_publication a ON a.singleton=1 JOIN query_publications q ON q.query_publication_id=a.query_publication_id
 WHERE m.catalog_revision_id=q.catalog_revision_id AND m.overlay_revision_id=q.overlay_revision_id AND m.source_id<>?`, []any{candidate.CatalogRevisionID, candidate.OverlayRevisionID, candidate.SourceID}},
-		{`INSERT INTO work_search (catalog_revision_id, overlay_revision_id, work_id, normalized_original_text, cjk_bigram_token_text, latin_trigram_token_text)
-SELECT ?, ?, s.work_id, s.normalized_original_text, s.cjk_bigram_token_text, s.latin_trigram_token_text FROM work_search s
-JOIN active_query_publication a ON a.singleton=1 JOIN query_publications q ON q.query_publication_id=a.query_publication_id
-JOIN work_projections w ON w.catalog_revision_id=q.catalog_revision_id AND w.overlay_revision_id=q.overlay_revision_id AND w.work_id=s.work_id
-WHERE s.catalog_revision_id=q.catalog_revision_id AND s.overlay_revision_id=q.overlay_revision_id AND w.source_id<>?`, []any{candidate.CatalogRevisionID, candidate.OverlayRevisionID, candidate.SourceID}},
 		{`INSERT INTO work_creator_relations SELECT ?, ?, r.work_id, r.creator_id, r.role, r.ordinal FROM work_creator_relations r
 JOIN active_query_publication a ON a.singleton=1 JOIN query_publications q ON q.query_publication_id=a.query_publication_id
 JOIN work_projections w ON w.catalog_revision_id=r.catalog_revision_id AND w.overlay_revision_id=r.overlay_revision_id AND w.work_id=r.work_id
@@ -1786,6 +1999,12 @@ WHERE r.catalog_revision_id=q.catalog_revision_id AND r.overlay_revision_id=q.ov
 		if _, err := tx.ExecContext(ctx, statement.query, statement.args...); err != nil {
 			return err
 		}
+	}
+	if err := insertSearchCandidatesForRevision(ctx, tx, candidate.CatalogRevisionID, candidate.OverlayRevisionID); err != nil {
+		return err
+	}
+	if err := insertSearchDocumentsForRevision(ctx, tx, candidate.CatalogRevisionID, candidate.OverlayRevisionID); err != nil {
+		return err
 	}
 	return nil
 }
