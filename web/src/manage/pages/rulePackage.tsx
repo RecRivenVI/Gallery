@@ -22,8 +22,6 @@ import {
   useRuleDraft,
   useRuleImpact,
   useRulePackage,
-  useRuleVersions,
-  useRollbackRulePackage,
   useSaveRuleDraft,
   useValidateRuleDraft,
   type RuleDraft,
@@ -32,13 +30,14 @@ import {
 } from '../api';
 import { IMPACT_CATEGORY_LABELS, IMPACT_CATEGORY_TONES } from '../labels';
 import { isRecord, parseRuleText } from '../rules/lossless';
+import { RuleParameterSetsPanel } from '../rules/RuleParameterSetsPanel';
+import { RuleVersionLifecyclePanel } from '../rules/RuleVersionLifecyclePanel';
 import {
   Absent,
   AsyncPanel,
   BoolBadge,
   ConfirmAction,
   ContractNoteList,
-  DataTable,
   Facts,
   InlineError,
   MonoId,
@@ -720,132 +719,6 @@ function PublishPanel({
   );
 }
 
-function RollbackPanel({
-  packageId,
-  packageRevision
-}: {
-  packageId: string;
-  packageRevision: number | null;
-}) {
-  const { show } = useToast();
-  const versions = useRuleVersions(packageId);
-  const rollback = useRollbackRulePackage();
-  const canPublish = useCapability('rules.publish');
-  const [target, setTarget] = useState<string | null>(null);
-  const [reason, setReason] = useState('');
-  const [confirmImpact, setConfirmImpact] = useState(false);
-
-  return (
-    <Section
-      title="回滚"
-      description="回滚只改变当前版本指针，不删除任何已发布版本。目标版本仍被使用或不满足前置条件时返回 409 RULE_ROLLBACK_BLOCKED。"
-    >
-      <AsyncPanel query={versions}>
-        {(data) => (
-          <>
-            {canPublish ? (
-              <div className="manage-form">
-                <Select
-                  label="回滚到"
-                  placeholder="选择一个已发布版本"
-                  options={data.items.map((item) => ({
-                    id: item.semanticHash,
-                    label: `${item.version}（${item.semanticHash.slice(0, 12)}…）`
-                  }))}
-                  selectedKey={target}
-                  onSelectionChange={setTarget}
-                />
-                <TextInput label="回滚理由" value={reason} onChange={setReason} isRequired />
-                <Checkbox isSelected={confirmImpact} onChange={setConfirmImpact}>
-                  我已确认回滚的影响（可能触发重扫或重投影）
-                </Checkbox>
-                <div className="manage-form__actions">
-                  <ConfirmAction
-                    label="回滚当前版本"
-                    dialogTitle="回滚规则包"
-                    confirmLabel="确认回滚"
-                    isDisabled={target === null || reason.trim() === '' || packageRevision === null}
-                    isPending={rollback.isPending}
-                    description="回滚会立即改变该规则包在所有绑定处的运行语义，并可能触发重扫。"
-                    onConfirm={() => {
-                      if (target === null || packageRevision === null) return;
-                      rollback.mutate(
-                        {
-                          packageId,
-                          targetSemanticHash: target,
-                          expectedRevision: packageRevision,
-                          reason: reason.trim(),
-                          confirmImpact
-                        },
-                        {
-                          onSuccess: () => {
-                            show({ title: '当前版本指针已回滚', tone: 'success' });
-                          }
-                        }
-                      );
-                    }}
-                  />
-                </div>
-                <InlineError error={rollback.error} title="回滚被拒绝" />
-              </div>
-            ) : null}
-
-            <DataTable
-              caption="已发布版本"
-              rows={data.items}
-              rowKey={(row) => row.semanticHash}
-              emptyTitle="该规则包还没有已发布版本"
-              columns={[
-                { id: 'version', header: '版本', render: (row) => row.version },
-                {
-                  id: 'status',
-                  header: '状态',
-                  render: (row) => (
-                    <Badge tone={row.status === 'published' ? 'success' : 'neutral'}>
-                      {row.status ?? 'published'}
-                    </Badge>
-                  )
-                },
-                {
-                  id: 'semantic',
-                  header: 'semanticHash',
-                  render: (row) => <MonoId value={row.semanticHash} label="semanticHash" />
-                },
-                {
-                  id: 'package',
-                  header: 'packageHash',
-                  render: (row) => <MonoId value={row.packageHash} label="packageHash" />
-                },
-                {
-                  id: 'ir',
-                  header: 'ruleIrHash',
-                  render: (row) => <MonoId value={row.ruleIrHash} label="ruleIrHash" />
-                },
-                {
-                  id: 'executable',
-                  header: '可执行',
-                  render: (row) =>
-                    row.executable === undefined ? (
-                      <Absent />
-                    ) : (
-                      <BoolBadge
-                        value={row.executable}
-                        trueLabel="是"
-                        falseLabel="编译失败"
-                        falseTone="danger"
-                      />
-                    )
-                },
-                { id: 'published', header: '发布时间', render: (row) => formatDateTime(row.publishedAt) }
-              ]}
-            />
-          </>
-        )}
-      </AsyncPanel>
-    </Section>
-  );
-}
-
 function AuditPanel({ packageId }: { packageId: string }) {
   const audits = useRuleAudits(packageId);
   return (
@@ -877,6 +750,7 @@ function RulePackageContent({ packageId }: { packageId: string }) {
   const [impactEvidence, setImpactEvidence] = useState<ImpactEvidence | null>(null);
   const [publishRefreshPending, setPublishRefreshPending] = useState(false);
   const currentSemanticHash = semanticHashOrUndefined(rulePackage.data?.currentSemanticHash);
+  const packageActive = rulePackage.data?.status === 'active';
   const draftMissing = draft.isError && errorCode(draft.error) === 'NOT_FOUND';
 
   useEffect(() => {
@@ -1096,49 +970,66 @@ function RulePackageContent({ packageId }: { packageId: string }) {
         </AsyncPanel>
       </Section>
 
-      <Section
-        title="草稿"
-        description="草稿是并发编辑对象。保存必须带 If-Match（草稿 revision），冲突时服务端返回 409 RULE_DRAFT_CONFLICT。"
-      >
-        <ContractNoteList area="rules" only={['rules-draft-if-match']} />
-        <DraftEditor
-          ruleSetId={rulePackage.data?.ruleSetId}
-          workspace={workspace}
-          draft={draft}
-          save={save}
-          validate={validate}
-          isLocked={publish.isPending || publishRefreshPending}
-          remoteChanged={remoteChanged}
-          onEdit={editWorkspace}
-          onSave={saveWorkspace}
-          onValidate={validateWorkspace}
-          onAdoptLatest={adoptLatestDraft}
-        />
-      </Section>
+      {rulePackage.data === undefined ? null : packageActive ? (
+        <>
+          <Section
+            title="草稿"
+            description="草稿是并发编辑对象。保存必须带 If-Match（草稿 revision），冲突时服务端返回 409 RULE_DRAFT_CONFLICT。"
+          >
+            <ContractNoteList area="rules" only={['rules-draft-if-match']} />
+            <DraftEditor
+              ruleSetId={rulePackage.data.ruleSetId}
+              workspace={workspace}
+              draft={draft}
+              save={save}
+              validate={validate}
+              isLocked={publish.isPending || publishRefreshPending}
+              remoteChanged={remoteChanged}
+              onEdit={editWorkspace}
+              onSave={saveWorkspace}
+              onValidate={validateWorkspace}
+              onAdoptLatest={adoptLatestDraft}
+            />
+          </Section>
 
-      <AsyncPanel query={rulePackage}>
-        {(data) => (
           <ImpactPanel
-            currentSemanticHash={semanticHashOrUndefined(data.currentSemanticHash)}
+            currentSemanticHash={currentSemanticHash}
             workspace={workspace}
             impact={impact}
             evidence={impactEvidence}
             onEvidence={setImpactEvidence}
           />
-        )}
-      </AsyncPanel>
 
-      <PublishPanel
+          <PublishPanel
+            packageId={packageId}
+            currentSemanticHash={currentSemanticHash}
+            workspace={workspace}
+            evidence={impactEvidence}
+            publish={publish}
+            draftMutationPending={save.isPending || validate.isPending}
+            onPublished={refreshAfterPublish}
+            onConflict={() => void draft.refetch()}
+          />
+        </>
+      ) : (
+        <Section
+          title="规则包作者操作已锁定"
+          description="规则包已永久弃用，草稿保存/校验、Impact、发布和回滚均不可再执行。历史 RuleVersion、ParameterSet、Binding 和已入队 Job 保持原事实。"
+        >
+          <p className="manage-section__description">版本与参数集的弃用操作仍可在下方执行。</p>
+        </Section>
+      )}
+      <RuleVersionLifecyclePanel
         packageId={packageId}
-        currentSemanticHash={currentSemanticHash}
-        workspace={workspace}
-        evidence={impactEvidence}
-        publish={publish}
-        draftMutationPending={save.isPending || validate.isPending}
-        onPublished={refreshAfterPublish}
-        onConflict={() => void draft.refetch()}
+        packageStatus={rulePackage.data?.status}
+        packageRevision={rulePackage.data?.revision ?? null}
+        currentSemanticHash={semanticHashOrUndefined(rulePackage.data?.currentSemanticHash)}
       />
-      <RollbackPanel packageId={packageId} packageRevision={rulePackage.data?.revision ?? null} />
+      <RuleParameterSetsPanel
+        packageId={packageId}
+        packageStatus={rulePackage.data?.status}
+        currentSemanticHash={semanticHashOrUndefined(rulePackage.data?.currentSemanticHash)}
+      />
       <AuditPanel packageId={packageId} />
     </>
   );

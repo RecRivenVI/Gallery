@@ -1,5 +1,5 @@
 import { readFile } from 'node:fs/promises';
-import { expect, test, type Response } from '@playwright/test';
+import { expect, test, type Page, type Response } from '@playwright/test';
 
 const realBaseURL = process.env.GALLERY_REAL_BASE_URL;
 const sourceRoot = process.env.GALLERY_REAL_SOURCE_ROOT;
@@ -11,12 +11,82 @@ function pathIs(response: Response, path: string, method = 'GET'): boolean {
   return response.request().method() === method && new URL(response.url()).pathname === path;
 }
 
+interface JobSnapshot {
+  id: string;
+  status: string;
+  queryPublicationId?: string;
+  ruleSemanticHash?: string;
+  ruleParametersHash?: string;
+  ruleIrHash?: string;
+  issueCode?: string;
+}
+
+interface BindingSnapshot {
+  id: string;
+  semanticHash: string;
+  parametersText: string;
+  priority: number;
+  ruleIrHash: string;
+  parameterId?: string;
+  parameterRevision?: number;
+  parameterHash?: string;
+  overrideText?: string;
+  status?: string;
+}
+
+interface ParameterSetSnapshot {
+  id: string;
+  name: string;
+  semanticHash: string;
+  currentRevision: number;
+  currentHash: string;
+  status: string;
+  parametersText: string;
+}
+
+async function readJSON<T>(page: Page, path: string): Promise<T> {
+  return page.evaluate(async (target) => {
+    const response = await fetch(target);
+    if (!response.ok) throw new Error(`只读请求失败: ${response.status}`);
+    return (await response.json()) as T;
+  }, path);
+}
+
+async function waitForJob(page: Page, jobId: string): Promise<JobSnapshot> {
+  let job: JobSnapshot | undefined;
+  await expect
+    .poll(
+      async () => {
+        job = await readJSON<JobSnapshot>(page, `/api/v1/jobs/${encodeURIComponent(jobId)}`);
+        return job.status;
+      },
+      { timeout: 30_000 }
+    )
+    .toMatch(/^(completed|failed|cancelled|superseded|needs_repair)$/);
+  expect(job?.status, JSON.stringify(job)).toBe('completed');
+  return job ?? { id: jobId, status: 'missing' };
+}
+
+function fact(page: Page, term: RegExp) {
+  return page.locator('dt', { hasText: term }).locator('xpath=following-sibling::dd[1]');
+}
+
 test('真实 galleryd 从空实例完成规则 UI 生命周期、绑定与 publication @real-bootstrap', async ({ page }) => {
   const rulePackage = JSON.parse(await readFile(rulePackagePath ?? '', 'utf8')) as Record<string, unknown>;
   const ruleSetId = rulePackage.rule_set_id;
   if (typeof ruleSetId !== 'string' || ruleSetId === '') {
     throw new Error('隔离规则包缺少有效的 rule_set_id');
   }
+  const firstParameterText = '{"minimumSize":9007199254740993123}';
+  const v1RulePackage = {
+    ...rulePackage,
+    parameter_schema: {
+      type: 'object',
+      properties: { minimumSize: { type: 'integer', minimum: 0 } },
+      required: ['minimumSize'],
+      additionalProperties: false
+    }
+  };
 
   await page.goto('/manage');
   await expect(page.getByRole('heading', { name: '管理需要认证', exact: true })).toBeVisible();
@@ -111,7 +181,7 @@ test('真实 galleryd 从空实例完成规则 UI 生命周期、绑定与 publi
   expect(templatedText).not.toContain('package_hash');
   expect(templatedText).not.toContain('semantic_hash');
 
-  const draftText = JSON.stringify(rulePackage, null, 2);
+  const draftText = JSON.stringify(v1RulePackage, null, 2);
   await textEditor.fill(draftText);
   const [saveResponse] = await Promise.all([
     page.waitForResponse((response) =>
@@ -130,7 +200,7 @@ test('真实 galleryd 从空实例完成规则 UI 生命周期、绑定与 publi
   };
   expect(savedDraft.revision).toBeGreaterThan(0);
   expect(savedDraft.format).toBe('json');
-  expect(savedDraft.content).toEqual(expect.objectContaining(rulePackage));
+  expect(savedDraft.content).toEqual(expect.objectContaining(v1RulePackage));
   const canonicalRulePackage = savedDraft.content as Record<string, unknown>;
   expect(canonicalRulePackage.package_hash).toMatch(/^[a-f0-9]{64}$/);
   expect(canonicalRulePackage.semantic_hash).toMatch(/^[a-f0-9]{64}$/);
@@ -202,21 +272,53 @@ test('真实 galleryd 从空实例完成规则 UI 生命周期、绑定与 publi
     reason: publishReason,
     confirmImpact: false
   });
-  const publishedVersion = (await publishResponse.json()) as { semanticHash: string };
-  expect(publishedVersion.semanticHash).toMatch(/^[a-f0-9]{64}$/);
-  await expect(page.getByText(publishedVersion.semanticHash, { exact: true }).first()).toBeVisible();
+  const v1 = (await publishResponse.json()) as { semanticHash: string; status: string };
+  expect(v1.semanticHash).toMatch(/^[a-f0-9]{64}$/);
+  expect(v1.status).toBe('published');
+  await expect(page.getByText(v1.semanticHash, { exact: true }).first()).toBeVisible();
+
+  const parameterName = '真实共享大整数参数';
+  const createParameterButton = page.getByRole('button', { name: '创建 ParameterSet' });
+  await page.getByRole('textbox', { name: '参数集名称' }).fill(parameterName);
+  await page.getByRole('textbox', { name: '初始参数（精确 JSON 对象文本）' }).fill(firstParameterText);
+  await expect(createParameterButton).toBeEnabled();
+  const [createParameterResponse] = await Promise.all([
+    page.waitForResponse((response) => pathIs(response, '/api/v1/rule-parameters', 'POST')),
+    createParameterButton.click()
+  ]);
+  expect(createParameterResponse.status()).toBe(201);
+  expect(createParameterResponse.request().postDataJSON()).toEqual({
+    name: parameterName,
+    semanticHash: v1.semanticHash,
+    parameters: firstParameterText
+  });
+  const parameterV1 = (await createParameterResponse.json()) as ParameterSetSnapshot;
+  expect(parameterV1).toEqual(
+    expect.objectContaining({
+      name: parameterName,
+      semanticHash: v1.semanticHash,
+      currentRevision: 1,
+      status: 'active',
+      parametersText: firstParameterText
+    })
+  );
+  expect(parameterV1.currentHash).toMatch(/^[a-f0-9]{64}$/);
+  await expect(fact(page, /^服务器 revision$/)).toHaveText('1');
+  await expect(fact(page, /^parameterHash$/)).toContainText(parameterV1.currentHash);
 
   await page.getByRole('link', { name: '← 返回规则', exact: true }).click();
   await expect(page.getByRole('heading', { name: '规则', exact: true })).toBeVisible();
   await page.getByRole('button', { name: /来源/ }).click();
   await page.getByRole('option', { name: `${source.displayName} · ${source.id}` }).click();
-  await page.getByRole('button', { name: /已发布版本/ }).click();
+  await page.getByRole('button', { name: /绑定参数来源/ }).click();
+  await page.getByRole('option', { name: 'ParameterSet · 共享参数集 + override' }).click();
+  await page.getByRole('button', { name: /active ParameterSet/ }).click();
   await page
     .getByRole('option')
-    .filter({ hasText: publishedVersion.semanticHash.slice(0, 12) })
+    .filter({ hasText: `${parameterName} · r1 · ${v1.semanticHash.slice(0, 12)}…` })
     .click();
   await page.getByRole('textbox', { name: 'priority' }).fill('0');
-  await page.getByRole('textbox', { name: /参数（规范 JSON 对象）/ }).fill('{}');
+  await page.getByRole('textbox', { name: /override（精确 JSON 对象文本）/ }).fill('{}');
   const [bindingResponse] = await Promise.all([
     page.waitForResponse((response) => pathIs(response, '/api/v1/source-rule-bindings', 'POST')),
     page.getByRole('button', { name: '创建绑定' }).click()
@@ -224,19 +326,40 @@ test('真实 galleryd 从空实例完成规则 UI 生命周期、绑定与 publi
   expect(bindingResponse.status()).toBe(201);
   expect(bindingResponse.request().postDataJSON()).toEqual({
     sourceId: source.id,
-    semanticHash: publishedVersion.semanticHash,
-    parameters: {},
+    parameterId: parameterV1.id,
+    override: '{}',
     priority: 0
   });
-  const binding = (await bindingResponse.json()) as { id: string; semanticHash: string; priority: number };
-  expect(binding.semanticHash).toBe(publishedVersion.semanticHash);
-  expect(binding.priority).toBe(0);
+  const bindingV1 = (await bindingResponse.json()) as BindingSnapshot;
+  expect(bindingV1).toEqual(
+    expect.objectContaining({
+      semanticHash: v1.semanticHash,
+      parametersText: firstParameterText,
+      priority: 0,
+      parameterId: parameterV1.id,
+      parameterRevision: 1,
+      parameterHash: parameterV1.currentHash,
+      overrideText: '{}',
+      status: 'active'
+    })
+  );
   const effectiveBinding = page
     .getByRole('heading', { name: '当前生效的绑定', exact: true })
     .locator('xpath=following-sibling::dl[1]');
-  await expect(effectiveBinding).toContainText(binding.id);
-  await expect(effectiveBinding).toContainText(publishedVersion.semanticHash);
+  await expect(effectiveBinding).toContainText(bindingV1.id);
+  await expect(effectiveBinding).toContainText(parameterV1.id);
+  await expect(effectiveBinding).toContainText(parameterV1.currentHash);
   await expect(effectiveBinding).toContainText('active');
+
+  let scanMutationCount = 0;
+  page.on('request', (request) => {
+    if (
+      request.method() === 'POST' &&
+      new URL(request.url()).pathname === `/api/v1/sources/${source.id}/scan-jobs`
+    ) {
+      scanMutationCount += 1;
+    }
+  });
 
   await page.getByRole('link', { name: '扫描与任务', exact: true }).click();
   await expect(page.getByRole('heading', { name: '扫描与任务', exact: true })).toBeVisible();
@@ -244,66 +367,48 @@ test('真实 galleryd 从空实例完成规则 UI 生命周期、绑定与 publi
   await page.getByRole('option', { name: `${source.displayName} · ${source.id}` }).click();
   await page.getByRole('button', { name: /扫描档案/ }).click();
   await page.getByRole('option', { name: 'index（仅首次扫描）' }).click();
-  const [scanResponse] = await Promise.all([
-    page.waitForResponse(
-      (response) =>
-        response.request().method() === 'POST' &&
-        response.url().endsWith(`/api/v1/sources/${source.id}/scan-jobs`)
-    ),
+  const [scan1Response] = await Promise.all([
+    page.waitForResponse((response) => pathIs(response, `/api/v1/sources/${source.id}/scan-jobs`, 'POST')),
     page.getByRole('button', { name: '发起扫描' }).click()
   ]);
-  expect(scanResponse.status()).toBe(202);
-  expect(scanResponse.request().postDataJSON()).toEqual({ scanProfile: 'index' });
-  const createdJob = (await scanResponse.json()) as { id: string };
+  expect(scan1Response.status()).toBe(202);
+  expect(scan1Response.request().postDataJSON()).toEqual({ scanProfile: 'index' });
+  const createdJob1 = (await scan1Response.json()) as { id: string };
+  const job1 = await waitForJob(page, createdJob1.id);
+  expect(job1.queryPublicationId).toBeTruthy();
+  expect(job1.ruleSemanticHash).toBe(v1.semanticHash);
+  expect(job1.ruleParametersHash).toBe(parameterV1.currentHash);
+  expect(job1.ruleIrHash).toBe(bindingV1.ruleIrHash);
+  if (job1.queryPublicationId === undefined) throw new Error('J1 缺少 publication');
+  const q1 = job1.queryPublicationId;
 
-  let completed:
-    | { status: string; queryPublicationId?: string; ruleSemanticHash?: string; issueCode?: string }
-    | undefined;
-  await expect
-    .poll(
-      async () => {
-        completed = await page.evaluate(async (jobId) => {
-          const response = await fetch(`/api/v1/jobs/${encodeURIComponent(jobId)}`);
-          return (await response.json()) as {
-            status: string;
-            queryPublicationId?: string;
-            ruleSemanticHash?: string;
-            issueCode?: string;
-          };
-        }, createdJob.id);
-        return completed.status;
-      },
-      { timeout: 30_000 }
-    )
-    .toMatch(/^(completed|failed|cancelled|superseded|needs_repair)$/);
-  expect(completed?.status, JSON.stringify(completed)).toBe('completed');
-  expect(completed?.queryPublicationId).toBeTruthy();
-  expect(completed?.ruleSemanticHash).toBe(publishedVersion.semanticHash);
-
-  await page.goto(`/manage/scans/${createdJob.id}`);
+  await page.goto(`/manage/scans/${job1.id}`);
   await expect(page.getByRole('heading', { name: '任务详情', exact: true })).toBeVisible();
-  await expect(
-    page.locator('dt', { hasText: /^状态$/ }).locator('xpath=following-sibling::dd[1]')
-  ).toHaveText('已完成');
-  await expect(
-    page.locator('dt', { hasText: /^产出快照$/ }).locator('xpath=following-sibling::dd[1]')
-  ).toContainText(completed?.queryPublicationId ?? '');
-  await expect(
-    page.locator('dt', { hasText: /^规则 semanticHash$/ }).locator('xpath=following-sibling::dd[1]')
-  ).toHaveText(publishedVersion.semanticHash);
+  await expect(fact(page, /^状态$/)).toHaveText('已完成');
+  await expect(fact(page, /^产出快照$/)).toContainText(q1);
+  await expect(fact(page, /^规则 semanticHash$/)).toContainText(v1.semanticHash);
+  await expect(fact(page, /^参数 hash$/)).toContainText(parameterV1.currentHash);
 
-  const currentPublication = await page.evaluate(async () => {
-    const response = await fetch('/api/v1/query-publications/current');
-    return (await response.json()) as { id: string };
-  });
-  expect(currentPublication.id).toBe(completed?.queryPublicationId);
+  expect(scanMutationCount).toBe(1);
+  expect((await readJSON<{ id: string }>(page, '/api/v1/query-publications/current')).id).toBe(q1);
 
   const worksResponsePromise = page.waitForResponse((response) => pathIs(response, '/api/v1/works'));
   await page.goto('/browse');
   const worksResponse = await worksResponsePromise;
   expect(worksResponse.status()).toBe(200);
   const works = (await worksResponse.json()) as { queryPublicationId: string };
-  expect(works.queryPublicationId).toBe(completed?.queryPublicationId);
+  expect(works.queryPublicationId).toBe(q1);
   await expect(page.getByRole('heading', { name: '全部作品', exact: true })).toBeVisible();
-  await expect(page.getByText('work-one', { exact: true })).toBeVisible();
+  const workLink = page.getByText('work-one', { exact: true }).locator('xpath=ancestor::a[1]');
+  await expect(workLink).toBeVisible();
+  const workHref = await workLink.getAttribute('href');
+  const workId = new URL(workHref ?? '', realBaseURL ?? 'http://127.0.0.1').pathname.split('/').at(-1);
+  if (workId === undefined || workId === '') throw new Error('初始 browse 缺少 Work ID');
+  const media = await readJSON<{
+    queryPublicationId: string;
+    media: Array<{ contentVerificationState: string }>;
+  }>(page, `/api/v1/works/${encodeURIComponent(workId)}/media?queryPublicationId=${encodeURIComponent(q1)}`);
+  expect(media.queryPublicationId).toBe(q1);
+  expect(media.media).toHaveLength(2);
+  expect(media.media.every((item) => item.contentVerificationState === 'located_unverified')).toBe(true);
 });

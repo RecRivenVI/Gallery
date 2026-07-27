@@ -11,6 +11,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -301,6 +302,126 @@ func TestRuleLifecycleRevisionHeadersFailClosed(t *testing.T) {
 			requestRuleJSONWithIfMatch(t, client, server.URL, csrf, test.method, test.path, test.body, test.ifMatch, http.StatusBadRequest)
 		})
 	}
+}
+
+func TestEV59RuleParameterHTTPUsesExactTextAndFailClosedCAS(t *testing.T) {
+	server, client, csrf := pairedRuleServer(t)
+	packageJSON, err := os.ReadFile(filepath.Join("..", "..", "rules", "testdata", "minimal-rule-package.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var packageValue map[string]any
+	if err := json.Unmarshal(packageJSON, &packageValue); err != nil {
+		t.Fatal(err)
+	}
+	packageValue["parameter_schema"] = map[string]any{
+		"type": "object", "properties": map[string]any{"minimumSize": map[string]any{"type": "integer", "minimum": 0}}, "additionalProperties": false,
+	}
+	pkg := requestRuleJSON(t, client, server.URL, csrf, http.MethodPost, "/api/v1/rule-packages", map[string]any{
+		"ruleSetId": packageValue["rule_set_id"], "name": "EV-59 exact parameters",
+	}, http.StatusCreated)
+	base := "/api/v1/rule-packages/" + pkg["id"].(string)
+	requestRuleJSONWithIfMatch(t, client, server.URL, csrf, http.MethodPut, base+"/draft", map[string]any{
+		"format": "json", "content": packageValue, "expectedRevision": 0,
+	}, `"0"`, http.StatusOK)
+	requestRuleJSONWithIfMatch(t, client, server.URL, csrf, http.MethodPost, base+"/draft/validate", nil, `"1"`, http.StatusOK)
+	version := requestRuleJSONWithIfMatch(t, client, server.URL, csrf, http.MethodPost, base+"/publish", map[string]any{
+		"expectedRevision": 2, "reason": "EV-59 publish", "confirmImpact": true,
+	}, `"2"`, http.StatusCreated)
+	semanticHash := version["semanticHash"].(string)
+
+	const firstExact = `{"minimumSize":9007199254740993123}`
+	parameter := requestRuleJSON(t, client, server.URL, csrf, http.MethodPost, "/api/v1/rule-parameters", map[string]any{
+		"name": "exact", "semanticHash": semanticHash, "parameters": firstExact,
+	}, http.StatusCreated)
+	if parameter["parametersText"] != firstExact {
+		t.Fatalf("参数响应未保留精确文本: %+v", parameter)
+	}
+	parameterID := parameter["id"].(string)
+
+	libraryID := createLibrary(t, client, server, csrf, "EV-59 binding")
+	sourceID := createQueryAuthorizationSource(t, client, server.URL, csrf, libraryID, "ev59-source")
+	direct := requestRuleJSON(t, client, server.URL, csrf, http.MethodPost, "/api/v1/source-rule-bindings", map[string]any{
+		"sourceId": sourceID, "semanticHash": semanticHash, "parameters": firstExact, "priority": 10,
+	}, http.StatusCreated)
+	if direct["parametersText"] != firstExact || direct["overrideText"] != `{}` {
+		t.Fatalf("Binding 精确文本响应错误: %+v", direct)
+	}
+	directUpdated := requestRuleJSON(t, client, server.URL, csrf, http.MethodPatch, "/api/v1/source-rule-bindings/"+direct["id"].(string), map[string]any{
+		"status": "paused",
+	}, http.StatusOK)
+	for _, field := range []string{"parameterId", "parameterRevision", "parameterHash"} {
+		if _, exists := directUpdated[field]; exists {
+			t.Fatalf("直接 Binding 更新响应不应返回空的可选参数身份字段 %s: %+v", field, directUpdated)
+		}
+	}
+	if directUpdated["parametersText"] != firstExact || directUpdated["overrideText"] != `{}` {
+		t.Fatalf("直接 Binding 更新响应未保留精确文本: %+v", directUpdated)
+	}
+
+	const secondExact = `{"minimumSize":9007199254740993124}`
+	requestRuleJSONWithIfMatch(t, client, server.URL, csrf, http.MethodPut, "/api/v1/rule-parameters/"+parameterID, map[string]any{
+		"parameters": secondExact, "confirmImpact": true,
+	}, `"1"`, http.StatusBadRequest)
+	requestRuleJSON(t, client, server.URL, csrf, http.MethodPut, "/api/v1/rule-parameters/"+parameterID, map[string]any{
+		"parameters": secondExact, "expectedRevision": 1, "confirmImpact": true,
+	}, http.StatusBadRequest)
+	requestRuleJSONWithIfMatch(t, client, server.URL, csrf, http.MethodPut, "/api/v1/rule-parameters/"+parameterID, map[string]any{
+		"parameters": secondExact, "expectedRevision": 2, "confirmImpact": true,
+	}, `"1"`, http.StatusBadRequest)
+	requestRuleJSONWithIfMatch(t, client, server.URL, csrf, http.MethodPut, "/api/v1/rule-parameters/"+parameterID, map[string]any{
+		"parameters": secondExact, "expectedRevision": 1, "confirmImpact": false,
+	}, `"1"`, http.StatusConflict)
+	updated := requestRuleJSONWithIfMatch(t, client, server.URL, csrf, http.MethodPut, "/api/v1/rule-parameters/"+parameterID, map[string]any{
+		"parameters": secondExact, "expectedRevision": 1, "confirmImpact": true,
+	}, `"1"`, http.StatusOK)
+	if updated["parametersText"] != secondExact || updated["currentRevision"] != float64(2) {
+		t.Fatalf("参数确认更新响应错误: %+v", updated)
+	}
+
+	requestRuleJSON(t, client, server.URL, csrf, http.MethodPost, "/api/v1/rule-parameters/"+parameterID+"/deprecate", map[string]any{
+		"expectedRevision": 2, "reason": "retire exact parameters",
+	}, http.StatusBadRequest)
+	requestRuleJSONWithIfMatch(t, client, server.URL, csrf, http.MethodPost, "/api/v1/rule-parameters/"+parameterID+"/deprecate", map[string]any{
+		"reason": "retire exact parameters",
+	}, `"2"`, http.StatusBadRequest)
+	deprecated := requestRuleJSONWithIfMatch(t, client, server.URL, csrf, http.MethodPost, "/api/v1/rule-parameters/"+parameterID+"/deprecate", map[string]any{
+		"expectedRevision": 2, "reason": "retire exact parameters",
+	}, `"2"`, http.StatusOK)
+	if deprecated["status"] != "deprecated" || deprecated["parametersText"] != secondExact {
+		t.Fatalf("参数弃用响应错误: %+v", deprecated)
+	}
+	audits := requestRuleJSON(t, client, server.URL, csrf, http.MethodGet, base+"/audits", nil, http.StatusOK)["items"].([]any)
+	var parameterAudit map[string]any
+	for _, raw := range audits {
+		item := raw.(map[string]any)
+		if item["subjectType"] == "parameter_set" && item["subjectId"] == parameterID && item["action"] == "deprecate_parameter" {
+			parameterAudit = item
+			break
+		}
+	}
+	if parameterAudit == nil {
+		t.Fatalf("未找到参数弃用审计: %+v", audits)
+	}
+
+	currentPackage := requestRuleJSON(t, client, server.URL, csrf, http.MethodGet, base, nil, http.StatusOK)
+	revision := int(currentPackage["revision"].(float64))
+	requestRuleJSON(t, client, server.URL, csrf, http.MethodPost, base+"/deprecate", map[string]any{
+		"expectedRevision": revision, "reason": "retire package",
+	}, http.StatusBadRequest)
+	requestRuleJSONWithIfMatch(t, client, server.URL, csrf, http.MethodPost, base+"/deprecate", map[string]any{
+		"reason": "retire package",
+	}, `"`+strconv.Itoa(revision)+`"`, http.StatusBadRequest)
+	retired := requestRuleJSONWithIfMatch(t, client, server.URL, csrf, http.MethodPost, base+"/deprecate", map[string]any{
+		"expectedRevision": revision, "reason": "retire package",
+	}, `"`+strconv.Itoa(revision)+`"`, http.StatusOK)
+	if retired["status"] != "deprecated" {
+		t.Fatalf("Package 弃用失败: %+v", retired)
+	}
+	requestRuleJSONWithIfMatch(t, client, server.URL, csrf, http.MethodPost, base+"/deprecate", map[string]any{
+		"expectedRevision": revision + 1, "reason": "repeat",
+	}, `"`+strconv.Itoa(revision+1)+`"`, http.StatusConflict)
+	requestRuleJSON(t, client, server.URL, csrf, http.MethodPost, "/api/v1/rule-versions/"+semanticHash+"/deprecate", map[string]any{"reason": ""}, http.StatusBadRequest)
 }
 
 func TestSourceRuleBindingCreateModesRejectMissingAndMixedInputs(t *testing.T) {

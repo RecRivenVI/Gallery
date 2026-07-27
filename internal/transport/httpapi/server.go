@@ -1428,13 +1428,26 @@ func (s *Server) createSourceRuleBinding(w http.ResponseWriter, r *http.Request)
 			s.writeRequestError(w, fault.WithField(fault.CodeValidation, "body", fmt.Errorf("parameterId 与 semanticHash/parameters 互斥")))
 			return
 		}
-		result, err = s.data.CreateSourceRuleBindingFromParameterSet(r.Context(), request.SourceID, parameterID, request.Priority, request.Override, request.Condition)
+		var override []byte
+		if len(request.Override) > 0 {
+			override, err = decodeRuleJSONDocument(request.Override, false)
+			if err != nil {
+				s.writeRequestError(w, fault.WithField(fault.CodeRuleParameterInvalid, "override", err))
+				return
+			}
+		}
+		result, err = s.data.CreateSourceRuleBindingFromParameterSet(r.Context(), request.SourceID, parameterID, request.Priority, override, request.Condition)
 	case directMode:
 		if request.ParameterID != nil || len(request.Override) > 0 {
 			s.writeRequestError(w, fault.WithField(fault.CodeValidation, "body", fmt.Errorf("semanticHash/parameters 与 parameterId/override 互斥")))
 			return
 		}
-		result, err = s.data.CreateSourceRuleBindingWithCondition(r.Context(), request.SourceID, semanticHash, request.Parameters, request.Priority, request.Condition)
+		parameters, decodeErr := decodeRuleJSONDocument(request.Parameters, false)
+		if decodeErr != nil {
+			s.writeRequestError(w, fault.WithField(fault.CodeRuleParameterInvalid, "parameters", decodeErr))
+			return
+		}
+		result, err = s.data.CreateSourceRuleBindingWithCondition(r.Context(), request.SourceID, semanticHash, parameters, request.Priority, request.Condition)
 	default:
 		s.writeRequestError(w, fault.WithField(fault.CodeValidation, "body", fmt.Errorf("必须提供 semanticHash+parameters 或 parameterId")))
 		return
@@ -3414,7 +3427,11 @@ func sourceRuleBindingDTO(value application.SourceRuleBinding) api.SourceRuleBin
 	decoder := json.NewDecoder(io.LimitReader(bytes.NewReader(value.Parameters), 1<<20))
 	decoder.UseNumber()
 	_ = decoder.Decode(&parameters)
-	result := api.SourceRuleBinding{Id: value.ID, SourceId: value.SourceID, SemanticHash: value.SemanticHash, Parameters: parameters, Priority: value.Priority, RuleIrHash: value.RuleIRHash, CreatedAt: value.CreatedAt}
+	result := api.SourceRuleBinding{
+		Id: value.ID, SourceId: value.SourceID, SemanticHash: value.SemanticHash, Parameters: parameters,
+		ParametersText: string(defaultJSON(value.Parameters, []byte("{}"))), OverrideText: string(defaultJSON(value.Override, []byte("{}"))),
+		Priority: value.Priority, RuleIrHash: value.RuleIRHash, CreatedAt: value.CreatedAt,
+	}
 	if value.ParameterID != "" {
 		result.ParameterId = &value.ParameterID
 	}

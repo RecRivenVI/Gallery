@@ -1189,6 +1189,27 @@ func (e ResourceScopeKind) Valid() bool {
 	}
 }
 
+// Defines values for RuleAuditSubjectType.
+const (
+	Package      RuleAuditSubjectType = "package"
+	ParameterSet RuleAuditSubjectType = "parameter_set"
+	Version      RuleAuditSubjectType = "version"
+)
+
+// Valid indicates whether the value is a known member of the RuleAuditSubjectType enum.
+func (e RuleAuditSubjectType) Valid() bool {
+	switch e {
+	case Package:
+		return true
+	case ParameterSet:
+		return true
+	case Version:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for RuleDiffEntryChange.
 const (
 	Added    RuleDiffEntryChange = "added"
@@ -2553,6 +2574,17 @@ type ErrorEnvelope struct {
 	Error ErrorDetail `json:"error"`
 }
 
+// ExactJSONObject JSON 对象或保留精确数字字面量的 JSON 对象文本
+type ExactJSONObject struct {
+	union json.RawMessage
+}
+
+// ExactJSONObject0 defines model for .
+type ExactJSONObject0 map[string]interface{}
+
+// ExactJSONObject1 defines model for .
+type ExactJSONObject1 = string
+
 // FieldMatch 通用、版本化的搜索命中表达，取代仅覆盖标题的 titleHighlights。field 为 title/creator/tag/filename 之一；value 是命中的原始显示值——tag/filename 是 具体命中的那一个取值（不是整个列表），filename 只是 path.Base 之后的安全 显示名，不泄露相对/绝对路径；同一字段可能出现多个条目（例如两个不同的 tag 分别命中）。单个 Work 的 matches 数与每个 value 的展示长度均有服务端截断。
 type FieldMatch struct {
 	Field FieldMatchField `json:"field"`
@@ -2997,6 +3029,23 @@ type ResourceScope struct {
 // ResourceScopeKind defines model for ResourceScope.Kind.
 type ResourceScopeKind string
 
+// RuleAudit defines model for RuleAudit.
+type RuleAudit struct {
+	Action           string               `json:"action"`
+	ActorId          string               `json:"actorId"`
+	CreatedAt        time.Time            `json:"createdAt"`
+	FromSemanticHash string               `json:"fromSemanticHash"`
+	Id               string               `json:"id"`
+	PackageId        RulePackageId        `json:"packageId"`
+	Reason           string               `json:"reason"`
+	SubjectId        string               `json:"subjectId"`
+	SubjectType      RuleAuditSubjectType `json:"subjectType"`
+	ToSemanticHash   string               `json:"toSemanticHash"`
+}
+
+// RuleAuditSubjectType defines model for RuleAudit.SubjectType.
+type RuleAuditSubjectType string
+
 // RuleCompileRequest defines model for RuleCompileRequest.
 type RuleCompileRequest struct {
 	Package    map[string]interface{} `json:"package"`
@@ -3292,13 +3341,27 @@ type RulePackageId = string
 
 // RuleParameterCreateRequest defines model for RuleParameterCreateRequest.
 type RuleParameterCreateRequest struct {
-	Name         string                 `json:"name"`
-	Parameters   map[string]interface{} `json:"parameters"`
-	SemanticHash SHA256Digest           `json:"semanticHash"`
+	Name string `json:"name"`
+
+	// Parameters JSON 对象或保留精确数字字面量的 JSON 对象文本
+	Parameters   ExactJSONObject `json:"parameters"`
+	SemanticHash SHA256Digest    `json:"semanticHash"`
+}
+
+// RuleParameterDeprecateRequest defines model for RuleParameterDeprecateRequest.
+type RuleParameterDeprecateRequest struct {
+	ExpectedRevision int    `json:"expectedRevision"`
+	Reason           string `json:"reason"`
 }
 
 // RuleParameterId defines model for RuleParameterId.
 type RuleParameterId = string
+
+// RuleParameterImpactRequest defines model for RuleParameterImpactRequest.
+type RuleParameterImpactRequest struct {
+	// Parameters JSON 对象或保留精确数字字面量的 JSON 对象文本
+	Parameters ExactJSONObject `json:"parameters"`
+}
 
 // RuleParameterSet defines model for RuleParameterSet.
 type RuleParameterSet struct {
@@ -3309,9 +3372,12 @@ type RuleParameterSet struct {
 	Id              RuleParameterId        `json:"id"`
 	Name            string                 `json:"name"`
 	Parameters      map[string]interface{} `json:"parameters"`
-	SemanticHash    SHA256Digest           `json:"semanticHash"`
-	Status          RuleParameterSetStatus `json:"status"`
-	UpdatedAt       time.Time              `json:"updatedAt"`
+
+	// ParametersText 当前 revision 参数的规范 JSON 文本；避免 JavaScript Number 中转损失精度
+	ParametersText string                 `json:"parametersText"`
+	SemanticHash   SHA256Digest           `json:"semanticHash"`
+	Status         RuleParameterSetStatus `json:"status"`
+	UpdatedAt      time.Time              `json:"updatedAt"`
 }
 
 // RuleParameterSetStatus defines model for RuleParameterSet.Status.
@@ -3320,6 +3386,15 @@ type RuleParameterSetStatus string
 // RuleParameterSetListResponse defines model for RuleParameterSetListResponse.
 type RuleParameterSetListResponse struct {
 	ParameterSets []RuleParameterSet `json:"parameterSets"`
+}
+
+// RuleParameterUpdateRequest defines model for RuleParameterUpdateRequest.
+type RuleParameterUpdateRequest struct {
+	ConfirmImpact    bool `json:"confirmImpact"`
+	ExpectedRevision int  `json:"expectedRevision"`
+
+	// Parameters JSON 对象或保留精确数字字面量的 JSON 对象文本
+	Parameters ExactJSONObject `json:"parameters"`
 }
 
 // RulePublishRequest defines model for RulePublishRequest.
@@ -3625,20 +3700,26 @@ type SourcePresentationTime struct {
 
 // SourceRuleBinding defines model for SourceRuleBinding.
 type SourceRuleBinding struct {
-	Condition         *map[string]interface{}  `json:"condition,omitempty"`
-	CreatedAt         time.Time                `json:"createdAt"`
-	Id                SourceRuleBindingId      `json:"id"`
-	Override          *map[string]interface{}  `json:"override,omitempty"`
-	ParameterHash     *SHA256Digest            `json:"parameterHash,omitempty"`
-	ParameterId       *string                  `json:"parameterId,omitempty"`
-	ParameterRevision *int                     `json:"parameterRevision,omitempty"`
-	Parameters        map[string]interface{}   `json:"parameters"`
-	Priority          int                      `json:"priority"`
-	RuleIrHash        SHA256Digest             `json:"ruleIrHash"`
-	SemanticHash      SHA256Digest             `json:"semanticHash"`
-	SourceId          SourceId                 `json:"sourceId"`
-	Status            *SourceRuleBindingStatus `json:"status,omitempty"`
-	UpdatedAt         *time.Time               `json:"updatedAt,omitempty"`
+	Condition *map[string]interface{} `json:"condition,omitempty"`
+	CreatedAt time.Time               `json:"createdAt"`
+	Id        SourceRuleBindingId     `json:"id"`
+	Override  *map[string]interface{} `json:"override,omitempty"`
+
+	// OverrideText 参数 override 的规范 JSON 文本；没有 override 时固定为 `{}`
+	OverrideText      string                 `json:"overrideText"`
+	ParameterHash     *SHA256Digest          `json:"parameterHash,omitempty"`
+	ParameterId       *string                `json:"parameterId,omitempty"`
+	ParameterRevision *int                   `json:"parameterRevision,omitempty"`
+	Parameters        map[string]interface{} `json:"parameters"`
+
+	// ParametersText 冻结参数的规范 JSON 文本；避免 JavaScript Number 中转损失精度
+	ParametersText string                   `json:"parametersText"`
+	Priority       int                      `json:"priority"`
+	RuleIrHash     SHA256Digest             `json:"ruleIrHash"`
+	SemanticHash   SHA256Digest             `json:"semanticHash"`
+	SourceId       SourceId                 `json:"sourceId"`
+	Status         *SourceRuleBindingStatus `json:"status,omitempty"`
+	UpdatedAt      *time.Time               `json:"updatedAt,omitempty"`
 }
 
 // SourceRuleBindingStatus defines model for SourceRuleBinding.Status.
@@ -3646,26 +3727,32 @@ type SourceRuleBindingStatus string
 
 // SourceRuleBindingCreateRequest defines model for SourceRuleBindingCreateRequest.
 type SourceRuleBindingCreateRequest struct {
-	Condition    *map[string]interface{} `json:"condition,omitempty"`
-	Override     *map[string]interface{} `json:"override,omitempty"`
-	ParameterId  *RuleParameterId        `json:"parameterId,omitempty"`
-	Parameters   *map[string]interface{} `json:"parameters,omitempty"`
-	Priority     int                     `json:"priority"`
-	SemanticHash *SHA256Digest           `json:"semanticHash,omitempty"`
-	SourceId     SourceId                `json:"sourceId"`
+	Condition *map[string]interface{} `json:"condition,omitempty"`
+
+	// Override JSON 对象或保留精确数字字面量的 JSON 对象文本
+	Override    *ExactJSONObject `json:"override,omitempty"`
+	ParameterId *RuleParameterId `json:"parameterId,omitempty"`
+
+	// Parameters JSON 对象或保留精确数字字面量的 JSON 对象文本
+	Parameters   *ExactJSONObject `json:"parameters,omitempty"`
+	Priority     int              `json:"priority"`
+	SemanticHash *SHA256Digest    `json:"semanticHash,omitempty"`
+	SourceId     SourceId         `json:"sourceId"`
 	union        json.RawMessage
 }
 
 // SourceRuleBindingCreateRequest0 defines model for .
 type SourceRuleBindingCreateRequest0 struct {
-	Parameters   map[string]interface{} `json:"parameters"`
-	SemanticHash SHA256Digest           `json:"semanticHash"`
+	// Parameters JSON 对象或保留精确数字字面量的 JSON 对象文本
+	Parameters   ExactJSONObject `json:"parameters"`
+	SemanticHash SHA256Digest    `json:"semanticHash"`
 }
 
 // SourceRuleBindingCreateRequest1 defines model for .
 type SourceRuleBindingCreateRequest1 struct {
-	Override    *map[string]interface{} `json:"override,omitempty"`
-	ParameterId RuleParameterId         `json:"parameterId"`
+	// Override JSON 对象或保留精确数字字面量的 JSON 对象文本
+	Override    *ExactJSONObject `json:"override,omitempty"`
+	ParameterId RuleParameterId  `json:"parameterId"`
 }
 
 // SourceRuleBindingId defines model for SourceRuleBindingId.
@@ -4147,19 +4234,20 @@ type CreateRulePackageParams struct {
 
 // DeleteRulePackageParams defines parameters for DeleteRulePackage.
 type DeleteRulePackageParams struct {
-	XGalleryCSRF CSRFHeader `json:"X-Gallery-CSRF"`
-	IfMatch      *IfMatch   `json:"If-Match,omitempty"`
+	XGalleryCSRF CSRFHeader      `json:"X-Gallery-CSRF"`
+	IfMatch      RequiredIfMatch `json:"If-Match"`
 }
 
 // DeprecateRulePackageJSONBody defines parameters for DeprecateRulePackage.
 type DeprecateRulePackageJSONBody struct {
-	Reason *string `json:"reason,omitempty"`
+	ExpectedRevision int    `json:"expectedRevision"`
+	Reason           string `json:"reason"`
 }
 
 // DeprecateRulePackageParams defines parameters for DeprecateRulePackage.
 type DeprecateRulePackageParams struct {
-	XGalleryCSRF CSRFHeader `json:"X-Gallery-CSRF"`
-	IfMatch      *IfMatch   `json:"If-Match,omitempty"`
+	XGalleryCSRF CSRFHeader      `json:"X-Gallery-CSRF"`
+	IfMatch      RequiredIfMatch `json:"If-Match"`
 }
 
 // SaveRuleDraftParams defines parameters for SaveRuleDraft.
@@ -4205,16 +4293,10 @@ type CreateRuleParameterSetParams struct {
 	XGalleryCSRF CSRFHeader `json:"X-Gallery-CSRF"`
 }
 
-// UpdateRuleParameterSetJSONBody defines parameters for UpdateRuleParameterSet.
-type UpdateRuleParameterSetJSONBody struct {
-	ExpectedRevision *int                   `json:"expectedRevision,omitempty"`
-	Parameters       map[string]interface{} `json:"parameters"`
-}
-
 // UpdateRuleParameterSetParams defines parameters for UpdateRuleParameterSet.
 type UpdateRuleParameterSetParams struct {
-	XGalleryCSRF CSRFHeader `json:"X-Gallery-CSRF"`
-	IfMatch      *IfMatch   `json:"If-Match,omitempty"`
+	XGalleryCSRF CSRFHeader      `json:"X-Gallery-CSRF"`
+	IfMatch      RequiredIfMatch `json:"If-Match"`
 }
 
 // CopyRuleParameterSetJSONBody defines parameters for CopyRuleParameterSet.
@@ -4229,12 +4311,8 @@ type CopyRuleParameterSetParams struct {
 
 // DeprecateRuleParameterSetParams defines parameters for DeprecateRuleParameterSet.
 type DeprecateRuleParameterSetParams struct {
-	XGalleryCSRF CSRFHeader `json:"X-Gallery-CSRF"`
-}
-
-// ImpactRuleParameterSetJSONBody defines parameters for ImpactRuleParameterSet.
-type ImpactRuleParameterSetJSONBody struct {
-	Parameters map[string]interface{} `json:"parameters"`
+	XGalleryCSRF CSRFHeader      `json:"X-Gallery-CSRF"`
+	IfMatch      RequiredIfMatch `json:"If-Match"`
 }
 
 // ImpactRuleParameterSetParams defines parameters for ImpactRuleParameterSet.
@@ -4260,7 +4338,7 @@ type DiffRuleVersionsParams struct {
 
 // DeprecateRuleVersionJSONBody defines parameters for DeprecateRuleVersion.
 type DeprecateRuleVersionJSONBody struct {
-	Reason *string `json:"reason,omitempty"`
+	Reason string `json:"reason"`
 }
 
 // DeprecateRuleVersionParams defines parameters for DeprecateRuleVersion.
@@ -4516,13 +4594,16 @@ type RollbackRulePackageJSONRequestBody = RuleRollbackRequest
 type CreateRuleParameterSetJSONRequestBody = RuleParameterCreateRequest
 
 // UpdateRuleParameterSetJSONRequestBody defines body for UpdateRuleParameterSet for application/json ContentType.
-type UpdateRuleParameterSetJSONRequestBody UpdateRuleParameterSetJSONBody
+type UpdateRuleParameterSetJSONRequestBody = RuleParameterUpdateRequest
 
 // CopyRuleParameterSetJSONRequestBody defines body for CopyRuleParameterSet for application/json ContentType.
 type CopyRuleParameterSetJSONRequestBody CopyRuleParameterSetJSONBody
 
+// DeprecateRuleParameterSetJSONRequestBody defines body for DeprecateRuleParameterSet for application/json ContentType.
+type DeprecateRuleParameterSetJSONRequestBody = RuleParameterDeprecateRequest
+
 // ImpactRuleParameterSetJSONRequestBody defines body for ImpactRuleParameterSet for application/json ContentType.
-type ImpactRuleParameterSetJSONRequestBody ImpactRuleParameterSetJSONBody
+type ImpactRuleParameterSetJSONRequestBody = RuleParameterImpactRequest
 
 // CreateRuleVersionJSONRequestBody defines body for CreateRuleVersion for application/json ContentType.
 type CreateRuleVersionJSONRequestBody = RuleVersionCreateRequest
@@ -4580,6 +4661,68 @@ type CreateScanJobJSONRequestBody = ScanJobCreateRequest
 
 // PutWorkOverlayJSONRequestBody defines body for PutWorkOverlay for application/json ContentType.
 type PutWorkOverlayJSONRequestBody = WorkOverlayPutRequest
+
+// AsExactJSONObject0 returns the union data inside the ExactJSONObject as a ExactJSONObject0
+func (t ExactJSONObject) AsExactJSONObject0() (ExactJSONObject0, error) {
+	var body ExactJSONObject0
+	err := json.Unmarshal(t.union, &body)
+	return body, err
+}
+
+// FromExactJSONObject0 overwrites any union data inside the ExactJSONObject as the provided ExactJSONObject0
+func (t *ExactJSONObject) FromExactJSONObject0(v ExactJSONObject0) error {
+	b, err := json.Marshal(v)
+	t.union = b
+	return err
+}
+
+// MergeExactJSONObject0 performs a merge with any union data inside the ExactJSONObject, using the provided ExactJSONObject0
+func (t *ExactJSONObject) MergeExactJSONObject0(v ExactJSONObject0) error {
+	b, err := json.Marshal(v)
+	if err != nil {
+		return err
+	}
+
+	merged, err := runtime.JSONMerge(t.union, b)
+	t.union = merged
+	return err
+}
+
+// AsExactJSONObject1 returns the union data inside the ExactJSONObject as a ExactJSONObject1
+func (t ExactJSONObject) AsExactJSONObject1() (ExactJSONObject1, error) {
+	var body ExactJSONObject1
+	err := json.Unmarshal(t.union, &body)
+	return body, err
+}
+
+// FromExactJSONObject1 overwrites any union data inside the ExactJSONObject as the provided ExactJSONObject1
+func (t *ExactJSONObject) FromExactJSONObject1(v ExactJSONObject1) error {
+	b, err := json.Marshal(v)
+	t.union = b
+	return err
+}
+
+// MergeExactJSONObject1 performs a merge with any union data inside the ExactJSONObject, using the provided ExactJSONObject1
+func (t *ExactJSONObject) MergeExactJSONObject1(v ExactJSONObject1) error {
+	b, err := json.Marshal(v)
+	if err != nil {
+		return err
+	}
+
+	merged, err := runtime.JSONMerge(t.union, b)
+	t.union = merged
+	return err
+}
+
+func (t ExactJSONObject) MarshalJSON() ([]byte, error) {
+	b, err := t.union.MarshalJSON()
+	return b, err
+}
+
+func (t *ExactJSONObject) UnmarshalJSON(b []byte) error {
+	err := t.union.UnmarshalJSON(b)
+	return err
+}
 
 // AsRuleDraftSaveRequestContent0 returns the union data inside the RuleDraftSaveRequest_Content as a RuleDraftSaveRequestContent0
 func (t RuleDraftSaveRequest_Content) AsRuleDraftSaveRequestContent0() (RuleDraftSaveRequestContent0, error) {
@@ -5376,8 +5519,10 @@ type ClientInterface interface {
 
 	CopyRuleParameterSet(ctx context.Context, parameterId RuleParameterId, params *CopyRuleParameterSetParams, body CopyRuleParameterSetJSONRequestBody, reqEditors ...RequestEditorFn) (*http.Response, error)
 
-	// DeprecateRuleParameterSet request
-	DeprecateRuleParameterSet(ctx context.Context, parameterId RuleParameterId, params *DeprecateRuleParameterSetParams, reqEditors ...RequestEditorFn) (*http.Response, error)
+	// DeprecateRuleParameterSetWithBody request with any body
+	DeprecateRuleParameterSetWithBody(ctx context.Context, parameterId RuleParameterId, params *DeprecateRuleParameterSetParams, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*http.Response, error)
+
+	DeprecateRuleParameterSet(ctx context.Context, parameterId RuleParameterId, params *DeprecateRuleParameterSetParams, body DeprecateRuleParameterSetJSONRequestBody, reqEditors ...RequestEditorFn) (*http.Response, error)
 
 	// ImpactRuleParameterSetWithBody request with any body
 	ImpactRuleParameterSetWithBody(ctx context.Context, parameterId RuleParameterId, params *ImpactRuleParameterSetParams, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*http.Response, error)
@@ -6848,8 +6993,20 @@ func (c *Client) CopyRuleParameterSet(ctx context.Context, parameterId RuleParam
 	return c.Client.Do(req)
 }
 
-func (c *Client) DeprecateRuleParameterSet(ctx context.Context, parameterId RuleParameterId, params *DeprecateRuleParameterSetParams, reqEditors ...RequestEditorFn) (*http.Response, error) {
-	req, err := NewDeprecateRuleParameterSetRequest(c.Server, parameterId, params)
+func (c *Client) DeprecateRuleParameterSetWithBody(ctx context.Context, parameterId RuleParameterId, params *DeprecateRuleParameterSetParams, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewDeprecateRuleParameterSetRequestWithBody(c.Server, parameterId, params, contentType, body)
+	if err != nil {
+		return nil, err
+	}
+	req = req.WithContext(ctx)
+	if err := c.applyEditors(ctx, req, reqEditors); err != nil {
+		return nil, err
+	}
+	return c.Client.Do(req)
+}
+
+func (c *Client) DeprecateRuleParameterSet(ctx context.Context, parameterId RuleParameterId, params *DeprecateRuleParameterSetParams, body DeprecateRuleParameterSetJSONRequestBody, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewDeprecateRuleParameterSetRequest(c.Server, parameterId, params, body)
 	if err != nil {
 		return nil, err
 	}
@@ -10912,16 +11069,14 @@ func NewDeleteRulePackageRequest(server string, packageId RulePackageId, params 
 
 		req.Header.Set("X-Gallery-CSRF", headerParam0)
 
-		if params.IfMatch != nil {
-			var headerParam1 string
+		var headerParam1 string
 
-			headerParam1, err = runtime.StyleParamWithOptions("simple", false, "If-Match", *params.IfMatch, runtime.StyleParamOptions{ParamLocation: runtime.ParamLocationHeader, Type: "string", Format: ""})
-			if err != nil {
-				return nil, err
-			}
-
-			req.Header.Set("If-Match", headerParam1)
+		headerParam1, err = runtime.StyleParamWithOptions("simple", false, "If-Match", params.IfMatch, runtime.StyleParamOptions{ParamLocation: runtime.ParamLocationHeader, Type: "string", Format: ""})
+		if err != nil {
+			return nil, err
 		}
+
+		req.Header.Set("If-Match", headerParam1)
 
 	}
 
@@ -11051,16 +11206,14 @@ func NewDeprecateRulePackageRequestWithBody(server string, packageId RulePackage
 
 		req.Header.Set("X-Gallery-CSRF", headerParam0)
 
-		if params.IfMatch != nil {
-			var headerParam1 string
+		var headerParam1 string
 
-			headerParam1, err = runtime.StyleParamWithOptions("simple", false, "If-Match", *params.IfMatch, runtime.StyleParamOptions{ParamLocation: runtime.ParamLocationHeader, Type: "string", Format: ""})
-			if err != nil {
-				return nil, err
-			}
-
-			req.Header.Set("If-Match", headerParam1)
+		headerParam1, err = runtime.StyleParamWithOptions("simple", false, "If-Match", params.IfMatch, runtime.StyleParamOptions{ParamLocation: runtime.ParamLocationHeader, Type: "string", Format: ""})
+		if err != nil {
+			return nil, err
 		}
+
+		req.Header.Set("If-Match", headerParam1)
 
 	}
 
@@ -11633,16 +11786,14 @@ func NewUpdateRuleParameterSetRequestWithBody(server string, parameterId RulePar
 
 		req.Header.Set("X-Gallery-CSRF", headerParam0)
 
-		if params.IfMatch != nil {
-			var headerParam1 string
+		var headerParam1 string
 
-			headerParam1, err = runtime.StyleParamWithOptions("simple", false, "If-Match", *params.IfMatch, runtime.StyleParamOptions{ParamLocation: runtime.ParamLocationHeader, Type: "string", Format: ""})
-			if err != nil {
-				return nil, err
-			}
-
-			req.Header.Set("If-Match", headerParam1)
+		headerParam1, err = runtime.StyleParamWithOptions("simple", false, "If-Match", params.IfMatch, runtime.StyleParamOptions{ParamLocation: runtime.ParamLocationHeader, Type: "string", Format: ""})
+		if err != nil {
+			return nil, err
 		}
+
+		req.Header.Set("If-Match", headerParam1)
 
 	}
 
@@ -11709,8 +11860,19 @@ func NewCopyRuleParameterSetRequestWithBody(server string, parameterId RuleParam
 	return req, nil
 }
 
-// NewDeprecateRuleParameterSetRequest generates requests for DeprecateRuleParameterSet
-func NewDeprecateRuleParameterSetRequest(server string, parameterId RuleParameterId, params *DeprecateRuleParameterSetParams) (*http.Request, error) {
+// NewDeprecateRuleParameterSetRequest calls the generic DeprecateRuleParameterSet builder with application/json body
+func NewDeprecateRuleParameterSetRequest(server string, parameterId RuleParameterId, params *DeprecateRuleParameterSetParams, body DeprecateRuleParameterSetJSONRequestBody) (*http.Request, error) {
+	var bodyReader io.Reader
+	buf, err := json.Marshal(body)
+	if err != nil {
+		return nil, err
+	}
+	bodyReader = bytes.NewReader(buf)
+	return NewDeprecateRuleParameterSetRequestWithBody(server, parameterId, params, "application/json", bodyReader)
+}
+
+// NewDeprecateRuleParameterSetRequestWithBody generates requests for DeprecateRuleParameterSet with any type of body
+func NewDeprecateRuleParameterSetRequestWithBody(server string, parameterId RuleParameterId, params *DeprecateRuleParameterSetParams, contentType string, body io.Reader) (*http.Request, error) {
 	var err error
 
 	var pathParam0 string
@@ -11735,10 +11897,12 @@ func NewDeprecateRuleParameterSetRequest(server string, parameterId RuleParamete
 		return nil, err
 	}
 
-	req, err := http.NewRequest(http.MethodPost, queryURL.String(), nil)
+	req, err := http.NewRequest(http.MethodPost, queryURL.String(), body)
 	if err != nil {
 		return nil, err
 	}
+
+	req.Header.Add("Content-Type", contentType)
 
 	if params != nil {
 
@@ -11750,6 +11914,15 @@ func NewDeprecateRuleParameterSetRequest(server string, parameterId RuleParamete
 		}
 
 		req.Header.Set("X-Gallery-CSRF", headerParam0)
+
+		var headerParam1 string
+
+		headerParam1, err = runtime.StyleParamWithOptions("simple", false, "If-Match", params.IfMatch, runtime.StyleParamOptions{ParamLocation: runtime.ParamLocationHeader, Type: "string", Format: ""})
+		if err != nil {
+			return nil, err
+		}
+
+		req.Header.Set("If-Match", headerParam1)
 
 	}
 
@@ -14199,8 +14372,10 @@ type ClientWithResponsesInterface interface {
 
 	CopyRuleParameterSetWithResponse(ctx context.Context, parameterId RuleParameterId, params *CopyRuleParameterSetParams, body CopyRuleParameterSetJSONRequestBody, reqEditors ...RequestEditorFn) (*CopyRuleParameterSetResponse, error)
 
-	// DeprecateRuleParameterSetWithResponse request
-	DeprecateRuleParameterSetWithResponse(ctx context.Context, parameterId RuleParameterId, params *DeprecateRuleParameterSetParams, reqEditors ...RequestEditorFn) (*DeprecateRuleParameterSetResponse, error)
+	// DeprecateRuleParameterSetWithBodyWithResponse request with any body
+	DeprecateRuleParameterSetWithBodyWithResponse(ctx context.Context, parameterId RuleParameterId, params *DeprecateRuleParameterSetParams, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*DeprecateRuleParameterSetResponse, error)
+
+	DeprecateRuleParameterSetWithResponse(ctx context.Context, parameterId RuleParameterId, params *DeprecateRuleParameterSetParams, body DeprecateRuleParameterSetJSONRequestBody, reqEditors ...RequestEditorFn) (*DeprecateRuleParameterSetResponse, error)
 
 	// ImpactRuleParameterSetWithBodyWithResponse request with any body
 	ImpactRuleParameterSetWithBodyWithResponse(ctx context.Context, parameterId RuleParameterId, params *ImpactRuleParameterSetParams, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*ImpactRuleParameterSetResponse, error)
@@ -16481,6 +16656,7 @@ type DeleteRulePackageResponse struct {
 	Body         []byte
 	HTTPResponse *http.Response
 	JSON200      *RulePackage
+	JSON400      *ValidationError
 	JSON401      *UnauthenticatedError
 	JSON403      *ForbiddenError
 	JSON404      *NotFoundError
@@ -16548,7 +16724,7 @@ type ListRuleAuditsResponse struct {
 	Body         []byte
 	HTTPResponse *http.Response
 	JSON200      *struct {
-		Items []map[string]interface{} `json:"items"`
+		Items []RuleAudit `json:"items"`
 	}
 	JSON401 *UnauthenticatedError
 	JSON403 *ForbiddenError
@@ -16583,9 +16759,11 @@ type DeprecateRulePackageResponse struct {
 	Body         []byte
 	HTTPResponse *http.Response
 	JSON200      *RulePackage
+	JSON400      *ValidationError
 	JSON401      *UnauthenticatedError
 	JSON403      *ForbiddenError
 	JSON404      *NotFoundError
+	JSON409      *ConflictError
 }
 
 // Status returns HTTPResponse.Status
@@ -16954,8 +17132,11 @@ type CopyRuleParameterSetResponse struct {
 	Body         []byte
 	HTTPResponse *http.Response
 	JSON201      *RuleParameterSet
+	JSON400      *ValidationError
 	JSON401      *UnauthenticatedError
 	JSON403      *ForbiddenError
+	JSON404      *NotFoundError
+	JSON409      *ConflictError
 }
 
 // Status returns HTTPResponse.Status
@@ -16986,9 +17167,11 @@ type DeprecateRuleParameterSetResponse struct {
 	Body         []byte
 	HTTPResponse *http.Response
 	JSON200      *RuleParameterSet
+	JSON400      *ValidationError
 	JSON401      *UnauthenticatedError
 	JSON403      *ForbiddenError
 	JSON404      *NotFoundError
+	JSON409      *ConflictError
 }
 
 // Status returns HTTPResponse.Status
@@ -17023,6 +17206,7 @@ type ImpactRuleParameterSetResponse struct {
 	JSON401      *UnauthenticatedError
 	JSON403      *ForbiddenError
 	JSON404      *NotFoundError
+	JSON409      *ConflictError
 }
 
 // Status returns HTTPResponse.Status
@@ -17153,6 +17337,7 @@ type DeprecateRuleVersionResponse struct {
 	Body         []byte
 	HTTPResponse *http.Response
 	JSON200      *RuleVersion
+	JSON400      *ValidationError
 	JSON401      *UnauthenticatedError
 	JSON403      *ForbiddenError
 	JSON404      *NotFoundError
@@ -19299,9 +19484,17 @@ func (c *ClientWithResponses) CopyRuleParameterSetWithResponse(ctx context.Conte
 	return ParseCopyRuleParameterSetResponse(rsp)
 }
 
-// DeprecateRuleParameterSetWithResponse request returning *DeprecateRuleParameterSetResponse
-func (c *ClientWithResponses) DeprecateRuleParameterSetWithResponse(ctx context.Context, parameterId RuleParameterId, params *DeprecateRuleParameterSetParams, reqEditors ...RequestEditorFn) (*DeprecateRuleParameterSetResponse, error) {
-	rsp, err := c.DeprecateRuleParameterSet(ctx, parameterId, params, reqEditors...)
+// DeprecateRuleParameterSetWithBodyWithResponse request with arbitrary body returning *DeprecateRuleParameterSetResponse
+func (c *ClientWithResponses) DeprecateRuleParameterSetWithBodyWithResponse(ctx context.Context, parameterId RuleParameterId, params *DeprecateRuleParameterSetParams, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*DeprecateRuleParameterSetResponse, error) {
+	rsp, err := c.DeprecateRuleParameterSetWithBody(ctx, parameterId, params, contentType, body, reqEditors...)
+	if err != nil {
+		return nil, err
+	}
+	return ParseDeprecateRuleParameterSetResponse(rsp)
+}
+
+func (c *ClientWithResponses) DeprecateRuleParameterSetWithResponse(ctx context.Context, parameterId RuleParameterId, params *DeprecateRuleParameterSetParams, body DeprecateRuleParameterSetJSONRequestBody, reqEditors ...RequestEditorFn) (*DeprecateRuleParameterSetResponse, error) {
+	rsp, err := c.DeprecateRuleParameterSet(ctx, parameterId, params, body, reqEditors...)
 	if err != nil {
 		return nil, err
 	}
@@ -22859,6 +23052,13 @@ func ParseDeleteRulePackageResponse(rsp *http.Response) (*DeleteRulePackageRespo
 		}
 		response.JSON200 = &dest
 
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 400:
+		var dest ValidationError
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON400 = &dest
+
 	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 401:
 		var dest UnauthenticatedError
 		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
@@ -22955,7 +23155,7 @@ func ParseListRuleAuditsResponse(rsp *http.Response) (*ListRuleAuditsResponse, e
 	switch {
 	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 200:
 		var dest struct {
-			Items []map[string]interface{} `json:"items"`
+			Items []RuleAudit `json:"items"`
 		}
 		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
 			return nil, err
@@ -23009,6 +23209,13 @@ func ParseDeprecateRulePackageResponse(rsp *http.Response) (*DeprecateRulePackag
 		}
 		response.JSON200 = &dest
 
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 400:
+		var dest ValidationError
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON400 = &dest
+
 	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 401:
 		var dest UnauthenticatedError
 		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
@@ -23029,6 +23236,13 @@ func ParseDeprecateRulePackageResponse(rsp *http.Response) (*DeprecateRulePackag
 			return nil, err
 		}
 		response.JSON404 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 409:
+		var dest ConflictError
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON409 = &dest
 
 	}
 
@@ -23570,6 +23784,13 @@ func ParseCopyRuleParameterSetResponse(rsp *http.Response) (*CopyRuleParameterSe
 		}
 		response.JSON201 = &dest
 
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 400:
+		var dest ValidationError
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON400 = &dest
+
 	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 401:
 		var dest UnauthenticatedError
 		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
@@ -23583,6 +23804,20 @@ func ParseCopyRuleParameterSetResponse(rsp *http.Response) (*CopyRuleParameterSe
 			return nil, err
 		}
 		response.JSON403 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 404:
+		var dest NotFoundError
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON404 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 409:
+		var dest ConflictError
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON409 = &dest
 
 	}
 
@@ -23610,6 +23845,13 @@ func ParseDeprecateRuleParameterSetResponse(rsp *http.Response) (*DeprecateRuleP
 		}
 		response.JSON200 = &dest
 
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 400:
+		var dest ValidationError
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON400 = &dest
+
 	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 401:
 		var dest UnauthenticatedError
 		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
@@ -23630,6 +23872,13 @@ func ParseDeprecateRuleParameterSetResponse(rsp *http.Response) (*DeprecateRuleP
 			return nil, err
 		}
 		response.JSON404 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 409:
+		var dest ConflictError
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON409 = &dest
 
 	}
 
@@ -23684,6 +23933,13 @@ func ParseImpactRuleParameterSetResponse(rsp *http.Response) (*ImpactRuleParamet
 			return nil, err
 		}
 		response.JSON404 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 409:
+		var dest ConflictError
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON409 = &dest
 
 	}
 
@@ -23858,6 +24114,13 @@ func ParseDeprecateRuleVersionResponse(rsp *http.Response) (*DeprecateRuleVersio
 			return nil, err
 		}
 		response.JSON200 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 400:
+		var dest ValidationError
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON400 = &dest
 
 	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 401:
 		var dest UnauthenticatedError

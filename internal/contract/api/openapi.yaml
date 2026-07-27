@@ -873,13 +873,14 @@ paths:
           required: true
           schema: {$ref: "#/components/schemas/RulePackageId"}
         - $ref: "#/components/parameters/CSRFHeader"
-        - $ref: "#/components/parameters/IfMatch"
+        - $ref: "#/components/parameters/RequiredIfMatch"
       responses:
         "200":
           description: 规则包已软删除
           content:
             application/json:
               schema: {$ref: "#/components/schemas/RulePackage"}
+        "400": {$ref: "#/components/responses/ValidationError"}
         "401": {$ref: "#/components/responses/UnauthenticatedError"}
         "403": {$ref: "#/components/responses/ForbiddenError"}
         "404": {$ref: "#/components/responses/NotFoundError"}
@@ -984,25 +985,29 @@ paths:
           required: true
           schema: {$ref: "#/components/schemas/RulePackageId"}
         - $ref: "#/components/parameters/CSRFHeader"
-        - $ref: "#/components/parameters/IfMatch"
+        - $ref: "#/components/parameters/RequiredIfMatch"
       requestBody:
-        required: false
+        required: true
         content:
           application/json:
             schema:
               type: object
               additionalProperties: false
+              required: [expectedRevision, reason]
               properties:
-                reason: {type: string, maxLength: 4096}
+                expectedRevision: {type: integer, minimum: 1}
+                reason: {type: string, minLength: 1, maxLength: 4096}
       responses:
         "200":
           description: 规则包已弃用
           content:
             application/json:
               schema: {$ref: "#/components/schemas/RulePackage"}
+        "400": {$ref: "#/components/responses/ValidationError"}
         "401": {$ref: "#/components/responses/UnauthenticatedError"}
         "403": {$ref: "#/components/responses/ForbiddenError"}
         "404": {$ref: "#/components/responses/NotFoundError"}
+        "409": {$ref: "#/components/responses/ConflictError"}
   /api/v1/rule-packages/{packageId}/audits:
     get:
       operationId: listRuleAudits
@@ -1024,7 +1029,7 @@ paths:
                 properties:
                   items:
                     type: array
-                    items: {type: object, additionalProperties: true}
+                    items: {$ref: "#/components/schemas/RuleAudit"}
         "401": {$ref: "#/components/responses/UnauthenticatedError"}
         "403": {$ref: "#/components/responses/ForbiddenError"}
         "404": {$ref: "#/components/responses/NotFoundError"}
@@ -1192,20 +1197,22 @@ paths:
           schema: {$ref: "#/components/schemas/SHA256Digest"}
         - $ref: "#/components/parameters/CSRFHeader"
       requestBody:
-        required: false
+        required: true
         content:
           application/json:
             schema:
               type: object
               additionalProperties: false
+              required: [reason]
               properties:
-                reason: {type: string, maxLength: 4096}
+                reason: {type: string, minLength: 1, maxLength: 4096}
       responses:
         "200":
           description: RuleVersion 已弃用
           content:
             application/json:
               schema: {$ref: "#/components/schemas/RuleVersion"}
+        "400": {$ref: "#/components/responses/ValidationError"}
         "401": {$ref: "#/components/responses/UnauthenticatedError"}
         "403": {$ref: "#/components/responses/ForbiddenError"}
         "404": {$ref: "#/components/responses/NotFoundError"}
@@ -1273,18 +1280,12 @@ paths:
           required: true
           schema: {$ref: "#/components/schemas/RuleParameterId"}
         - $ref: "#/components/parameters/CSRFHeader"
-        - $ref: "#/components/parameters/IfMatch"
+        - $ref: "#/components/parameters/RequiredIfMatch"
       requestBody:
         required: true
         content:
           application/json:
-            schema:
-              type: object
-              additionalProperties: false
-              required: [parameters]
-              properties:
-                parameters: {type: object, additionalProperties: true}
-                expectedRevision: {type: integer, minimum: 1}
+            schema: {$ref: "#/components/schemas/RuleParameterUpdateRequest"}
       responses:
         "200":
           description: 参数集已更新
@@ -1321,8 +1322,11 @@ paths:
           content:
             application/json:
               schema: {$ref: "#/components/schemas/RuleParameterSet"}
+        "400": {$ref: "#/components/responses/ValidationError"}
         "401": {$ref: "#/components/responses/UnauthenticatedError"}
         "403": {$ref: "#/components/responses/ForbiddenError"}
+        "404": {$ref: "#/components/responses/NotFoundError"}
+        "409": {$ref: "#/components/responses/ConflictError"}
   /api/v1/rule-parameters/{parameterId}/deprecate:
     post:
       operationId: deprecateRuleParameterSet
@@ -1333,15 +1337,23 @@ paths:
           required: true
           schema: {$ref: "#/components/schemas/RuleParameterId"}
         - $ref: "#/components/parameters/CSRFHeader"
+        - $ref: "#/components/parameters/RequiredIfMatch"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: "#/components/schemas/RuleParameterDeprecateRequest"}
       responses:
         "200":
           description: 参数集已弃用
           content:
             application/json:
               schema: {$ref: "#/components/schemas/RuleParameterSet"}
+        "400": {$ref: "#/components/responses/ValidationError"}
         "401": {$ref: "#/components/responses/UnauthenticatedError"}
         "403": {$ref: "#/components/responses/ForbiddenError"}
         "404": {$ref: "#/components/responses/NotFoundError"}
+        "409": {$ref: "#/components/responses/ConflictError"}
   /api/v1/rule-parameters/{parameterId}/impact:
     post:
       operationId: impactRuleParameterSet
@@ -1356,12 +1368,7 @@ paths:
         required: true
         content:
           application/json:
-            schema:
-              type: object
-              additionalProperties: false
-              required: [parameters]
-              properties:
-                parameters: {type: object, additionalProperties: true}
+            schema: {$ref: "#/components/schemas/RuleParameterImpactRequest"}
       responses:
         "200":
           description: 参数影响
@@ -1372,6 +1379,7 @@ paths:
         "401": {$ref: "#/components/responses/UnauthenticatedError"}
         "403": {$ref: "#/components/responses/ForbiddenError"}
         "404": {$ref: "#/components/responses/NotFoundError"}
+        "409": {$ref: "#/components/responses/ConflictError"}
   /api/v1/source-rule-bindings:
     get:
       operationId: listSourceRuleBindings
@@ -4528,7 +4536,7 @@ components:
           required: [semanticHash, parameters]
           properties:
             semanticHash: {$ref: "#/components/schemas/SHA256Digest"}
-            parameters: {type: object, additionalProperties: true}
+            parameters: {$ref: "#/components/schemas/ExactJSONObject"}
           not:
             anyOf:
               - required: [parameterId]
@@ -4537,7 +4545,7 @@ components:
           required: [parameterId]
           properties:
             parameterId: {$ref: "#/components/schemas/RuleParameterId"}
-            override: {type: object, additionalProperties: true}
+            override: {$ref: "#/components/schemas/ExactJSONObject"}
           not:
             anyOf:
               - required: [semanticHash]
@@ -4550,22 +4558,20 @@ components:
         parameterId:
           $ref: "#/components/schemas/RuleParameterId"
         parameters:
-          type: object
-          additionalProperties: true
+          $ref: "#/components/schemas/ExactJSONObject"
         priority:
           type: integer
           minimum: 0
           maximum: 10000
         override:
-          type: object
-          additionalProperties: true
+          $ref: "#/components/schemas/ExactJSONObject"
         condition:
           type: object
           additionalProperties: true
     SourceRuleBinding:
       type: object
       additionalProperties: false
-      required: [id, sourceId, semanticHash, parameters, priority, ruleIrHash, createdAt]
+      required: [id, sourceId, semanticHash, parameters, parametersText, overrideText, priority, ruleIrHash, createdAt]
       properties:
         id:
           $ref: "#/components/schemas/SourceRuleBindingId"
@@ -4576,6 +4582,10 @@ components:
         parameters:
           type: object
           additionalProperties: true
+        parametersText:
+          type: string
+          description: 冻结参数的规范 JSON 文本；避免 JavaScript Number 中转损失精度
+          maxLength: 8388608
         priority:
           type: integer
         ruleIrHash:
@@ -4598,6 +4608,10 @@ components:
         override:
           type: object
           additionalProperties: true
+        overrideText:
+          type: string
+          description: 参数 override 的规范 JSON 文本；没有 override 时固定为 `{}`
+          maxLength: 8388608
         condition:
           type: object
           additionalProperties: true
@@ -4792,11 +4806,32 @@ components:
       properties:
         name: {type: string, minLength: 1, maxLength: 256}
         semanticHash: {$ref: "#/components/schemas/SHA256Digest"}
-        parameters: {type: object, additionalProperties: true}
+        parameters: {$ref: "#/components/schemas/ExactJSONObject"}
+    RuleParameterUpdateRequest:
+      type: object
+      additionalProperties: false
+      required: [parameters, expectedRevision, confirmImpact]
+      properties:
+        parameters: {$ref: "#/components/schemas/ExactJSONObject"}
+        expectedRevision: {type: integer, minimum: 1}
+        confirmImpact: {type: boolean}
+    RuleParameterImpactRequest:
+      type: object
+      additionalProperties: false
+      required: [parameters]
+      properties:
+        parameters: {$ref: "#/components/schemas/ExactJSONObject"}
+    RuleParameterDeprecateRequest:
+      type: object
+      additionalProperties: false
+      required: [expectedRevision, reason]
+      properties:
+        expectedRevision: {type: integer, minimum: 1}
+        reason: {type: string, minLength: 1, maxLength: 4096}
     RuleParameterSet:
       type: object
       additionalProperties: false
-      required: [id, name, semanticHash, currentRevision, currentHash, status, parameters, createdBy, createdAt, updatedAt]
+      required: [id, name, semanticHash, currentRevision, currentHash, status, parameters, parametersText, createdBy, createdAt, updatedAt]
       properties:
         id: {$ref: "#/components/schemas/RuleParameterId"}
         name: {type: string}
@@ -4805,6 +4840,10 @@ components:
         currentHash: {$ref: "#/components/schemas/SHA256Digest"}
         status: {type: string, enum: [active, deprecated]}
         parameters: {type: object, additionalProperties: true}
+        parametersText:
+          type: string
+          description: 当前 revision 参数的规范 JSON 文本；避免 JavaScript Number 中转损失精度
+          maxLength: 8388608
         createdBy: {type: string}
         createdAt: {type: string, format: date-time}
         updatedAt: {type: string, format: date-time}
@@ -4825,6 +4864,28 @@ components:
     RuleParameterId:
       type: string
       pattern: "^rparam_[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+    ExactJSONObject:
+      description: JSON 对象或保留精确数字字面量的 JSON 对象文本
+      oneOf:
+        - type: object
+          additionalProperties: true
+        - type: string
+          maxLength: 8388608
+    RuleAudit:
+      type: object
+      additionalProperties: false
+      required: [id, packageId, subjectType, subjectId, action, fromSemanticHash, toSemanticHash, reason, actorId, createdAt]
+      properties:
+        id: {type: string}
+        packageId: {$ref: "#/components/schemas/RulePackageId"}
+        subjectType: {type: string, enum: [package, version, parameter_set]}
+        subjectId: {type: string, minLength: 1}
+        action: {type: string, minLength: 1}
+        fromSemanticHash: {type: string}
+        toSemanticHash: {type: string}
+        reason: {type: string}
+        actorId: {type: string, minLength: 1}
+        createdAt: {type: string, format: date-time}
     SHA256Digest:
       type: string
       pattern: "^[0-9a-f]{64}$"

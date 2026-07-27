@@ -263,13 +263,19 @@ func (s *Server) deprecateRulePackage(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var request struct {
-		Reason string `json:"reason"`
+		ExpectedRevision *int   `json:"expectedRevision"`
+		Reason           string `json:"reason"`
 	}
-	if err := decodeOptionalJSON(r, &request); err != nil {
+	if err := decodeJSON(r, &request); err != nil {
 		s.writeRequestError(w, fault.WithField(fault.CodeValidation, "body", err))
 		return
 	}
-	item, err := s.data.SetRulePackageStatus(r.Context(), r.PathValue("packageId"), application.RulePackageDeprecated, session.PrincipalID, request.Reason, ifMatchRevision(r))
+	expected, err := requiredIfMatchBodyRevision(r, request.ExpectedRevision, 1)
+	if err != nil {
+		s.writeRequestError(w, err)
+		return
+	}
+	item, err := s.data.SetRulePackageStatus(r.Context(), r.PathValue("packageId"), application.RulePackageDeprecated, session.PrincipalID, request.Reason, expected)
 	if err != nil {
 		s.writeRequestError(w, err)
 		return
@@ -287,7 +293,12 @@ func (s *Server) deleteRulePackage(w http.ResponseWriter, r *http.Request) {
 		s.writeRequestError(w, err)
 		return
 	}
-	item, err := s.data.SetRulePackageStatus(r.Context(), r.PathValue("packageId"), application.RulePackageDeleted, session.PrincipalID, "soft delete", ifMatchRevision(r))
+	expected, err := requiredIfMatchRevision(r, nil, 1)
+	if err != nil {
+		s.writeRequestError(w, err)
+		return
+	}
+	item, err := s.data.SetRulePackageStatus(r.Context(), r.PathValue("packageId"), application.RulePackageDeleted, session.PrincipalID, "soft delete", expected)
 	if err != nil {
 		s.writeRequestError(w, err)
 		return
@@ -307,7 +318,7 @@ func (s *Server) listRuleAudits(w http.ResponseWriter, r *http.Request) {
 	}
 	result := make([]map[string]any, 0, len(items))
 	for _, item := range items {
-		result = append(result, map[string]any{"id": item.ID, "packageId": item.PackageID, "action": item.Action, "fromSemanticHash": item.FromSemanticHash, "toSemanticHash": item.ToSemanticHash, "reason": item.Reason, "actorId": item.ActorID, "createdAt": item.CreatedAt})
+		result = append(result, map[string]any{"id": item.ID, "packageId": item.PackageID, "subjectType": item.SubjectType, "subjectId": item.SubjectID, "action": item.Action, "fromSemanticHash": item.FromSemanticHash, "toSemanticHash": item.ToSemanticHash, "reason": item.Reason, "actorId": item.ActorID, "createdAt": item.CreatedAt})
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"items": result})
 }
@@ -375,7 +386,7 @@ func (s *Server) deprecateRuleVersion(w http.ResponseWriter, r *http.Request) {
 	var request struct {
 		Reason string `json:"reason"`
 	}
-	if err := decodeOptionalJSON(r, &request); err != nil {
+	if err := decodeJSON(r, &request); err != nil {
 		s.writeRequestError(w, fault.WithField(fault.CodeValidation, "body", err))
 		return
 	}
@@ -448,7 +459,12 @@ func (s *Server) createRuleParameterSet(w http.ResponseWriter, r *http.Request) 
 		s.writeRequestError(w, fault.WithField(fault.CodeValidation, "body", err))
 		return
 	}
-	item, err := s.data.CreateRuleParameterSet(r.Context(), request.Name, request.SemanticHash, request.Parameters, session.PrincipalID)
+	parameters, err := decodeRuleJSONDocument(request.Parameters, false)
+	if err != nil {
+		s.writeRequestError(w, fault.WithField(fault.CodeRuleParameterInvalid, "parameters", err))
+		return
+	}
+	item, err := s.data.CreateRuleParameterSet(r.Context(), request.Name, request.SemanticHash, parameters, session.PrincipalID)
 	if err != nil {
 		s.writeRequestError(w, err)
 		return
@@ -499,16 +515,27 @@ func (s *Server) updateRuleParameterSet(w http.ResponseWriter, r *http.Request) 
 	var request struct {
 		Parameters       json.RawMessage `json:"parameters"`
 		ExpectedRevision *int            `json:"expectedRevision"`
+		ConfirmImpact    *bool           `json:"confirmImpact"`
 	}
 	if err := decodeJSON(r, &request); err != nil {
 		s.writeRequestError(w, fault.WithField(fault.CodeValidation, "body", err))
 		return
 	}
-	expected := ifMatchRevision(r)
-	if request.ExpectedRevision != nil {
-		expected = *request.ExpectedRevision
+	expected, err := requiredIfMatchBodyRevision(r, request.ExpectedRevision, 1)
+	if err != nil {
+		s.writeRequestError(w, err)
+		return
 	}
-	item, err := s.data.UpdateRuleParameterSet(r.Context(), r.PathValue("parameterId"), request.Parameters, expected, session.PrincipalID)
+	if request.ConfirmImpact == nil {
+		s.writeRequestError(w, fault.WithField(fault.CodeValidation, "confirmImpact", fmt.Errorf("confirmImpact 是必填字段")))
+		return
+	}
+	parameters, err := decodeRuleJSONDocument(request.Parameters, false)
+	if err != nil {
+		s.writeRequestError(w, fault.WithField(fault.CodeRuleParameterInvalid, "parameters", err))
+		return
+	}
+	item, err := s.data.UpdateRuleParameterSet(r.Context(), r.PathValue("parameterId"), parameters, expected, session.PrincipalID, *request.ConfirmImpact)
 	if err != nil {
 		s.writeRequestError(w, err)
 		return
@@ -534,7 +561,12 @@ func (s *Server) impactRuleParameterSet(w http.ResponseWriter, r *http.Request) 
 		s.writeRequestError(w, fault.WithField(fault.CodeRuleParameterInvalid, "body", err))
 		return
 	}
-	result, err := s.data.ImpactRuleParameterSet(r.Context(), r.PathValue("parameterId"), request.Parameters)
+	parameters, err := decodeRuleJSONDocument(request.Parameters, false)
+	if err != nil {
+		s.writeRequestError(w, fault.WithField(fault.CodeRuleParameterInvalid, "parameters", err))
+		return
+	}
+	result, err := s.data.ImpactRuleParameterSet(r.Context(), r.PathValue("parameterId"), parameters)
 	if err != nil {
 		s.writeRequestError(w, err)
 		return
@@ -577,7 +609,20 @@ func (s *Server) deprecateRuleParameterSet(w http.ResponseWriter, r *http.Reques
 		s.writeRequestError(w, err)
 		return
 	}
-	item, err := s.data.DeprecateRuleParameterSet(r.Context(), r.PathValue("parameterId"))
+	var request struct {
+		ExpectedRevision *int   `json:"expectedRevision"`
+		Reason           string `json:"reason"`
+	}
+	if err := decodeJSON(r, &request); err != nil {
+		s.writeRequestError(w, fault.WithField(fault.CodeValidation, "body", err))
+		return
+	}
+	expected, err := requiredIfMatchBodyRevision(r, request.ExpectedRevision, 1)
+	if err != nil {
+		s.writeRequestError(w, err)
+		return
+	}
+	item, err := s.data.DeprecateRuleParameterSet(r.Context(), r.PathValue("parameterId"), expected, session.PrincipalID, request.Reason)
 	if err != nil {
 		s.writeRequestError(w, err)
 		return
@@ -853,14 +898,6 @@ func decodeRuleJSONDocument(raw json.RawMessage, allowNull bool) ([]byte, error)
 	return []byte(text), nil
 }
 
-func ifMatchRevision(r *http.Request) int {
-	value, err := parseIfMatchRevision(r.Header.Get("If-Match"))
-	if err != nil {
-		return -1
-	}
-	return value
-}
-
 func requiredIfMatchRevision(r *http.Request, body *int, minimum int) (int, error) {
 	values := r.Header.Values("If-Match")
 	if len(values) != 1 {
@@ -877,6 +914,13 @@ func requiredIfMatchRevision(r *http.Request, body *int, minimum int) (int, erro
 		return 0, fault.WithField(fault.CodeValidation, "expectedRevision", fmt.Errorf("body revision 与 If-Match 不一致"))
 	}
 	return value, nil
+}
+
+func requiredIfMatchBodyRevision(r *http.Request, body *int, minimum int) (int, error) {
+	if body == nil {
+		return 0, fault.WithField(fault.CodeValidation, "expectedRevision", errors.New("body expectedRevision 必须提供"))
+	}
+	return requiredIfMatchRevision(r, body, minimum)
 }
 
 func parseIfMatchRevision(raw string) (int, error) {
@@ -963,19 +1007,30 @@ func ruleParameterMap(value application.RuleParameterSet) map[string]any {
 	return map[string]any{
 		"id": value.ID, "name": value.Name, "semanticHash": value.SemanticHash, "currentRevision": value.CurrentRevision,
 		"currentHash": value.CurrentHash, "status": value.Status, "parameters": json.RawMessage(defaultJSON(value.Parameters, []byte("{}"))),
-		"createdBy": value.CreatedBy, "createdAt": value.CreatedAt, "updatedAt": value.UpdatedAt,
+		"parametersText": string(defaultJSON(value.Parameters, []byte("{}"))),
+		"createdBy":      value.CreatedBy, "createdAt": value.CreatedAt, "updatedAt": value.UpdatedAt,
 	}
 }
 
 func sourceRuleBindingMap(value application.SourceRuleBinding) map[string]any {
-	return map[string]any{
+	result := map[string]any{
 		"id": value.ID, "sourceId": value.SourceID, "semanticHash": value.SemanticHash,
-		"parameters": json.RawMessage(defaultJSON(value.Parameters, []byte("{}"))), "priority": value.Priority,
-		"ruleIrHash": value.RuleIRHash, "parameterId": value.ParameterID, "parameterRevision": value.ParameterRevision,
-		"parameterHash": value.ParameterHash, "override": json.RawMessage(defaultJSON(value.Override, []byte("{}"))),
-		"condition": json.RawMessage(defaultJSON(value.Condition, []byte("{}"))), "status": value.Status,
+		"parameters": json.RawMessage(defaultJSON(value.Parameters, []byte("{}"))), "parametersText": string(defaultJSON(value.Parameters, []byte("{}"))), "priority": value.Priority,
+		"ruleIrHash": value.RuleIRHash, "override": json.RawMessage(defaultJSON(value.Override, []byte("{}"))),
+		"overrideText": string(defaultJSON(value.Override, []byte("{}"))),
+		"condition":    json.RawMessage(defaultJSON(value.Condition, []byte("{}"))), "status": value.Status,
 		"createdAt": value.CreatedAt, "updatedAt": value.UpdatedAt,
 	}
+	if value.ParameterID != "" {
+		result["parameterId"] = value.ParameterID
+	}
+	if value.ParameterRevision != 0 {
+		result["parameterRevision"] = value.ParameterRevision
+	}
+	if value.ParameterHash != "" {
+		result["parameterHash"] = value.ParameterHash
+	}
+	return result
 }
 
 func defaultJSON(value, fallback []byte) []byte {

@@ -17,6 +17,7 @@ import {
   useInfiniteQuery,
   useMutation,
   useQuery,
+  useQueries,
   useQueryClient,
   type UseMutationResult
 } from '@tanstack/react-query';
@@ -53,7 +54,9 @@ export type RulePackage = Schemas['RulePackage'];
 export type RuleDraft = Schemas['RuleDraft'];
 export type RuleDraftValidationResult = Schemas['RuleDraftValidationResult'];
 export type RuleVersion = Schemas['RuleVersion'];
+export type RuleVersionDiff = Schemas['RuleVersionDiff'];
 export type RuleImpactResult = Schemas['RuleImpactResult'];
+export type RuleParameterSet = Schemas['RuleParameterSet'];
 export type SourceRuleBinding = Schemas['SourceRuleBinding'];
 export type BindingIssue = Schemas['BindingIssue'];
 export type SourceStructureDecision = Schemas['SourceStructureDecision'];
@@ -726,7 +729,10 @@ export interface RollbackInput {
   confirmImpact: boolean;
 }
 
-/** 回滚当前版本指针。目标版本仍被使用或前置条件不满足时返回 409 RULE_ROLLBACK_BLOCKED。 */
+/**
+ * 只回滚规则包的 current 指针。它不会改写既有 Binding、ParameterSet 或 Job，也不会自动创建任务。
+ * diff 所说的重扫/重投影只是调用方需要另行安排的后续动作。
+ */
 export function useRollbackRulePackage(): UseMutationResult<RuleVersion, unknown, RollbackInput> {
   const header = useCsrfHeaders();
   const invalidate = useInvalidate();
@@ -746,8 +752,9 @@ export function useRollbackRulePackage(): UseMutationResult<RuleVersion, unknown
           }
         })
       ),
-    onSuccess: () => {
-      invalidate(['rules', 'jobs']);
+    onSettled: () => {
+      // 失败也刷新：revision 冲突后页面必须看到新的 current，而 mutation error 仍常驻在页面内。
+      invalidate(['rules']);
     }
   });
 }
@@ -766,6 +773,126 @@ export function useRuleVersions(packageId: string | undefined) {
   });
 }
 
+/**
+ * 为 Binding 采纳选择并行读取多个 active RulePackage 的全部不可变版本。
+ *
+ * Package current 只是作者工作流指针；后端允许采用同一 active Package 下任意仍为
+ * published + executable 的历史版本，因此不能把这里静默缩窄为 current。
+ */
+export function useRuleVersionsForPackages(packageIds: readonly string[]) {
+  const results = useQueries({
+    queries: packageIds.map((packageId) => ({
+      queryKey: ['rules', 'versions', packageId],
+      queryFn: async ({ signal }: { signal: AbortSignal }) =>
+        expectData(
+          await api.GET('/api/v1/rule-packages/{packageId}/versions', {
+            params: { path: { packageId } },
+            signal
+          })
+        )
+    }))
+  });
+  const isPending = results.some((result) => result.isPending);
+  const errorResult = results.find((result) => result.isError);
+  const fetchStatus: 'fetching' | 'paused' | 'idle' = results.some(
+    (result) => result.fetchStatus === 'fetching'
+  )
+    ? 'fetching'
+    : results.some((result) => result.fetchStatus === 'paused')
+      ? 'paused'
+      : 'idle';
+  return {
+    isPending,
+    isError: errorResult !== undefined,
+    error: errorResult?.error,
+    data:
+      isPending || errorResult !== undefined
+        ? undefined
+        : { items: results.flatMap((result) => result.data?.items ?? []) },
+    fetchStatus,
+    refetch: () => Promise.all(results.map((result) => result.refetch()))
+  };
+}
+
+/** 持久 RuleVersion 的结构化差异；rollback 的确认只能绑定到这份证据。 */
+export function useRuleVersionDiff(oldSemanticHash: string | null, newSemanticHash: string | null) {
+  const header = useCsrfHeaders();
+  return useQuery({
+    queryKey: ['rules', 'version-diff', oldSemanticHash, newSemanticHash],
+    enabled: oldSemanticHash !== null && newSemanticHash !== null,
+    retry: false,
+    queryFn: async ({ signal }) =>
+      expectData(
+        await api.POST('/api/v1/rule-versions/diff', {
+          params: { header },
+          body: {
+            oldSemanticHash: oldSemanticHash ?? '',
+            newSemanticHash: newSemanticHash ?? ''
+          },
+          signal
+        })
+      )
+  });
+}
+
+export interface DeprecateRulePackageInput {
+  packageId: string;
+  expectedRevision: number;
+  reason: string;
+}
+
+/** 单向弃用规则包；既有版本、ParameterSet、Binding 与 Job 保持原事实。 */
+export function useDeprecateRulePackage(): UseMutationResult<
+  RulePackage,
+  unknown,
+  DeprecateRulePackageInput
+> {
+  const header = useCsrfHeaders();
+  const invalidate = useInvalidate();
+  return useMutation({
+    mutationFn: async (input: DeprecateRulePackageInput) =>
+      expectData(
+        await api.POST('/api/v1/rule-packages/{packageId}/deprecate', {
+          params: {
+            header: { ...header, 'If-Match': `"${String(input.expectedRevision)}"` },
+            path: { packageId: input.packageId }
+          },
+          body: { expectedRevision: input.expectedRevision, reason: input.reason }
+        })
+      ),
+    onSettled: () => {
+      invalidate(['rules']);
+    }
+  });
+}
+
+export interface DeprecateRuleVersionInput {
+  semanticHash: string;
+  reason: string;
+}
+
+/** 弃用非 current、且未被 active SourceRuleBinding 使用的不可变 RuleVersion。 */
+export function useDeprecateRuleVersion(): UseMutationResult<
+  RuleVersion,
+  unknown,
+  DeprecateRuleVersionInput
+> {
+  const header = useCsrfHeaders();
+  const invalidate = useInvalidate();
+  return useMutation({
+    mutationFn: async (input: DeprecateRuleVersionInput) =>
+      expectData(
+        await api.POST('/api/v1/rule-versions/{semanticHash}/deprecate', {
+          params: { header, path: { semanticHash: input.semanticHash } },
+          body: { reason: input.reason }
+        })
+      ),
+    onSettled: () => {
+      invalidate(['rules']);
+    }
+  });
+}
+
 export function useRuleAudits(packageId: string | undefined) {
   return useQuery({
     queryKey: ['rules', 'audits', packageId],
@@ -777,6 +904,172 @@ export function useRuleAudits(packageId: string | undefined) {
           signal
         })
       )
+  });
+}
+
+export function useRuleParameterSets(
+  /** null 禁用查询；undefined 列出全部版本的参数集。 */
+  semanticHash: string | null | undefined,
+  status?: RuleParameterSet['status']
+) {
+  return useQuery({
+    queryKey: ['rules', 'parameter-sets', semanticHash, status],
+    enabled: semanticHash !== null,
+    queryFn: async ({ signal }) =>
+      expectData(
+        await api.GET('/api/v1/rule-parameters', {
+          params: {
+            query: {
+              ...(semanticHash === null || semanticHash === undefined ? {} : { semanticHash }),
+              ...(status === undefined ? {} : { status })
+            }
+          },
+          signal
+        })
+      )
+  });
+}
+
+export interface CreateRuleParameterSetInput {
+  name: string;
+  semanticHash: string;
+  /** 规范 JSON 对象文本，数字不得经过 JavaScript Number。 */
+  parameters: string;
+}
+
+export function useCreateRuleParameterSet(): UseMutationResult<
+  RuleParameterSet,
+  unknown,
+  CreateRuleParameterSetInput
+> {
+  const header = useCsrfHeaders();
+  const invalidate = useInvalidate();
+  return useMutation({
+    mutationFn: async (input: CreateRuleParameterSetInput) =>
+      expectData(
+        await api.POST('/api/v1/rule-parameters', {
+          params: { header },
+          body: input
+        })
+      ),
+    onSuccess: () => {
+      invalidate(['rules']);
+    }
+  });
+}
+
+export interface ImpactRuleParameterSetInput {
+  parameterId: string;
+  /** 规范 JSON 对象文本，数字不得经过 JavaScript Number。 */
+  parameters: string;
+}
+
+export function useImpactRuleParameterSet(): UseMutationResult<
+  RuleImpactResult,
+  unknown,
+  ImpactRuleParameterSetInput
+> {
+  const header = useCsrfHeaders();
+  return useMutation({
+    mutationFn: async (input: ImpactRuleParameterSetInput) =>
+      expectData(
+        await api.POST('/api/v1/rule-parameters/{parameterId}/impact', {
+          params: { header, path: { parameterId: input.parameterId } },
+          body: { parameters: input.parameters }
+        })
+      )
+  });
+}
+
+export interface UpdateRuleParameterSetInput {
+  parameterId: string;
+  parameters: string;
+  expectedRevision: number;
+  confirmImpact: boolean;
+}
+
+export function useUpdateRuleParameterSet(): UseMutationResult<
+  RuleParameterSet,
+  unknown,
+  UpdateRuleParameterSetInput
+> {
+  const header = useCsrfHeaders();
+  const invalidate = useInvalidate();
+  return useMutation({
+    mutationFn: async (input: UpdateRuleParameterSetInput) =>
+      expectData(
+        await api.PUT('/api/v1/rule-parameters/{parameterId}', {
+          params: {
+            header: { ...header, 'If-Match': `"${String(input.expectedRevision)}"` },
+            path: { parameterId: input.parameterId }
+          },
+          body: {
+            parameters: input.parameters,
+            expectedRevision: input.expectedRevision,
+            confirmImpact: input.confirmImpact
+          }
+        })
+      ),
+    onSettled: () => {
+      // 冲突时刷新服务器 revision；编辑器自行保留本地文本，不静默采用缓存值。
+      invalidate(['rules', 'sources']);
+    }
+  });
+}
+
+export interface CopyRuleParameterSetInput {
+  parameterId: string;
+  name: string;
+}
+
+export function useCopyRuleParameterSet(): UseMutationResult<
+  RuleParameterSet,
+  unknown,
+  CopyRuleParameterSetInput
+> {
+  const header = useCsrfHeaders();
+  const invalidate = useInvalidate();
+  return useMutation({
+    mutationFn: async (input: CopyRuleParameterSetInput) =>
+      expectData(
+        await api.POST('/api/v1/rule-parameters/{parameterId}/copy', {
+          params: { header, path: { parameterId: input.parameterId } },
+          body: { name: input.name }
+        })
+      ),
+    onSuccess: () => {
+      invalidate(['rules']);
+    }
+  });
+}
+
+export interface DeprecateRuleParameterSetInput {
+  parameterId: string;
+  expectedRevision: number;
+  reason: string;
+}
+
+export function useDeprecateRuleParameterSet(): UseMutationResult<
+  RuleParameterSet,
+  unknown,
+  DeprecateRuleParameterSetInput
+> {
+  const header = useCsrfHeaders();
+  const invalidate = useInvalidate();
+  return useMutation({
+    mutationFn: async (input: DeprecateRuleParameterSetInput) =>
+      expectData(
+        await api.POST('/api/v1/rule-parameters/{parameterId}/deprecate', {
+          params: {
+            header: { ...header, 'If-Match': `"${String(input.expectedRevision)}"` },
+            path: { parameterId: input.parameterId }
+          },
+          body: { expectedRevision: input.expectedRevision, reason: input.reason }
+        })
+      ),
+    onSettled: () => {
+      invalidate(['rules']);
+    }
   });
 }
 
@@ -866,12 +1159,27 @@ export function useEffectiveRuleBinding(sourceId: string | null) {
   });
 }
 
-export interface CreateBindingInput {
+export interface CreateDirectBindingInput {
   sourceId: string;
   semanticHash: string;
   priority: number;
-  parameters: Record<string, unknown>;
+  /** 规范 JSON 对象文本，数字不得经过 JavaScript Number。 */
+  parameters: string;
+  parameterId?: never;
+  override?: never;
 }
+
+export interface CreateParameterSetBindingInput {
+  sourceId: string;
+  parameterId: string;
+  priority: number;
+  /** 一层 canonical object override；数字不得经过 JavaScript Number。 */
+  override: string;
+  semanticHash?: never;
+  parameters?: never;
+}
+
+export type CreateBindingInput = CreateDirectBindingInput | CreateParameterSetBindingInput;
 
 export function useCreateSourceRuleBinding(): UseMutationResult<
   SourceRuleBinding,

@@ -17,11 +17,14 @@ import {
   useCreateRulePackage,
   useCreateSourceRuleBinding,
   useEffectiveRuleBinding,
+  useRuleParameterSets,
   useRuleSchema,
   useRulePackages,
+  useRuleVersionsForPackages,
   useSourceRuleBindings,
   useSources
 } from '../api';
+import { isRecord, parseRuleValue } from '../rules/lossless';
 import {
   Absent,
   AsyncPanel,
@@ -39,6 +42,14 @@ const SEMANTIC_HASH_PATTERN = /^[a-f0-9]{64}$/;
 
 function isSemanticHash(value: string | undefined): value is string {
   return value !== undefined && SEMANTIC_HASH_PATTERN.test(value);
+}
+
+function jsonObjectError(text: string): string | undefined {
+  try {
+    return isRecord(parseRuleValue(text)) ? undefined : '必须是 JSON 对象';
+  } catch (error) {
+    return error instanceof Error ? error.message : '不是合法的 JSON';
+  }
 }
 
 function RulePackagesPanel() {
@@ -147,39 +158,39 @@ function BindingsPanel() {
   const { show } = useToast();
   const sources = useSources();
   const packages = useRulePackages();
+  const activePackages = packages.data?.items.filter((item) => item.status === 'active') ?? [];
+  const versions = useRuleVersionsForPackages(activePackages.map((item) => item.id));
+  const parameterSets = useRuleParameterSets(undefined, 'active');
   const [sourceId, setSourceId] = useState<string | null>(null);
   const bindings = useSourceRuleBindings(sourceId);
   const effective = useEffectiveRuleBinding(sourceId);
   const create = useCreateSourceRuleBinding();
+  const [bindingMode, setBindingMode] = useState<'direct' | 'parameter'>('direct');
   const [semanticHash, setSemanticHash] = useState<string | null>(null);
+  const [parameterId, setParameterId] = useState<string | null>(null);
   const [priority, setPriority] = useState('100');
   const [parameters, setParameters] = useState('{}');
+  const [override, setOverride] = useState('{}');
 
-  const priorityValue = Number.parseInt(priority, 10);
-  const priorityValid = Number.isFinite(priorityValue);
-  let parsedParameters: Record<string, unknown> | null = null;
-  let parameterError: string | undefined;
-  try {
-    const parsed: unknown = JSON.parse(parameters);
-    if (typeof parsed === 'object' && parsed !== null && !Array.isArray(parsed)) {
-      parsedParameters = parsed as Record<string, unknown>;
-    } else {
-      parameterError = '参数必须是 JSON 对象';
-    }
-  } catch {
-    parameterError = '不是合法的 JSON';
-  }
+  const priorityValue = Number(priority);
+  const priorityValid = Number.isInteger(priorityValue) && priorityValue >= 0 && priorityValue <= 10000;
+  const parameterError = jsonObjectError(parameters);
+  const overrideError = jsonObjectError(override);
+  const activePackageNames = new Map(activePackages.map((item) => [item.id, item.name]));
   const publishedVersions =
-    packages.data?.items.flatMap((item) =>
-      item.status === 'active' && isSemanticHash(item.currentSemanticHash)
+    versions.data?.items.flatMap((item) => {
+      if (item.packageId === undefined) return [];
+      const packageName = activePackageNames.get(item.packageId);
+      return packageName !== undefined && item.status === 'published' && item.executable === true
         ? [
             {
-              id: item.currentSemanticHash,
-              label: `${item.name} · ${item.currentSemanticHash.slice(0, 12)}…`
+              id: item.semanticHash,
+              label: `${packageName} · ${item.version} · ${item.semanticHash.slice(0, 12)}…`
             }
           ]
-        : []
-    ) ?? [];
+        : [];
+    }) ?? [];
+  const adoptableSemanticHashes = new Set(publishedVersions.map((item) => item.id));
 
   return (
     <Section
@@ -238,6 +249,30 @@ function BindingsPanel() {
                     header: 'ruleIrHash',
                     render: (row) => <MonoId value={row.ruleIrHash} label="ruleIrHash" />
                   },
+                  {
+                    id: 'parameterSet',
+                    header: 'ParameterSet',
+                    render: (row) =>
+                      row.parameterId === undefined ? (
+                        <Absent>direct</Absent>
+                      ) : (
+                        <>
+                          <MonoId value={row.parameterId} label="ParameterSet ID" />
+                          <br />
+                          revision {row.parameterRevision ?? 0}
+                        </>
+                      )
+                  },
+                  {
+                    id: 'parameterHash',
+                    header: 'parameterHash',
+                    render: (row) =>
+                      row.parameterHash === undefined || row.parameterHash === '' ? (
+                        <Absent />
+                      ) : (
+                        <MonoId value={row.parameterHash} label="parameterHash" />
+                      )
+                  },
                   { id: 'created', header: '创建时间', render: (row) => formatDateTime(row.createdAt) }
                 ]}
               />
@@ -246,19 +281,53 @@ function BindingsPanel() {
 
           <div className="manage-form">
             <h3 className="manage-section__title">新增绑定</h3>
+            <Select
+              label="绑定参数来源"
+              options={[
+                { id: 'direct', label: 'direct · 直接参数文本' },
+                { id: 'parameter', label: 'ParameterSet · 共享参数集 + override' }
+              ]}
+              selectedKey={bindingMode}
+              onSelectionChange={(value) => {
+                if (value !== 'direct' && value !== 'parameter') return;
+                setBindingMode(value);
+                create.reset();
+              }}
+              description="两种请求体严格互斥：direct 只发送 semanticHash/parameters；ParameterSet 模式只发送 parameterId/override。"
+            />
             <div className="manage-form__row">
-              <AsyncPanel query={packages}>
-                {() => (
-                  <Select
-                    label="已发布版本"
-                    placeholder="选择 active 规则包的当前版本"
-                    options={publishedVersions}
-                    selectedKey={semanticHash}
-                    onSelectionChange={setSemanticHash}
-                    description="只列出 active 规则包的当前 immutable RuleVersion。"
-                  />
-                )}
-              </AsyncPanel>
+              {bindingMode === 'direct' ? (
+                <AsyncPanel query={versions}>
+                  {() => (
+                    <Select
+                      label="已发布版本"
+                      placeholder="选择 active 规则包的已发布版本"
+                      options={publishedVersions}
+                      selectedKey={semanticHash}
+                      onSelectionChange={setSemanticHash}
+                      description="列出 active 规则包下全部 published + executable 的 immutable RuleVersion；current 只是作者工作流指针。"
+                    />
+                  )}
+                </AsyncPanel>
+              ) : (
+                <AsyncPanel query={parameterSets}>
+                  {(data) => (
+                    <Select
+                      label="active ParameterSet"
+                      placeholder="选择共享参数集"
+                      options={data.parameterSets
+                        .filter((item) => adoptableSemanticHashes.has(item.semanticHash))
+                        .map((item) => ({
+                          id: item.id,
+                          label: `${item.name} · r${String(item.currentRevision)} · ${item.semanticHash.slice(0, 12)}…`
+                        }))}
+                      selectedKey={parameterId}
+                      onSelectionChange={setParameterId}
+                      description="列出 active 规则包下 published + executable 版本的 active ParameterSet。创建时冻结所选 revision/hash；以后更新会在服务端事务中刷新引用它的 Binding。"
+                    />
+                  )}
+                </AsyncPanel>
+              )}
               <TextInput
                 label="priority"
                 value={priority}
@@ -266,39 +335,70 @@ function BindingsPanel() {
                 errorMessage={priorityValid ? undefined : '必须是整数'}
               />
             </div>
-            <TextInput
-              label="参数（规范 JSON 对象）"
-              value={parameters}
-              onChange={setParameters}
-              isMultiline
-              rows={6}
-              errorMessage={parameterError}
-            />
+            {bindingMode === 'direct' ? (
+              <TextInput
+                label="参数（精确 JSON 对象文本）"
+                value={parameters}
+                onChange={setParameters}
+                isMultiline
+                rows={6}
+                errorMessage={parameterError}
+                description="文本原样发送，大整数和高精度小数不会先经过 JavaScript Number。"
+              />
+            ) : (
+              <TextInput
+                label="override（精确 JSON 对象文本）"
+                value={override}
+                onChange={setOverride}
+                isMultiline
+                rows={6}
+                errorMessage={overrideError}
+                description="只允许一层 canonical object override；不传 semanticHash 或 direct parameters。"
+              />
+            )}
             <div className="manage-form__actions">
               <Button
                 variant="primary"
                 isPending={create.isPending}
-                isDisabled={semanticHash === null || !priorityValid || parsedParameters === null}
+                isDisabled={
+                  !priorityValid ||
+                  (bindingMode === 'direct'
+                    ? semanticHash === null || parameterError !== undefined
+                    : parameterId === null || overrideError !== undefined)
+                }
                 onPress={() => {
-                  if (semanticHash === null || parsedParameters === null || !priorityValid) return;
-                  create.mutate(
-                    {
-                      sourceId,
-                      semanticHash,
-                      priority: priorityValue,
-                      parameters: parsedParameters
-                    },
-                    {
-                      onSuccess: () => {
-                        setSemanticHash(null);
-                        setPriority('100');
-                        setParameters('{}');
-                        void bindings.refetch();
-                        void effective.refetch();
-                        show({ title: '绑定已创建', tone: 'success' });
-                      }
+                  if (!priorityValid) return;
+                  const input =
+                    bindingMode === 'direct'
+                      ? semanticHash === null || parameterError !== undefined
+                        ? null
+                        : {
+                            sourceId,
+                            semanticHash,
+                            priority: priorityValue,
+                            parameters
+                          }
+                      : parameterId === null || overrideError !== undefined
+                        ? null
+                        : {
+                            sourceId,
+                            parameterId,
+                            priority: priorityValue,
+                            override
+                          };
+                  if (input === null) return;
+                  create.mutate(input, {
+                    onSuccess: () => {
+                      setSemanticHash(null);
+                      setParameterId(null);
+                      setPriority('100');
+                      setParameters('{}');
+                      setOverride('{}');
+                      void bindings.refetch();
+                      void effective.refetch();
+                      show({ title: '绑定已创建', tone: 'success' });
                     }
-                  );
+                  });
                 }}
               >
                 创建绑定
@@ -333,6 +433,25 @@ function EffectiveBinding({ query }: { query: ReturnType<typeof useEffectiveRule
         { term: '绑定 ID', value: <MonoId value={query.data.id} label="绑定 ID" /> },
         { term: 'semanticHash', value: <MonoId value={query.data.semanticHash} label="semanticHash" /> },
         { term: 'ruleIrHash', value: <MonoId value={query.data.ruleIrHash} label="ruleIrHash" /> },
+        {
+          term: 'ParameterSet',
+          value:
+            query.data.parameterId === undefined ? (
+              <Absent>direct</Absent>
+            ) : (
+              <MonoId value={query.data.parameterId} label="ParameterSet ID" />
+            )
+        },
+        { term: '参数 revision', value: query.data.parameterRevision ?? <Absent /> },
+        {
+          term: 'parameterHash',
+          value:
+            query.data.parameterHash === undefined || query.data.parameterHash === '' ? (
+              <Absent />
+            ) : (
+              <MonoId value={query.data.parameterHash} label="parameterHash" />
+            )
+        },
         { term: 'priority', value: query.data.priority },
         { term: '状态', value: query.data.status ?? 'active' }
       ]}

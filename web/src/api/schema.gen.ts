@@ -2631,26 +2631,18 @@ export interface components {
             sourceId: components["schemas"]["SourceId"];
             semanticHash?: components["schemas"]["SHA256Digest"];
             parameterId?: components["schemas"]["RuleParameterId"];
-            parameters?: {
-                [key: string]: unknown;
-            };
+            parameters?: components["schemas"]["ExactJSONObject"];
             priority: number;
-            override?: {
-                [key: string]: unknown;
-            };
+            override?: components["schemas"]["ExactJSONObject"];
             condition?: {
                 [key: string]: unknown;
             };
         } & ({
             semanticHash: components["schemas"]["SHA256Digest"];
-            parameters: {
-                [key: string]: unknown;
-            };
+            parameters: components["schemas"]["ExactJSONObject"];
         } | {
             parameterId: components["schemas"]["RuleParameterId"];
-            override?: {
-                [key: string]: unknown;
-            };
+            override?: components["schemas"]["ExactJSONObject"];
         });
         SourceRuleBinding: {
             id: components["schemas"]["SourceRuleBindingId"];
@@ -2659,6 +2651,8 @@ export interface components {
             parameters: {
                 [key: string]: unknown;
             };
+            /** @description 冻结参数的规范 JSON 文本；避免 JavaScript Number 中转损失精度 */
+            parametersText: string;
             priority: number;
             ruleIrHash: components["schemas"]["SHA256Digest"];
             /** Format: date-time */
@@ -2673,6 +2667,8 @@ export interface components {
             override?: {
                 [key: string]: unknown;
             };
+            /** @description 参数 override 的规范 JSON 文本；没有 override 时固定为 `{}` */
+            overrideText: string;
             condition?: {
                 [key: string]: unknown;
             };
@@ -2832,9 +2828,19 @@ export interface components {
         RuleParameterCreateRequest: {
             name: string;
             semanticHash: components["schemas"]["SHA256Digest"];
-            parameters: {
-                [key: string]: unknown;
-            };
+            parameters: components["schemas"]["ExactJSONObject"];
+        };
+        RuleParameterUpdateRequest: {
+            parameters: components["schemas"]["ExactJSONObject"];
+            expectedRevision: number;
+            confirmImpact: boolean;
+        };
+        RuleParameterImpactRequest: {
+            parameters: components["schemas"]["ExactJSONObject"];
+        };
+        RuleParameterDeprecateRequest: {
+            expectedRevision: number;
+            reason: string;
         };
         RuleParameterSet: {
             id: components["schemas"]["RuleParameterId"];
@@ -2847,6 +2853,8 @@ export interface components {
             parameters: {
                 [key: string]: unknown;
             };
+            /** @description 当前 revision 参数的规范 JSON 文本；避免 JavaScript Number 中转损失精度 */
+            parametersText: string;
             createdBy: string;
             /** Format: date-time */
             createdAt: string;
@@ -2859,6 +2867,24 @@ export interface components {
         RulePackageId: string;
         RuleDraftId: string;
         RuleParameterId: string;
+        /** @description JSON 对象或保留精确数字字面量的 JSON 对象文本 */
+        ExactJSONObject: {
+            [key: string]: unknown;
+        } | string;
+        RuleAudit: {
+            id: string;
+            packageId: components["schemas"]["RulePackageId"];
+            /** @enum {string} */
+            subjectType: "package" | "version" | "parameter_set";
+            subjectId: string;
+            action: string;
+            fromSemanticHash: string;
+            toSemanticHash: string;
+            reason: string;
+            actorId: string;
+            /** Format: date-time */
+            createdAt: string;
+        };
         SHA256Digest: string;
         PairingAttemptResponse: {
             credential: string;
@@ -4414,7 +4440,7 @@ export interface operations {
             query?: never;
             header: {
                 "X-Gallery-CSRF": components["parameters"]["CSRFHeader"];
-                "If-Match"?: components["parameters"]["IfMatch"];
+                "If-Match": components["parameters"]["RequiredIfMatch"];
             };
             path: {
                 packageId: components["schemas"]["RulePackageId"];
@@ -4432,6 +4458,7 @@ export interface operations {
                     "application/json": components["schemas"]["RulePackage"];
                 };
             };
+            400: components["responses"]["ValidationError"];
             401: components["responses"]["UnauthenticatedError"];
             403: components["responses"]["ForbiddenError"];
             404: components["responses"]["NotFoundError"];
@@ -4563,17 +4590,18 @@ export interface operations {
             query?: never;
             header: {
                 "X-Gallery-CSRF": components["parameters"]["CSRFHeader"];
-                "If-Match"?: components["parameters"]["IfMatch"];
+                "If-Match": components["parameters"]["RequiredIfMatch"];
             };
             path: {
                 packageId: components["schemas"]["RulePackageId"];
             };
             cookie?: never;
         };
-        requestBody?: {
+        requestBody: {
             content: {
                 "application/json": {
-                    reason?: string;
+                    expectedRevision: number;
+                    reason: string;
                 };
             };
         };
@@ -4587,9 +4615,11 @@ export interface operations {
                     "application/json": components["schemas"]["RulePackage"];
                 };
             };
+            400: components["responses"]["ValidationError"];
             401: components["responses"]["UnauthenticatedError"];
             403: components["responses"]["ForbiddenError"];
             404: components["responses"]["NotFoundError"];
+            409: components["responses"]["ConflictError"];
         };
     };
     listRuleAudits: {
@@ -4610,9 +4640,7 @@ export interface operations {
                 };
                 content: {
                     "application/json": {
-                        items: {
-                            [key: string]: unknown;
-                        }[];
+                        items: components["schemas"]["RuleAudit"][];
                     };
                 };
             };
@@ -4810,10 +4838,10 @@ export interface operations {
             };
             cookie?: never;
         };
-        requestBody?: {
+        requestBody: {
             content: {
                 "application/json": {
-                    reason?: string;
+                    reason: string;
                 };
             };
         };
@@ -4827,6 +4855,7 @@ export interface operations {
                     "application/json": components["schemas"]["RuleVersion"];
                 };
             };
+            400: components["responses"]["ValidationError"];
             401: components["responses"]["UnauthenticatedError"];
             403: components["responses"]["ForbiddenError"];
             404: components["responses"]["NotFoundError"];
@@ -4919,7 +4948,7 @@ export interface operations {
             query?: never;
             header: {
                 "X-Gallery-CSRF": components["parameters"]["CSRFHeader"];
-                "If-Match"?: components["parameters"]["IfMatch"];
+                "If-Match": components["parameters"]["RequiredIfMatch"];
             };
             path: {
                 parameterId: components["schemas"]["RuleParameterId"];
@@ -4928,12 +4957,7 @@ export interface operations {
         };
         requestBody: {
             content: {
-                "application/json": {
-                    parameters: {
-                        [key: string]: unknown;
-                    };
-                    expectedRevision?: number;
-                };
+                "application/json": components["schemas"]["RuleParameterUpdateRequest"];
             };
         };
         responses: {
@@ -4980,8 +5004,11 @@ export interface operations {
                     "application/json": components["schemas"]["RuleParameterSet"];
                 };
             };
+            400: components["responses"]["ValidationError"];
             401: components["responses"]["UnauthenticatedError"];
             403: components["responses"]["ForbiddenError"];
+            404: components["responses"]["NotFoundError"];
+            409: components["responses"]["ConflictError"];
         };
     };
     deprecateRuleParameterSet: {
@@ -4989,13 +5016,18 @@ export interface operations {
             query?: never;
             header: {
                 "X-Gallery-CSRF": components["parameters"]["CSRFHeader"];
+                "If-Match": components["parameters"]["RequiredIfMatch"];
             };
             path: {
                 parameterId: components["schemas"]["RuleParameterId"];
             };
             cookie?: never;
         };
-        requestBody?: never;
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["RuleParameterDeprecateRequest"];
+            };
+        };
         responses: {
             /** @description 参数集已弃用 */
             200: {
@@ -5006,9 +5038,11 @@ export interface operations {
                     "application/json": components["schemas"]["RuleParameterSet"];
                 };
             };
+            400: components["responses"]["ValidationError"];
             401: components["responses"]["UnauthenticatedError"];
             403: components["responses"]["ForbiddenError"];
             404: components["responses"]["NotFoundError"];
+            409: components["responses"]["ConflictError"];
         };
     };
     impactRuleParameterSet: {
@@ -5024,11 +5058,7 @@ export interface operations {
         };
         requestBody: {
             content: {
-                "application/json": {
-                    parameters: {
-                        [key: string]: unknown;
-                    };
-                };
+                "application/json": components["schemas"]["RuleParameterImpactRequest"];
             };
         };
         responses: {
@@ -5045,6 +5075,7 @@ export interface operations {
             401: components["responses"]["UnauthenticatedError"];
             403: components["responses"]["ForbiddenError"];
             404: components["responses"]["NotFoundError"];
+            409: components["responses"]["ConflictError"];
         };
     };
     listSourceRuleBindings: {

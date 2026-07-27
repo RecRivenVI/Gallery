@@ -148,7 +148,7 @@ func TestRuleLifecycleDraftPublishParameterAndRollback(t *testing.T) {
 	if parameter.CurrentRevision != 1 || parameter.CurrentHash == "" {
 		t.Fatalf("参数集错误: %+v", parameter)
 	}
-	parameter, err = resources.UpdateRuleParameterSet(ctx, parameter.ID, []byte(`{}`), 1, "owner")
+	parameter, err = resources.UpdateRuleParameterSet(ctx, parameter.ID, []byte(`{}`), 1, "owner", true)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -301,7 +301,7 @@ func TestRuleParameterBindingRefreshAndDeterministicSelection(t *testing.T) {
 	if err != nil || len(impact.AffectedSources) != 1 || impact.AffectedSources[0] != source.ID {
 		t.Fatalf("共享参数 Impact 错误: %+v %v", impact, err)
 	}
-	updated, err := resources.UpdateRuleParameterSet(ctx, parameter.ID, []byte(`{"minimumSize":3}`), 1, "owner")
+	updated, err := resources.UpdateRuleParameterSet(ctx, parameter.ID, []byte(`{"minimumSize":3}`), 1, "owner", true)
 	if err != nil || updated.CurrentRevision != 2 {
 		t.Fatalf("参数更新失败: %+v %v", updated, err)
 	}

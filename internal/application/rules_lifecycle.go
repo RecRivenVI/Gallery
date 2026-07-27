@@ -18,19 +18,22 @@ import (
 )
 
 const (
-	RulePackageActive       = "active"
-	RulePackageDeprecated   = "deprecated"
-	RulePackageDeleted      = "deleted"
-	RuleDraftState          = "draft"
-	RuleDraftValidated      = "validated"
-	RuleDraftInvalid        = "invalid"
-	RuleVersionPublished    = "published"
-	RuleVersionDeprecated   = "deprecated"
-	RuleParameterActive     = "active"
-	RuleParameterDeprecated = "deprecated"
-	RuleBindingActive       = "active"
-	RuleBindingPaused       = "paused"
-	RuleBindingInvalid      = "invalid"
+	RulePackageActive         = "active"
+	RulePackageDeprecated     = "deprecated"
+	RulePackageDeleted        = "deleted"
+	RuleDraftState            = "draft"
+	RuleDraftValidated        = "validated"
+	RuleDraftInvalid          = "invalid"
+	RuleVersionPublished      = "published"
+	RuleVersionDeprecated     = "deprecated"
+	RuleParameterActive       = "active"
+	RuleParameterDeprecated   = "deprecated"
+	RuleBindingActive         = "active"
+	RuleBindingPaused         = "paused"
+	RuleBindingInvalid        = "invalid"
+	RuleAuditSubjectPackage   = "package"
+	RuleAuditSubjectVersion   = "version"
+	RuleAuditSubjectParameter = "parameter_set"
 )
 
 type RulePackage struct {
@@ -86,6 +89,8 @@ type RuleParameterSet struct {
 type RuleAudit struct {
 	ID               string
 	PackageID        string
+	SubjectType      string
+	SubjectID        string
 	Action           string
 	FromSemanticHash string
 	ToSemanticHash   string
@@ -185,6 +190,13 @@ func (r *Resources) SetRulePackageStatus(ctx context.Context, packageID, status,
 	if status != RulePackageActive && status != RulePackageDeprecated && status != RulePackageDeleted {
 		return RulePackage{}, fault.WithField(fault.CodeValidation, "status", nil)
 	}
+	if expectedRevision < 0 {
+		return RulePackage{}, fault.WithField(fault.CodeValidation, "revision", fmt.Errorf("expected revision is required"))
+	}
+	reason = strings.TrimSpace(reason)
+	if reason == "" || len([]rune(reason)) > 4096 {
+		return RulePackage{}, fault.WithField(fault.CodeValidation, "reason", nil)
+	}
 	now := r.clock.Now().UTC()
 	tx, err := r.control.BeginTx(ctx, nil)
 	if err != nil {
@@ -209,8 +221,12 @@ FROM rule_packages WHERE package_id=?`, packageID).Scan(&item.ID, &item.RuleSetI
 	if status == RulePackageDeleted && item.CurrentSemanticHash != "" {
 		return RulePackage{}, fault.New(fault.CodeRuleVersionInUse, false, nil)
 	}
-	if expectedRevision >= 0 && item.Revision != expectedRevision {
+	if item.Revision != expectedRevision {
 		return RulePackage{}, rulePackageConflict(expectedRevision, item.Revision)
+	}
+	if item.Status == status || status == RulePackageActive ||
+		(status == RulePackageDeprecated && item.Status != RulePackageActive) {
+		return RulePackage{}, fault.New(fault.CodeRulePackageConflict, false, fmt.Errorf("规则包状态不允许该转换"))
 	}
 	result, err := tx.ExecContext(ctx, `UPDATE rule_packages SET status=?, revision=revision+1, updated_at=? WHERE package_id=? AND revision=?`, status, now.Unix(), packageID, item.Revision)
 	if err != nil {
@@ -219,7 +235,7 @@ FROM rule_packages WHERE package_id=?`, packageID).Scan(&item.ID, &item.RuleSetI
 	if count, _ := result.RowsAffected(); count != 1 {
 		return RulePackage{}, rulePackageConflict(item.Revision, item.Revision+1)
 	}
-	if err := r.appendRuleAuditTx(ctx, tx, packageID, "status_"+status, item.CurrentSemanticHash, item.CurrentSemanticHash, reason, actorOrSystem(actor), now); err != nil {
+	if err := r.appendRuleAuditTx(ctx, tx, packageID, RuleAuditSubjectPackage, packageID, "status_"+status, item.CurrentSemanticHash, item.CurrentSemanticHash, reason, actorOrSystem(actor), now); err != nil {
 		return RulePackage{}, err
 	}
 	if err := tx.Commit(); err != nil {
@@ -232,7 +248,7 @@ func (r *Resources) ListRuleAudits(ctx context.Context, packageID string) ([]Rul
 	if _, err := r.GetRulePackage(ctx, packageID); err != nil {
 		return nil, err
 	}
-	rows, err := r.control.QueryContext(ctx, `SELECT audit_id, package_id, action, from_semantic_hash, to_semantic_hash, reason, actor_id, created_at FROM rule_audits WHERE package_id=? ORDER BY created_at, audit_id`, packageID)
+	rows, err := r.control.QueryContext(ctx, `SELECT audit_id, package_id, subject_type, subject_id, action, from_semantic_hash, to_semantic_hash, reason, actor_id, created_at FROM rule_audits WHERE package_id=? ORDER BY created_at, audit_id`, packageID)
 	if err != nil {
 		return nil, fault.New(fault.CodeInternal, true, err)
 	}
@@ -242,7 +258,7 @@ func (r *Resources) ListRuleAudits(ctx context.Context, packageID string) ([]Rul
 		var item RuleAudit
 		var fromHash, toHash sql.NullString
 		var createdAt int64
-		if err := rows.Scan(&item.ID, &item.PackageID, &item.Action, &fromHash, &toHash, &item.Reason, &item.ActorID, &createdAt); err != nil {
+		if err := rows.Scan(&item.ID, &item.PackageID, &item.SubjectType, &item.SubjectID, &item.Action, &fromHash, &toHash, &item.Reason, &item.ActorID, &createdAt); err != nil {
 			return nil, fault.New(fault.CodeInternal, true, err)
 		}
 		item.FromSemanticHash, item.ToSemanticHash = fromHash.String, toHash.String
@@ -385,6 +401,9 @@ func (r *Resources) ValidateRuleDraft(ctx context.Context, packageID string, exp
 		return RuleDraftValidation{}, fault.New(fault.CodeInternal, true, err)
 	}
 	defer tx.Rollback()
+	if err := requireRulePackageTx(ctx, tx, packageID); err != nil {
+		return RuleDraftValidation{}, err
+	}
 	draft, err := scanRuleDraft(tx.QueryRowContext(ctx, `
 SELECT draft_id, package_id, base_semantic_hash, content_json, source_format, validation_status,
        diagnostics_json, revision, saved_by, created_at, updated_at
@@ -550,14 +569,8 @@ VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1)`, compiled.S
  extension_requirements_json=?, revision=revision+1, updated_at=? WHERE package_id=?`, compiled.SemanticHash,
 		compiled.SemanticHash, string(parts.extensions), now.Unix(), packageID)
 	if err == nil {
-		id, idErr := r.ids.New(domain.IDRuleAudit)
-		if idErr != nil {
-			return RuleVersion{}, fault.New(fault.CodeInternal, true, idErr)
-		}
-		_, err = tx.ExecContext(ctx, `INSERT INTO rule_audits
-(audit_id, package_id, action, from_semantic_hash, to_semantic_hash, reason, actor_id, created_at)
-VALUES (?, ?, 'publish', ?, ?, ?, ?, ?)`, id.String(), packageID, nullableText(previousHash.String),
-			compiled.SemanticHash, reason, actorOrSystem(actor), now.Unix())
+		err = r.appendRuleAuditTx(ctx, tx, packageID, RuleAuditSubjectVersion, compiled.SemanticHash, "publish",
+			previousHash.String, compiled.SemanticHash, reason, actorOrSystem(actor), now)
 	}
 	if err != nil {
 		return RuleVersion{}, fault.New(fault.CodeInternal, true, err)
@@ -578,16 +591,32 @@ FROM rule_versions WHERE semantic_hash=?`, compiled.SemanticHash))
 }
 
 func (r *Resources) DeprecateRuleVersion(ctx context.Context, semanticHash, actor, reason string) (RuleVersion, error) {
+	reason = strings.TrimSpace(reason)
+	if reason == "" || len([]rune(reason)) > 4096 {
+		return RuleVersion{}, fault.WithField(fault.CodeValidation, "reason", nil)
+	}
 	tx, err := r.control.BeginTx(ctx, nil)
 	if err != nil {
 		return RuleVersion{}, fault.New(fault.CodeInternal, true, err)
 	}
 	defer tx.Rollback()
 	var packageID sql.NullString
-	if err := tx.QueryRowContext(ctx, `SELECT package_id FROM rule_versions WHERE semantic_hash=?`, semanticHash).Scan(&packageID); errors.Is(err, sql.ErrNoRows) {
+	var status string
+	if err := tx.QueryRowContext(ctx, `SELECT package_id, status FROM rule_versions WHERE semantic_hash=?`, semanticHash).Scan(&packageID, &status); errors.Is(err, sql.ErrNoRows) {
 		return RuleVersion{}, fault.New(fault.CodeNotFound, false, nil)
 	} else if err != nil {
 		return RuleVersion{}, fault.New(fault.CodeInternal, true, err)
+	}
+	if !packageID.Valid {
+		return RuleVersion{}, fault.New(fault.CodeRuleVersionInUse, false, fmt.Errorf("legacy RuleVersion 不属于正式 RulePackage 生命周期"))
+	}
+	if status == RuleVersionDeprecated {
+		return scanRuleVersion(tx.QueryRowContext(ctx, `
+SELECT semantic_hash, package_id, rule_set_id, version, package_hash, semantic_hash, rule_ir_hash,
+       canonical_json, compiled_ir_json, status, normalization_algorithm_version, cel_profile_version,
+       parameter_schema_json, tests_json, extensions_json, parent_semantic_hash, created_by,
+       published_at, deprecated_at, executable, compile_error, created_at
+FROM rule_versions WHERE semantic_hash=?`, semanticHash))
 	}
 	var inUse int
 	if err := tx.QueryRowContext(ctx, `SELECT EXISTS(
@@ -601,91 +630,124 @@ SELECT 1 FROM source_rule_bindings WHERE semantic_hash=? AND status='active'
 		return RuleVersion{}, fault.New(fault.CodeRuleVersionInUse, false, nil)
 	}
 	now := r.clock.Now().UTC()
-	_, err = tx.ExecContext(ctx, `UPDATE rule_versions SET status=?, deprecated_at=? WHERE semantic_hash=? AND status<>?`, RuleVersionDeprecated, now.Unix(), semanticHash, RuleVersionDeprecated)
+	result, err := tx.ExecContext(ctx, `UPDATE rule_versions SET status=?, deprecated_at=? WHERE semantic_hash=? AND status=?`, RuleVersionDeprecated, now.Unix(), semanticHash, RuleVersionPublished)
 	if err != nil {
 		return RuleVersion{}, fault.New(fault.CodeInternal, true, err)
 	}
-	if packageID.Valid {
-		if err := r.appendRuleAuditTx(ctx, tx, packageID.String, "deprecate", semanticHash, "", reason, actorOrSystem(actor), now); err != nil {
-			return RuleVersion{}, err
-		}
+	if count, _ := result.RowsAffected(); count != 1 {
+		return RuleVersion{}, fault.New(fault.CodeConflict, false, fmt.Errorf("RuleVersion 状态已变化"))
+	}
+	if err := r.appendRuleAuditTx(ctx, tx, packageID.String, RuleAuditSubjectVersion, semanticHash, "deprecate", semanticHash, "", reason, actorOrSystem(actor), now); err != nil {
+		return RuleVersion{}, err
+	}
+	written, err := scanRuleVersion(tx.QueryRowContext(ctx, `
+SELECT semantic_hash, package_id, rule_set_id, version, package_hash, semantic_hash, rule_ir_hash,
+       canonical_json, compiled_ir_json, status, normalization_algorithm_version, cel_profile_version,
+       parameter_schema_json, tests_json, extensions_json, parent_semantic_hash, created_by,
+       published_at, deprecated_at, executable, compile_error, created_at
+FROM rule_versions WHERE semantic_hash=?`, semanticHash))
+	if err != nil {
+		return RuleVersion{}, fault.New(fault.CodeInternal, true, err)
 	}
 	if err := tx.Commit(); err != nil {
 		return RuleVersion{}, fault.New(fault.CodeInternal, true, err)
 	}
-	return r.GetRuleVersion(ctx, semanticHash)
+	return written, nil
 }
 
 func (r *Resources) RollbackRulePackage(ctx context.Context, packageID, targetSemanticHash string, expectedRevision int, actor, reason string, confirm bool) (RuleVersion, error) {
 	if expectedRevision < 0 {
 		return RuleVersion{}, fault.WithField(fault.CodeValidation, "revision", fmt.Errorf("expected revision is required"))
 	}
-	pkg, err := r.GetRulePackage(ctx, packageID)
-	if err != nil {
-		return RuleVersion{}, err
-	}
-	target, err := r.GetRuleVersion(ctx, targetSemanticHash)
-	if err != nil {
-		return RuleVersion{}, err
-	}
-	if target.PackageID != "" && target.PackageID != packageID {
-		return RuleVersion{}, fault.New(fault.CodeConflict, false, nil)
-	}
-	if pkg.CurrentSemanticHash != "" && pkg.CurrentSemanticHash != targetSemanticHash {
-		current, getErr := r.GetRuleVersion(ctx, pkg.CurrentSemanticHash)
-		if getErr != nil {
-			return RuleVersion{}, getErr
-		}
-		life, lifeErr := rules.NewLifecycle()
-		if lifeErr != nil {
-			return RuleVersion{}, fault.New(fault.CodeInternal, false, lifeErr)
-		}
-		diff, diffErr := life.DiffRulePackages(current.Canonical, target.Canonical)
-		if diffErr != nil {
-			return RuleVersion{}, fault.WithField(fault.CodeRuleRollbackBlocked, "targetSemanticHash", diffErr)
-		}
-		if !diff.ParameterCompatible {
-			return RuleVersion{}, fault.New(fault.CodeRuleRollbackBlocked, false, fmt.Errorf("目标版本参数 Schema 不兼容，需要新建参数实例"))
-		}
-		if diff.BindingReview && !confirm {
-			return RuleVersion{}, fault.New(fault.CodeRuleRollbackBlocked, false, fmt.Errorf("回滚影响需要人工确认"))
-		}
-	}
-	if strings.TrimSpace(reason) == "" {
+	reason = strings.TrimSpace(reason)
+	if reason == "" || len([]rune(reason)) > 4096 {
 		return RuleVersion{}, fault.WithField(fault.CodeValidation, "reason", nil)
 	}
-	now := r.clock.Now().UTC()
 	tx, err := r.control.BeginTx(ctx, nil)
 	if err != nil {
 		return RuleVersion{}, fault.New(fault.CodeInternal, true, err)
 	}
 	defer tx.Rollback()
+	var pkgRuleSetID, pkgStatus string
+	var currentHash sql.NullString
 	var revision int
-	if err := tx.QueryRowContext(ctx, `SELECT revision FROM rule_packages WHERE package_id=?`, packageID).Scan(&revision); err != nil {
+	if err := tx.QueryRowContext(ctx, `SELECT rule_set_id, status, current_semantic_hash, revision FROM rule_packages WHERE package_id=?`, packageID).Scan(&pkgRuleSetID, &pkgStatus, &currentHash, &revision); errors.Is(err, sql.ErrNoRows) {
+		return RuleVersion{}, fault.New(fault.CodeNotFound, false, nil)
+	} else if err != nil {
 		return RuleVersion{}, fault.New(fault.CodeInternal, true, err)
+	}
+	if pkgStatus != RulePackageActive {
+		return RuleVersion{}, fault.New(fault.CodeRuleRollbackBlocked, false, fmt.Errorf("规则包不是 active 状态"))
 	}
 	if revision != expectedRevision {
 		return RuleVersion{}, rulePackageConflict(expectedRevision, revision)
 	}
-	if _, err := tx.ExecContext(ctx, `UPDATE rule_packages SET current_semantic_hash=?, revision=revision+1, updated_at=? WHERE package_id=? AND revision=?`, targetSemanticHash, now.Unix(), packageID, revision); err != nil {
+	if !currentHash.Valid || currentHash.String == "" || currentHash.String == targetSemanticHash {
+		return RuleVersion{}, fault.New(fault.CodeRuleRollbackBlocked, false, fmt.Errorf("目标必须是不同的历史版本"))
+	}
+	target, err := scanRuleVersion(tx.QueryRowContext(ctx, `
+SELECT semantic_hash, package_id, rule_set_id, version, package_hash, semantic_hash, rule_ir_hash,
+       canonical_json, compiled_ir_json, status, normalization_algorithm_version, cel_profile_version,
+       parameter_schema_json, tests_json, extensions_json, parent_semantic_hash, created_by,
+       published_at, deprecated_at, executable, compile_error, created_at
+FROM rule_versions WHERE semantic_hash=?`, targetSemanticHash))
+	if errors.Is(err, sql.ErrNoRows) {
+		return RuleVersion{}, fault.WithField(fault.CodeRuleRollbackBlocked, "targetSemanticHash", fmt.Errorf("目标版本不存在"))
+	}
+	if err != nil {
 		return RuleVersion{}, fault.New(fault.CodeInternal, true, err)
 	}
-	id, idErr := r.ids.New(domain.IDRuleAudit)
-	if idErr != nil {
-		return RuleVersion{}, fault.New(fault.CodeInternal, true, idErr)
+	if target.PackageID != packageID || target.RuleSetID != pkgRuleSetID || !target.Executable || (target.Status != RuleVersionPublished && target.Status != RuleVersionDeprecated) {
+		return RuleVersion{}, fault.WithField(fault.CodeRuleRollbackBlocked, "targetSemanticHash", fmt.Errorf("目标版本不属于该规则包、不可执行或状态无效"))
 	}
-	if _, err := tx.ExecContext(ctx, `INSERT INTO rule_audits
-(audit_id, package_id, action, from_semantic_hash, to_semantic_hash, reason, actor_id, created_at)
-VALUES (?, ?, 'rollback', ?, ?, ?, ?, ?)`, id.String(), packageID, pkg.CurrentSemanticHash, targetSemanticHash, reason, actorOrSystem(actor), now.Unix()); err != nil {
+	current, err := scanRuleVersion(tx.QueryRowContext(ctx, `
+SELECT semantic_hash, package_id, rule_set_id, version, package_hash, semantic_hash, rule_ir_hash,
+       canonical_json, compiled_ir_json, status, normalization_algorithm_version, cel_profile_version,
+       parameter_schema_json, tests_json, extensions_json, parent_semantic_hash, created_by,
+       published_at, deprecated_at, executable, compile_error, created_at
+FROM rule_versions WHERE semantic_hash=?`, currentHash.String))
+	if err != nil || current.PackageID != packageID || current.RuleSetID != pkgRuleSetID {
+		return RuleVersion{}, fault.New(fault.CodeRuleRollbackBlocked, false, fmt.Errorf("当前版本身份无效"))
+	}
+	life, err := rules.NewLifecycle()
+	if err != nil {
+		return RuleVersion{}, fault.New(fault.CodeInternal, false, err)
+	}
+	diff, err := life.DiffRulePackages(current.Canonical, target.Canonical)
+	if err != nil {
+		return RuleVersion{}, fault.WithField(fault.CodeRuleRollbackBlocked, "targetSemanticHash", err)
+	}
+	if !diff.ParameterCompatible {
+		return RuleVersion{}, fault.New(fault.CodeRuleRollbackBlocked, false, fmt.Errorf("目标版本参数 Schema 不兼容，需要新建参数实例"))
+	}
+	if diff.BindingReview && !confirm {
+		return RuleVersion{}, fault.New(fault.CodeRuleRollbackBlocked, false, fmt.Errorf("回滚影响需要人工确认"))
+	}
+	now := r.clock.Now().UTC()
+	result, err := tx.ExecContext(ctx, `UPDATE rule_packages SET current_semantic_hash=?, revision=revision+1, updated_at=? WHERE package_id=? AND revision=? AND status='active'`, targetSemanticHash, now.Unix(), packageID, revision)
+	if err != nil {
 		return RuleVersion{}, fault.New(fault.CodeInternal, true, err)
 	}
-	if _, err := tx.ExecContext(ctx, `UPDATE rule_versions SET status='published', deprecated_at=NULL WHERE semantic_hash=?`, targetSemanticHash); err != nil {
-		return RuleVersion{}, fault.New(fault.CodeInternal, true, err)
+	if count, _ := result.RowsAffected(); count != 1 {
+		return RuleVersion{}, rulePackageConflict(revision, revision+1)
+	}
+	if err := r.appendRuleAuditTx(ctx, tx, packageID, RuleAuditSubjectPackage, packageID, "rollback", currentHash.String, targetSemanticHash, reason, actorOrSystem(actor), now); err != nil {
+		return RuleVersion{}, err
+	}
+	if target.Status == RuleVersionDeprecated {
+		result, err = tx.ExecContext(ctx, `UPDATE rule_versions SET status='published', deprecated_at=NULL WHERE semantic_hash=? AND package_id=? AND status='deprecated' AND executable=1`, targetSemanticHash, packageID)
+		if err != nil {
+			return RuleVersion{}, fault.New(fault.CodeInternal, true, err)
+		}
+		if count, _ := result.RowsAffected(); count != 1 {
+			return RuleVersion{}, fault.New(fault.CodeRuleRollbackBlocked, false, fmt.Errorf("目标版本状态已变化"))
+		}
+		target.Status, target.DeprecatedAt = RuleVersionPublished, nil
 	}
 	if err := tx.Commit(); err != nil {
 		return RuleVersion{}, fault.New(fault.CodeInternal, true, err)
 	}
-	return r.GetRuleVersion(ctx, targetSemanticHash)
+	return target, nil
 }
 
 func (r *Resources) DiffRuleVersions(ctx context.Context, oldHash, newHash string) (rules.RuleVersionDiff, error) {
@@ -713,11 +775,30 @@ func (r *Resources) CreateRuleParameterSet(ctx context.Context, name, semanticHa
 	if name == "" || len([]rune(name)) > 256 {
 		return RuleParameterSet{}, fault.WithField(fault.CodeValidation, "name", nil)
 	}
-	version, err := r.GetRuleVersion(ctx, semanticHash)
+	id, err := r.ids.New(domain.IDRuleParameter)
 	if err != nil {
-		return RuleParameterSet{}, err
+		return RuleParameterSet{}, fault.New(fault.CodeInternal, true, err)
 	}
-	compiled, err := rules.CompilePackage(version.Canonical)
+	tx, err := r.control.BeginTx(ctx, nil)
+	if err != nil {
+		return RuleParameterSet{}, fault.New(fault.CodeInternal, true, err)
+	}
+	defer tx.Rollback()
+	var canonicalPackage, versionStatus string
+	var executable int
+	var packageID sql.NullString
+	if err := tx.QueryRowContext(ctx, `SELECT canonical_json, status, executable, package_id FROM rule_versions WHERE semantic_hash=?`, semanticHash).Scan(&canonicalPackage, &versionStatus, &executable, &packageID); errors.Is(err, sql.ErrNoRows) {
+		return RuleParameterSet{}, fault.New(fault.CodeNotFound, false, nil)
+	} else if err != nil {
+		return RuleParameterSet{}, fault.New(fault.CodeInternal, true, err)
+	}
+	if versionStatus != RuleVersionPublished || executable != 1 || !packageID.Valid {
+		return RuleParameterSet{}, fault.New(fault.CodeRuleParameterConflict, false, fmt.Errorf("RuleVersion 不属于可用的正式规则包"))
+	}
+	if err := requireRulePackageTx(ctx, tx, packageID.String); err != nil {
+		return RuleParameterSet{}, fault.New(fault.CodeRuleParameterConflict, false, err)
+	}
+	compiled, err := rules.CompilePackage([]byte(canonicalPackage))
 	if err != nil {
 		return RuleParameterSet{}, fault.New(fault.CodeRuleSchemaInvalid, false, err)
 	}
@@ -725,17 +806,8 @@ func (r *Resources) CreateRuleParameterSet(ctx context.Context, name, semanticHa
 	if err != nil {
 		return RuleParameterSet{}, fault.New(fault.CodeRuleParameterInvalid, false, err)
 	}
-	id, err := r.ids.New(domain.IDRuleParameter)
-	if err != nil {
-		return RuleParameterSet{}, fault.New(fault.CodeInternal, true, err)
-	}
 	now := r.clock.Now().UTC()
 	hash := parameterHash(canonical)
-	tx, err := r.control.BeginTx(ctx, nil)
-	if err != nil {
-		return RuleParameterSet{}, fault.New(fault.CodeInternal, true, err)
-	}
-	defer tx.Rollback()
 	if _, err := tx.ExecContext(ctx, `INSERT INTO rule_parameter_sets
 (parameter_id, name, semantic_hash, current_revision, current_hash, status, created_by, created_at, updated_at)
 VALUES (?, ?, ?, 1, ?, 'active', ?, ?, ?)`, id.String(), name, semanticHash, hash, actorOrSystem(actor), now.Unix(), now.Unix()); err != nil {
@@ -745,29 +817,44 @@ VALUES (?, ?, ?, 1, ?, 'active', ?, ?, ?)`, id.String(), name, semanticHash, has
 (parameter_id, revision, parameters_json, parameters_hash, created_by, created_at) VALUES (?, 1, ?, ?, ?, ?)`, id.String(), string(canonical), hash, actorOrSystem(actor), now.Unix()); err != nil {
 		return RuleParameterSet{}, fault.New(fault.CodeInternal, true, err)
 	}
+	written, err := scanRuleParameterSet(tx.QueryRowContext(ctx, `SELECT s.parameter_id, s.name, s.semantic_hash, s.current_revision,
+ s.current_hash, s.status, s.created_by, s.created_at, s.updated_at, r.parameters_json
+FROM rule_parameter_sets s JOIN rule_parameter_revisions r ON r.parameter_id=s.parameter_id AND r.revision=s.current_revision
+WHERE s.parameter_id=?`, id.String()))
+	if err != nil {
+		return RuleParameterSet{}, fault.New(fault.CodeInternal, true, err)
+	}
 	if err := tx.Commit(); err != nil {
 		return RuleParameterSet{}, fault.New(fault.CodeInternal, true, err)
 	}
-	return r.GetRuleParameterSet(ctx, id.String())
+	return written, nil
 }
 
 func (r *Resources) GetRuleParameterSet(ctx context.Context, parameterID string) (RuleParameterSet, error) {
 	if _, err := domain.ParseID(domain.IDRuleParameter, parameterID); err != nil {
 		return RuleParameterSet{}, fault.New(fault.CodeNotFound, false, nil)
 	}
-	var result RuleParameterSet
-	var createdAt, updatedAt int64
-	var parameters string
-	err := r.control.QueryRowContext(ctx, `SELECT s.parameter_id, s.name, s.semantic_hash, s.current_revision,
+	result, err := scanRuleParameterSet(r.control.QueryRowContext(ctx, `SELECT s.parameter_id, s.name, s.semantic_hash, s.current_revision,
  s.current_hash, s.status, s.created_by, s.created_at, s.updated_at, r.parameters_json
 FROM rule_parameter_sets s JOIN rule_parameter_revisions r ON r.parameter_id=s.parameter_id AND r.revision=s.current_revision
-WHERE s.parameter_id=?`, parameterID).Scan(&result.ID, &result.Name, &result.SemanticHash, &result.CurrentRevision,
-		&result.CurrentHash, &result.Status, &result.CreatedBy, &createdAt, &updatedAt, &parameters)
+WHERE s.parameter_id=?`, parameterID))
 	if errors.Is(err, sql.ErrNoRows) {
 		return RuleParameterSet{}, fault.New(fault.CodeNotFound, false, nil)
 	}
 	if err != nil {
 		return RuleParameterSet{}, fault.New(fault.CodeInternal, true, err)
+	}
+	return result, nil
+}
+
+func scanRuleParameterSet(scanner interface{ Scan(...any) error }) (RuleParameterSet, error) {
+	var result RuleParameterSet
+	var createdAt, updatedAt int64
+	var parameters string
+	err := scanner.Scan(&result.ID, &result.Name, &result.SemanticHash, &result.CurrentRevision,
+		&result.CurrentHash, &result.Status, &result.CreatedBy, &createdAt, &updatedAt, &parameters)
+	if err != nil {
+		return RuleParameterSet{}, err
 	}
 	result.Parameters = []byte(parameters)
 	result.CreatedAt, result.UpdatedAt = time.Unix(createdAt, 0).UTC(), time.Unix(updatedAt, 0).UTC()
@@ -816,19 +903,44 @@ func (r *Resources) ListRuleParameterSets(ctx context.Context, semanticHash, sta
 	return result, nil
 }
 
-func (r *Resources) UpdateRuleParameterSet(ctx context.Context, parameterID string, parameters []byte, expectedRevision int, actor string) (RuleParameterSet, error) {
-	set, err := r.GetRuleParameterSet(ctx, parameterID)
+func (r *Resources) UpdateRuleParameterSet(ctx context.Context, parameterID string, parameters []byte, expectedRevision int, actor string, confirmImpact bool) (RuleParameterSet, error) {
+	if expectedRevision < 1 {
+		return RuleParameterSet{}, fault.WithField(fault.CodeValidation, "revision", fmt.Errorf("expected revision is required"))
+	}
+	tx, err := r.control.BeginTx(ctx, nil)
 	if err != nil {
-		return RuleParameterSet{}, err
+		return RuleParameterSet{}, fault.New(fault.CodeInternal, true, err)
+	}
+	defer tx.Rollback()
+	set, err := scanRuleParameterSet(tx.QueryRowContext(ctx, `SELECT s.parameter_id, s.name, s.semantic_hash, s.current_revision,
+ s.current_hash, s.status, s.created_by, s.created_at, s.updated_at, r.parameters_json
+FROM rule_parameter_sets s JOIN rule_parameter_revisions r ON r.parameter_id=s.parameter_id AND r.revision=s.current_revision
+WHERE s.parameter_id=?`, parameterID))
+	if errors.Is(err, sql.ErrNoRows) {
+		return RuleParameterSet{}, fault.New(fault.CodeNotFound, false, nil)
+	}
+	if err != nil {
+		return RuleParameterSet{}, fault.New(fault.CodeInternal, true, err)
 	}
 	if set.Status != RuleParameterActive {
-		return RuleParameterSet{}, fault.New(fault.CodeRuleParameterConflict, false, nil)
+		return RuleParameterSet{}, fault.New(fault.CodeRuleParameterConflict, false, fmt.Errorf("参数集不是 active 状态"))
 	}
-	version, err := r.GetRuleVersion(ctx, set.SemanticHash)
-	if err != nil {
-		return RuleParameterSet{}, err
+	if set.CurrentRevision != expectedRevision {
+		return RuleParameterSet{}, ruleParameterConflict(expectedRevision, set.CurrentRevision)
 	}
-	compiled, err := rules.CompilePackage(version.Canonical)
+	var canonicalPackage, versionStatus string
+	var executable int
+	var packageID sql.NullString
+	if err := tx.QueryRowContext(ctx, `SELECT canonical_json, status, executable, package_id FROM rule_versions WHERE semantic_hash=?`, set.SemanticHash).Scan(&canonicalPackage, &versionStatus, &executable, &packageID); err != nil {
+		return RuleParameterSet{}, fault.New(fault.CodeInternal, true, err)
+	}
+	if versionStatus != RuleVersionPublished || executable != 1 || !packageID.Valid {
+		return RuleParameterSet{}, fault.New(fault.CodeRuleParameterConflict, false, fmt.Errorf("RuleVersion 不可用于参数更新"))
+	}
+	if err := requireRulePackageTx(ctx, tx, packageID.String); err != nil {
+		return RuleParameterSet{}, fault.New(fault.CodeRuleParameterConflict, false, err)
+	}
+	compiled, err := rules.CompilePackage([]byte(canonicalPackage))
 	if err != nil {
 		return RuleParameterSet{}, fault.New(fault.CodeRuleSchemaInvalid, false, err)
 	}
@@ -836,18 +948,17 @@ func (r *Resources) UpdateRuleParameterSet(ctx context.Context, parameterID stri
 	if err != nil {
 		return RuleParameterSet{}, fault.New(fault.CodeRuleParameterInvalid, false, err)
 	}
-	if expectedRevision >= 0 && set.CurrentRevision != expectedRevision {
-		return RuleParameterSet{}, ruleParameterConflict(expectedRevision, set.CurrentRevision)
+	impact, err := parameterImpact(ctx, tx, []byte(canonicalPackage), set.Parameters, canonical, parameterID)
+	if err != nil {
+		return RuleParameterSet{}, err
+	}
+	if impact.ManualConfirm && !confirmImpact {
+		return RuleParameterSet{}, fault.WithField(fault.CodeRuleParameterConflict, "confirmImpact", fmt.Errorf("参数影响需要人工确认"))
 	}
 	now := r.clock.Now().UTC()
 	hash := parameterHash(canonical)
 	newRevision := set.CurrentRevision + 1
-	tx, err := r.control.BeginTx(ctx, nil)
-	if err != nil {
-		return RuleParameterSet{}, fault.New(fault.CodeInternal, true, err)
-	}
-	defer tx.Rollback()
-	query := `UPDATE rule_parameter_sets SET current_revision=?, current_hash=?, updated_at=? WHERE parameter_id=? AND current_revision=?`
+	query := `UPDATE rule_parameter_sets SET current_revision=?, current_hash=?, updated_at=? WHERE parameter_id=? AND current_revision=? AND status='active'`
 	result, err := tx.ExecContext(ctx, query, newRevision, hash, now.Unix(), parameterID, set.CurrentRevision)
 	if err != nil {
 		return RuleParameterSet{}, fault.New(fault.CodeInternal, true, err)
@@ -862,10 +973,17 @@ func (r *Resources) UpdateRuleParameterSet(ctx context.Context, parameterID stri
 	if err := refreshParameterBindings(ctx, tx, parameterID, set.SemanticHash, compiled, canonical, newRevision, hash, now.Unix()); err != nil {
 		return RuleParameterSet{}, err
 	}
+	written, err := scanRuleParameterSet(tx.QueryRowContext(ctx, `SELECT s.parameter_id, s.name, s.semantic_hash, s.current_revision,
+ s.current_hash, s.status, s.created_by, s.created_at, s.updated_at, r.parameters_json
+FROM rule_parameter_sets s JOIN rule_parameter_revisions r ON r.parameter_id=s.parameter_id AND r.revision=s.current_revision
+WHERE s.parameter_id=?`, parameterID))
+	if err != nil {
+		return RuleParameterSet{}, fault.New(fault.CodeInternal, true, err)
+	}
 	if err := tx.Commit(); err != nil {
 		return RuleParameterSet{}, fault.New(fault.CodeInternal, true, err)
 	}
-	return r.GetRuleParameterSet(ctx, parameterID)
+	return written, nil
 }
 
 // ImpactRuleParameterSet 在修改共享参数前返回绑定范围和执行影响。绑定本身在
@@ -879,15 +997,23 @@ func (r *Resources) ImpactRuleParameterSet(ctx context.Context, parameterID stri
 	if err != nil {
 		return rules.ImpactResult{}, err
 	}
+	return parameterImpact(ctx, r.control, version.Canonical, set.Parameters, parameters, parameterID)
+}
+
+type ruleQueryer interface {
+	QueryContext(context.Context, string, ...any) (*sql.Rows, error)
+}
+
+func parameterImpact(ctx context.Context, queryer ruleQueryer, canonicalPackage, before, after []byte, parameterID string) (rules.ImpactResult, error) {
 	life, err := rules.NewLifecycle()
 	if err != nil {
 		return rules.ImpactResult{}, fault.New(fault.CodeInternal, false, err)
 	}
-	impact, err := life.ImpactParameters(version.Canonical, set.Parameters, parameters)
+	impact, err := life.ImpactParameters(canonicalPackage, before, after)
 	if err != nil {
 		return rules.ImpactResult{}, fault.WithField(fault.CodeRuleParameterInvalid, "parameters", err)
 	}
-	rows, err := r.control.QueryContext(ctx, `SELECT DISTINCT source_id FROM source_rule_bindings WHERE parameter_id=? ORDER BY source_id`, parameterID)
+	rows, err := queryer.QueryContext(ctx, `SELECT DISTINCT source_id FROM source_rule_bindings WHERE parameter_id=? ORDER BY source_id`, parameterID)
 	if err != nil {
 		return rules.ImpactResult{}, fault.New(fault.CodeInternal, true, err)
 	}
@@ -961,14 +1087,64 @@ func (r *Resources) CopyRuleParameterSet(ctx context.Context, parameterID, name,
 	return r.CreateRuleParameterSet(ctx, name, set.SemanticHash, set.Parameters, actor)
 }
 
-func (r *Resources) DeprecateRuleParameterSet(ctx context.Context, parameterID string) (RuleParameterSet, error) {
-	if _, err := r.GetRuleParameterSet(ctx, parameterID); err != nil {
-		return RuleParameterSet{}, err
+func (r *Resources) DeprecateRuleParameterSet(ctx context.Context, parameterID string, expectedRevision int, actor, reason string) (RuleParameterSet, error) {
+	if expectedRevision < 1 {
+		return RuleParameterSet{}, fault.WithField(fault.CodeValidation, "revision", fmt.Errorf("expected revision is required"))
 	}
-	if _, err := r.control.ExecContext(ctx, `UPDATE rule_parameter_sets SET status='deprecated', updated_at=? WHERE parameter_id=?`, r.clock.Now().UTC().Unix(), parameterID); err != nil {
+	reason = strings.TrimSpace(reason)
+	if reason == "" || len([]rune(reason)) > 4096 {
+		return RuleParameterSet{}, fault.WithField(fault.CodeValidation, "reason", nil)
+	}
+	tx, err := r.control.BeginTx(ctx, nil)
+	if err != nil {
 		return RuleParameterSet{}, fault.New(fault.CodeInternal, true, err)
 	}
-	return r.GetRuleParameterSet(ctx, parameterID)
+	defer tx.Rollback()
+	set, err := scanRuleParameterSet(tx.QueryRowContext(ctx, `SELECT s.parameter_id, s.name, s.semantic_hash, s.current_revision,
+ s.current_hash, s.status, s.created_by, s.created_at, s.updated_at, r.parameters_json
+FROM rule_parameter_sets s JOIN rule_parameter_revisions r ON r.parameter_id=s.parameter_id AND r.revision=s.current_revision
+WHERE s.parameter_id=?`, parameterID))
+	if errors.Is(err, sql.ErrNoRows) {
+		return RuleParameterSet{}, fault.New(fault.CodeNotFound, false, nil)
+	}
+	if err != nil {
+		return RuleParameterSet{}, fault.New(fault.CodeInternal, true, err)
+	}
+	if set.CurrentRevision != expectedRevision {
+		return RuleParameterSet{}, ruleParameterConflict(expectedRevision, set.CurrentRevision)
+	}
+	if set.Status != RuleParameterActive {
+		return RuleParameterSet{}, fault.New(fault.CodeRuleParameterConflict, false, fmt.Errorf("参数集不是 active 状态"))
+	}
+	var packageID sql.NullString
+	if err := tx.QueryRowContext(ctx, `SELECT package_id FROM rule_versions WHERE semantic_hash=?`, set.SemanticHash).Scan(&packageID); err != nil {
+		return RuleParameterSet{}, fault.New(fault.CodeInternal, true, err)
+	}
+	if !packageID.Valid {
+		return RuleParameterSet{}, fault.New(fault.CodeRuleParameterConflict, false, fmt.Errorf("参数集不属于正式规则包"))
+	}
+	now := r.clock.Now().UTC()
+	result, err := tx.ExecContext(ctx, `UPDATE rule_parameter_sets SET status='deprecated', updated_at=? WHERE parameter_id=? AND current_revision=? AND status='active'`, now.Unix(), parameterID, expectedRevision)
+	if err != nil {
+		return RuleParameterSet{}, fault.New(fault.CodeInternal, true, err)
+	}
+	if count, _ := result.RowsAffected(); count != 1 {
+		return RuleParameterSet{}, fault.New(fault.CodeRuleParameterConflict, false, fmt.Errorf("参数集状态已变化"))
+	}
+	if err := r.appendRuleAuditTx(ctx, tx, packageID.String, RuleAuditSubjectParameter, parameterID, "deprecate_parameter", set.SemanticHash, set.SemanticHash, reason, actorOrSystem(actor), now); err != nil {
+		return RuleParameterSet{}, err
+	}
+	written, err := scanRuleParameterSet(tx.QueryRowContext(ctx, `SELECT s.parameter_id, s.name, s.semantic_hash, s.current_revision,
+ s.current_hash, s.status, s.created_by, s.created_at, s.updated_at, r.parameters_json
+FROM rule_parameter_sets s JOIN rule_parameter_revisions r ON r.parameter_id=s.parameter_id AND r.revision=s.current_revision
+WHERE s.parameter_id=?`, parameterID))
+	if err != nil {
+		return RuleParameterSet{}, fault.New(fault.CodeInternal, true, err)
+	}
+	if err := tx.Commit(); err != nil {
+		return RuleParameterSet{}, fault.New(fault.CodeInternal, true, err)
+	}
+	return written, nil
 }
 
 func (r *Resources) ListRuleVersions(ctx context.Context, options RuleVersionListOptions) ([]RuleVersion, error) {
@@ -1070,11 +1246,21 @@ func (r *Resources) SetSourceRuleBindingStatus(ctx context.Context, bindingID, s
 	if status == RuleBindingActive {
 		var versionStatus string
 		var executable int
-		if err := tx.QueryRowContext(ctx, `SELECT status, executable FROM rule_versions WHERE semantic_hash=?`, semanticHash).Scan(&versionStatus, &executable); err != nil {
+		var packageID sql.NullString
+		if err := tx.QueryRowContext(ctx, `SELECT status, executable, package_id FROM rule_versions WHERE semantic_hash=?`, semanticHash).Scan(&versionStatus, &executable, &packageID); err != nil {
 			return SourceRuleBinding{}, fault.New(fault.CodeInternal, true, err)
 		}
 		if versionStatus != RuleVersionPublished || executable != 1 {
 			return SourceRuleBinding{}, fault.New(fault.CodeRuleVersionInUse, false, nil)
+		}
+		if packageID.Valid {
+			var packageStatus string
+			if err := tx.QueryRowContext(ctx, `SELECT status FROM rule_packages WHERE package_id=?`, packageID.String).Scan(&packageStatus); err != nil {
+				return SourceRuleBinding{}, fault.New(fault.CodeInternal, true, err)
+			}
+			if packageStatus != RulePackageActive {
+				return SourceRuleBinding{}, fault.New(fault.CodeRuleVersionInUse, false, fmt.Errorf("规则包不是 active 状态"))
+			}
 		}
 	}
 	if _, err := tx.ExecContext(ctx, `UPDATE source_rule_bindings SET status=?, updated_at=? WHERE binding_id=?`, status, r.clock.Now().UTC().Unix(), bindingID); err != nil {
@@ -1087,7 +1273,8 @@ func (r *Resources) SetSourceRuleBindingStatus(ctx context.Context, bindingID, s
 }
 
 // CreateSourceRuleBindingFromParameterSet 将参数集的 semantic/revision/hash 一起冻结到
-// Binding；后续参数集更新不会改变已入队或已创建 Binding 的执行身份。
+// Binding。后续参数集更新会原子刷新仍引用该参数集的 Binding，但不会改变已经入队
+// Job 的执行快照。
 func (r *Resources) CreateSourceRuleBindingFromParameterSet(ctx context.Context, sourceID, parameterID string, priority int, override, condition []byte) (SourceRuleBinding, error) {
 	set, err := r.GetRuleParameterSet(ctx, parameterID)
 	if err != nil {
@@ -1370,20 +1557,7 @@ func parameterHash(canonical []byte) string {
 // 前提下记录同一份参数的执行身份。
 func RuleParameterHash(canonical []byte) string { return parameterHash(canonical) }
 
-func (r *Resources) appendRuleAudit(ctx context.Context, packageID, action, fromHash, toHash, reason, actor string, now time.Time) error {
-	id, err := r.ids.New(domain.IDRuleAudit)
-	if err != nil {
-		return fault.New(fault.CodeInternal, true, err)
-	}
-	if _, err := r.control.ExecContext(ctx, `INSERT INTO rule_audits
-(audit_id, package_id, action, from_semantic_hash, to_semantic_hash, reason, actor_id, created_at)
-VALUES (?, ?, ?, ?, ?, ?, ?, ?)`, id.String(), packageID, action, nullableText(fromHash), nullableText(toHash), reason, actorOrSystem(actor), now.Unix()); err != nil {
-		return fault.New(fault.CodeInternal, true, err)
-	}
-	return nil
-}
-
-func (r *Resources) appendRuleAuditTx(ctx context.Context, tx *sql.Tx, packageID, action, fromHash, toHash, reason, actor string, now time.Time) error {
+func (r *Resources) appendRuleAuditTx(ctx context.Context, tx *sql.Tx, packageID, subjectType, subjectID, action, fromHash, toHash, reason, actor string, now time.Time) error {
 	// 状态变更、revision 和审计必须在同一 control.db 事务中提交，避免出现
 	// 已改变状态但没有可追溯操作记录的半完成生命周期动作。
 	id, err := r.ids.New(domain.IDRuleAudit)
@@ -1391,8 +1565,8 @@ func (r *Resources) appendRuleAuditTx(ctx context.Context, tx *sql.Tx, packageID
 		return fault.New(fault.CodeInternal, true, err)
 	}
 	if _, err := tx.ExecContext(ctx, `INSERT INTO rule_audits
-(audit_id, package_id, action, from_semantic_hash, to_semantic_hash, reason, actor_id, created_at)
-VALUES (?, ?, ?, ?, ?, ?, ?, ?)`, id.String(), packageID, action, nullableText(fromHash), nullableText(toHash), reason, actorOrSystem(actor), now.Unix()); err != nil {
+(audit_id, package_id, subject_type, subject_id, action, from_semantic_hash, to_semantic_hash, reason, actor_id, created_at)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`, id.String(), packageID, subjectType, subjectID, action, nullableText(fromHash), nullableText(toHash), reason, actorOrSystem(actor), now.Unix()); err != nil {
 		return fault.New(fault.CodeInternal, true, err)
 	}
 	return nil

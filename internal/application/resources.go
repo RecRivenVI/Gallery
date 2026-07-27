@@ -403,14 +403,36 @@ func (r *Resources) createSourceRuleBinding(ctx context.Context, sourceID, seman
 		return SourceRuleBinding{}, fault.New(fault.CodeInternal, true, err)
 	}
 	var canonical, status string
+	var packageID sql.NullString
 	var executable int
-	if err := tx.QueryRowContext(ctx, `SELECT canonical_json, status, executable FROM rule_versions WHERE semantic_hash=?`, semanticHash).Scan(&canonical, &status, &executable); errors.Is(err, sql.ErrNoRows) {
+	if err := tx.QueryRowContext(ctx, `SELECT canonical_json, status, executable, package_id FROM rule_versions WHERE semantic_hash=?`, semanticHash).Scan(&canonical, &status, &executable, &packageID); errors.Is(err, sql.ErrNoRows) {
 		return SourceRuleBinding{}, fault.New(fault.CodeNotFound, false, nil)
 	} else if err != nil {
 		return SourceRuleBinding{}, fault.New(fault.CodeInternal, true, err)
 	}
 	if status != RuleVersionPublished || executable != 1 {
 		return SourceRuleBinding{}, fault.New(fault.CodeRuleVersionInUse, false, nil)
+	}
+	if packageID.Valid {
+		var packageStatus string
+		if err := tx.QueryRowContext(ctx, `SELECT status FROM rule_packages WHERE package_id=?`, packageID.String).Scan(&packageStatus); err != nil {
+			return SourceRuleBinding{}, fault.New(fault.CodeInternal, true, err)
+		}
+		if packageStatus != RulePackageActive {
+			return SourceRuleBinding{}, fault.New(fault.CodeRuleVersionInUse, false, fmt.Errorf("规则包不是 active 状态"))
+		}
+	}
+	if parameterID != "" {
+		var currentRevision int
+		var currentHash, parameterStatus, parameterSemanticHash string
+		if err := tx.QueryRowContext(ctx, `SELECT current_revision, current_hash, status, semantic_hash FROM rule_parameter_sets WHERE parameter_id=?`, parameterID).Scan(&currentRevision, &currentHash, &parameterStatus, &parameterSemanticHash); errors.Is(err, sql.ErrNoRows) {
+			return SourceRuleBinding{}, fault.New(fault.CodeNotFound, false, nil)
+		} else if err != nil {
+			return SourceRuleBinding{}, fault.New(fault.CodeInternal, true, err)
+		}
+		if parameterStatus != RuleParameterActive || parameterSemanticHash != semanticHash || currentRevision != parameterRevision || currentHash != baseParameterHash {
+			return SourceRuleBinding{}, fault.New(fault.CodeRuleParameterConflict, false, fmt.Errorf("参数集状态或 revision 已变化"))
+		}
 	}
 	compiled, err := rules.CompilePackage([]byte(canonical))
 	if err != nil {

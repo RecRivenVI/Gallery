@@ -67,6 +67,7 @@ beforeEach(() => {
   recorded = [];
   route('GET /api/v1/bootstrap', () => jsonResponse(BOOTSTRAP));
   route('GET /api/v1/libraries', () => jsonResponse({ libraries: [] }));
+  route('GET /api/v1/rule-parameters', () => jsonResponse({ parameterSets: [] }));
   setFetchHandler((request) => {
     const url = new URL(request.url);
     recorded.push({
@@ -221,6 +222,27 @@ function ruleVersion(overrides: Record<string, unknown> = {}): Record<string, un
     publishedAt: '2026-07-27T05:00:00Z',
     createdAt: '2026-07-27T05:00:00Z',
     executable: true,
+    ...overrides
+  };
+}
+
+function ruleParameterSet(overrides: Record<string, unknown> = {}): Record<string, unknown> {
+  const parametersText =
+    typeof overrides.parametersText === 'string'
+      ? overrides.parametersText
+      : '{"minimumSize":9007199254740993123}';
+  return {
+    id: 'rparam_00000000-0000-7000-8000-000000000001',
+    name: '共享参数',
+    semanticHash: NEW_RULE_HASH,
+    currentRevision: 2,
+    currentHash: 'f'.repeat(64),
+    status: 'active',
+    parameters: { minimumSize: 1 },
+    parametersText,
+    createdBy: 'principal_manage',
+    createdAt: '2026-07-27T05:00:00Z',
+    updatedAt: '2026-07-27T05:00:00Z',
     ...overrides
   };
 }
@@ -617,6 +639,12 @@ describe('同名 Source 写入身份', () => {
         ]
       })
     );
+    route('GET /api/v1/rule-packages/pkg_01/versions', () =>
+      jsonResponse({
+        items: [ruleVersion({ semanticHash: OLD_RULE_HASH, version: '0.9.0' })]
+      })
+    );
+    route('GET /api/v1/rule-packages/pkg_unpublished/versions', () => jsonResponse({ items: [] }));
     route('GET /api/v1/source-rule-bindings', () => jsonResponse({ bindings: [] }));
     route('GET /api/v1/sources/src_b/effective-rule-binding', () =>
       faultResponse('RULE_BINDING_NOT_MATCHED', 409, 'corr-effective')
@@ -629,7 +657,7 @@ describe('同名 Source 写入身份', () => {
           sourceId: 'src_b',
           semanticHash: 'a'.repeat(64),
           ruleIrHash: 'b'.repeat(64),
-          parameters: {},
+          parameters: '{}',
           priority: 100,
           status: 'active',
           createdAt: '2026-07-27T03:00:00Z'
@@ -643,7 +671,7 @@ describe('同名 Source 写入身份', () => {
     await selectOption(/来源/, '同名来源 · src_b');
     await userEvent.click(screen.getByRole('button', { name: /已发布版本/ }));
     expect(screen.queryByRole('option', { name: /未发布规则包/ })).not.toBeInTheDocument();
-    await userEvent.click(screen.getByRole('option', { name: '合成规则包 · aaaaaaaaaaaa…' }));
+    await userEvent.click(screen.getByRole('option', { name: '合成规则包 · 0.9.0 · aaaaaaaaaaaa…' }));
     await userEvent.click(screen.getByRole('button', { name: '创建绑定' }));
 
     await waitFor(() => expect(requestsTo('POST /api/v1/source-rule-bindings')).toHaveLength(1));
@@ -651,7 +679,7 @@ describe('同名 Source 写入身份', () => {
       sourceId: 'src_b',
       semanticHash: OLD_RULE_HASH,
       priority: 100,
-      parameters: {}
+      parameters: '{}'
     });
   });
 
@@ -1117,6 +1145,18 @@ describe('规则草稿', () => {
     route('GET /api/v1/rule-packages/pkg_01/versions', () =>
       jsonResponse({ items: [ruleVersion({ version: '0.9.0', semanticHash: OLD_RULE_HASH })] })
     );
+    route('POST /api/v1/rule-versions/diff', () =>
+      jsonResponse({
+        oldSemanticHash: NEW_RULE_HASH,
+        newSemanticHash: OLD_RULE_HASH,
+        oldPackageHash: 'c'.repeat(64),
+        newPackageHash: 'e'.repeat(64),
+        category: 'NO_ACTION',
+        parameterCompatible: true,
+        bindingReview: false,
+        entries: []
+      })
+    );
     route('GET /api/v1/rule-packages/pkg_01/audits', () => jsonResponse({ items: [] }));
     route(`GET /api/v1/rule-versions/${NEW_RULE_HASH}/export`, () => jsonResponse({ version: 1 }));
     route('POST /api/v1/rule-packages/pkg_01/rollback', (request) => {
@@ -1126,11 +1166,12 @@ describe('规则草稿', () => {
 
     renderManage('/rules/pkg_01');
     await screen.findByRole('button', { name: /回滚到/ });
-    await selectOption(/回滚到/, '0.9.0（aaaaaaaaaaaa…）');
+    await selectOption(/回滚到/, '0.9.0 · published · aaaaaaaaaaaa…');
     await userEvent.type(screen.getByRole('textbox', { name: '回滚理由' }), '恢复稳定版本');
-    await userEvent.click(screen.getByRole('button', { name: '回滚当前版本' }));
-    const dialog = await screen.findByRole('dialog', { name: '回滚规则包' });
-    await userEvent.click(within(dialog).getByRole('button', { name: '确认回滚' }));
+    await waitFor(() => expect(screen.getByRole('button', { name: '回滚 current 指针' })).toBeEnabled());
+    await userEvent.click(screen.getByRole('button', { name: '回滚 current 指针' }));
+    const dialog = await screen.findByRole('dialog', { name: '回滚规则包 current 指针' });
+    await userEvent.click(within(dialog).getByRole('button', { name: '确认回滚指针' }));
 
     await waitFor(() => expect(requestsTo('POST /api/v1/rule-packages/pkg_01/rollback')).toHaveLength(1));
     expect(requestsTo('POST /api/v1/rule-packages/pkg_01/rollback')[0]?.ifMatch).toBe('"7"');
@@ -1143,7 +1184,291 @@ describe('规则草稿', () => {
   });
 });
 
-/* ————————————————————————————— 6. 密文只显示一次 ————————————————————————————— */
+/* ————————————————————————————— 6. 规则生命周期与 ParameterSet ————————————————————————————— */
+
+describe('规则生命周期与 ParameterSet', () => {
+  it('ParameterSet Binding 只发送 parameterId 与无损 override，不混入 direct 字段', async () => {
+    const parameter = ruleParameterSet();
+    let body: Promise<unknown> | undefined;
+    route('GET /api/v1/sources', () => jsonResponse({ sources: [SOURCE] }));
+    route('GET /api/v1/rule-packages', () =>
+      jsonResponse({ items: [rulePackage({ currentSemanticHash: NEW_RULE_HASH })] })
+    );
+    route('GET /api/v1/rule-packages/pkg_01/versions', () => jsonResponse({ items: [ruleVersion()] }));
+    route('GET /api/v1/rule-parameters', () => jsonResponse({ parameterSets: [parameter] }));
+    route('GET /api/v1/source-rule-bindings', () => jsonResponse({ bindings: [] }));
+    route('GET /api/v1/sources/src_01/effective-rule-binding', () =>
+      faultResponse('NOT_FOUND', 404, 'corr-no-effective')
+    );
+    route('POST /api/v1/source-rule-bindings', (request) => {
+      body = request.clone().json();
+      return jsonResponse(
+        {
+          id: 'srbind_01',
+          sourceId: SOURCE.id,
+          semanticHash: NEW_RULE_HASH,
+          parameters: {},
+          parametersText: parameter.parametersText,
+          priority: 100,
+          ruleIrHash: 'd'.repeat(64),
+          parameterId: parameter.id,
+          parameterRevision: parameter.currentRevision,
+          parameterHash: parameter.currentHash,
+          override: {},
+          overrideText: '{"minimumSize":9007199254740993124}',
+          status: 'active',
+          createdAt: '2026-07-27T05:00:00Z'
+        },
+        201
+      );
+    });
+
+    renderManage('/rules');
+    await screen.findByRole('button', { name: /来源/ });
+    await selectOption(/来源/, '合成来源 · src_01');
+    await selectOption(/绑定参数来源/, 'ParameterSet · 共享参数集 + override');
+    await selectOption(/active ParameterSet/, `共享参数 · r2 · ${NEW_RULE_HASH.slice(0, 12)}…`);
+    const exactOverride = '{"minimumSize":9007199254740993124}';
+    fireEvent.change(screen.getByRole('textbox', { name: /override（精确 JSON 对象文本）/ }), {
+      target: { value: exactOverride }
+    });
+    await userEvent.click(screen.getByRole('button', { name: '创建绑定' }));
+
+    await waitFor(() => expect(requestsTo('POST /api/v1/source-rule-bindings')).toHaveLength(1));
+    expect(await body).toEqual({
+      sourceId: SOURCE.id,
+      parameterId: parameter.id,
+      priority: 100,
+      override: exactOverride
+    });
+  });
+
+  it('新 Binding 列出 active 规则包全部可采纳 published 版本及其 ParameterSet', async () => {
+    const current = ruleParameterSet();
+    const historical = ruleParameterSet({
+      id: 'rparam_00000000-0000-7000-8000-000000000002',
+      name: '历史参数',
+      semanticHash: OLD_RULE_HASH
+    });
+    route('GET /api/v1/sources', () => jsonResponse({ sources: [SOURCE] }));
+    route('GET /api/v1/rule-packages', () =>
+      jsonResponse({ items: [rulePackage({ currentSemanticHash: NEW_RULE_HASH })] })
+    );
+    route('GET /api/v1/rule-packages/pkg_01/versions', () =>
+      jsonResponse({
+        items: [
+          ruleVersion(),
+          ruleVersion({ id: 'version_02', semanticHash: OLD_RULE_HASH, version: '0.9.0' })
+        ]
+      })
+    );
+    route('GET /api/v1/rule-parameters', () => jsonResponse({ parameterSets: [current, historical] }));
+    route('GET /api/v1/source-rule-bindings', () => jsonResponse({ bindings: [] }));
+    route('GET /api/v1/sources/src_01/effective-rule-binding', () =>
+      faultResponse('NOT_FOUND', 404, 'corr-no-effective')
+    );
+
+    renderManage('/rules');
+    await screen.findByRole('button', { name: /来源/ });
+    await selectOption(/来源/, '合成来源 · src_01');
+    await userEvent.click(screen.getByRole('button', { name: /已发布版本/ }));
+    expect(
+      screen.getByRole('option', { name: `合成规则包 · 1.0.0 · ${NEW_RULE_HASH.slice(0, 12)}…` })
+    ).toBeVisible();
+    expect(
+      screen.getByRole('option', { name: `合成规则包 · 0.9.0 · ${OLD_RULE_HASH.slice(0, 12)}…` })
+    ).toBeVisible();
+    await userEvent.keyboard('{Escape}');
+    await selectOption(/绑定参数来源/, 'ParameterSet · 共享参数集 + override');
+    await userEvent.click(screen.getByRole('button', { name: /active ParameterSet/ }));
+
+    expect(
+      screen.getByRole('option', { name: `共享参数 · r2 · ${NEW_RULE_HASH.slice(0, 12)}…` })
+    ).toBeVisible();
+    expect(
+      screen.getByRole('option', { name: `历史参数 · r2 · ${OLD_RULE_HASH.slice(0, 12)}…` })
+    ).toBeVisible();
+  });
+
+  it('ParameterSet 大整数经 Impact 后必须确认，并以 If-Match CAS 更新', async () => {
+    let stored = ruleParameterSet();
+    let impactBody: Promise<unknown> | undefined;
+    let updateBody: Promise<unknown> | undefined;
+    route('GET /api/v1/rule-packages/pkg_01', () =>
+      jsonResponse(rulePackage({ currentSemanticHash: NEW_RULE_HASH }))
+    );
+    route('GET /api/v1/rule-packages/pkg_01/draft', () =>
+      jsonResponse(ruleDraft({ baseSemanticHash: NEW_RULE_HASH }))
+    );
+    route('GET /api/v1/rule-packages/pkg_01/versions', () => jsonResponse({ items: [ruleVersion()] }));
+    route('GET /api/v1/rule-packages/pkg_01/audits', () => jsonResponse({ items: [] }));
+    route(`GET /api/v1/rule-versions/${NEW_RULE_HASH}/export`, () => jsonResponse({ version: 1 }));
+    route('GET /api/v1/rules/schema', () => jsonResponse(RULE_SCHEMA));
+    route('GET /api/v1/rules/examples', () => jsonResponse({ items: [] }));
+    route('GET /api/v1/rule-parameters', () => jsonResponse({ parameterSets: [stored] }));
+    route(`POST /api/v1/rule-parameters/${String(stored.id)}/impact`, (request) => {
+      impactBody = request.clone().json();
+      return jsonResponse(
+        ruleImpact({ category: 'RESCAN_PARTIAL', affectedSources: [SOURCE.id], partialRescan: true })
+      );
+    });
+    route(`PUT /api/v1/rule-parameters/${String(stored.id)}`, (request) => {
+      updateBody = request.clone().json();
+      stored = ruleParameterSet({
+        ...stored,
+        currentRevision: 3,
+        currentHash: '9'.repeat(64),
+        parametersText: '{"minimumSize":9007199254740993124}'
+      });
+      return jsonResponse(stored);
+    });
+
+    renderManage('/rules/pkg_01');
+    const editor = await screen.findByRole('textbox', { name: '参数（精确 JSON 对象文本）' });
+    const nextText = '{"minimumSize":9007199254740993124}';
+    fireEvent.change(editor, { target: { value: nextText } });
+    await userEvent.click(screen.getByRole('button', { name: '评估参数影响' }));
+    await waitFor(() =>
+      expect(requestsTo(`POST /api/v1/rule-parameters/${String(stored.id)}/impact`)).toHaveLength(1)
+    );
+    expect(await impactBody).toEqual({ parameters: nextText });
+
+    const updateButton = screen.getByRole('button', { name: 'CAS 更新 ParameterSet' });
+    expect(updateButton).toBeDisabled();
+    await userEvent.click(
+      screen.getByRole('checkbox', { name: /我已审阅本 revision 与当前参数文本的 Impact/ })
+    );
+    expect(updateButton).toBeEnabled();
+    await userEvent.click(updateButton);
+    const dialog = await screen.findByRole('dialog', { name: '更新共享 ParameterSet' });
+    await userEvent.click(within(dialog).getByRole('button', { name: '确认更新共享参数' }));
+
+    await waitFor(() =>
+      expect(requestsTo(`PUT /api/v1/rule-parameters/${String(stored.id)}`)).toHaveLength(1)
+    );
+    expect(requestsTo(`PUT /api/v1/rule-parameters/${String(stored.id)}`)[0]?.ifMatch).toBe('"2"');
+    expect(await updateBody).toEqual({
+      parameters: nextText,
+      expectedRevision: 2,
+      confirmImpact: true
+    });
+  });
+
+  it('ParameterSet CAS 冲突保留本地精确文本，并要求显式采用服务器 revision', async () => {
+    const parameterId = 'rparam_00000000-0000-7000-8000-000000000001';
+    let stored = ruleParameterSet({ id: parameterId });
+    route('GET /api/v1/rule-packages/pkg_01', () =>
+      jsonResponse(rulePackage({ currentSemanticHash: NEW_RULE_HASH }))
+    );
+    route('GET /api/v1/rule-packages/pkg_01/draft', () =>
+      jsonResponse(ruleDraft({ baseSemanticHash: NEW_RULE_HASH }))
+    );
+    route('GET /api/v1/rule-packages/pkg_01/versions', () => jsonResponse({ items: [ruleVersion()] }));
+    route('GET /api/v1/rule-packages/pkg_01/audits', () => jsonResponse({ items: [] }));
+    route(`GET /api/v1/rule-versions/${NEW_RULE_HASH}/export`, () => jsonResponse({ version: 1 }));
+    route('GET /api/v1/rules/schema', () => jsonResponse(RULE_SCHEMA));
+    route('GET /api/v1/rules/examples', () => jsonResponse({ items: [] }));
+    route('GET /api/v1/rule-parameters', () => jsonResponse({ parameterSets: [stored] }));
+    route(`POST /api/v1/rule-parameters/${parameterId}/impact`, () => jsonResponse(ruleImpact()));
+    route(`PUT /api/v1/rule-parameters/${parameterId}`, () => {
+      stored = ruleParameterSet({
+        id: parameterId,
+        currentRevision: 3,
+        currentHash: '8'.repeat(64),
+        parametersText: '{"minimumSize":7}'
+      });
+      return faultResponse('RULE_PARAMETER_CONFLICT', 409, 'corr-param-conflict');
+    });
+
+    renderManage('/rules/pkg_01');
+    const editor = await screen.findByRole('textbox', { name: '参数（精确 JSON 对象文本）' });
+    const localText = '{"minimumSize":9007199254740993999}';
+    fireEvent.change(editor, { target: { value: localText } });
+    await userEvent.click(screen.getByRole('button', { name: '评估参数影响' }));
+    await userEvent.click(
+      await screen.findByRole('checkbox', { name: /我已审阅本 revision 与当前参数文本的 Impact/ })
+    );
+    await userEvent.click(screen.getByRole('button', { name: 'CAS 更新 ParameterSet' }));
+    const dialog = await screen.findByRole('dialog', { name: '更新共享 ParameterSet' });
+    await userEvent.click(within(dialog).getByRole('button', { name: '确认更新共享参数' }));
+
+    await screen.findByText('ParameterSet revision 已变化');
+    expect(screen.getByRole('textbox', { name: '参数（精确 JSON 对象文本）' })).toHaveValue(localText);
+    expect(
+      screen.getAllByRole('alert').some((item) => item.textContent.includes('RULE_PARAMETER_CONFLICT'))
+    ).toBe(true);
+    expect(screen.getByRole('button', { name: '采用服务器最新参数' })).toBeEnabled();
+  });
+
+  it('RuleVersion 在用时弃用错误常驻，并提交非空理由', async () => {
+    let body: Promise<unknown> | undefined;
+    route('GET /api/v1/rule-packages/pkg_01', () =>
+      jsonResponse(rulePackage({ currentSemanticHash: NEW_RULE_HASH }))
+    );
+    route('GET /api/v1/rule-packages/pkg_01/draft', () => jsonResponse(ruleDraft()));
+    route('GET /api/v1/rule-packages/pkg_01/versions', () =>
+      jsonResponse({
+        items: [ruleVersion(), ruleVersion({ version: '0.9.0', semanticHash: OLD_RULE_HASH })]
+      })
+    );
+    route('GET /api/v1/rule-packages/pkg_01/audits', () => jsonResponse({ items: [] }));
+    route(`GET /api/v1/rule-versions/${NEW_RULE_HASH}/export`, () => jsonResponse({ version: 1 }));
+    route('GET /api/v1/rules/schema', () => jsonResponse(RULE_SCHEMA));
+    route('GET /api/v1/rules/examples', () => jsonResponse({ items: [] }));
+    route(`POST /api/v1/rule-versions/${OLD_RULE_HASH}/deprecate`, (request) => {
+      body = request.clone().json();
+      return faultResponse('RULE_VERSION_IN_USE', 409, 'corr-version-in-use');
+    });
+
+    renderManage('/rules/pkg_01');
+    await screen.findByRole('button', { name: /要弃用的 RuleVersion/ });
+    await selectOption(/要弃用的 RuleVersion/, '0.9.0 · published · aaaaaaaaaaaa…');
+    await userEvent.type(screen.getByRole('textbox', { name: '版本弃用理由' }), '停止新采用');
+    await userEvent.click(screen.getByRole('button', { name: '弃用所选 RuleVersion' }));
+    const dialog = await screen.findByRole('dialog', { name: '弃用不可变 RuleVersion' });
+    await userEvent.click(within(dialog).getByRole('button', { name: '确认弃用版本' }));
+
+    expect(await body).toEqual({ reason: '停止新采用' });
+    expect(await screen.findByRole('alert')).toHaveTextContent('RULE_VERSION_IN_USE');
+    expect(screen.getByText(/RuleVersion 仍被 current 指针或 active Binding 使用/)).toBeVisible();
+  });
+
+  it('规则包弃用带 package revision，成功后锁定作者操作但保留生命周期清理', async () => {
+    let packageValue = rulePackage({ revision: 7, currentSemanticHash: NEW_RULE_HASH });
+    let body: Promise<unknown> | undefined;
+    route('GET /api/v1/rule-packages/pkg_01', () => jsonResponse(packageValue));
+    route('GET /api/v1/rule-packages/pkg_01/draft', () => jsonResponse(ruleDraft()));
+    route('GET /api/v1/rule-packages/pkg_01/versions', () => jsonResponse({ items: [ruleVersion()] }));
+    route('GET /api/v1/rule-packages/pkg_01/audits', () => jsonResponse({ items: [] }));
+    route(`GET /api/v1/rule-versions/${NEW_RULE_HASH}/export`, () => jsonResponse({ version: 1 }));
+    route('GET /api/v1/rules/schema', () => jsonResponse(RULE_SCHEMA));
+    route('GET /api/v1/rules/examples', () => jsonResponse({ items: [] }));
+    route('POST /api/v1/rule-packages/pkg_01/deprecate', (request) => {
+      body = request.clone().json();
+      packageValue = rulePackage({
+        revision: 8,
+        status: 'deprecated',
+        currentSemanticHash: NEW_RULE_HASH
+      });
+      return jsonResponse(packageValue);
+    });
+
+    renderManage('/rules/pkg_01');
+    await userEvent.type(await screen.findByRole('textbox', { name: '规则包弃用理由' }), '停止维护');
+    await userEvent.click(screen.getByRole('button', { name: '永久弃用规则包' }));
+    const dialog = await screen.findByRole('dialog', { name: '永久弃用规则包' });
+    await userEvent.click(within(dialog).getByRole('button', { name: '确认永久弃用' }));
+
+    await waitFor(() => expect(requestsTo('POST /api/v1/rule-packages/pkg_01/deprecate')).toHaveLength(1));
+    expect(requestsTo('POST /api/v1/rule-packages/pkg_01/deprecate')[0]?.ifMatch).toBe('"7"');
+    expect(await body).toEqual({ expectedRevision: 7, reason: '停止维护' });
+    expect(await screen.findByRole('heading', { name: '规则包作者操作已锁定' })).toBeVisible();
+    expect(screen.queryByRole('button', { name: '保存草稿' })).not.toBeInTheDocument();
+    expect(screen.getByRole('heading', { name: '弃用非当前版本' })).toBeVisible();
+  });
+});
+
+/* ————————————————————————————— 7. 密文只显示一次 ————————————————————————————— */
 
 describe('分享密文', () => {
   it('创建后只显示一次，关闭对话框即从界面消失且没有再次查看的入口', async () => {
