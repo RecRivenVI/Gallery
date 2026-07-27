@@ -81,6 +81,29 @@ describe('调度器', () => {
     expect(scheduler.known('media_1')).toEqual({ status: 'ready', assetKey: 'b'.repeat(64) });
   });
 
+  it('同一个 CanonicalMedia 在不同 publication 独立求值，不能复用旧快照派生资产', async () => {
+    const createJob = vi
+      .fn()
+      .mockResolvedValueOnce(job({ status: 'completed', derivedAssetKey: 'd'.repeat(64) }))
+      .mockResolvedValueOnce(job({ status: 'completed', derivedAssetKey: 'e'.repeat(64) }));
+    const scheduler = new ThumbnailScheduler({
+      transport: { createJob, readJob: () => Promise.reject(new Error('不应轮询')) }
+    });
+
+    await scheduler.request('media_1', { ...options, queryPublicationId: 'qpub_1' });
+    await scheduler.request('media_1', { ...options, queryPublicationId: 'qpub_2' });
+
+    expect(createJob).toHaveBeenCalledTimes(2);
+    expect(scheduler.known('media_1', 'qpub_1')).toEqual({
+      status: 'ready',
+      assetKey: 'd'.repeat(64)
+    });
+    expect(scheduler.known('media_1', 'qpub_2')).toEqual({
+      status: 'ready',
+      assetKey: 'e'.repeat(64)
+    });
+  });
+
   it('排队的 Job 会被轮询直到完成', async () => {
     const statuses: Job[] = [
       job({ status: 'running' }),

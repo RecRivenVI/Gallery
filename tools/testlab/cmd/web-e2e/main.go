@@ -12,6 +12,9 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"image"
+	"image/color"
+	"image/png"
 	"io/fs"
 	"net/http"
 	"os"
@@ -95,6 +98,12 @@ func run() (exitCode int) {
 	if err := os.CopyFS(sourceRoot, os.DirFS(fixture)); err != nil {
 		return fail("复制合成 Source", err)
 	}
+	if err := os.Remove(filepath.Join(sourceRoot, "work-one", "media.bin")); err != nil {
+		return fail("移除占位合成媒体", err)
+	}
+	if err := writeSyntheticPNG(filepath.Join(sourceRoot, "work-one", "media.png")); err != nil {
+		return fail("写入可解码合成媒体", err)
+	}
 	metadata := []byte("{\"creator\":{\"name\":\"Synthetic Creator\"}}\n")
 	if err := os.WriteFile(filepath.Join(sourceRoot, "work-one", "metadata.json"), metadata, 0o600); err != nil {
 		return fail("写入合成 metadata", err)
@@ -149,7 +158,13 @@ func run() (exitCode int) {
 		}
 	}()
 
-	rulePackage := filepath.Join(root, "internal", "rules", "testdata", "minimal-rule-package.json")
+	rulePackage := filepath.Join(testRoot, "web-e2e-rule-package.json")
+	if err := prepareRulePackage(
+		filepath.Join(root, "internal", "rules", "testdata", "minimal-rule-package.json"),
+		rulePackage,
+	); err != nil {
+		return fail("准备 Web E2E 规则包", err)
+	}
 	env := []string{
 		"GALLERY_REAL_BASE_URL=" + server.BaseURL,
 		"GALLERY_REAL_SOURCE_ROOT=" + sourceRoot,
@@ -159,7 +174,18 @@ func run() (exitCode int) {
 	testErr := waitHealthy(runCtx, server.BaseURL, 30*time.Second)
 	if testErr == nil {
 		testErr = command(runCtx, 2*time.Minute, webRoot, env, nodeBin, playwright, "test",
-			"e2e/real-bootstrap.spec.ts", "e2e/real-gallery.spec.ts",
+			"e2e/real-bootstrap.spec.ts", "--project=chromium", "--workers=1", "--retries=0")
+	}
+	// publication E2E 以 bootstrap 已完成为前置；分开调用把这个状态依赖写进运行器契约，
+	// 不依赖 Playwright 对多个 spec 参数的偶然排序，也不给长状态链与其它套件共享超时预算。
+	if testErr == nil {
+		testErr = command(runCtx, 2*time.Minute, webRoot, env, nodeBin, playwright, "test",
+			"e2e/real-media.spec.ts",
+			"--project=chromium", "--workers=1", "--retries=0")
+	}
+	if testErr == nil {
+		testErr = command(runCtx, 2*time.Minute, webRoot, env, nodeBin, playwright, "test",
+			"e2e/real-gallery.spec.ts",
 			"--project=chromium", "--workers=1", "--retries=0")
 	}
 	stop := server.Stop()
@@ -179,6 +205,35 @@ func run() (exitCode int) {
 
 	fmt.Println("真实 galleryd 浏览器 E2E 通过；合成 Source 只读 guard 通过；galleryd 已优雅停止")
 	return 0
+}
+
+func writeSyntheticPNG(path string) error {
+	file, err := os.Create(path)
+	if err != nil {
+		return err
+	}
+	imageData := image.NewNRGBA(image.Rect(0, 0, 2, 2))
+	imageData.Set(0, 0, color.NRGBA{R: 8, G: 127, B: 104, A: 255})
+	imageData.Set(1, 0, color.NRGBA{R: 245, G: 158, B: 11, A: 255})
+	imageData.Set(0, 1, color.NRGBA{R: 37, G: 99, B: 235, A: 255})
+	imageData.Set(1, 1, color.NRGBA{R: 225, G: 29, B: 72, A: 255})
+	encodeErr := png.Encode(file, imageData)
+	closeErr := file.Close()
+	return errors.Join(encodeErr, closeErr)
+}
+
+func prepareRulePackage(sourcePath, targetPath string) error {
+	content, err := os.ReadFile(sourcePath)
+	if err != nil {
+		return err
+	}
+	const oldMedia = `"glob": "*.bin", "kind": "image", "mime": "application/octet-stream"`
+	const newMedia = `"glob": "*.png", "kind": "image", "mime": "image/png"`
+	if strings.Count(string(content), oldMedia) != 1 {
+		return fmt.Errorf("最小规则包媒体原语形状不符合预期")
+	}
+	adapted := strings.Replace(string(content), oldMedia, newMedia, 1)
+	return os.WriteFile(targetPath, []byte(adapted), 0o600)
 }
 
 func retainDiagnostics(logPath, diagnosticsRoot string) error {

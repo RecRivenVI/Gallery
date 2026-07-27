@@ -241,26 +241,46 @@ export function useWorkList(params: WorkQueryParams): WorkListView {
 
 /* ————————————————————————————— 作品详情与媒体 ————————————————————————————— */
 
-export function useWork(workId: string) {
+export function useWork(workId: string, queryPublicationId?: string) {
   return useQuery({
-    queryKey: ['works', 'detail', workId],
+    queryKey: ['works', 'detail', workId, queryPublicationId],
     queryFn: async ({ signal }) =>
-      expectData(await api.GET('/api/v1/works/{workId}', { params: { path: { workId } }, signal }))
+      expectData(
+        await api.GET('/api/v1/works/{workId}', {
+          params: {
+            path: { workId },
+            query: queryPublicationId === undefined ? {} : { queryPublicationId }
+          },
+          signal
+        })
+      ),
+    // 显式历史 publication 已失效时，重复同一个 ID 不会恢复；立即交给页面提供 current 导航。
+    retry: (failureCount, error) =>
+      classifyCursorFailure(error) === 'none' && isRetryable(error) && failureCount < 2
   });
 }
 
 /**
  * 作品的媒体列表。
  *
- * 省略 queryPublicationId 走 current 模式，响应会告诉我们实际用的是哪个快照；随后正文读取
- * 就绑定这个快照，保证同一次浏览里列表与字节来自同一代次。
+ * queryPublicationId 来自同一次 Work 读取；媒体、正文与后续操作必须继续绑定这个快照。
  */
-export function useWorkMedia(workId: string, enabled = true) {
+export function useWorkMedia(workId: string, queryPublicationId?: string, enabled = true) {
   return useQuery({
     enabled,
-    queryKey: ['media', 'work', workId],
+    queryKey: ['media', 'work', workId, queryPublicationId],
     queryFn: async ({ signal }): Promise<MediaListResponse> =>
-      expectData(await api.GET('/api/v1/works/{workId}/media', { params: { path: { workId } }, signal }))
+      expectData(
+        await api.GET('/api/v1/works/{workId}/media', {
+          params: {
+            path: { workId },
+            query: queryPublicationId === undefined ? {} : { queryPublicationId }
+          },
+          signal
+        })
+      ),
+    retry: (failureCount, error) =>
+      classifyCursorFailure(error) === 'none' && isRetryable(error) && failureCount < 2
   });
 }
 
@@ -345,14 +365,18 @@ export function useOverlayMutation(workId: string): OverlayMutation {
 /* ————————————————————————————— 按需内容确认 ————————————————————————————— */
 
 /** 为 located_unverified 媒体创建内容确认 Job。需要 scan.run。 */
-export function useVerificationJob(mediaId: string) {
+export function useVerificationJob(mediaId: string, queryPublicationId?: string) {
   const csrf = useCsrfHeaders();
   const queryClient = useQueryClient();
   return useMutation({
     mutationFn: async () =>
       expectData(
         await api.POST('/api/v1/media/{mediaId}/verification-jobs', {
-          params: { path: { mediaId }, header: csrf }
+          params: {
+            path: { mediaId },
+            query: queryPublicationId === undefined ? {} : { queryPublicationId },
+            header: csrf
+          }
         })
       ),
     onSuccess: () => {

@@ -22,3 +22,18 @@ func TestGeneratedErrorEnumCoversCanonicalCodes(t *testing.T) {
 		}
 	}
 }
+
+func TestPublicationBoundResponsesExposeValidationErrors(t *testing.T) {
+	validation := &api.ValidationError{}
+	responses := []any{
+		api.GetWorkResponse{JSON400: validation},
+		api.ListWorkMediaResponse{JSON400: validation},
+		api.GetMediaResponse{JSON400: validation},
+		api.HeadMediaContentResponse{JSON400: validation},
+		api.GetMediaContentResponse{JSON400: validation},
+		api.CreateMediaVerificationJobResponse{JSON400: validation},
+	}
+	if len(responses) != 6 {
+		t.Fatalf("publication-bound validation response count = %d, want 6", len(responses))
+	}
+}

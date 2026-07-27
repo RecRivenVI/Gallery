@@ -21,6 +21,7 @@ import {
   isLowerBoundTotal,
   mediaContentUrl,
   MISSING_CREATOR_TEXT,
+  publicationHref,
   type RuleBadge
 } from './contracts';
 import { GalleryError } from '../api/client';
@@ -182,5 +183,10 @@ describe('live 字段与媒体地址', () => {
     expect(mediaContentUrl('media_1', { queryPublicationId: 'qpub_1', download: true })).toBe(
       '/api/v1/media/media_1/content?queryPublicationId=qpub_1&download=true'
     );
+  });
+
+  it('内部作品链接携带 publication，空值才保留 current 模式', () => {
+    expect(publicationHref('/works/work_1', 'qpub_1')).toBe('/works/work_1?queryPublicationId=qpub_1');
+    expect(publicationHref('/works/work_1')).toBe('/works/work_1');
   });
 });

@@ -215,10 +215,18 @@ export interface ThumbnailSourceOptions {
 export function useThumbnailSource(options: ThumbnailSourceOptions): string {
   const { mediaId, media, queryPublicationId, csrfToken, canDerive, inView } = options;
   const fullSize = mediaContentUrl(mediaId, { queryPublicationId });
-  const known = thumbnailScheduler.known(mediaId);
-  const [assetKey, setAssetKey] = useState<string | undefined>(
-    known?.status === 'ready' ? known.assetKey : undefined
+  const identity = JSON.stringify([queryPublicationId ?? null, mediaId]);
+  const known = thumbnailScheduler.known(mediaId, queryPublicationId);
+  const [selection, setSelection] = useState<{ identity: string; assetKey?: string }>(
+    known?.status === 'ready' ? { identity, assetKey: known.assetKey } : { identity }
   );
+  // 路由在同一组件实例中切到新 publication 时，不得短暂复用旧快照的派生资产。
+  const assetKey =
+    selection.identity === identity
+      ? selection.assetKey
+      : known?.status === 'ready'
+        ? known.assetKey
+        : undefined;
 
   useEffect(() => {
     if (assetKey !== undefined) return;
@@ -229,14 +237,16 @@ export function useThumbnailSource(options: ThumbnailSourceOptions): string {
       void thumbnailScheduler
         .request(mediaId, { csrfToken, queryPublicationId, signal: controller.signal })
         .then((outcome) => {
-          if (outcome.status === 'ready' && !controller.signal.aborted) setAssetKey(outcome.assetKey);
+          if (outcome.status === 'ready' && !controller.signal.aborted) {
+            setSelection({ identity, assetKey: outcome.assetKey });
+          }
         });
     }, THUMBNAIL_DWELL_MS);
     return () => {
       clearTimeout(timer);
       controller.abort();
     };
-  }, [assetKey, inView, mediaId, media, canDerive, csrfToken, queryPublicationId]);
+  }, [assetKey, identity, inView, mediaId, media, canDerive, csrfToken, queryPublicationId]);
 
   return assetKey === undefined ? fullSize : derivedAssetUrl(assetKey);
 }

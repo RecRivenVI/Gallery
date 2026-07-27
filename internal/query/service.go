@@ -253,6 +253,9 @@ func (s *Service) Search(ctx context.Context, request Request) (Result, error) {
 	} else {
 		if request.QueryPublicationID != "" {
 			pub, err = s.publication(ctx, request.QueryPublicationID)
+			if err != nil {
+				return Result{}, asExpired(err)
+			}
 		} else {
 			pub, err = s.currentPublication(ctx)
 		}

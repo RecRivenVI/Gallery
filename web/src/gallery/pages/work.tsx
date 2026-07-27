@@ -7,12 +7,12 @@
  * - **用户事实**：收藏、进度、标题覆盖、手动标签、隐藏、自定义封面。重扫**不会**覆盖。
  * - **快照身份**：这一页的媒体与正文来自哪个 publication。
  *
- * 媒体列表用 current 模式读取，响应会告诉我们实际使用的快照；随后所有正文读取都绑定它，
- * 保证同一次浏览里列表与字节来自同一代次。
+ * 作品先解析出实际快照，媒体列表、正文、Viewer、下载和按需确认随后全部绑定它，保证同一次
+ * 浏览里列表、详情与字节来自同一代次。
  */
 
 import { useRef } from 'react';
-import { Link, useParams } from 'react-router-dom';
+import { Link, useParams, useSearchParams } from 'react-router-dom';
 import { Badge, Button, EmptyState, ErrorState, Spinner, useToast } from '../../design';
 import { describeError, errorCode, errorCorrelationId } from '../../shared/errors';
 import { useCapability, useSession } from '../../shared/session';
@@ -25,6 +25,7 @@ import {
   isVideoMedia,
   mediaContentUrl,
   MISSING_PUBLISHED_AT_TEXT,
+  publicationHref,
   type PublishedMedia
 } from '../contracts';
 import { useVerificationJob, useWork, useWorkMedia, useWorkOverlay } from '../queries';
@@ -47,7 +48,7 @@ function MediaThumb({ workId, media, queryPublicationId }: MediaThumbProps) {
   const { csrfToken } = useSession();
   const canDerive = useCapability('media.derive');
   const canVerify = useCapability('scan.run');
-  const verification = useVerificationJob(media.id);
+  const verification = useVerificationJob(media.id, queryPublicationId);
   const toast = useToast();
   // 只有这里才有 mimeType 与内容确认状态，也只有这里才有资格判断"缩略图是否可能存在"。
   const src = useThumbnailSource({
@@ -64,7 +65,10 @@ function MediaThumb({ workId, media, queryPublicationId }: MediaThumbProps) {
     <div className="gal-thumb" ref={containerRef}>
       <Link
         className="gal-thumb__link"
-        to={`/works/${encodeURIComponent(workId)}/view/${encodeURIComponent(media.id)}`}
+        to={publicationHref(
+          `/works/${encodeURIComponent(workId)}/view/${encodeURIComponent(media.id)}`,
+          queryPublicationId
+        )}
       >
         {isImageMedia(media) && !unverified ? (
           <MediaImage src={src} alt={`第 ${media.ordinal + 1} 项媒体`} allowRetry={false} />
@@ -114,8 +118,13 @@ function MediaThumb({ workId, media, queryPublicationId }: MediaThumbProps) {
 export function WorkPage() {
   const params = useParams();
   const workId = params.workId ?? '';
-  const work = useWork(workId);
-  const media = useWorkMedia(workId);
+  const [searchParams] = useSearchParams();
+  const requestedPublicationId = searchParams.get('queryPublicationId') ?? undefined;
+  const work = useWork(workId, requestedPublicationId);
+  // 先让 Work 解析出实际 publication，再用同一个 ID 读媒体；current 模式下也不能让两个
+  // 独立请求各自在不同时刻读取当时的 active publication。
+  const workPublicationId = work.data?.queryPublicationId;
+  const media = useWorkMedia(workId, workPublicationId, workPublicationId !== undefined);
   const overlay = useWorkOverlay(workId, false);
   const canEditOverlay = useCapability('overlays.write');
 
@@ -127,6 +136,7 @@ export function WorkPage() {
     );
   }
   if (work.error !== null) {
+    const expired = errorCode(work.error) === 'CURSOR_EXPIRED';
     return (
       <div className="gal-page">
         <ErrorState
@@ -136,6 +146,17 @@ export function WorkPage() {
           correlationId={errorCorrelationId(work.error)}
           onRetry={() => void work.refetch()}
         />
+        {expired ? (
+          <p>
+            <Link className="gal-link" to={`/works/${encodeURIComponent(workId)}`}>
+              打开当前版本
+            </Link>
+            {' · '}
+            <Link className="gal-link" to="/browse">
+              返回全部作品
+            </Link>
+          </p>
+        ) : null}
       </div>
     );
   }
@@ -145,13 +166,11 @@ export function WorkPage() {
   const items = media.data?.media ?? [];
   const first = items[0];
   const publicationId = media.data?.queryPublicationId ?? item.queryPublicationId;
-  const titleOverride = overlay.data?.titleOverride ?? '';
 
   return (
     <div className="gal-page gal-work">
       <header className="gal-work__header">
-        <h1 className="gal-page__title">{titleOverride === '' ? item.title : titleOverride}</h1>
-        {titleOverride === '' ? null : <p className="gal-muted">规则解析的标题：{item.title}</p>}
+        <h1 className="gal-page__title">{item.title}</h1>
         <p className={isCreatorMissing(item.creator) ? 'gal-muted' : undefined}>
           {isCreatorMissing(item.creator) ? formatCreator(item.creator) : item.creator}
         </p>
@@ -198,12 +217,25 @@ export function WorkPage() {
         {media.isPending ? (
           <Spinner label="正在加载媒体" />
         ) : media.error !== null ? (
-          <ErrorState
-            description={describeError(media.error)}
-            code={errorCode(media.error)}
-            correlationId={errorCorrelationId(media.error)}
-            onRetry={() => void media.refetch()}
-          />
+          <>
+            <ErrorState
+              description={describeError(media.error)}
+              code={errorCode(media.error)}
+              correlationId={errorCorrelationId(media.error)}
+              onRetry={() => void media.refetch()}
+            />
+            {errorCode(media.error) === 'CURSOR_EXPIRED' ? (
+              <p>
+                <Link className="gal-link" to={`/works/${encodeURIComponent(workId)}`}>
+                  打开当前版本
+                </Link>
+                {' · '}
+                <Link className="gal-link" to="/browse">
+                  返回全部作品
+                </Link>
+              </p>
+            ) : null}
+          </>
         ) : items.length === 0 ? (
           <EmptyState title="这个作品没有可显示的媒体" description="规则没有为它解析出任何媒体。" />
         ) : (
@@ -222,7 +254,11 @@ export function WorkPage() {
         {first === undefined ? null : (
           <>
             {' · '}
-            <a className="gal-link" href={mediaContentUrl(first.id, { download: true })} download>
+            <a
+              className="gal-link"
+              href={mediaContentUrl(first.id, { queryPublicationId: publicationId, download: true })}
+              download
+            >
               下载第一项媒体
             </a>
           </>

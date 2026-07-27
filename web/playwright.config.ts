@@ -48,12 +48,12 @@ export default defineConfig({
     { name: 'chromium', use: { ...devices['Desktop Chrome'] } },
     {
       name: 'chrome',
-      testIgnore: realMode ? /real-bootstrap\.spec\.ts/ : undefined,
+      testIgnore: realMode ? /real-(bootstrap|media)\.spec\.ts/ : undefined,
       use: { ...devices['Desktop Chrome'], channel: 'chrome' }
     },
     {
       name: 'edge',
-      testIgnore: realMode ? /real-bootstrap\.spec\.ts/ : undefined,
+      testIgnore: realMode ? /real-(bootstrap|media)\.spec\.ts/ : undefined,
       use: { ...devices['Desktop Edge'], channel: 'msedge' }
     }
   ]

@@ -243,6 +243,13 @@ export interface MediaContentOptions {
   download?: boolean;
 }
 
+/** 为画廊内部链接携带列表/详情实际使用的 publication；空值保持 current 模式。 */
+export function publicationHref(path: string, queryPublicationId?: string): string {
+  if (queryPublicationId === undefined || queryPublicationId === '') return path;
+  const params = new URLSearchParams({ queryPublicationId });
+  return `${path}?${params.toString()}`;
+}
+
 /** 媒体正文地址。Cookie 认证，可直接交给 `<video src>` 或本目录的媒体加载器。 */
 export function mediaContentUrl(mediaId: string, options: MediaContentOptions = {}): string {
   const params = new URLSearchParams();

@@ -42,6 +42,7 @@ func TestStatusForFaultMapsSecurityCodes(t *testing.T) {
 		{fault.CodeInvalidCredentials, http.StatusUnauthorized},
 		{fault.CodeTokenInvalid, http.StatusUnauthorized},
 		{fault.CodeRateLimited, http.StatusTooManyRequests},
+		{fault.CodeCursorExpired, http.StatusConflict},
 		{fault.CodeLANAlreadyInitialized, http.StatusConflict},
 		{fault.CodeLANOwnerRequired, http.StatusPreconditionRequired},
 	}
@@ -49,6 +50,44 @@ func TestStatusForFaultMapsSecurityCodes(t *testing.T) {
 		if got := statusForFault(fault.New(item.code, false, nil)); got != item.want {
 			t.Fatalf("%s 映射为 %d，应为 %d", item.code, got, item.want)
 		}
+	}
+}
+
+func TestOptionalQueryPublicationIDDistinguishesAbsentFromMalformed(t *testing.T) {
+	const valid = "qpub_018f47d2-5c16-7a44-a8a0-000000000001"
+	cases := []struct {
+		name     string
+		target   string
+		rawQuery string
+		want     string
+		wantErr  bool
+	}{
+		{name: "absent uses current", target: "/api/v1/works", want: ""},
+		{name: "valid snapshot", target: "/api/v1/works?queryPublicationId=" + valid, want: valid},
+		{name: "present empty", target: "/api/v1/works?queryPublicationId=", wantErr: true},
+		{name: "invalid id", target: "/api/v1/works?queryPublicationId=qpub_invalid", wantErr: true},
+		{name: "duplicate", target: "/api/v1/works?queryPublicationId=" + valid + "&queryPublicationId=" + valid, wantErr: true},
+		{name: "semicolon parse error", target: "/api/v1/works", rawQuery: "queryPublicationId=" + valid + ";x=1", wantErr: true},
+		{name: "bad escape parse error", target: "/api/v1/works", rawQuery: "queryPublicationId=%zz", wantErr: true},
+	}
+	for _, item := range cases {
+		t.Run(item.name, func(t *testing.T) {
+			request := httptest.NewRequest(http.MethodGet, item.target, nil)
+			if item.rawQuery != "" {
+				request.URL.RawQuery = item.rawQuery
+			}
+			got, err := optionalQueryPublicationID(request)
+			if item.wantErr {
+				structured := asFault(err)
+				if structured.Code != fault.CodeValidation || structured.Field != "queryPublicationId" {
+					t.Fatalf("malformed publication = (%q, %v), want VALIDATION_ERROR/queryPublicationId", got, err)
+				}
+				return
+			}
+			if err != nil || got != item.want {
+				t.Fatalf("optionalQueryPublicationID() = (%q, %v), want (%q, nil)", got, err, item.want)
+			}
+		})
 	}
 }
 

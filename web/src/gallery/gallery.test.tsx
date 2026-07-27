@@ -13,7 +13,7 @@
 import { QueryClientProvider } from '@tanstack/react-query';
 import { render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
-import { MemoryRouter } from 'react-router-dom';
+import { MemoryRouter, Route, Routes } from 'react-router-dom';
 import { beforeEach, describe, expect, it } from 'vitest';
 import type { ReactNode } from 'react';
 import { faultResponse, jsonResponse, setFetchHandler } from '../../tests/http';
@@ -24,6 +24,7 @@ import { ThemeProvider } from '../shared/theme';
 import { WorkBrowser } from './components/browser';
 import { MediaImage, MediaLoaderProvider } from './components/media';
 import { MediaLoader } from './media';
+import { WorkPage } from './pages/work';
 
 const PUBLICATION = 'qpub_test';
 
@@ -47,6 +48,7 @@ interface WorkOverrides {
   creator?: string;
   publishedAt?: string | null;
   favorite?: boolean;
+  coverMediaId?: string | null;
 }
 
 function work(overrides: WorkOverrides = {}) {
@@ -56,7 +58,7 @@ function work(overrides: WorkOverrides = {}) {
     creator: overrides.creator ?? '画师甲',
     tags: ['合成'],
     mediaCount: 3,
-    coverMediaId: null,
+    coverMediaId: overrides.coverMediaId ?? null,
     badges: [],
     favorite: overrides.favorite ?? false,
     progress: 0.25,
@@ -112,14 +114,14 @@ function testMediaLoader(): MediaLoader {
   });
 }
 
-function renderGallery(ui: ReactNode, initialEntry = '/browse') {
+function renderGallery(ui: ReactNode, initialEntry = '/browse', loader = testMediaLoader()) {
   return render(
     <QueryClientProvider client={createQueryClient()}>
       <ThemeProvider surface="gallery">
         <ToastProvider>
           <MemoryRouter initialEntries={[initialEntry]}>
             <SessionProvider>
-              <MediaLoaderProvider loader={testMediaLoader()}>{ui}</MediaLoaderProvider>
+              <MediaLoaderProvider loader={loader}>{ui}</MediaLoaderProvider>
             </SessionProvider>
           </MemoryRouter>
         </ToastProvider>
@@ -208,6 +210,93 @@ describe('缺失事实的空态', () => {
     expect(screen.getByText(/未记录发布时间/)).toBeInTheDocument();
     expect(document.body.textContent).not.toContain('Invalid Date');
     expect(document.body.textContent).not.toContain('undefined');
+  });
+});
+
+describe('publication 快照传播', () => {
+  it('作品卡片的详情链接和封面正文都绑定列表 publication', async () => {
+    let loadedURL = '';
+    const loader = new MediaLoader({
+      fetchImpl: (input) => {
+        loadedURL = typeof input === 'string' ? input : input instanceof URL ? input.href : input.url;
+        return Promise.resolve(new Response('image-bytes', { status: 200 }));
+      },
+      createObjectUrl: () => 'blob:cover',
+      revokeObjectUrl: () => undefined
+    });
+    setFetchHandler((request) => {
+      const url = new URL(request.url);
+      if (url.pathname === '/api/v1/bootstrap') return jsonResponse(BOOTSTRAP);
+      if (url.pathname === '/api/v1/works') {
+        return jsonResponse(workList({ works: [work({ coverMediaId: 'media_cover' })] }));
+      }
+      return faultResponse('NOT_FOUND', 404);
+    });
+
+    renderGallery(<WorkBrowser />, '/browse', loader);
+    const title = await screen.findByText('合成作品');
+    expect(title.closest('a')).toHaveAttribute('href', `/works/work_1?queryPublicationId=${PUBLICATION}`);
+    await waitFor(() =>
+      expect(loadedURL).toBe(`/api/v1/media/media_cover/content?queryPublicationId=${PUBLICATION}`)
+    );
+  });
+
+  it('详情先绑定 Work，再用同一个 publication 读取媒体', async () => {
+    const requested: Array<{ path: string; publication: string | null }> = [];
+    setFetchHandler((request) => {
+      const url = new URL(request.url);
+      if (url.pathname === '/api/v1/bootstrap') return jsonResponse(BOOTSTRAP);
+      if (url.pathname === '/api/v1/works/work_1') {
+        requested.push({ path: url.pathname, publication: url.searchParams.get('queryPublicationId') });
+        return jsonResponse(work());
+      }
+      if (url.pathname === '/api/v1/works/work_1/media') {
+        requested.push({ path: url.pathname, publication: url.searchParams.get('queryPublicationId') });
+        return jsonResponse({ queryPublicationId: PUBLICATION, media: [] });
+      }
+      if (url.pathname === '/api/v1/works/work_1/overlay') return jsonResponse(overlayState());
+      return faultResponse('NOT_FOUND', 404);
+    });
+
+    renderGallery(
+      <Routes>
+        <Route path="/works/:workId" element={<WorkPage />} />
+      </Routes>,
+      `/works/work_1?queryPublicationId=${PUBLICATION}`
+    );
+
+    expect(await screen.findByText(/本页内容来自快照/)).toHaveTextContent(PUBLICATION);
+    expect(screen.getByRole('heading', { name: '合成作品' })).toBeInTheDocument();
+    expect(screen.queryByText('我的标题')).not.toBeInTheDocument();
+    await waitFor(() => expect(requested).toHaveLength(2));
+    expect(requested).toEqual([
+      { path: '/api/v1/works/work_1', publication: PUBLICATION },
+      { path: '/api/v1/works/work_1/media', publication: PUBLICATION }
+    ]);
+  });
+
+  it('Work 已绑定但媒体快照失效时提供 current 恢复入口', async () => {
+    setFetchHandler((request) => {
+      const url = new URL(request.url);
+      if (url.pathname === '/api/v1/bootstrap') return jsonResponse(BOOTSTRAP);
+      if (url.pathname === '/api/v1/works/work_1') return jsonResponse(work());
+      if (url.pathname === '/api/v1/works/work_1/media') return faultResponse('CURSOR_EXPIRED', 409);
+      if (url.pathname === '/api/v1/works/work_1/overlay') return jsonResponse(overlayState());
+      return faultResponse('NOT_FOUND', 404);
+    });
+
+    renderGallery(
+      <Routes>
+        <Route path="/works/:workId" element={<WorkPage />} />
+      </Routes>,
+      `/works/work_1?queryPublicationId=${PUBLICATION}`
+    );
+
+    expect(await screen.findByRole('link', { name: '打开当前版本' })).toHaveAttribute(
+      'href',
+      '/works/work_1'
+    );
+    expect(screen.getByRole('link', { name: '返回全部作品' })).toHaveAttribute('href', '/browse');
   });
 });
 

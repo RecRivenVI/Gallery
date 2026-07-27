@@ -10,11 +10,18 @@
  */
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { Link, useNavigate, useParams } from 'react-router-dom';
+import { Link, useNavigate, useParams, useSearchParams } from 'react-router-dom';
 import { Badge, Button, ErrorState, IconButton, Spinner } from '../../design';
 import { describeError, errorCode, errorCorrelationId } from '../../shared/errors';
 import { useTheme } from '../../shared/theme';
-import { isAudioMedia, isImageMedia, isVideoMedia, mediaContentUrl, type PublishedMedia } from '../contracts';
+import {
+  isAudioMedia,
+  isImageMedia,
+  isVideoMedia,
+  mediaContentUrl,
+  publicationHref,
+  type PublishedMedia
+} from '../contracts';
 import { useWorkMedia } from '../queries';
 import { MediaImage } from '../components/media';
 
@@ -173,7 +180,9 @@ export function ViewerPage() {
   const workId = params.workId ?? '';
   const mediaId = params.mediaId ?? '';
   const navigate = useNavigate();
-  const media = useWorkMedia(workId);
+  const [searchParams] = useSearchParams();
+  const requestedPublicationId = searchParams.get('queryPublicationId') ?? undefined;
+  const media = useWorkMedia(workId, requestedPublicationId);
   const loaded = media.data?.media;
   // useMemo 不是性能优化：go() 依赖 items，每次渲染换身份会让键盘监听不断重挂。
   const items = useMemo(() => loaded ?? [], [loaded]);
@@ -186,17 +195,21 @@ export function ViewerPage() {
       const target = items[index + offset];
       if (!target) return;
       // replace：翻阅媒体不应该在历史里堆出几十个条目，返回键要能一步回到作品页。
-      void navigate(`/works/${encodeURIComponent(workId)}/view/${encodeURIComponent(target.id)}`, {
-        replace: true
-      });
+      void navigate(
+        publicationHref(
+          `/works/${encodeURIComponent(workId)}/view/${encodeURIComponent(target.id)}`,
+          publicationId
+        ),
+        { replace: true }
+      );
     },
-    [items, index, navigate, workId]
+    [items, index, navigate, workId, publicationId]
   );
 
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
       if (event.key === 'Escape') {
-        void navigate(`/works/${encodeURIComponent(workId)}`);
+        void navigate(publicationHref(`/works/${encodeURIComponent(workId)}`, publicationId));
         return;
       }
       if (event.key === 'ArrowLeft') go(-1);
@@ -206,7 +219,7 @@ export function ViewerPage() {
     return () => {
       window.removeEventListener('keydown', onKeyDown);
     };
-  }, [go, navigate, workId]);
+  }, [go, navigate, workId, publicationId]);
 
   if (media.isPending) {
     return (
@@ -216,6 +229,7 @@ export function ViewerPage() {
     );
   }
   if (media.error !== null) {
+    const expired = errorCode(media.error) === 'CURSOR_EXPIRED';
     return (
       <div className="gal-viewer">
         <ErrorState
@@ -224,6 +238,17 @@ export function ViewerPage() {
           correlationId={errorCorrelationId(media.error)}
           onRetry={() => void media.refetch()}
         />
+        {expired ? (
+          <p>
+            <Link className="gal-link" to={`/works/${encodeURIComponent(workId)}`}>
+              打开作品当前版本
+            </Link>
+            {' · '}
+            <Link className="gal-link" to="/browse">
+              返回全部作品
+            </Link>
+          </p>
+        ) : null}
       </div>
     );
   }
@@ -235,7 +260,13 @@ export function ViewerPage() {
           description="它可能已经不在当前快照里，或当前账户没有查看它的权限。"
           code="NOT_FOUND"
         />
-        <Link className="gal-link" to={`/works/${encodeURIComponent(workId)}`}>
+        <Link
+          className="gal-link"
+          to={publicationHref(
+            `/works/${encodeURIComponent(workId)}`,
+            publicationId || requestedPublicationId
+          )}
+        >
           返回作品
         </Link>
       </div>
@@ -247,7 +278,10 @@ export function ViewerPage() {
   return (
     <div className="gal-viewer">
       <header className="gal-viewer__bar">
-        <Link className="gal-link" to={`/works/${encodeURIComponent(workId)}`}>
+        <Link
+          className="gal-link"
+          to={publicationHref(`/works/${encodeURIComponent(workId)}`, publicationId)}
+        >
           返回作品
         </Link>
         <span className="gal-viewer__counter" aria-live="polite">

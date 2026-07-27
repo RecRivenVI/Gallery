@@ -22,6 +22,7 @@ import {
   isCreatorMissing,
   mediaContentUrl,
   MISSING_PUBLISHED_AT_TEXT,
+  publicationHref,
   type PublishedWork
 } from '../contracts';
 import { useOverlayMutation, useWorkOverlay } from '../queries';
@@ -126,14 +127,19 @@ export function WorkCard({ work, timeZone, authorLabel = '创作者' }: WorkCard
 
   return (
     <article className="gal-card">
-      <Link className="gal-card__link" to={`/works/${encodeURIComponent(work.id)}`}>
+      <Link
+        className="gal-card__link"
+        to={publicationHref(`/works/${encodeURIComponent(work.id)}`, work.queryPublicationId)}
+      >
         <span className="gal-card__cover">
           {work.coverMediaId === null ? (
             <CoverMissing />
           ) : (
-            // 列表封面刻意走 current 模式（不绑定 publication）：媒体 ID 是稳定的领域身份，
-            // 绑定一个可能刚刚换代的快照只会让整屏封面同时变成 409。
-            <MediaImage src={mediaContentUrl(work.coverMediaId)} alt="" allowRetry={false} />
+            <MediaImage
+              src={mediaContentUrl(work.coverMediaId, { queryPublicationId: work.queryPublicationId })}
+              alt=""
+              allowRetry={false}
+            />
           )}
           <RuleBadges badges={work.badges} position="cover_top_left" className="gal-badges--tl" />
           <RuleBadges badges={work.badges} position="cover_top_right" className="gal-badges--tr" />

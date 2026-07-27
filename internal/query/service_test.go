@@ -99,6 +99,8 @@ func TestFTSSnapshotKeysetCursorAndAuthorization(t *testing.T) {
 	assertCode(t, err, fault.CodeCursorExpired)
 	_, err = service.Search(ctx, authorizedRequest(galleryquery.Request{Limit: 2, Cursor: firstCursor, QueryPublicationID: "qpub_018f47d2-5c16-7a44-a8a0-000000000002", AuthorizationScope: scope}))
 	assertCode(t, err, fault.CodeCursorExpired)
+	_, err = service.Search(ctx, authorizedRequest(galleryquery.Request{Limit: 2, QueryPublicationID: "qpub_018f47d2-5c16-7a44-a8a0-0000000000ff", AuthorizationScope: scope}))
+	assertCode(t, err, fault.CodeCursorExpired)
 	tampered := "A" + firstCursor[1:]
 	_, err = service.Search(ctx, authorizedRequest(galleryquery.Request{Limit: 2, Cursor: tampered, AuthorizationScope: scope}))
 	assertCode(t, err, fault.CodeCursorInvalid)

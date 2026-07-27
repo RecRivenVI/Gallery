@@ -104,6 +104,12 @@ export class ThumbnailScheduler {
   private readonly settled = new Map<string, ThumbnailOutcome>();
   private readonly running = new Map<string, Promise<ThumbnailOutcome>>();
 
+  private key(mediaId: string, queryPublicationId?: string): string {
+    // CanonicalMedia 可跨 publication 指向不同 Blob；在没有 blob digest 的前端 DTO 中，
+    // publication + media 才是足够强的派生资产缓存身份。
+    return JSON.stringify([queryPublicationId ?? null, mediaId]);
+  }
+
   constructor(options: ThumbnailSchedulerOptions = {}) {
     this.transport = options.transport ?? defaultTransport;
     this.limit = options.limit ?? THUMBNAIL_CONCURRENCY_LIMIT;
@@ -117,8 +123,8 @@ export class ThumbnailScheduler {
   }
 
   /** 已知结论。用于渲染前同步判断，避免每次挂载都重新发请求。 */
-  known(mediaId: string): ThumbnailOutcome | undefined {
-    return this.settled.get(mediaId);
+  known(mediaId: string, queryPublicationId?: string): ThumbnailOutcome | undefined {
+    return this.settled.get(this.key(mediaId, queryPublicationId));
   }
 
   /**
@@ -128,26 +134,27 @@ export class ThumbnailScheduler {
    * 预算满时返回 `skipped` 且**不**记忆——它不是关于这个媒体的结论。
    */
   async request(mediaId: string, options: ThumbnailRequestOptions): Promise<ThumbnailOutcome> {
-    const known = this.settled.get(mediaId);
+    const key = this.key(mediaId, options.queryPublicationId);
+    const known = this.settled.get(key);
     if (known) return known;
-    const running = this.running.get(mediaId);
+    const running = this.running.get(key);
     if (running) return await running;
     if (this.running.size >= this.limit) return { status: 'skipped' };
 
     const task = this.run(mediaId, options).then(
       (outcome) => {
-        this.running.delete(mediaId);
-        if (outcome.status !== 'skipped') this.settled.set(mediaId, outcome);
+        this.running.delete(key);
+        if (outcome.status !== 'skipped') this.settled.set(key, outcome);
         return outcome;
       },
       () => {
-        this.running.delete(mediaId);
+        this.running.delete(key);
         // 网络层失败不是关于这个媒体的结论，不记忆；但也不在本轮重试。
         const outcome: ThumbnailOutcome = { status: 'skipped' };
         return outcome;
       }
     );
-    this.running.set(mediaId, task);
+    this.running.set(key, task);
     return await task;
   }
 

@@ -13,6 +13,7 @@ import (
 	"mime"
 	"net"
 	"net/http"
+	"net/url"
 	"strconv"
 	"strings"
 	"time"
@@ -2456,6 +2457,11 @@ func (s *Server) listWorks(w http.ResponseWriter, r *http.Request) {
 		s.writeRequestError(w, err)
 		return
 	}
+	requestedPub, err := optionalQueryPublicationID(r)
+	if err != nil {
+		s.writeRequestError(w, err)
+		return
+	}
 	scope := auth.ResourceScope{Kind: "global"}
 	if sourceID := r.URL.Query().Get("sourceId"); sourceID != "" {
 		scope = auth.ResourceScope{Kind: "source", ID: sourceID}
@@ -2499,7 +2505,7 @@ func (s *Server) listWorks(w http.ResponseWriter, r *http.Request) {
 		LibraryID: r.URL.Query().Get("libraryId"), SourceID: r.URL.Query().Get("sourceId"),
 		Filter: filter,
 		Sort:   r.URL.Query().Get("sort"), Limit: limit, Cursor: r.URL.Query().Get("cursor"),
-		QueryPublicationID: r.URL.Query().Get("queryPublicationId"), OmitTotal: omitTotal,
+		QueryPublicationID: requestedPub, OmitTotal: omitTotal,
 		AuthorizationScope: queryservice.AuthorizationScope(fmt.Sprintf("%s:%d:%v", session.PrincipalID, session.SecurityVersion, session.TokenScopes), session.Capabilities),
 		AuthorizeSources: func(ctx context.Context, capabilities, sourceIDs []string) ([]string, error) {
 			return s.auth.AuthorizeSessionSources(ctx, session, capabilities, sourceIDs)
@@ -2559,7 +2565,11 @@ func (s *Server) getWork(w http.ResponseWriter, r *http.Request) {
 		s.writeRequestError(w, err)
 		return
 	}
-	requestedPub := r.URL.Query().Get("queryPublicationId")
+	requestedPub, err := optionalQueryPublicationID(r)
+	if err != nil {
+		s.writeRequestError(w, err)
+		return
+	}
 	release, err := s.acquirePublicationLeaseIfExplicit(r, session, requestedPub)
 	if err != nil {
 		s.writeRequestError(w, err)
@@ -2657,7 +2667,11 @@ func (s *Server) listWorkMedia(w http.ResponseWriter, r *http.Request) {
 		s.writeRequestError(w, err)
 		return
 	}
-	requestedPub := r.URL.Query().Get("queryPublicationId")
+	requestedPub, err := optionalQueryPublicationID(r)
+	if err != nil {
+		s.writeRequestError(w, err)
+		return
+	}
 	release, err := s.acquirePublicationLeaseIfExplicit(r, session, requestedPub)
 	if err != nil {
 		s.writeRequestError(w, err)
@@ -2691,7 +2705,11 @@ func (s *Server) getMedia(w http.ResponseWriter, r *http.Request) {
 		s.writeRequestError(w, err)
 		return
 	}
-	requestedPub := r.URL.Query().Get("queryPublicationId")
+	requestedPub, err := optionalQueryPublicationID(r)
+	if err != nil {
+		s.writeRequestError(w, err)
+		return
+	}
 	release, err := s.acquirePublicationLeaseIfExplicit(r, session, requestedPub)
 	if err != nil {
 		s.writeRequestError(w, err)
@@ -2716,7 +2734,11 @@ func (s *Server) mediaContent(w http.ResponseWriter, r *http.Request) {
 		s.writeRequestError(w, err)
 		return
 	}
-	requestedPub := r.URL.Query().Get("queryPublicationId")
+	requestedPub, err := optionalQueryPublicationID(r)
+	if err != nil {
+		s.writeRequestError(w, err)
+		return
+	}
 	release, err := s.acquirePublicationLeaseIfExplicit(r, session, requestedPub)
 	if err != nil {
 		s.writeRequestError(w, err)
@@ -2941,7 +2963,11 @@ func (s *Server) createMediaVerificationJob(w http.ResponseWriter, r *http.Reque
 		s.writeRequestError(w, err)
 		return
 	}
-	requestedPub := r.URL.Query().Get("queryPublicationId")
+	requestedPub, err := optionalQueryPublicationID(r)
+	if err != nil {
+		s.writeRequestError(w, err)
+		return
+	}
 	release, err := s.acquirePublicationLeaseIfExplicit(r, session, requestedPub)
 	if err != nil {
 		s.writeRequestError(w, err)
@@ -3027,7 +3053,11 @@ func (s *Server) createDerivedAsset(w http.ResponseWriter, r *http.Request) {
 		s.writeRequestError(w, fault.WithField(fault.CodeDerivedAssetInvalid, "transformId", nil))
 		return
 	}
-	requestedPub := r.URL.Query().Get("queryPublicationId")
+	requestedPub, err := optionalQueryPublicationID(r)
+	if err != nil {
+		s.writeRequestError(w, err)
+		return
+	}
 	release, err := s.acquirePublicationLeaseIfExplicit(r, session, requestedPub)
 	if err != nil {
 		s.writeRequestError(w, err)
@@ -3147,6 +3177,32 @@ func etagMatches(header, current string) bool {
 		}
 	}
 	return false
+}
+
+// optionalQueryPublicationID 区分“参数缺省”的 current 模式与“参数存在但为空/非法”的
+// malformed snapshot 请求。url.Values.Get 会把两者都折叠为 ""，直接使用会让
+// ?queryPublicationId= 静默回退 current，破坏显式快照绝不回退的不变量。
+func optionalQueryPublicationID(r *http.Request) (string, error) {
+	query, err := url.ParseQuery(r.URL.RawQuery)
+	if err != nil {
+		field := "query"
+		if strings.Contains(r.URL.RawQuery, "queryPublicationId") {
+			field = "queryPublicationId"
+		}
+		return "", fault.WithField(fault.CodeValidation, field, err)
+	}
+	values, exists := query["queryPublicationId"]
+	if !exists {
+		return "", nil
+	}
+	if len(values) != 1 {
+		return "", fault.WithField(fault.CodeValidation, "queryPublicationId", nil)
+	}
+	value := values[0]
+	if _, err := domain.ParseID(domain.IDQueryPublication, value); err != nil {
+		return "", fault.WithField(fault.CodeValidation, "queryPublicationId", err)
+	}
+	return value, nil
 }
 
 // acquirePublicationLeaseIfExplicit 是媒体/DerivedAsset 快照绑定读取的公共入口：
@@ -3877,7 +3933,7 @@ func statusForFault(err error) int {
 	switch structured.Code {
 	case fault.CodeValidation:
 		return http.StatusBadRequest
-	case fault.CodeSourcePathInvalid, fault.CodeCursorInvalid, fault.CodeCursorExpired, fault.CodeQueryTooShort,
+	case fault.CodeSourcePathInvalid, fault.CodeCursorInvalid, fault.CodeQueryTooShort,
 		fault.CodeOverlayFactInvalid, fault.CodeDerivedAssetInvalid,
 		fault.CodeRuleSchemaInvalid, fault.CodeRuleParameterInvalid, fault.CodeRuleCompile,
 		fault.CodeRuleCELLimit, fault.CodeRuleDryRun, fault.CodeRuleImpact, fault.CodeRuleEval:
@@ -3895,7 +3951,7 @@ func statusForFault(err error) int {
 		return http.StatusNotFound
 	case fault.CodeBackupCorrupt, fault.CodeBackupIncompatible:
 		return http.StatusConflict
-	case fault.CodeConflict, fault.CodeRuleDraftConflict, fault.CodeRulePackageConflict,
+	case fault.CodeConflict, fault.CodeCursorExpired, fault.CodeRuleDraftConflict, fault.CodeRulePackageConflict,
 		fault.CodeRuleParameterConflict, fault.CodeRulePublishBlocked, fault.CodeRuleRollbackBlocked,
 		fault.CodeRuleVersionInUse, fault.CodeRuleBindingConflict:
 		return http.StatusConflict

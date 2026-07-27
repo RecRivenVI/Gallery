@@ -5707,6 +5707,7 @@ export interface operations {
                     "application/json": components["schemas"]["PublishedWork"];
                 };
             };
+            400: components["responses"]["ValidationError"];
             401: components["responses"]["UnauthenticatedError"];
             403: components["responses"]["ForbiddenError"];
             404: components["responses"]["NotFoundError"];
@@ -5792,6 +5793,7 @@ export interface operations {
                     "application/json": components["schemas"]["MediaListResponse"];
                 };
             };
+            400: components["responses"]["ValidationError"];
             401: components["responses"]["UnauthenticatedError"];
             403: components["responses"]["ForbiddenError"];
             404: components["responses"]["NotFoundError"];
@@ -5820,6 +5822,7 @@ export interface operations {
                     "application/json": components["schemas"]["PublishedMedia"];
                 };
             };
+            400: components["responses"]["ValidationError"];
             401: components["responses"]["UnauthenticatedError"];
             403: components["responses"]["ForbiddenError"];
             404: components["responses"]["NotFoundError"];
@@ -5879,6 +5882,7 @@ export interface operations {
                 };
                 content?: never;
             };
+            400: components["responses"]["ValidationError"];
             401: components["responses"]["UnauthenticatedError"];
             403: components["responses"]["ForbiddenError"];
             404: components["responses"]["NotFoundError"];
@@ -5936,6 +5940,7 @@ export interface operations {
                 };
                 content?: never;
             };
+            400: components["responses"]["ValidationError"];
             401: components["responses"]["UnauthenticatedError"];
             403: components["responses"]["ForbiddenError"];
             404: components["responses"]["NotFoundError"];
@@ -5969,6 +5974,7 @@ export interface operations {
                     "application/json": components["schemas"]["Job"];
                 };
             };
+            400: components["responses"]["ValidationError"];
             401: components["responses"]["UnauthenticatedError"];
             403: components["responses"]["ForbiddenError"];
             404: components["responses"]["NotFoundError"];

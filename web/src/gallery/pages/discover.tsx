@@ -49,7 +49,13 @@ function SourceCard({ source }: { source: Source }) {
           {source.coverMediaId === null || source.coverMediaId === undefined ? (
             <CoverMissing label={`${presentationName(source)} 暂无封面`} />
           ) : (
-            <MediaImage src={mediaContentUrl(source.coverMediaId)} alt="" allowRetry={false} />
+            <MediaImage
+              src={mediaContentUrl(source.coverMediaId, {
+                queryPublicationId: source.queryPublicationId ?? undefined
+              })}
+              alt=""
+              allowRetry={false}
+            />
           )}
         </span>
         <span className="gal-tile__title">
@@ -215,7 +221,13 @@ function CreatorTile({ creator }: { creator: Creator }) {
           {creator.coverMediaId === null || creator.coverMediaId === undefined ? (
             <CoverMissing label={`${creator.name} 暂无封面`} />
           ) : (
-            <MediaImage src={mediaContentUrl(creator.coverMediaId)} alt="" allowRetry={false} />
+            <MediaImage
+              src={mediaContentUrl(creator.coverMediaId, {
+                queryPublicationId: creator.queryPublicationId ?? undefined
+              })}
+              alt=""
+              allowRetry={false}
+            />
           )}
         </span>
         <span className="gal-tile__title">{creator.name}</span>

@@ -38,7 +38,10 @@ test('真实 galleryd 嵌入资产与 Personal 配对闭环 @real', async ({ bro
   const secondBody = (await secondExchange.json()) as { session: { id: string } };
   await expect(secondPage.getByRole('heading', { name: '画廊' })).toBeVisible();
   const secondSession = (await second.cookies()).find((cookie) => cookie.name.includes('session'));
-  expect(secondSession?.value).not.toBe(firstSession?.value);
+  // 失败输出只能包含布尔值，不能让断言框架打印 HttpOnly Session Cookie。
+  expect(
+    firstSession !== undefined && secondSession !== undefined && secondSession.value !== firstSession.value
+  ).toBe(true);
 
   const sessions = await firstPage.evaluate(async () => {
     const response = await fetch('/api/v1/sessions', { credentials: 'same-origin' });
@@ -106,6 +109,9 @@ test('真实后端正确解码 Job WebSocket 事件并且没有 CSP 违规 @real
   });
 
   await page.goto('/manage');
+  // 等 bootstrap 判定完成再检查配对态；locator.isVisible() 本身不会等待 React 异步渲染，
+  // 过早读取会把尚未出现的配对按钮误判为“已经认证”。
+  await expect(page.getByRole('heading', { name: /^(管理需要认证|Gallery 管理)$/ })).toBeVisible();
   const pair = page.getByRole('button', { name: '开始配对' });
   if (await pair.isVisible().catch(() => false)) {
     const exchange = page.waitForResponse((response) => response.url().endsWith('/api/v1/personal/pair'));

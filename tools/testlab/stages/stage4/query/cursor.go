@@ -39,38 +39,29 @@ func RunCursorCorrectness(rep *report.Report, sess *environment.Session) {
 
 	// 换用不同的搜索词复用同一个游标：查询指纹变化必须使旧游标续页失败为 CURSOR_EXPIRED。
 	wrongQuery, err := listWorks(sess, api.ListWorksParams{Q: ptr("普通作品"), Limit: ptr(50), Cursor: ptr(cursor)})
-	if err != nil || wrongQuery.JSON400 == nil {
+	if err != nil || wrongQuery.JSON409 == nil {
 		rep.Add("cursor/reuse-with-different-query-rejected", false, fmt.Sprintf("err=%v status=%d", err, environment.StatusOf(wrongQuery)))
 	} else {
-		rep.Add("cursor/reuse-with-different-query-rejected", wrongQuery.JSON400.Error.Code == api.CURSOREXPIRED, fmt.Sprintf("code=%v", wrongQuery.JSON400.Error.Code))
+		rep.Add("cursor/reuse-with-different-query-rejected", wrongQuery.JSON409.Error.Code == api.CURSOREXPIRED, fmt.Sprintf("code=%v", wrongQuery.JSON409.Error.Code))
 	}
 
 	// 换用不同排序复用同一个游标：同样必须 CURSOR_EXPIRED。
 	wrongSort, err := listWorks(sess, api.ListWorksParams{Limit: ptr(50), Cursor: ptr(cursor), Sort: ptr(api.ListWorksParamsSort("title_desc"))})
-	if err != nil || wrongSort.JSON400 == nil {
+	if err != nil || wrongSort.JSON409 == nil {
 		rep.Add("cursor/reuse-with-different-sort-rejected", false, fmt.Sprintf("err=%v status=%d", err, environment.StatusOf(wrongSort)))
 	} else {
-		rep.Add("cursor/reuse-with-different-sort-rejected", wrongSort.JSON400.Error.Code == api.CURSOREXPIRED, fmt.Sprintf("code=%v", wrongSort.JSON400.Error.Code))
+		rep.Add("cursor/reuse-with-different-sort-rejected", wrongSort.JSON409.Error.Code == api.CURSOREXPIRED, fmt.Sprintf("code=%v", wrongSort.JSON409.Error.Code))
 	}
 
 	// 裸 revision 组合拒绝：queryPublicationId 必须是服务端签发的合法 ID，任意伪造
 	// 字符串不得被当作合法快照静默接受、也不得静默回退到 active。internal/query
-	// /service.go 对这一情形区分两条路径：经由游标续页解析出的不匹配 publication
-	// 统一转换为 CURSOR_EXPIRED（asExpired 包装，见 verifyCursorClaims 附近逻辑）；
-	// 而不带游标、直接在全新请求里提供一个从未签发过的 queryPublicationId，走的是
-	// currentPublication/s.publication 的原始 CodeNotFound（ListWorksResponse 的
-	// JSON404 是契约声明的正式响应之一，不是意外泄漏）。两条路径都正确拒绝了伪造
-	// ID，只是错误码不同；这里接受二者之一，并记录这一不一致供 API Freeze 前复核，
-	// 不属于需要在阶段 4 内直接修复的产品缺陷。
-	forged, err := listWorks(sess, api.ListWorksParams{Limit: ptr(20), QueryPublicationId: ptr(api.QueryPublicationId("qpub_forged_not_real"))})
+	// 格式合法但从未由服务端签发的 publication 必须按已回收快照处理，不得回退 current。
+	forged, err := listWorks(sess, api.ListWorksParams{Limit: ptr(20), QueryPublicationId: ptr(api.QueryPublicationId("qpub_018f47d2-5c16-7a44-a8a0-0000000000ff"))})
 	switch {
 	case err != nil:
 		rep.Add("cursor/forged-publication-id-rejected", false, fmt.Sprintf("err=%v status=%d", err, environment.StatusOf(forged)))
-	case forged.JSON400 != nil && forged.JSON400.Error.Code == api.CURSOREXPIRED:
+	case forged.JSON409 != nil && forged.JSON409.Error.Code == api.CURSOREXPIRED:
 		rep.Add("cursor/forged-publication-id-rejected", true, "")
-	case forged.JSON404 != nil:
-		rep.Add("cursor/forged-publication-id-rejected", true, "")
-		rep.Limitations = append(rep.Limitations, "非游标续页的裸伪造 queryPublicationId 返回 NOT_FOUND 而非 CURSOR_EXPIRED，与游标续页路径的错误码不一致，建议 API Freeze 前复核")
 	default:
 		rep.Add("cursor/forged-publication-id-rejected", false, fmt.Sprintf("status=%d", environment.StatusOf(forged)))
 	}

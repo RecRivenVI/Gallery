@@ -1949,6 +1949,8 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/PublishedWork"
+        "400":
+          $ref: "#/components/responses/ValidationError"
         "401":
           $ref: "#/components/responses/UnauthenticatedError"
         "403":
@@ -2038,6 +2040,8 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/MediaListResponse"
+        "400":
+          $ref: "#/components/responses/ValidationError"
         "401":
           $ref: "#/components/responses/UnauthenticatedError"
         "403":
@@ -2071,6 +2075,8 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/PublishedMedia"
+        "400":
+          $ref: "#/components/responses/ValidationError"
         "401":
           $ref: "#/components/responses/UnauthenticatedError"
         "403":
@@ -2139,6 +2145,7 @@ paths:
             ETag: {schema: {type: string}}
         "304":
           description: ETag 未变化
+        "400": {$ref: "#/components/responses/ValidationError"}
         "401": {$ref: "#/components/responses/UnauthenticatedError"}
         "403": {$ref: "#/components/responses/ForbiddenError"}
         "404": {$ref: "#/components/responses/NotFoundError"}
@@ -2170,6 +2177,7 @@ paths:
               schema: {type: string, format: binary}
         "304":
           description: ETag 未变化
+        "400": {$ref: "#/components/responses/ValidationError"}
         "401": {$ref: "#/components/responses/UnauthenticatedError"}
         "403": {$ref: "#/components/responses/ForbiddenError"}
         "404": {$ref: "#/components/responses/NotFoundError"}
@@ -2212,6 +2220,8 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/Job"
+        "400":
+          $ref: "#/components/responses/ValidationError"
         "401":
           $ref: "#/components/responses/UnauthenticatedError"
         "403":

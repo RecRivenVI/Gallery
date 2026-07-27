@@ -147,7 +147,7 @@ func TestStage4CorrectnessSmoke(t *testing.T) {
 	assertReportPassed(t, queryReport)
 	assertExactFindingNames(t, queryReport, stage4QueryCursorFindingNames)
 	assertEverySourceIsQueryable(t, sess, manifest)
-	assertLimitations(t, queryReport, []string{"filter/creator.id", "裸伪造 queryPublicationId"})
+	assertLimitations(t, queryReport, []string{"filter/creator.id"})
 	if err := queryReport.Save(filepath.Join(root, "stage4-query-cursor-smoke.json")); err != nil {
 		t.Fatalf("保存脱敏 query/cursor smoke 报告: %v", err)
 	}

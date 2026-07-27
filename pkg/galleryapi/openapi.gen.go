@@ -15480,6 +15480,7 @@ type GetMediaResponse struct {
 	Body         []byte
 	HTTPResponse *http.Response
 	JSON200      *PublishedMedia
+	JSON400      *ValidationError
 	JSON401      *UnauthenticatedError
 	JSON403      *ForbiddenError
 	JSON404      *NotFoundError
@@ -15513,6 +15514,7 @@ func (r GetMediaResponse) ContentType() string {
 type GetMediaContentResponse struct {
 	Body         []byte
 	HTTPResponse *http.Response
+	JSON400      *ValidationError
 	JSON401      *UnauthenticatedError
 	JSON403      *ForbiddenError
 	JSON404      *NotFoundError
@@ -15548,6 +15550,7 @@ func (r GetMediaContentResponse) ContentType() string {
 type HeadMediaContentResponse struct {
 	Body         []byte
 	HTTPResponse *http.Response
+	JSON400      *ValidationError
 	JSON401      *UnauthenticatedError
 	JSON403      *ForbiddenError
 	JSON404      *NotFoundError
@@ -15619,6 +15622,7 @@ type CreateMediaVerificationJobResponse struct {
 	Body         []byte
 	HTTPResponse *http.Response
 	JSON202      *Job
+	JSON400      *ValidationError
 	JSON401      *UnauthenticatedError
 	JSON403      *ForbiddenError
 	JSON404      *NotFoundError
@@ -17718,6 +17722,7 @@ type GetWorkResponse struct {
 	Body         []byte
 	HTTPResponse *http.Response
 	JSON200      *PublishedWork
+	JSON400      *ValidationError
 	JSON401      *UnauthenticatedError
 	JSON403      *ForbiddenError
 	JSON404      *NotFoundError
@@ -17752,6 +17757,7 @@ type ListWorkMediaResponse struct {
 	Body         []byte
 	HTTPResponse *http.Response
 	JSON200      *MediaListResponse
+	JSON400      *ValidationError
 	JSON401      *UnauthenticatedError
 	JSON403      *ForbiddenError
 	JSON404      *NotFoundError
@@ -21576,6 +21582,13 @@ func ParseGetMediaResponse(rsp *http.Response) (*GetMediaResponse, error) {
 		}
 		response.JSON200 = &dest
 
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 400:
+		var dest ValidationError
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON400 = &dest
+
 	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 401:
 		var dest UnauthenticatedError
 		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
@@ -21623,6 +21636,13 @@ func ParseGetMediaContentResponse(rsp *http.Response) (*GetMediaContentResponse,
 	}
 
 	switch {
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 400:
+		var dest ValidationError
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON400 = &dest
+
 	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 401:
 		var dest UnauthenticatedError
 		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
@@ -21684,6 +21704,13 @@ func ParseHeadMediaContentResponse(rsp *http.Response) (*HeadMediaContentRespons
 	}
 
 	switch {
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 400:
+		var dest ValidationError
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON400 = &dest
+
 	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 401:
 		var dest UnauthenticatedError
 		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
@@ -21812,6 +21839,13 @@ func ParseCreateMediaVerificationJobResponse(rsp *http.Response) (*CreateMediaVe
 			return nil, err
 		}
 		response.JSON202 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 400:
+		var dest ValidationError
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON400 = &dest
 
 	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 401:
 		var dest UnauthenticatedError
@@ -24854,6 +24888,13 @@ func ParseGetWorkResponse(rsp *http.Response) (*GetWorkResponse, error) {
 		}
 		response.JSON200 = &dest
 
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 400:
+		var dest ValidationError
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON400 = &dest
+
 	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 401:
 		var dest UnauthenticatedError
 		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
@@ -24907,6 +24948,13 @@ func ParseListWorkMediaResponse(rsp *http.Response) (*ListWorkMediaResponse, err
 			return nil, err
 		}
 		response.JSON200 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 400:
+		var dest ValidationError
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON400 = &dest
 
 	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 401:
 		var dest UnauthenticatedError
