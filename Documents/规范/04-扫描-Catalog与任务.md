@@ -201,6 +201,7 @@ catalog v10→v11 是一次有界例外：旧 Catalog 未持久化规则 `CoverP
 
 - Watcher 事件只是“可能变化”的提示，不是事实源；事件丢失必须由周期校验扫描收敛。
 - 当前平台 adapter 提供只读 polling Watcher fallback，正式 bootstrap 默认周期为五分钟而非高频全树遍历；Watcher Manager 动态发现新增、删除和根变更 Source，channel 关闭或错误时标记 dirty/unavailable 并退避重启。它只更新 Source dirty/overflow 状态，不直接发布 Catalog；周期收敛负责在线/离线、事件丢失、失败重试、重复扫描抑制和当前 Job 关联，真实 OS watcher 与网络挂载行为另按平台门禁验证。
+- 任意入口创建的 Scan Job 都必须在启动前关联到该 Source 的收敛状态，包括复用同一 Job ID 的 Retry Attempt。当前 Attempt 排队/启动前已有的 dirty hint 由本次完整 discovery 消费；Retry 不得沿用 Job 第一次创建时间判断覆盖边界。当前 Attempt 开始后到达（同一秒无法确定先后时也按开始后保守处理）的事件必须继续保留为 dirty，并在当前扫描终态后触发后继收敛。扫描完成不得无条件清除执行期间的新事件；进程恢复时发现未登记的活动 Scan 也必须先接管为当前 Job，不能并发创建第二个扫描。
 - 增量扫描可复用未变化 Source 分区或候选，但最终仍发布完整查询 revision。
 - 目录签名精度必须到规则可观察的容器层；规则、metadata 或内容身份变化必须使相关候选失效。
 - SourceRuleBinding 的 RuleVersion 或影响索引的参数变化必须经过 RuleImpact 决定重扫范围，不能靠 UI 猜测。

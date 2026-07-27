@@ -271,25 +271,41 @@ func (s *Service) ReconcileSource(ctx context.Context, sourceID string) error {
 		state.BlockingIssueCode = string(fault.CodeSourceUnavailable)
 		return s.saveState(ctx, state)
 	}
-	if state.Status != "online" {
-		state.Dirty = true
-	}
+	previousStatus := state.Status
 	state.Status = "online"
-	active, err := s.activeScan(ctx, sourceID)
+	activeJob, active, err := s.activeScan(ctx, sourceID)
 	if err != nil {
 		return err
 	}
+	if previousStatus != "online" && state.CurrentJobID == "" && !active {
+		state.Dirty = true
+	}
+	if active && state.CurrentJobID != activeJob.ID {
+		state.CurrentJobID = activeJob.ID
+		// 进程恢复或非 HTTP 调用方创建的扫描也必须被 Watcher 接管。Job 创建前的
+		// dirty hint 会被这次完整 discovery 覆盖；创建后（同秒也按创建后保守处理）的
+		// Watcher 事件必须保留，待当前扫描完成后再收敛一次。
+		state.Dirty = scanHasNewerEvent(state, activeJob)
+	}
 	if state.CurrentJobID != "" && !active {
 		job, jobErr := s.jobs.Get(ctx, state.CurrentJobID)
-		if jobErr == nil {
-			switch job.Status {
-			case jobs.StatusCompleted:
-				state.Dirty = false
+		if jobErr != nil {
+			return jobErr
+		}
+		switch job.Status {
+		case jobs.StatusCompleted:
+			// TrackScan/Watcher 入队时已经消费了扫描开始前的 dirty hint。这里不能
+			// 无条件清 dirty，否则会吞掉扫描执行期间到达的新事件。
+			if !state.Dirty {
+				state.WatcherOverflow = false
 				state.BlockingIssueCode = ""
-			case jobs.StatusFailed, jobs.StatusCancelled, jobs.StatusNeedsRepair:
-				state.Dirty = true
-				state.BlockingIssueCode = job.IssueCode
 			}
+			if job.PublicationID != "" {
+				state.CurrentPublicationID = job.PublicationID
+			}
+		case jobs.StatusFailed, jobs.StatusCancelled, jobs.StatusNeedsRepair, jobs.StatusSuperseded:
+			state.Dirty = true
+			state.BlockingIssueCode = job.IssueCode
 		}
 		state.CurrentJobID = ""
 	}
@@ -307,6 +323,47 @@ func (s *Service) ReconcileSource(ctx context.Context, sourceID string) error {
 		}
 		s.scanner.Start(job.ID)
 		return nil
+	}
+	return s.saveState(ctx, state)
+}
+
+// TrackScan 把 Watcher 之外创建的持久 Scan Job 纳入同一 Source 收敛状态机。调用方应在
+// 启动 Job 前登记；这样扫描开始前的 dirty hint 由本次完整 discovery 消费，而开始后到达
+// 的 Watcher 事件仍会把 Dirty 重新置为 true，不会在完成态被覆盖。
+func (s *Service) TrackScan(ctx context.Context, job jobs.Job) error {
+	if job.Type != "scan" || strings.TrimSpace(job.ID) == "" || strings.TrimSpace(job.SourceID) == "" {
+		return fault.New(fault.CodeValidation, false, nil)
+	}
+	s.stateMu.Lock()
+	defer s.stateMu.Unlock()
+	state, err := s.GetState(ctx, job.SourceID)
+	if err != nil {
+		return err
+	}
+	source, err := s.resources.GetSource(ctx, job.SourceID)
+	if err != nil {
+		return err
+	}
+	if s.resources.SourceAvailable(source) {
+		state.Status = "online"
+	}
+	switch job.Status {
+	case jobs.StatusQueued, jobs.StatusRunning, jobs.StatusPublishing, jobs.StatusCancelling:
+		state.CurrentJobID = job.ID
+		state.Dirty = scanHasNewerEvent(state, job)
+	case jobs.StatusCompleted:
+		if state.CurrentJobID == job.ID {
+			state.CurrentJobID = ""
+		}
+		if job.PublicationID != "" {
+			state.CurrentPublicationID = job.PublicationID
+		}
+	case jobs.StatusFailed, jobs.StatusCancelled, jobs.StatusNeedsRepair, jobs.StatusSuperseded:
+		if state.CurrentJobID == job.ID {
+			state.CurrentJobID = ""
+		}
+		state.Dirty = true
+		state.BlockingIssueCode = job.IssueCode
 	}
 	return s.saveState(ctx, state)
 }
@@ -366,17 +423,35 @@ current_publication_id=excluded.current_publication_id, updated_at=excluded.upda
 	return nil
 }
 
-func (s *Service) activeScan(ctx context.Context, sourceID string) (bool, error) {
+func (s *Service) activeScan(ctx context.Context, sourceID string) (jobs.Job, bool, error) {
 	items, err := s.jobs.ListByStatuses(ctx, jobs.StatusQueued, jobs.StatusRunning, jobs.StatusPublishing, jobs.StatusCancelling)
 	if err != nil {
-		return false, err
+		return jobs.Job{}, false, err
 	}
 	for _, item := range items {
 		if item.Type == "scan" && item.SourceID == sourceID {
-			return true, nil
+			return item, true, nil
 		}
 	}
-	return false, nil
+	return jobs.Job{}, false, nil
+}
+
+func scanHasNewerEvent(state State, job jobs.Job) bool {
+	if state.LastEventAt == nil {
+		return false
+	}
+	coverageStartedAt := job.CreatedAt
+	if job.StartedAt != nil {
+		coverageStartedAt = *job.StartedAt
+	} else if job.Attempt > 1 && !job.UpdatedAt.IsZero() {
+		// Retry 复用同一个 Job ID，CreatedAt 仍属于第一次 Attempt。queued Retry 的
+		// UpdatedAt 是本次 Attempt 的持久入队时刻；启动后则优先使用 StartedAt。
+		coverageStartedAt = job.UpdatedAt
+	}
+	if coverageStartedAt.IsZero() {
+		return state.Dirty
+	}
+	return !state.LastEventAt.Before(coverageStartedAt)
 }
 
 func (s *Service) sourceIDs(ctx context.Context) ([]string, error) {

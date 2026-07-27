@@ -1559,6 +1559,7 @@ func (s *Server) createScanJob(w http.ResponseWriter, r *http.Request) {
 		s.writeRequestError(w, err)
 		return
 	}
+	s.trackScan(r.Context(), job)
 	writeJSON(w, http.StatusAccepted, jobDTO(job))
 	s.scanner.Start(job.ID)
 }
@@ -1677,6 +1678,9 @@ func (s *Server) retryJob(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		s.writeRequestError(w, err)
 		return
+	}
+	if job.Type == "scan" {
+		s.trackScan(r.Context(), job)
 	}
 	s.startJob(job)
 	writeJSON(w, http.StatusAccepted, jobDTO(job))
@@ -3107,8 +3111,20 @@ func (s *Server) createMediaVerificationJob(w http.ResponseWriter, r *http.Reque
 		s.writeRequestError(w, err)
 		return
 	}
+	s.trackScan(r.Context(), job)
 	writeJSON(w, http.StatusAccepted, jobDTO(job))
 	s.scanner.Start(job.ID)
+}
+
+func (s *Server) trackScan(ctx context.Context, job jobs.Job) {
+	if s.watcher == nil {
+		return
+	}
+	// Job 已经持久化后，即使客户端中途断开，也必须完成 Watcher 状态关联；关联失败
+	// 不应把已创建的 Job 留在 queued，因此保留既有 accepted/start 语义并记录诊断。
+	if err := s.watcher.TrackScan(context.WithoutCancel(ctx), job); err != nil {
+		s.logger.Error("watcher_track_scan_failed", "job_id", job.ID, "source_id", job.SourceID, "error", err)
+	}
 }
 
 // createDerivedAsset 请求生成或复用一个 DerivedAsset。总是返回持久 Job（缓存命中时

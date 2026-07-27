@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/RecRivenVI/gallery/internal/application"
+	"github.com/RecRivenVI/gallery/internal/domain"
 	"github.com/RecRivenVI/gallery/internal/jobs"
 	"github.com/RecRivenVI/gallery/internal/platform/appdirs"
 	"github.com/RecRivenVI/gallery/internal/platform/clock"
@@ -173,6 +174,199 @@ func (f *fakeScanner) CreateScan(ctx context.Context, sourceID, createdBy string
 }
 
 func (f *fakeScanner) Start(jobID string) { f.last = jobID }
+
+type watcherFixture struct {
+	ctx       context.Context
+	now       *clock.Manual
+	ids       identity.Generator
+	resources *application.Resources
+	source    application.Source
+	jobs      *jobs.Store
+	fake      *fakeScanner
+	service   *watcherservice.Service
+}
+
+func newWatcherFixture(t *testing.T, name string) watcherFixture {
+	t.Helper()
+	ctx := context.Background()
+	dirs := appdirs.UnderRoot(filepath.Join(t.TempDir(), "app"))
+	if err := dirs.Ensure(filesystem.OS{}); err != nil {
+		t.Fatal(err)
+	}
+	store, err := storage.Open(ctx, dirs)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = store.Close() })
+	now := clock.NewManual(time.Date(2026, 7, 28, 2, 0, 0, 0, time.UTC))
+	ids := identity.NewGenerator(now)
+	resources, err := application.NewResources(store.Control.SQL(), dirs, filesystem.OS{}, now, ids)
+	if err != nil {
+		t.Fatal(err)
+	}
+	library, err := resources.CreateLibrary(ctx, name)
+	if err != nil {
+		t.Fatal(err)
+	}
+	root := filepath.Join(t.TempDir(), "source")
+	if err := os.MkdirAll(root, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	source, err := resources.CreateSource(ctx, library.ID, name+"-source", root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	jobStore, err := jobs.NewStore(store.Control.SQL(), now, ids)
+	if err != nil {
+		t.Fatal(err)
+	}
+	fake := &fakeScanner{jobs: jobStore}
+	service, err := watcherservice.New(ctx, store.Control.SQL(), resources, jobStore, fake, nil, now, time.Hour)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return watcherFixture{ctx: ctx, now: now, ids: ids, resources: resources, source: source, jobs: jobStore, fake: fake, service: service}
+}
+
+func completeScan(t *testing.T, fixture watcherFixture, jobID string) string {
+	t.Helper()
+	if _, err := fixture.jobs.Start(fixture.ctx, jobID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := fixture.jobs.BeginPublishing(fixture.ctx, jobID); err != nil {
+		t.Fatal(err)
+	}
+	publicationID, err := fixture.ids.New(domain.IDQueryPublication)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := fixture.jobs.Complete(fixture.ctx, jobID, publicationID.String()); err != nil {
+		t.Fatal(err)
+	}
+	return publicationID.String()
+}
+
+func TestTrackScanPreventsDuplicateAfterExplicitCompletion(t *testing.T) {
+	fixture := newWatcherFixture(t, "tracked-explicit")
+	job, err := fixture.jobs.CreateScan(fixture.ctx, fixture.source.ID, "personal-owner", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := fixture.service.TrackScan(fixture.ctx, job); err != nil {
+		t.Fatal(err)
+	}
+	state, err := fixture.service.GetState(fixture.ctx, fixture.source.ID)
+	if err != nil || state.Status != "online" || state.Dirty || state.CurrentJobID != job.ID {
+		t.Fatalf("显式扫描未正确关联 Watcher: %+v err=%v", state, err)
+	}
+	publicationID := completeScan(t, fixture, job.ID)
+	if err := fixture.service.ReconcileSource(fixture.ctx, fixture.source.ID); err != nil {
+		t.Fatal(err)
+	}
+	state, err = fixture.service.GetState(fixture.ctx, fixture.source.ID)
+	if err != nil || state.Dirty || state.CurrentJobID != "" || state.CurrentPublicationID != publicationID || fixture.fake.count != 0 {
+		t.Fatalf("显式扫描完成后发生重复收敛: %+v count=%d err=%v", state, fixture.fake.count, err)
+	}
+}
+
+func TestTrackScanPreservesEventArrivingDuringScan(t *testing.T) {
+	fixture := newWatcherFixture(t, "tracked-event")
+	job, err := fixture.jobs.CreateScan(fixture.ctx, fixture.source.ID, "personal-owner", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := fixture.service.TrackScan(fixture.ctx, job); err != nil {
+		t.Fatal(err)
+	}
+	if err := fixture.service.HandleEvent(fixture.ctx, fixture.source.ID, ports.WatchEvent{Kind: ports.WatchModified, At: fixture.now.Now()}); err != nil {
+		t.Fatal(err)
+	}
+	completeScan(t, fixture, job.ID)
+	if err := fixture.service.ReconcileSource(fixture.ctx, fixture.source.ID); err != nil {
+		t.Fatal(err)
+	}
+	state, err := fixture.service.GetState(fixture.ctx, fixture.source.ID)
+	if err != nil || state.CurrentJobID == "" || fixture.fake.count != 1 {
+		t.Fatalf("扫描期间事件未触发后继收敛: %+v count=%d err=%v", state, fixture.fake.count, err)
+	}
+}
+
+func TestTrackScanPreservesEventArrivingBeforeAssociation(t *testing.T) {
+	fixture := newWatcherFixture(t, "tracked-association-gap")
+	job, err := fixture.jobs.CreateScan(fixture.ctx, fixture.source.ID, "personal-owner", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := fixture.service.HandleEvent(fixture.ctx, fixture.source.ID, ports.WatchEvent{Kind: ports.WatchModified, At: fixture.now.Now()}); err != nil {
+		t.Fatal(err)
+	}
+	if err := fixture.service.TrackScan(fixture.ctx, job); err != nil {
+		t.Fatal(err)
+	}
+	state, err := fixture.service.GetState(fixture.ctx, fixture.source.ID)
+	if err != nil || !state.Dirty || state.CurrentJobID != job.ID {
+		t.Fatalf("Job 创建至 Watcher 关联窗口内的事件被覆盖: %+v err=%v", state, err)
+	}
+	completeScan(t, fixture, job.ID)
+	if err := fixture.service.ReconcileSource(fixture.ctx, fixture.source.ID); err != nil {
+		t.Fatal(err)
+	}
+	state, err = fixture.service.GetState(fixture.ctx, fixture.source.ID)
+	if err != nil || state.CurrentJobID == "" || fixture.fake.count != 1 {
+		t.Fatalf("关联窗口事件未触发后继收敛: %+v count=%d err=%v", state, fixture.fake.count, err)
+	}
+}
+
+func TestTrackScanRetryConsumesEventBeforeCurrentAttempt(t *testing.T) {
+	fixture := newWatcherFixture(t, "tracked-retry")
+	job, err := fixture.jobs.CreateScan(fixture.ctx, fixture.source.ID, "personal-owner", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := fixture.service.TrackScan(fixture.ctx, job); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := fixture.jobs.Start(fixture.ctx, job.ID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := fixture.jobs.FailWithRetryable(fixture.ctx, job.ID, "TRANSIENT", true); err != nil {
+		t.Fatal(err)
+	}
+	fixture.now.Advance(time.Minute)
+	if err := fixture.service.HandleEvent(fixture.ctx, fixture.source.ID, ports.WatchEvent{Kind: ports.WatchModified, At: fixture.now.Now()}); err != nil {
+		t.Fatal(err)
+	}
+	fixture.now.Advance(time.Minute)
+	retry, err := fixture.jobs.Retry(fixture.ctx, job.ID, "personal-owner")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := fixture.service.TrackScan(fixture.ctx, retry); err != nil {
+		t.Fatal(err)
+	}
+	state, err := fixture.service.GetState(fixture.ctx, fixture.source.ID)
+	if err != nil || state.Dirty || state.CurrentJobID != job.ID {
+		t.Fatalf("Retry 未消费本次 Attempt 开始前的事件: %+v err=%v", state, err)
+	}
+}
+
+func TestReconcileAdoptsUntrackedActiveScan(t *testing.T) {
+	fixture := newWatcherFixture(t, "adopt-active")
+	job, err := fixture.jobs.CreateScan(fixture.ctx, fixture.source.ID, "recovery", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := fixture.jobs.Start(fixture.ctx, job.ID); err != nil {
+		t.Fatal(err)
+	}
+	if err := fixture.service.ReconcileSource(fixture.ctx, fixture.source.ID); err != nil {
+		t.Fatal(err)
+	}
+	state, err := fixture.service.GetState(fixture.ctx, fixture.source.ID)
+	if err != nil || state.Dirty || state.CurrentJobID != job.ID || fixture.fake.count != 0 {
+		t.Fatalf("未接管恢复中的扫描: %+v count=%d err=%v", state, fixture.fake.count, err)
+	}
+}
 
 func TestWatcherStateCoalescesEventsAndTracksOfflineSource(t *testing.T) {
 	ctx := context.Background()
