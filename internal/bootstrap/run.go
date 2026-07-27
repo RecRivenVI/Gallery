@@ -184,7 +184,7 @@ func run(ctx context.Context, cfg config.Config, logger *slog.Logger, ready chan
 	if err != nil {
 		return err
 	}
-	maintenanceService, err := maintenance.New(ctx, store.Control.SQL(), catalogStore, jobStore, derivedService, cfg.AppDirs, disk.OS{}, systemClock)
+	maintenanceService, err := maintenance.New(ctx, store.Control.SQL(), catalogStore, jobStore, derivedService, cfg.AppDirs, disk.OS{}, systemClock, hub)
 	if err != nil {
 		return err
 	}

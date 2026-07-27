@@ -31,6 +31,68 @@ type spaceChecker struct{ free int64 }
 
 func (s spaceChecker) FreeBytes(string) (int64, error) { return s.free, nil }
 
+type jobNotifier struct {
+	mu   sync.Mutex
+	jobs []jobs.Job
+}
+
+func (n *jobNotifier) JobChanged(job jobs.Job) {
+	n.mu.Lock()
+	n.jobs = append(n.jobs, job)
+	n.mu.Unlock()
+}
+
+func (n *jobNotifier) snapshot() []jobs.Job {
+	n.mu.Lock()
+	defer n.mu.Unlock()
+	return append([]jobs.Job(nil), n.jobs...)
+}
+
+func TestMaintenancePublishesPersistentJobLifecycle(t *testing.T) {
+	ctx := context.Background()
+	dirs := appdirs.UnderRoot(filepath.Join(t.TempDir(), "app"))
+	if err := dirs.Ensure(filesystem.OS{}); err != nil {
+		t.Fatal(err)
+	}
+	store, err := storage.Open(ctx, dirs)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	now := clock.Fixed{Time: time.Date(2026, 7, 28, 3, 0, 0, 0, time.UTC)}
+	ids := identity.NewGenerator(now)
+	jobStore, err := jobs.NewStore(store.Control.SQL(), now, ids)
+	if err != nil {
+		t.Fatal(err)
+	}
+	catalogStore, err := catalog.NewStore(store.Catalog.SQL(), now, ids)
+	if err != nil {
+		t.Fatal(err)
+	}
+	notifier := &jobNotifier{}
+	service, err := maintenance.New(ctx, store.Control.SQL(), catalogStore, jobStore, nil, dirs, spaceChecker{free: 1 << 30}, now, notifier)
+	if err != nil {
+		t.Fatal(err)
+	}
+	job, err := service.CreateGC(ctx, "owner", maintenance.Request{DryRun: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := service.Execute(ctx, job.ID); err != nil {
+		t.Fatal(err)
+	}
+	events := notifier.snapshot()
+	if len(events) != 3 {
+		t.Fatalf("维护 Job 事件数量=%d，期望 queued/running/completed: %+v", len(events), events)
+	}
+	want := []jobs.Status{jobs.StatusQueued, jobs.StatusRunning, jobs.StatusCompleted}
+	for index, event := range events {
+		if event.ID != job.ID || event.Status != want[index] {
+			t.Fatalf("维护 Job 事件 %d=%+v，期望 id=%s status=%s", index, event, job.ID, want[index])
+		}
+	}
+}
+
 func TestPreflightRejectsInsufficientAppDirsSpace(t *testing.T) {
 	dirs := appdirs.UnderRoot(filepath.Join(t.TempDir(), "app"))
 	if err := dirs.Ensure(filesystem.OS{}); err != nil {
@@ -51,7 +113,7 @@ func TestPreflightRejectsInsufficientAppDirsSpace(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	service, err := maintenance.New(context.Background(), store.Control.SQL(), catalogStore, jobStore, nil, dirs, spaceChecker{free: 10}, now)
+	service, err := maintenance.New(context.Background(), store.Control.SQL(), catalogStore, jobStore, nil, dirs, spaceChecker{free: 10}, now, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -116,7 +178,8 @@ func TestMaintenanceCancellationEndsCancelled(t *testing.T) {
 		t.Fatal(err)
 	}
 	checker := &blockingSpaceChecker{entered: make(chan struct{}), release: make(chan struct{})}
-	service, err := maintenance.New(ctx, store.Control.SQL(), catalogStore, jobStore, nil, dirs, checker, clk)
+	notifier := &jobNotifier{}
+	service, err := maintenance.New(ctx, store.Control.SQL(), catalogStore, jobStore, nil, dirs, checker, clk, notifier)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -160,6 +223,10 @@ func TestMaintenanceCancellationEndsCancelled(t *testing.T) {
 	if err != nil || len(attempts) != 1 || attempts[0].Status != "cancelled" {
 		t.Fatalf("维护 Attempt 未收敛 cancelled: %+v %v", attempts, err)
 	}
+	events := notifier.snapshot()
+	if len(events) != 2 || events[0].Status != jobs.StatusRunning || events[1].Status != jobs.StatusCancelled {
+		t.Fatalf("维护取消事件未收敛为 running/cancelled: %+v", events)
+	}
 	// 取消路径必须释放维护互斥；后续 dry-run GC 不应死锁。
 	verifyCtx, cancelVerify := context.WithTimeout(ctx, 3*time.Second)
 	defer cancelVerify()
@@ -190,7 +257,8 @@ func TestMaintenanceShutdownRemainsRetryableProcessInterrupted(t *testing.T) {
 		t.Fatal(err)
 	}
 	checker := &blockingSpaceChecker{entered: make(chan struct{}), release: make(chan struct{})}
-	service, err := maintenance.New(ctx, store.Control.SQL(), catalogStore, jobStore, nil, dirs, checker, clk)
+	notifier := &jobNotifier{}
+	service, err := maintenance.New(ctx, store.Control.SQL(), catalogStore, jobStore, nil, dirs, checker, clk, notifier)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -232,6 +300,10 @@ func TestMaintenanceShutdownRemainsRetryableProcessInterrupted(t *testing.T) {
 	if err != nil || len(attempts) != 1 || attempts[0].Status != "failed" ||
 		attempts[0].ErrorCode != string(fault.CodeProcessInterrupted) || !attempts[0].ErrorRetryable {
 		t.Fatalf("shutdown Attempt 未记录 PROCESS_INTERRUPTED: %+v %v", attempts, err)
+	}
+	events := notifier.snapshot()
+	if len(events) != 2 || events[0].Status != jobs.StatusRunning || events[1].Status != jobs.StatusFailed {
+		t.Fatalf("维护中断事件未收敛为 running/failed: %+v", events)
 	}
 }
 
@@ -302,7 +374,7 @@ func TestRunGCProtectsFixedShareBlobUntilRevoked(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	maintenanceService, err := maintenance.New(ctx, store.Control.SQL(), catalogStore, jobStore, nil, dirs, spaceChecker{free: 1 << 30}, clk)
+	maintenanceService, err := maintenance.New(ctx, store.Control.SQL(), catalogStore, jobStore, nil, dirs, spaceChecker{free: 1 << 30}, clk, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -388,7 +460,7 @@ func TestRunGCProtectsBlobForQueuedDerivedJobBeyondLeaseTTL(t *testing.T) {
 	// 排队等待调度的时间超过固定 5 分钟 BlobReadLeaseDuration：Job 从未 Execute，Create 时
 	// 建立的租约早已过期。
 	clk.Advance(10 * time.Minute)
-	maintenanceService, err := maintenance.New(ctx, store.Control.SQL(), catalogStore, jobStore, assets, dirs, spaceChecker{free: 1 << 30}, clk)
+	maintenanceService, err := maintenance.New(ctx, store.Control.SQL(), catalogStore, jobStore, assets, dirs, spaceChecker{free: 1 << 30}, clk, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -455,7 +527,7 @@ func TestRunGCProtectsBlobForRetryPendingDerivedJobBeyondLeaseTTL(t *testing.T) 
 	// 推进时钟越过退避等待与固定租约 TTL，但不调用 RequeueDueFailures，模拟仍在退避
 	// 窗口内（未到 next_attempt_at）而尚未被重新排队执行的状态。
 	clk.Advance(10 * time.Minute)
-	maintenanceService, err := maintenance.New(ctx, store.Control.SQL(), catalogStore, jobStore, assets, dirs, spaceChecker{free: 1 << 30}, clk)
+	maintenanceService, err := maintenance.New(ctx, store.Control.SQL(), catalogStore, jobStore, assets, dirs, spaceChecker{free: 1 << 30}, clk, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -520,7 +592,7 @@ func TestRunGCReclaimsBlobAfterDerivedJobPermanentlyFails(t *testing.T) {
 		t.Fatalf("Job 应处于不可重试的永久 failed 状态: %+v", failed)
 	}
 	clk.Advance(10 * time.Minute)
-	maintenanceService, err := maintenance.New(ctx, store.Control.SQL(), catalogStore, jobStore, assets, dirs, spaceChecker{free: 1 << 30}, clk)
+	maintenanceService, err := maintenance.New(ctx, store.Control.SQL(), catalogStore, jobStore, assets, dirs, spaceChecker{free: 1 << 30}, clk, nil)
 	if err != nil {
 		t.Fatal(err)
 	}

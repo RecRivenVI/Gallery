@@ -45,29 +45,42 @@ type GCReport struct {
 	DryRun             bool
 }
 
-type Service struct {
-	context context.Context
-	control *sql.DB
-	catalog *catalog.Store
-	jobs    *jobs.Store
-	derived *derived.Service
-	dirs    appdirs.Dirs
-	space   ports.SpaceChecker
-	clock   ports.Clock
-	temp    *jobs.TempStore
-	coord   *Coordinator
+// Notifier 接收维护 Job 的持久状态变化，供 WebSocket 仅作为 HTTP 快照失效提示。
+type Notifier interface {
+	JobChanged(jobs.Job)
 }
 
-func New(ctx context.Context, control *sql.DB, catalogStore *catalog.Store, jobStore *jobs.Store, derivedService *derived.Service, dirs appdirs.Dirs, space ports.SpaceChecker, clock ports.Clock) (*Service, error) {
+type nopNotifier struct{}
+
+func (nopNotifier) JobChanged(jobs.Job) {}
+
+type Service struct {
+	context  context.Context
+	control  *sql.DB
+	catalog  *catalog.Store
+	jobs     *jobs.Store
+	derived  *derived.Service
+	dirs     appdirs.Dirs
+	space    ports.SpaceChecker
+	clock    ports.Clock
+	temp     *jobs.TempStore
+	coord    *Coordinator
+	notifier Notifier
+}
+
+func New(ctx context.Context, control *sql.DB, catalogStore *catalog.Store, jobStore *jobs.Store, derivedService *derived.Service, dirs appdirs.Dirs, space ports.SpaceChecker, clock ports.Clock, notifier Notifier) (*Service, error) {
 	if ctx == nil || control == nil || catalogStore == nil || jobStore == nil || clock == nil {
 		return nil, fmt.Errorf("Maintenance Service 缺少依赖")
+	}
+	if notifier == nil {
+		notifier = nopNotifier{}
 	}
 	tempStore, err := jobs.NewTempStore(control, dirs.Temp, clock)
 	if err != nil {
 		return nil, err
 	}
 	return &Service{context: ctx, control: control, catalog: catalogStore, jobs: jobStore, derived: derivedService,
-		dirs: dirs, space: space, clock: clock, temp: tempStore, coord: NewCoordinator()}, nil
+		dirs: dirs, space: space, clock: clock, temp: tempStore, coord: NewCoordinator(), notifier: notifier}, nil
 }
 
 func (s *Service) SetCoordinator(coordinator *Coordinator) {
@@ -96,7 +109,11 @@ func (s *Service) CreateGC(ctx context.Context, createdBy string, request Reques
 	if _, err := s.jobs.SetRequest(ctx, job.ID, payload); err != nil {
 		return jobs.Job{}, err
 	}
-	return s.jobs.Get(ctx, job.ID)
+	created, err := s.jobs.Get(ctx, job.ID)
+	if err == nil {
+		s.notifier.JobChanged(created)
+	}
+	return created, err
 }
 
 func (s *Service) Create(ctx context.Context, jobType, createdBy string) (jobs.Job, error) {
@@ -112,7 +129,11 @@ func (s *Service) Create(ctx context.Context, jobType, createdBy string) (jobs.J
 	if _, err := s.jobs.SetRequest(ctx, job.ID, payload); err != nil {
 		return jobs.Job{}, err
 	}
-	return s.jobs.Get(ctx, job.ID)
+	created, err := s.jobs.Get(ctx, job.ID)
+	if err == nil {
+		s.notifier.JobChanged(created)
+	}
+	return created, err
 }
 
 func (s *Service) Execute(ctx context.Context, jobID string) error {
@@ -120,6 +141,7 @@ func (s *Service) Execute(ctx context.Context, jobID string) error {
 	if err != nil {
 		return err
 	}
+	s.notifier.JobChanged(job)
 	switch job.Type {
 	case "catalog_gc":
 		var request Request
@@ -156,9 +178,11 @@ func (s *Service) Execute(ctx context.Context, jobID string) error {
 	if current, getErr := s.jobs.Get(context.Background(), jobID); getErr == nil && current.CancelRequested {
 		return s.fail(ctx, jobID, fault.New(fault.CodeProcessInterrupted, true, ctx.Err()))
 	}
-	if _, err = s.jobs.CompleteMaintenance(ctx, jobID); err != nil {
+	completed, err := s.jobs.CompleteMaintenance(ctx, jobID)
+	if err != nil {
 		return s.fail(ctx, jobID, err)
 	}
+	s.notifier.JobChanged(completed)
 	return nil
 }
 
@@ -367,7 +391,8 @@ func (s *Service) fail(ctx context.Context, jobID string, err error) error {
 		if current.Status == jobs.StatusCancelled {
 			return err
 		}
-		if _, finalizeErr := s.jobs.FinalizeCancelled(context.Background(), jobID); finalizeErr == nil {
+		if cancelled, finalizeErr := s.jobs.FinalizeCancelled(context.Background(), jobID); finalizeErr == nil {
+			s.notifier.JobChanged(cancelled)
 			return err
 		} else {
 			err = errors.Join(err, finalizeErr)
@@ -381,8 +406,10 @@ func (s *Service) fail(ctx context.Context, jobID string, err error) error {
 	if errors.Is(ctx.Err(), context.Canceled) || errors.Is(err, context.Canceled) {
 		code, retryable = fault.CodeProcessInterrupted, true
 	}
-	if _, failErr := s.jobs.FailWithRetryable(context.Background(), jobID, string(code), retryable); failErr != nil {
+	if failed, failErr := s.jobs.FailWithRetryable(context.Background(), jobID, string(code), retryable); failErr != nil {
 		return errors.Join(err, failErr)
+	} else {
+		s.notifier.JobChanged(failed)
 	}
 	return err
 }
