@@ -18,7 +18,7 @@
 - 当前仓库已有正式产品代码（`cmd/`、`internal/`、`pkg/`、`web/`）。阶段 0 契约骨架、Walking Skeleton、Architecture Proof 正确性切片、阶段 1「领域和数据所有权」、阶段 2「规则闭环」、阶段 3「扫描、任务和 Catalog」与阶段 4「查询和媒体」均已完成代码与合成 Correctness 实现；阶段 5「账户、安全和多客户端」已完成代码/合成安全收尾，并取得 Chrome/Edge 同机 Personal/LAN 主路径与当前工作站 Argon2id 补证；EV-48 又关闭规则递归深度崩溃及空格式、Windows 路径、Range、Cursor 的非规范输入缺口，但正式 Security Gate 尚未通过。阶段 6 已实现 React/TypeScript Web/PWA 页面代码基线、OpenAPI 生成客户端、同源嵌入资产、静态壳 PWA，以及认证、浏览/媒体、Overlay、任务、规则、安全和维护页面骨架；Chrome/Edge 真实后端认证主路径通过，但正式 Web Gate 尚未通过（见 EV-38）。阶段 4 的 EV-35/EV-36 结论保持：500,000 WorkProjection 的 Correctness/Cursor 通过，Reference Performance Gate 未通过，Gank/Pawchive 未完成有界验证。
 - **[EV-39](Documents/证据/验证记录.md)（2026-07-23）的真实浏览器复核下调了阶段 6 的完成度陈述**：`/ws/v1` 在 Chrome/Edge 中 100% 握手失败（服务端对 WebSocket 强制要求浏览器不会发送的 `Sec-Fetch-Site` 头），前端信封字段名与 `internal/contract/realtime` 不符，且 6 个前端 capability 名不在后端权威词表中，导致 Overlay 编辑、任务取消/重试、Library 创建、Source 登记、按需内容确认与全部治理动作对任何主体都不渲染。[EV-40](Documents/证据/验证记录.md) 已修复这些阻断项并经真实 Chrome/Edge 复验，但**仍不得把阶段 6 描述为「已完成业务闭环」**——完整管理写路径的浏览器端到端覆盖尚未建立。[EV-44](Documents/证据/验证记录.md) 又关闭 `AUTHZ-1` 与 `QRY-1`，[EV-45](Documents/证据/验证记录.md) 关闭 `TEST-2`，[EV-46](Documents/证据/验证记录.md) 关闭 `MED-1` 与 `SEC-3`。**EV-39 登记的缺陷至此全部关闭**；EV-46 另行发现并修复了三项新缺陷（`LINK-1` Windows 目录联接被识别为普通文件、`TX-1` WAL 下读后写事务的过期读快照失败、迁移预算门禁用固定墙钟导致不可复现），详见 EV-39、EV-40、EV-44、EV-45 与 EV-46。
 - [EV-42](Documents/证据/验证记录.md)（2026-07-26）补齐规则 `CoverPath` 到 SourceMedia/CanonicalMedia、显式规则/有效封面投影、CustomCover 优先与失效回退、`PublishedWork.coverMediaId`、Work 详情快照绑定和 Web 同快照封面/编辑；当前证据为根级 `Check.ps1`、WSL2 Debian 定向 race、合成 migration 与 Web Vitest/Chromium mock，不含真实 Source、真实媒体或真实后端浏览器，阶段 4/5/6 Gate 均未因此通过。
-- 尚未完成：阶段 5 真实物理 LAN 多设备、目标低端设备 Argon2id 和真实恶意资源门禁；阶段 6 Firefox、真实移动设备/屏幕阅读器与完整业务 E2E；以及真实全量 HDD、SMB/NAS、真实 FileID/`dev+inode`、正式 Reference/Degradation Performance Gate、ranking/total/租约等 PRE_FREEZE 数值、AND/OR canonical 化、Progress 排序和平台发行。
+- 尚未完成：阶段 5 真实物理 LAN 多设备、目标低端设备 Argon2id 和真实恶意资源门禁；阶段 6 Firefox、真实移动设备/屏幕阅读器与完整业务 E2E；以及真实全量 HDD、SMB/NAS、真实 FileID/`dev+inode`、正式 Reference/Degradation Performance Gate、ranking/total/租约等 PRE_FREEZE 数值、AND/OR canonical 化和平台发行。
 - 本文件是需要随真实开发状态持续维护的 Agent 规则；发现与代码、有效 ADR 或规范不一致时应更新本文件，但不得放宽安全、只读 Source、Git、签名或测试要求，也不得把临时实装写成已冻结决策。
 
 ## 权威资料与阅读顺序
@@ -1670,6 +1670,6 @@ EV-46 另行发现并修复三项本轮新缺陷，后续开发必须继续遵�
 
 [EV-48](Documents/证据/验证记录.md) 关闭审计遗留的恶意输入缺口：全部规则递归路径共享 `MaxRuleNestingDepth=256`（PRE_FREEZE），不得恢复为空格式隐式 JSON 或依赖解析器/goroutine 栈的不同上限；Source 相对路径不得接受段内冒号、NTFS 备用数据流与 `CONIN$`/`CONOUT$`；Range 位置只接受 ASCII 数字；签名 Cursor 只接受签发器产生的规范 base64url 原文。
 
-「真实后端 E2E 未进入 CI」仍是当前最大的门禁缺口之一。`gallery-rules.json` 所需的聚合封面、文件根浏览与平台呈现/排序集下发仍未实现。
+「真实后端 E2E 未进入 CI」仍是当前最大的门禁缺口之一。`gallery-rules.json` 所需的三级聚合封面、独立只读文件根、平台呈现/排序集下发均已实现；排序协议 v2 已贯通 title/name、publishedAt、Progress、签名 keyset 与 Web 规则菜单，但尚未取得 Reference Performance/API Freeze 证据。
 
-其后并行关闭阶段 4 性能/API Freeze、阶段 5 真实物理 LAN/目标低端设备/恶意资源门禁和阶段 6 Firefox/真实移动设备/屏幕阅读器/完整业务 E2E；在这些完成前不要进入桌面壳或发行。真实 HDD/SMB/NAS、FileID、ranking/total/租约等 PRE_FREEZE 数值、AND/OR canonical 化、Progress 排序、Wails/Tauri 与跨平台发行仍属后续门禁。
+其后并行关闭阶段 4 性能/API Freeze、阶段 5 真实物理 LAN/目标低端设备/恶意资源门禁和阶段 6 Firefox/真实移动设备/屏幕阅读器/完整业务 E2E；在这些完成前不要进入桌面壳或发行。真实 HDD/SMB/NAS、FileID、ranking/total/租约等 PRE_FREEZE 数值、AND/OR canonical 化、Wails/Tauri 与跨平台发行仍属后续门禁。

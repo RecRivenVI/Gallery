@@ -107,7 +107,7 @@ Gallery 是一个"本地优先"（数据主要放在自己电脑上，不依赖�
 | 桌面壳选型 | ADR-008：Wails 有条件接受，仍可能改为 Tauri | 保持不变 | Web/PWA 已进入正式代码，壳仍是「有条件接受」 | 阶段 6 Web 基线不依赖壳；阶段 7 未开始 | 维持壳可替换、后端独立 |
 | 排序与排名细节 | 初始只提出「需要搜索排序」，未给权重 | 新增细化 | 阶段 4 落地字段级 Ranking v2（标题 3 / 作者 2 / 标签 1 / 文件名 0），结构冻结、数值 PRE_FREEZE | 阶段 4 Correctness 收口逐步细化 | 结构已实现，数值待压力测试后冻结 |
 | 按需校验单个文件（VerificationTarget） | 初始未提及 | 新增 | 经 EV-30→EV-34 五轮修正，最终以 EV-34 的 publication 冻结结论为准 | 见验证记录 EV-30~EV-34 | 已收口；说明「验证记录标记通过」也需看是否为最新一轮结论 |
-| Progress 排序 | 初始计划未单列 | **未实现但被错误声明** | `overlay.OverlayFieldCapabilities` 与 `规范/06` 能力表都标注 `progress` 可排序，但代码无排序字段入参，排序恒为标题；`规范/06` 自身「已知缺口」又写明只提供过滤 | EV-39 核对 | 规范内部矛盾，需二选一定稿 |
+| Progress 排序 | 初始计划未单列 | **已实现并统一语义** | 排序协议 v2 增加服务端 `progress_asc`/`progress_desc`、签名 keyset、动态 dependency set 与 Web 控件；排序判据固定使用 publication snapshot，live Overlay 只展示 | EV-49 合成回归 | EV-39 发现的能力表/实现矛盾已关闭；数值性能仍待 Reference Gate |
 | 阶段 6 业务闭环 | 「普通浏览器完成所有业务闭环后，才开始壳集成」 | **完成度被高估，已下调** | EV-39 实测：WebSocket 在真实浏览器 100% 握手失败；6 个 capability 名与后端权威词表不符，Overlay 编辑、任务取消/重试、Library 创建、Source 登记、按需确认与全部治理动作在真实后端下永不渲染 | EV-39 真实 Chrome/Edge 探针与后端词表逐项核对 | 闭环条件明确未满足，仍不得进入壳集成 |
 
 ---
