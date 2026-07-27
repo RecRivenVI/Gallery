@@ -6,6 +6,19 @@ import (
 	"testing"
 )
 
+func TestValidateBrowserProject(t *testing.T) {
+	for _, project := range []string{"chromium", "firefox"} {
+		if err := validateBrowserProject(project); err != nil {
+			t.Fatalf("项目 %s 应受支持: %v", project, err)
+		}
+	}
+	for _, project := range []string{"", "chrome", "edge", "../firefox"} {
+		if err := validateBrowserProject(project); err == nil {
+			t.Fatalf("项目 %q 应被拒绝", project)
+		}
+	}
+}
+
 func TestRetainDiagnosticsPreservesDistinctLogNames(t *testing.T) {
 	logsRoot := t.TempDir()
 	diagnosticsRoot := t.TempDir()

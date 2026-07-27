@@ -57,10 +57,15 @@ func main() {
 
 func run() (exitCode int) {
 	var repoRoot string
+	var browserProject string
 	var keep bool
 	flag.StringVar(&repoRoot, "repo-root", ".", "Gallery 仓库根目录")
+	flag.StringVar(&browserProject, "browser-project", "chromium", "Playwright 浏览器项目（chromium 或 firefox）")
 	flag.BoolVar(&keep, "keep", false, "保留临时验证目录")
 	flag.Parse()
+	if err := validateBrowserProject(browserProject); err != nil {
+		return fail("验证浏览器项目", err)
+	}
 	runCtx, stopSignals := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stopSignals()
 
@@ -194,10 +199,11 @@ func run() (exitCode int) {
 		"GALLERY_REAL_RETRY_JOB_ID=" + retryPendingJobs.RetryID,
 	}
 	playwright := filepath.Join(webRoot, "node_modules", "@playwright", "test", "cli.js")
+	projectArgument := "--project=" + browserProject
 	testErr := waitHealthy(runCtx, server.BaseURL, 30*time.Second)
 	if testErr == nil {
 		testErr = command(runCtx, 2*time.Minute, webRoot, env, nodeBin, playwright, "test",
-			"e2e/real-bootstrap.spec.ts", "--project=chromium", "--workers=1", "--retries=0")
+			"e2e/real-bootstrap.spec.ts", projectArgument, "--workers=1", "--retries=0")
 	}
 	// publication E2E 以 bootstrap 留下的首次 index/J1 未确认媒体为前置；规则生命周期则要在
 	// media/custom-cover/gallery 完成后再用新 Personal Session 继续同一隔离实例。分开调用把这些
@@ -205,39 +211,39 @@ func run() (exitCode int) {
 	if testErr == nil {
 		testErr = command(runCtx, 2*time.Minute, webRoot, env, nodeBin, playwright, "test",
 			"e2e/real-media.spec.ts",
-			"--project=chromium", "--workers=1", "--retries=0")
+			projectArgument, "--workers=1", "--retries=0")
 	}
 	if testErr == nil {
 		testErr = command(runCtx, 2*time.Minute, webRoot, env, nodeBin, playwright, "test",
 			"e2e/real-custom-cover.spec.ts",
-			"--project=chromium", "--workers=1", "--retries=0")
+			projectArgument, "--workers=1", "--retries=0")
 	}
 	if testErr == nil {
 		testErr = command(runCtx, 2*time.Minute, webRoot, env, nodeBin, playwright, "test",
 			"e2e/real-gallery.spec.ts",
-			"--project=chromium", "--workers=1", "--retries=0")
+			projectArgument, "--workers=1", "--retries=0")
 	}
 	// 规则绑定状态链必须在规则生命周期用例永久弃用规则包之前完成；否则服务端会按正式
 	// 契约拒绝重新激活该 Binding。治理与 Job 用例完成后会恢复所有可供后续用例使用的状态。
 	if testErr == nil {
 		testErr = command(runCtx, 2*time.Minute, webRoot, env, nodeBin, playwright, "test",
 			"e2e/real-jobs-governance.spec.ts",
-			"--project=chromium", "--workers=1", "--retries=0")
+			projectArgument, "--workers=1", "--retries=0")
 	}
 	if testErr == nil {
 		testErr = command(runCtx, 2*time.Minute, webRoot, env, nodeBin, playwright, "test",
 			"e2e/real-rule-lifecycle.spec.ts",
-			"--project=chromium", "--workers=1", "--retries=0")
+			projectArgument, "--workers=1", "--retries=0")
 	}
 	if testErr == nil {
 		testErr = command(runCtx, 2*time.Minute, webRoot, env, nodeBin, playwright, "test",
 			"e2e/real-security.spec.ts",
-			"--project=chromium", "--workers=1", "--retries=0")
+			projectArgument, "--workers=1", "--retries=0")
 	}
 	if testErr == nil {
 		testErr = command(runCtx, 2*time.Minute, webRoot, env, nodeBin, playwright, "test",
 			"e2e/real-maintenance.spec.ts",
-			"--project=chromium", "--workers=1", "--retries=0")
+			projectArgument, "--workers=1", "--retries=0")
 	}
 	// 维护用例只登记 pending restore。先优雅停止当前进程，再以完全相同的 AppDirs 和
 	// 合成 Source 启动第二个 galleryd；启动期会在打开数据库前应用恢复并完成安全收尾。
@@ -266,7 +272,7 @@ func run() (exitCode int) {
 			if testErr == nil {
 				testErr = command(runCtx, 2*time.Minute, webRoot, restoredEnv, nodeBin, playwright, "test",
 					"e2e/real-restore-restart.spec.ts",
-					"--project=chromium", "--workers=1", "--retries=0")
+					projectArgument, "--workers=1", "--retries=0")
 			}
 		}
 	}
@@ -318,7 +324,7 @@ func run() (exitCode int) {
 	if lanErr == nil {
 		lanErr = command(runCtx, 2*time.Minute, webRoot, lanEnv, nodeBin, playwright, "test",
 			"e2e/real-lan.spec.ts",
-			"--project=chromium", "--workers=1", "--retries=0")
+			projectArgument, "--workers=1", "--retries=0")
 	}
 	lanStop := lanServer.Stop()
 	lanStopped = true
@@ -331,8 +337,17 @@ func run() (exitCode int) {
 		return fail("真实 LAN 浏览器 E2E", errors.Join(lanErr, diagnosticErr))
 	}
 
-	fmt.Println("真实 Personal/LAN galleryd 浏览器 E2E 通过；Personal 同 AppDirs 恢复重启通过；合成 Source 只读 guard 通过；galleryd 均已优雅停止")
+	fmt.Printf("真实 %s Personal/LAN galleryd 浏览器 E2E 通过；Personal 同 AppDirs 恢复重启通过；合成 Source 只读 guard 通过；galleryd 均已优雅停止\n", browserProject)
 	return 0
+}
+
+func validateBrowserProject(project string) error {
+	switch project {
+	case "chromium", "firefox":
+		return nil
+	default:
+		return fmt.Errorf("不支持的 Playwright 浏览器项目 %q；只允许 chromium 或 firefox", project)
+	}
 }
 
 // seedRetryPendingJobs 在 galleryd 取得 AppDirs 单写锁之前，用正式 Job Store 建立两个处于

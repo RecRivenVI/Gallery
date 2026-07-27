@@ -21,11 +21,11 @@
     "typecheck": "tsc -b --pretty false",
     "lint": "eslint . --max-warnings=0",
     "format:check": "prettier --check .",
-    "test": "vitest run",
+    "test": "vitest run --maxWorkers=50%",
     "build": "npm run generate && tsc -b --pretty false && vite build",
     "test:e2e": "playwright test",
     "test:real:bootstrap": "node scripts/run-real-e2e.mjs",
-    "test:smoke": "playwright test --project=chromium --grep @smoke"
+    "test:smoke": "playwright test --project=chromium --project=firefox --workers=50% --grep @smoke"
   },
   "dependencies": {
     "@rjsf/core": "6.7.1",

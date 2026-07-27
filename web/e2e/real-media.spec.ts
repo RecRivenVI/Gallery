@@ -192,6 +192,9 @@ test('真实 publication 贯穿浏览、详情、确认、查看与 Range @real-
       const etag = head.headers.get('ETag');
       const full = await fetch(url);
       const fullBytes = new Uint8Array(await full.arrayBuffer());
+      const notModified = await fetch(url, {
+        headers: etag === null ? {} : { 'If-None-Match': etag }
+      });
       const range = await fetch(url, {
         headers: { Range: 'bytes=0-7', ...(etag === null ? {} : { 'If-Range': etag }) }
       });
@@ -200,9 +203,12 @@ test('真实 publication 贯穿浏览、详情、确认、查看与 Range @real-
         headStatus: head.status,
         headType: head.headers.get('Content-Type'),
         headLength: Number(head.headers.get('Content-Length')),
+        etag,
         etagPresent: etag !== null && etag !== '',
         getStatus: full.status,
         getLength: fullBytes.byteLength,
+        notModifiedStatus: notModified.status,
+        notModifiedETag: notModified.headers.get('ETag'),
         rangeStatus: range.status,
         acceptRanges: range.headers.get('Accept-Ranges'),
         contentRange: range.headers.get('Content-Range'),
@@ -213,13 +219,15 @@ test('真实 publication 贯穿浏览、详情、确认、查看与 Range @real-
     },
     { targetMediaId: mediaId, publication: verifiedPublication }
   );
-  expect(contentContract).toEqual({
+  const { etag: mediaETag, notModifiedETag, ...stableContentContract } = contentContract;
+  expect(stableContentContract).toEqual({
     headStatus: 200,
     headType: 'image/png',
     headLength: mediaSize,
     etagPresent: true,
     getStatus: 200,
     getLength: mediaSize,
+    notModifiedStatus: 304,
     rangeStatus: 206,
     acceptRanges: 'bytes',
     contentRange: `bytes 0-7/${mediaSize}`,
@@ -227,6 +235,8 @@ test('真实 publication 贯穿浏览、详情、确认、查看与 Range @real-
     rangeEtagMatches: true,
     prefixMatches: true
   });
+  expect(mediaETag).toMatch(/^"gallery-sha256-v1-[0-9a-f]{64}"$/);
+  expect(notModifiedETag).toBe(mediaETag);
   expect(mediaSize).toBeGreaterThan(8);
 
   const download = page.getByRole('link', { name: '下载第一项媒体' });
@@ -261,7 +271,14 @@ test('真实 publication 贯穿浏览、详情、确认、查看与 Range @real-
   expect(((await viewerMedia.json()) as { queryPublicationId: string }).queryPublicationId).toBe(
     verifiedPublication
   );
-  expect(viewerContent.status()).toBe(200);
+  // Firefox 会在 reload 时复用刚解码的正文并按 private,no-cache 重新验证，服务端返回
+  // 304 后浏览器使用原缓存；Chromium 当前重新取 200。Firefox 协议不向 Playwright 暴露
+  // 浏览器自动添加的 validator，因此上面显式验证 If-None-Match，本处要求 304 回显同一
+  // 强 ETag 且图片仍可解码，不能把任意空响应放行。
+  expect([200, 304]).toContain(viewerContent.status());
+  if (viewerContent.status() === 304) {
+    expect(await viewerContent.headerValue('etag')).toBe(mediaETag);
+  }
   await expectSyntheticImage(page.getByRole('img', { name: '第 1 项媒体' }));
   await expect(page.getByRole('link', { name: '返回作品' })).toHaveAttribute(
     'href',
