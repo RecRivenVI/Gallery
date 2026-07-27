@@ -1,6 +1,7 @@
 import { expect, test, type Page, type Response } from '@playwright/test';
 
 const realBaseURL = process.env.GALLERY_REAL_BASE_URL;
+const restoreSentinelLibraryName = 'EV-64 备份后资料库';
 test.skip(!realBaseURL, '仅由隔离 Personal galleryd E2E 运行器执行');
 test.setTimeout(90_000);
 
@@ -79,6 +80,26 @@ test('Personal 维护、备份、验证与待重启恢复真实链 @real-mainten
   const backupRow = page.getByRole('row').filter({ hasText: backupId });
   await expect(backupRow).toHaveCount(1);
 
+  // 备份发布后再经可见 UI 写入一个不会接触 Source 的 Library 事实。运行器稍后重启同一
+  // AppDirs，下一段浏览器用例以该事实消失、原有 Library 保留来证明恢复确实已经应用。
+  await page.goto('/manage/scans');
+  await expect(page.getByRole('heading', { name: '扫描与任务', exact: true })).toBeVisible();
+  await page.getByRole('textbox', { name: /Library 名称/ }).fill(restoreSentinelLibraryName);
+  const sentinelResponsePromise = page.waitForResponse((response) =>
+    pathIs(response, '/api/v1/libraries', 'POST')
+  );
+  await page.getByRole('button', { name: '创建 Library', exact: true }).click();
+  const sentinelResponse = await sentinelResponsePromise;
+  expect(sentinelResponse.status()).toBe(201);
+  expect((await sentinelResponse.json()) as { name: string }).toMatchObject({
+    name: restoreSentinelLibraryName
+  });
+  const libraryTable = page.getByRole('table', { name: 'Library', exact: true });
+  await expect(libraryTable.getByRole('row').filter({ hasText: restoreSentinelLibraryName })).toHaveCount(1);
+
+  await page.goto('/manage/diagnostics');
+  await expect(page.getByRole('heading', { name: '验证和诊断', exact: true })).toBeVisible();
+
   // Select 的选项来自同一份 HTTP manifest 快照；验证是只读 dry-run。
   await page.getByRole('button', { name: /要恢复的备份/ }).click();
   await page.getByRole('option', { name: new RegExp(backupId) }).click();
@@ -95,8 +116,8 @@ test('Personal 维护、备份、验证与待重启恢复真实链 @real-mainten
   await expect(fact(page, '完整性')).toHaveText('通过');
   await expect(fact(page, '不变量')).toHaveText('通过');
 
-  // 登记恢复只写入隔离 AppDirs 的 pending 请求，本进程不会应用；运行器不再以该 AppDirs
-  // 启动 galleryd，因此不会把这项验证误当成已执行的恢复。
+  // 登记恢复只写入隔离 AppDirs 的 pending 请求；本段不会把登记误当成已执行。运行器会在
+  // 本用例结束后优雅停止进程，并以同一 AppDirs 重启，再由独立浏览器用例验证恢复结果。
   const restoreResponsePromise = page.waitForResponse((response) =>
     pathIs(response, '/api/v1/admin/control-restores', 'POST')
   );

@@ -239,15 +239,51 @@ func run() (exitCode int) {
 			"e2e/real-maintenance.spec.ts",
 			"--project=chromium", "--workers=1", "--retries=0")
 	}
-	stop := server.Stop()
-	serverStopped = true
+	// 维护用例只登记 pending restore。先优雅停止当前进程，再以完全相同的 AppDirs 和
+	// 合成 Source 启动第二个 galleryd；启动期会在打开数据库前应用恢复并完成安全收尾。
+	restoredLog := filepath.Join(logsRoot, "galleryd-restored.log")
+	if testErr == nil {
+		stop := server.Stop()
+		serverStopped = true
+		testErr = stopError(stop)
+	}
+	if testErr == nil {
+		restoredServer, startErr := testprocess.StartGallerydWithSourceRootsContext(
+			runCtx,
+			galleryd,
+			appRoot,
+			restoredLog,
+			60*time.Second,
+			sourceRoot,
+		)
+		if startErr != nil {
+			testErr = fmt.Errorf("以同一 AppDirs 重启 galleryd: %w", startErr)
+		} else {
+			server = restoredServer
+			serverStopped = false
+			restoredEnv := append([]string{"GALLERY_REAL_BASE_URL=" + server.BaseURL}, env[1:]...)
+			testErr = waitHealthy(runCtx, server.BaseURL, 30*time.Second)
+			if testErr == nil {
+				testErr = command(runCtx, 2*time.Minute, webRoot, restoredEnv, nodeBin, playwright, "test",
+					"e2e/real-restore-restart.spec.ts",
+					"--project=chromium", "--workers=1", "--retries=0")
+			}
+		}
+	}
+	if !serverStopped {
+		stop := server.Stop()
+		serverStopped = true
+		testErr = errors.Join(testErr, stopError(stop))
+	}
 	after, guardErr := snapshot(sourceRoot)
 	if guardErr == nil && !reflect.DeepEqual(before, after) {
 		guardErr = describeGuardDifference(before, after)
 	}
-	testErr = errors.Join(testErr, stopError(stop))
 	if testErr != nil || guardErr != nil {
 		diagnosticErr := retainDiagnostics(gallerydLog, diagnosticsRoot)
+		if _, statErr := os.Stat(restoredLog); statErr == nil {
+			diagnosticErr = errors.Join(diagnosticErr, retainDiagnostics(restoredLog, diagnosticsRoot))
+		}
 		if diagnosticErr == nil {
 			fmt.Printf("失败诊断已保存到：%s\n", diagnosticsRoot)
 		}
@@ -295,7 +331,7 @@ func run() (exitCode int) {
 		return fail("真实 LAN 浏览器 E2E", errors.Join(lanErr, diagnosticErr))
 	}
 
-	fmt.Println("真实 Personal/LAN galleryd 浏览器 E2E 通过；合成 Source 只读 guard 通过；galleryd 均已优雅停止")
+	fmt.Println("真实 Personal/LAN galleryd 浏览器 E2E 通过；Personal 同 AppDirs 恢复重启通过；合成 Source 只读 guard 通过；galleryd 均已优雅停止")
 	return 0
 }
 
@@ -408,7 +444,7 @@ func retainDiagnostics(logPath, diagnosticsRoot string) error {
 	if err := os.MkdirAll(diagnosticsRoot, 0o700); err != nil {
 		return fmt.Errorf("创建诊断目录: %w", err)
 	}
-	if err := os.WriteFile(filepath.Join(diagnosticsRoot, "galleryd.log"), content, 0o600); err != nil {
+	if err := os.WriteFile(filepath.Join(diagnosticsRoot, filepath.Base(logPath)), content, 0o600); err != nil {
 		return fmt.Errorf("保存 galleryd 诊断日志: %w", err)
 	}
 	return nil
