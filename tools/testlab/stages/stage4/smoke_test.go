@@ -15,6 +15,8 @@ import (
 	"github.com/RecRivenVI/gallery/internal/config"
 	"github.com/RecRivenVI/gallery/internal/platform/appdirs"
 	"github.com/RecRivenVI/gallery/internal/platform/descriptor"
+	api "github.com/RecRivenVI/gallery/pkg/galleryapi"
+	"github.com/RecRivenVI/gallery/tools/testlab/internal/corpus"
 	"github.com/RecRivenVI/gallery/tools/testlab/internal/environment"
 	"github.com/RecRivenVI/gallery/tools/testlab/internal/report"
 	"github.com/RecRivenVI/gallery/tools/testlab/internal/seeding"
@@ -24,6 +26,15 @@ import (
 )
 
 const stage4SmokeScale = 1_000
+
+// stage4SmokeSources 让 smoke 语料分布到多个 Source。
+//
+// 单 Source 语料永远不会执行 catalog.cloneUnchangedSources 的 12 条全量搬运语句
+// （WHERE source_id<>?），因此在此之前，"重扫其中一个 Source 时按比例复制其余全部
+// Source 的投影与 FTS5 索引"这条发布路径在 testlab 的任何规模下都没有被执行过。三个
+// Source 使最后一次发布搬运 2/3 的语料，同时让浏览、排序与游标分页必须真正跨 Source
+// 合并（corpus.SourceIndex 按取模交错分配，各 Source 的作品在排序键上完全交叉）。
+const stage4SmokeSources = 3
 
 var stage4QueryCursorFindingNames = []string{
 	"cursor/continuation-succeeds",
@@ -106,12 +117,16 @@ func TestStage4CorrectnessSmoke(t *testing.T) {
 	seedSourceRoot := filepath.Join(root, "query-source")
 	manifest, err := seeding.Run(context.Background(), seeding.Config{
 		AppRoot: appRoot, SourceRoot: seedSourceRoot, Scale: stage4SmokeScale, BatchSize: 257,
+		Sources: stage4SmokeSources,
 	})
 	if err != nil {
 		t.Fatalf("构建阶段 4 smoke publication: %v", err)
 	}
 	if manifest.Scale != stage4SmokeScale {
 		t.Fatalf("manifest.Scale = %d, want %d", manifest.Scale, stage4SmokeScale)
+	}
+	if manifest.SourceCount() != stage4SmokeSources {
+		t.Fatalf("manifest.SourceCount() = %d, want %d", manifest.SourceCount(), stage4SmokeSources)
 	}
 
 	sess := startGalleryd(t, appRoot, seedSourceRoot)
@@ -123,7 +138,7 @@ func TestStage4CorrectnessSmoke(t *testing.T) {
 		SchemaVersion: 2, Scenario: "stage4-query-cursor-smoke", Tier: "smoke",
 		Scale: manifest.Scale, Transport: "loopback-http",
 	}
-	query.RunStructuredFilterCorrectness(queryReport, sess, manifest.LibraryID, manifest.SourceID, manifest.CreatorIDs, manifest.Stats)
+	query.RunStructuredFilterCorrectness(queryReport, sess, manifest)
 	query.RunSearchRecallCorrectness(queryReport, sess, manifest.Stats)
 	query.RunRankingAndMatchesCorrectness(queryReport, sess)
 	query.RunTotalTriStateCorrectness(queryReport, sess, manifest.Stats)
@@ -131,6 +146,7 @@ func TestStage4CorrectnessSmoke(t *testing.T) {
 	query.RunCursorCorrectness(queryReport, sess)
 	assertReportPassed(t, queryReport)
 	assertExactFindingNames(t, queryReport, stage4QueryCursorFindingNames)
+	assertEverySourceIsQueryable(t, sess, manifest)
 	assertLimitations(t, queryReport, []string{"filter/creator.id", "裸伪造 queryPublicationId"})
 	if err := queryReport.Save(filepath.Join(root, "stage4-query-cursor-smoke.json")); err != nil {
 		t.Fatalf("保存脱敏 query/cursor smoke 报告: %v", err)
@@ -166,6 +182,39 @@ func TestStage4CorrectnessSmoke(t *testing.T) {
 		t.Fatalf("保存脱敏 media smoke 报告: %v", err)
 	}
 }
+
+// assertEverySourceIsQueryable 逐个 Source 复核最终 publication 里它的作品都能被查到，
+// 且各 Source 的可见命中数合计等于整份语料的可见总数。
+//
+// 这是 cloneUnchangedSources 的端到端证明：最后一次发布只 Stage 了 1/N 的语料，其余
+// (N-1)/N 的 work_projections、media_projections 与 FTS5 行只可能来自那 12 条搬运语句。
+// 如果哪一条被漏掉或写错，这里会直接看到某个 Source 查不到或数量对不上，而不是等到
+// 500,000 规模的正式实测才暴露。
+func assertEverySourceIsQueryable(t *testing.T, sess *environment.Session, manifest corpus.Manifest) {
+	t.Helper()
+	if len(manifest.SourceIDs) != len(manifest.SourceVisibleWorkCounts) {
+		t.Fatalf("manifest 的 Source ID 数 %d 与逐 Source 计数 %d 不一致",
+			len(manifest.SourceIDs), len(manifest.SourceVisibleWorkCounts))
+	}
+	total := 0
+	for slot, sourceID := range manifest.SourceIDs {
+		expected := manifest.SourceVisibleWorkCounts[slot]
+		resp, err := sess.ListWorks(api.ListWorksParams{SourceId: &sourceID, Limit: ptrOf(1)})
+		if err != nil || resp.JSON200 == nil {
+			t.Fatalf("按 Source %d 查询失败: err=%v status=%d", slot, err, environment.StatusOf(resp))
+		}
+		if resp.JSON200.Total.Value == nil || int(*resp.JSON200.Total.Value) != expected {
+			t.Fatalf("Source %d 的可见作品数 = %v, want %d（mode=%s）",
+				slot, resp.JSON200.Total.Value, expected, resp.JSON200.Total.Mode)
+		}
+		total += expected
+	}
+	if total != manifest.Stats.VisibleN {
+		t.Fatalf("各 Source 可见数合计 %d != 语料 VisibleN %d", total, manifest.Stats.VisibleN)
+	}
+}
+
+func ptrOf[T any](v T) *T { return &v }
 
 func startGalleryd(t *testing.T, appRoot, sourceRoot string) *environment.Session {
 	t.Helper()

@@ -11,6 +11,8 @@ import (
 	"sort"
 	"strings"
 	"time"
+
+	"github.com/RecRivenVI/gallery/tools/testlab/internal/hostfacts"
 )
 
 // Finding 是单条断言结果：name 描述被验证的具体行为，pass 是断言结论，detail 是
@@ -22,6 +24,33 @@ type Finding struct {
 	Detail string `json:"detail,omitempty"`
 }
 
+// 缓存状态取值。它们描述的是**本次实际测到的进程状态**，不是人工标注，也不是
+// 「大概是热的」这种默认假设：
+//
+//   - CacheStateColdProcess：本组合的第一次测量请求由一个自启动以来从未服务过任何
+//     查询请求的 galleryd 进程处理（进程内 SQLite 连接池、页缓存、prepared statement
+//     缓存与查询服务缓存全为空）。
+//   - CacheStateWarm：本组合在测量前执行了显式 warmup，且至少有一次 warmup 请求成功。
+//   - CacheStateWarmIncidental：本组合没有 warmup，但同一进程已经服务过前面组合的
+//     请求，因此缓存被前序组合偶然预热。这是本工具在 2026-07-27 之前实际处于的状态，
+//     当时却被硬编码标注为 warm。
+//   - CacheStateUnknown：无法判定（例如要求 warmup 但全部 warmup 请求失败）。
+//
+// **这四个取值都不表示存储介质冷读**：清空操作系统文件系统缓存需要管理员权限与平台
+// 专有接口，本工具不做，因此 cold-process 只覆盖进程内缓存这一层，必须按此解读。
+const (
+	CacheStateColdProcess    = "cold-process"
+	CacheStateWarm           = "warm"
+	CacheStateWarmIncidental = "warm-incidental"
+	CacheStateUnknown        = "unknown"
+)
+
+// MinSamplesForP99 是「P99 可估」的最小成功样本数。最近秩分位数在 n 个样本上能表达的
+// 最细分位间隔是 1/n，因此 n=30 时最高可分辨的分位点是 96.7%，此时 ceil(0.99·30)=30
+// 直接落到最大值——报出来的"P99"其实就是 max，不是 P99 的估计。要让 P99 落在最大值
+// 之前至少需要 n≥100。
+const MinSamplesForP99 = 100
+
 // LatencySample 汇总一个查询类别在给定 limit/concurrency 下的重复测量分位数与
 // 运行统计恒等式。四类运行计数必须始终满足：
 //
@@ -32,6 +61,9 @@ type Finding struct {
 // 第五类；调用方不得把 NotAttemptedRuns（组合截止时间已过、从未派发）静默折叠进
 // FailedRuns，否则会破坏第一条恒等式，把"部分组合未完整执行"误报为"全部已尝试
 // 的请求都成功"。
+//
+// WarmupRuns/WarmupFailedRuns 独立于上面四类计数：warmup 请求既不进入 PlannedRuns
+// 也不进入 Durations，否则第一批本来就偏慢的样本会污染分位数。
 type LatencySample struct {
 	Category    string `json:"category"`
 	Limit       int    `json:"limit"`
@@ -44,15 +76,28 @@ type LatencySample struct {
 	TimedOutRuns     int `json:"timedOutRuns"`
 	NotAttemptedRuns int `json:"notAttemptedRuns"`
 
+	WarmupRuns       int `json:"warmupRuns"`
+	WarmupFailedRuns int `json:"warmupFailedRuns"`
+
 	CacheState string  `json:"cacheState"`
 	P50Ms      float64 `json:"p50Ms"`
 	P95Ms      float64 `json:"p95Ms"`
 	P99Ms      float64 `json:"p99Ms"`
 	MinMs      float64 `json:"minMs"`
 	MaxMs      float64 `json:"maxMs"`
-	HitCount   int     `json:"hitCount"`
-	TotalMode  string  `json:"totalMode"`
-	TotalValue int     `json:"totalValue"`
+
+	// PercentileMethod 固定为 nearest-rank，写进每条样本使读者不必猜测这批数字用的是
+	// 哪种分位数定义；历史结果文件里没有这个字段，即为旧口径。
+	PercentileMethod string `json:"percentileMethod"`
+	// CarriesP99 表示本组合被矩阵指定为承载 P99 的组合，因此样本量不足是一条失败。
+	CarriesP99 bool `json:"carriesP99"`
+	// P99Estimable 报告 SuccessfulRuns 是否达到 MinSamplesForP99；为 false 时 P99Ms
+	// 只是"最近秩落在最大值上"的结果，不能当作 P99 估计使用。
+	P99Estimable bool `json:"p99Estimable"`
+
+	HitCount   int    `json:"hitCount"`
+	TotalMode  string `json:"totalMode"`
+	TotalValue int    `json:"totalValue"`
 }
 
 // IdentityOK 报告本样本的运行计数是否满足统计恒等式；调用方应在写入报告前检查，
@@ -67,13 +112,21 @@ func (s LatencySample) IdentityOK() bool {
 // token、Cookie、CSRF 或 correlationId。运行期间需要的原始诊断信息只写入
 // 本地日志文件（由调用方放在授权测试根的 logs/ 目录内），不进入本结构。
 type Report struct {
-	SchemaVersion  int             `json:"schemaVersion"`
-	GeneratedAt    string          `json:"generatedAt"`
-	Scenario       string          `json:"scenario"`
-	ScenarioAlias  string          `json:"scenarioAlias,omitempty"`
-	SourceAlias    string          `json:"sourceAlias,omitempty"`
-	StorageClass   string          `json:"storageClass,omitempty"`
-	Tier           string          `json:"tier,omitempty"`
+	SchemaVersion int    `json:"schemaVersion"`
+	GeneratedAt   string `json:"generatedAt"`
+	Scenario      string `json:"scenario"`
+	ScenarioAlias string `json:"scenarioAlias,omitempty"`
+	SourceAlias   string `json:"sourceAlias,omitempty"`
+	StorageClass  string `json:"storageClass,omitempty"`
+	Tier          string `json:"tier,omitempty"`
+	// Environment 是本次运行**实测**的环境事实（CPU/内存/OS/SQLite 版本/物理盘介质
+	// 与型号）。Reference Performance Gate 要求每次结果同时记录这些项，缺任一项时结果
+	// 只能作为方向性证据；StorageClass 是人工标注，只用于与 Environment.Storage 交叉
+	// 核对，不得覆盖实测结论。
+	Environment *hostfacts.Facts `json:"environment,omitempty"`
+	// Corpus 描述本次被测语料的结构性事实（例如 Source 数量），使读者能判断哪些发布
+	// 路径确实被覆盖过。
+	Corpus         *CorpusFacts    `json:"corpus,omitempty"`
 	Transport      string          `json:"transport"`
 	Scale          int             `json:"scale,omitempty"`
 	Nonrecommended bool            `json:"nonrecommendedScale,omitempty"`
@@ -89,6 +142,23 @@ type Report struct {
 	CompletedCombinations int    `json:"completedCombinations,omitempty"`
 	AbortedByTimeLimit    bool   `json:"abortedByTimeLimit,omitempty"`
 	AbortReason           string `json:"abortReason,omitempty"`
+}
+
+// CorpusFacts 记录本次被测语料的结构性事实。SourceCount 尤其重要：单 Source 语料
+// 永远不会执行 catalog.cloneUnchangedSources 的全量搬运语句（那 12 条语句的 WHERE
+// 条件是 `source_id<>?`），因此单 Source 的发布耗时不能代表"多 Source 环境下重扫其中
+// 一个 Source"的真实发布代价——后者要按比例复制其余全部 Source 的投影与 FTS5 索引。
+type CorpusFacts struct {
+	Scale       int `json:"scale"`
+	SourceCount int `json:"sourceCount"`
+	// ClonedSourceCountOnLastPublish 是最后一次 BeginCandidate 时被 cloneUnchangedSources
+	// 搬运的 Source 数量；为 0 表示这条路径在本次语料构建中一次都没有执行。
+	ClonedSourceCountOnLastPublish int `json:"clonedSourceCountOnLastPublish"`
+	// SourceBeginDurationsMs 是逐个 Source 的 BeginCandidate 耗时，即 cloneUnchangedSources
+	// 的实际代价（第一个 Source 没有可搬运的对象，因此是该路径的空载基线）。
+	SourceBeginDurationsMs []int64 `json:"sourceBeginDurationsMs,omitempty"`
+	// SourcePublishDurationsMs 是逐个 Source 的 Publish 耗时。
+	SourcePublishDurationsMs []int64 `json:"sourcePublishDurationsMs,omitempty"`
 }
 
 func (r *Report) Add(name string, pass bool, detail string) {
@@ -147,6 +217,22 @@ func (r *Report) scanForSensitiveContent() error {
 			return fmt.Errorf("limitation 文本疑似包含绝对路径或地址: %s", limitation)
 		}
 	}
+	// 环境事实由物理盘/卷/设备描述符采集，天然接触大量路径形态的字符串，必须同样
+	// 经过这道防线，不能因为"它是自动采集的"就默认安全。
+	if r.Environment != nil {
+		facts := *r.Environment
+		texts := append([]string{
+			facts.OSVersion, facts.CPUModel, facts.SQLiteVersion, facts.SQLiteLibrary, facts.GoVersion,
+			facts.Storage.Model, facts.Storage.BusType, facts.Storage.MediumEvidence,
+			facts.Storage.VolumeID, facts.Storage.LogicalDrive, facts.Storage.PhysicalDrive,
+		}, facts.Errors...)
+		texts = append(texts, facts.Storage.Errors...)
+		for _, text := range texts {
+			if containsSensitiveMarker(text) {
+				return fmt.Errorf("environment 字段疑似包含绝对路径或地址: %s", text)
+			}
+		}
+	}
 	return nil
 }
 
@@ -185,27 +271,79 @@ func (r *Report) Save(path string) error {
 	return os.Rename(tempPath, path)
 }
 
-func percentile(sortedMs []float64, p float64) float64 {
-	if len(sortedMs) == 0 {
+// PercentileMethodNearestRank 是本工具自 2026-07-27 起使用的分位数定义标识，写入每条
+// LatencySample，使读者能一眼区分新旧口径的数字。
+const PercentileMethodNearestRank = "nearest-rank"
+
+// 分位点以整数千分比表达，见 percentileNearestRank 中关于浮点误差的说明。
+const (
+	perMilleP50 = 500
+	perMilleP95 = 950
+	perMilleP99 = 990
+)
+
+// percentileNearestRank 按标准最近秩（nearest-rank）定义取分位数：秩 = ceil(p·n)，
+// 返回升序样本中第「秩」个（1 基）值。
+//
+// 此前的实现是 `int(p·n) - 1`（即 floor(p·n) 再减一，0 基），比标准最近秩整整低一名：
+// n=30 时 P95 取到第 28 个样本（经验分位 93.3%）、P99 取到第 29 个（96.7%），系统性
+// 低估尾延迟。修正后同一批原始样本的 P95/P99 只会等于或高于旧口径，因此**新旧数字
+// 不可直接比较**，调用方必须在报告的 Limitations 中写明这一点。
+//
+// 分位点用整数千分比而不是 float64 字面量：0.95 在二进制下不可精确表示，
+// `math.Ceil(0.95*20)` 会因为乘积是 19.000000000000004 而返回 20，凭空多抬一名。
+// 整数运算 (perMille*n + 999) / 1000 就是精确的 ceil(p·n)。
+func percentileNearestRank(sortedMs []float64, perMille int) float64 {
+	n := len(sortedMs)
+	if n == 0 {
 		return 0
 	}
-	index := int(p*float64(len(sortedMs))) - 1
-	if index < 0 {
-		index = 0
+	rank := (perMille*n + 999) / 1000
+	if rank < 1 {
+		rank = 1
 	}
-	if index >= len(sortedMs) {
-		index = len(sortedMs) - 1
+	if rank > n {
+		rank = n
 	}
-	return sortedMs[index]
+	return sortedMs[rank-1]
 }
 
-// Summarize 把一个 (类别,limit,并发) 组合的原始测量结果汇总为一条满足统计恒等式
-// 的 LatencySample。durations 只包含成功请求的耗时；failed/timedOut/notAttempted
-// 由调用方按上文定义分别统计，timedOut 是 failed 的子集，不额外计入总数。
-func Summarize(category string, limit, concurrency, planned, attempted int, durations []time.Duration,
-	failed, timedOut, notAttempted int, cacheState string, hitCount int, totalMode string, totalValue int) LatencySample {
-	ms := make([]float64, len(durations))
-	for i, d := range durations {
+// Measurement 是一个 (类别,limit,并发) 组合的原始测量输入。用结构体而不是继续增加
+// 位置参数：这些字段之间没有自然顺序，位置参数一旦超过十来个，调用点插错一列不会有
+// 任何编译错误，而这里错一列就是一份看起来正常、实际错误的性能报告。
+type Measurement struct {
+	Category    string
+	Limit       int
+	Concurrency int
+
+	// PlannedRuns/AttemptedRuns/FailedRuns/TimedOutRuns/NotAttemptedRuns 的语义见
+	// LatencySample 的统计恒等式说明；Durations 只包含成功请求的耗时。
+	PlannedRuns      int
+	AttemptedRuns    int
+	FailedRuns       int
+	TimedOutRuns     int
+	NotAttemptedRuns int
+	Durations        []time.Duration
+
+	// WarmupRuns/WarmupFailedRuns 是显式预热阶段的计数，不进入上面任何一类，也不进入
+	// Durations。
+	WarmupRuns       int
+	WarmupFailedRuns int
+
+	// CacheState 必须是本次实测到的状态（见 CacheState* 常量），不得填写字面量猜测。
+	CacheState string
+	// CarriesP99 表示本组合被矩阵指定为承载 P99 的组合。
+	CarriesP99 bool
+
+	HitCount   int
+	TotalMode  string
+	TotalValue int
+}
+
+// Summarize 把一个组合的原始测量结果汇总为一条满足统计恒等式的 LatencySample。
+func Summarize(m Measurement) LatencySample {
+	ms := make([]float64, len(m.Durations))
+	for i, d := range m.Durations {
 		ms[i] = float64(d.Microseconds()) / 1000.0
 	}
 	sort.Float64s(ms)
@@ -213,12 +351,25 @@ func Summarize(category string, limit, concurrency, planned, attempted int, dura
 	if len(ms) > 0 {
 		min, max = ms[0], ms[len(ms)-1]
 	}
+	cacheState := m.CacheState
+	if cacheState == "" {
+		// 空缓存状态是调用方的实现缺陷，绝不能默认成 warm——那正是本轮修掉的那个
+		// 硬编码假设。如实记为 unknown。
+		cacheState = CacheStateUnknown
+	}
 	return LatencySample{
-		Category: category, Limit: limit, Concurrency: concurrency,
-		PlannedRuns: planned, AttemptedRuns: attempted, SuccessfulRuns: len(ms),
-		FailedRuns: failed, TimedOutRuns: timedOut, NotAttemptedRuns: notAttempted,
+		Category: m.Category, Limit: m.Limit, Concurrency: m.Concurrency,
+		PlannedRuns: m.PlannedRuns, AttemptedRuns: m.AttemptedRuns, SuccessfulRuns: len(ms),
+		FailedRuns: m.FailedRuns, TimedOutRuns: m.TimedOutRuns, NotAttemptedRuns: m.NotAttemptedRuns,
+		WarmupRuns: m.WarmupRuns, WarmupFailedRuns: m.WarmupFailedRuns,
 		CacheState: cacheState,
-		P50Ms:      percentile(ms, 0.50), P95Ms: percentile(ms, 0.95), P99Ms: percentile(ms, 0.99),
-		MinMs: min, MaxMs: max, HitCount: hitCount, TotalMode: totalMode, TotalValue: totalValue,
+		P50Ms:      percentileNearestRank(ms, perMilleP50),
+		P95Ms:      percentileNearestRank(ms, perMilleP95),
+		P99Ms:      percentileNearestRank(ms, perMilleP99),
+		MinMs:      min, MaxMs: max,
+		PercentileMethod: PercentileMethodNearestRank,
+		CarriesP99:       m.CarriesP99,
+		P99Estimable:     len(ms) >= MinSamplesForP99,
+		HitCount:         m.HitCount, TotalMode: m.TotalMode, TotalValue: m.TotalValue,
 	}
 }

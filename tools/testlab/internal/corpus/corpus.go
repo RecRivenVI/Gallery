@@ -140,6 +140,34 @@ func ContentVerified(i int) bool { return i%3 != 0 }
 // 约束，可以安全使用确定性字符串。
 func SourceKey(i int) string { return fmt.Sprintf("stage4/work-%08d", i) }
 
+// SourceIndex 返回第 i 个作品所属的 Source 槽位（0..sources-1）。
+//
+// 采用取模交错分配而不是连续切块：交错让每个 Source 的作品在 sort_title_key 上完全
+// 交叉，浏览、排序与游标分页因此必须真正跨 Source 合并；连续切块会让每一页几乎总是
+// 落在同一个 Source 内，把跨 Source 的排序与逐 Source 授权裁剪代价整个掩盖掉。
+func SourceIndex(i, sources int) int {
+	if sources <= 1 {
+		return 0
+	}
+	return i % sources
+}
+
+// VisibleCountForSource 返回规模 n、共 sources 个 Source 时，第 slot 个 Source 上默认
+// 可见（即排除 Hidden）的作品数。probe 断言 `filter/source.id` 命中数时必须用它，不能
+// 沿用整个语料的 VisibleN——多 Source 语料下后者是全部 Source 的合计。
+func VisibleCountForSource(n, sources, slot int) int {
+	if sources <= 1 {
+		return ComputeStats(n).VisibleN
+	}
+	count := 0
+	for i := slot; i < n; i += sources {
+		if !Hidden(i) {
+			count++
+		}
+	}
+	return count
+}
+
 // Stats 汇总一个给定规模 N 的语料在各个查询维度上的期望真值，供 probe 工具
 // 断言真实 API 响应是否与确定性生成规则一致。除 N/HiddenCount/FavoriteCount 等
 // 直接描述 Hidden/Favorite 本身的字段外，其余 Visible 前缀字段均已排除 Hidden
@@ -182,6 +210,27 @@ type Manifest struct {
 	PublishDurationMs  int64    `json:"publishDurationMs"`
 	TotalDurationMs    int64    `json:"totalDurationMs"`
 	Stats              Stats    `json:"stats"`
+
+	// Sources 是本次语料实际分布到的 Source 数量；SourceID 保持为第一个 Source，
+	// 使既有单 Source 断言无需改写即可继续工作。
+	//
+	// 这组字段存在的原因：catalog.cloneUnchangedSources 的 12 条全量搬运语句
+	// （WHERE source_id<>?）在单 Source 语料下一条都不会执行，而它正是"重扫一个
+	// Source 时按比例复制其余全部 Source 投影与 FTS5 索引"的路径，是发布代价大头
+	// 之一。只有 Sources>1 的语料才会真正走到它。
+	Sources                  int      `json:"sources,omitempty"`
+	SourceIDs                []string `json:"sourceIds,omitempty"`
+	SourceVisibleWorkCounts  []int    `json:"sourceVisibleWorkCounts,omitempty"`
+	SourceBeginDurationsMs   []int64  `json:"sourceBeginDurationsMs,omitempty"`
+	SourcePublishDurationsMs []int64  `json:"sourcePublishDurationsMs,omitempty"`
+}
+
+// SourceCount 返回本次语料的 Source 数量，对没有该字段的历史 manifest 返回 1。
+func (m Manifest) SourceCount() int {
+	if m.Sources <= 0 {
+		return 1
+	}
+	return m.Sources
 }
 
 // LoadManifest 读取 stage4seed 产出的 manifest JSON。

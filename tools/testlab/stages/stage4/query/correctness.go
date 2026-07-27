@@ -74,7 +74,18 @@ func ptr[T any](v T) *T { return &v }
 // RunStructuredFilterCorrectness 覆盖阶段 4 正式压力测试第七节「结构化过滤」的必测
 // 维度：逐字段过滤、AND/OR/NOT、空集合、非法字段/值，并把命中数与 corpus.ComputeStats
 // 的确定性期望值逐一核对，而不只是检查请求是否成功。
-func RunStructuredFilterCorrectness(rep *report.Report, sess *environment.Session, libraryID, sourceID string, creatorIDs []string, stats corpus.Stats) {
+// 直接接收 manifest 而不是拆成 libraryID/sourceID/creatorIDs/stats 四个参数：多 Source
+// 语料下 `filter/source.id` 的期望值不再等于整个语料的 VisibleN，必须用 manifest 里逐
+// Source 的可见计数，而这类"期望值来源随语料形态变化"的判断只有拿到完整 manifest 才
+// 做得对。
+func RunStructuredFilterCorrectness(rep *report.Report, sess *environment.Session, manifest corpus.Manifest) {
+	libraryID, sourceID, creatorIDs, stats := manifest.LibraryID, manifest.SourceID, manifest.CreatorIDs, manifest.Stats
+	// 单 Source 语料下第一个 Source 就是全部可见作品；多 Source 语料下必须用该 Source
+	// 自己的可见计数，否则这条断言会在正确的产品行为上失败。
+	sourceVisibleCount := stats.VisibleN
+	if len(manifest.SourceVisibleWorkCounts) > 0 {
+		sourceVisibleCount = manifest.SourceVisibleWorkCounts[0]
+	}
 	check := func(name string, filter map[string]any, expected int, extra func(api.ListWorksParams)) {
 		params := api.ListWorksParams{Filter: ptr(filterJSON(filter)), Limit: ptr(200)}
 		if extra != nil {
@@ -94,7 +105,7 @@ func RunStructuredFilterCorrectness(rep *report.Report, sess *environment.Sessio
 	// 原始 Hidden-inclusive 计数——这是此前 12 项烟雾测试失败的真正根因
 	// （HARNESS_BUG：WRONG_EXPECTATION，不是产品缺陷）。
 	check("filter/library.id", leaf("library.id", "eq", libraryID), stats.VisibleN, nil)
-	check("filter/source.id", leaf("source.id", "eq", sourceID), stats.VisibleN, nil)
+	check("filter/source.id", leaf("source.id", "eq", sourceID), sourceVisibleCount, nil)
 	for slot := 0; slot < 5; slot++ {
 		providerID := corpus.ProviderID(slot)
 		check(fmt.Sprintf("filter/provider.id[%d]", slot), leaf("provider.id", "eq", providerID), stats.VisibleProviderCounts[providerID], nil)
