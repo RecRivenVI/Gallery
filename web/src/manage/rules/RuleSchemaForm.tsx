@@ -1,28 +1,25 @@
 import Form from '@rjsf/core';
-import type {
-  Field as RjsfField,
-  FieldProps as RjsfFieldProps,
-  FormContextType,
-  RJSFSchema,
-  UiSchema
-} from '@rjsf/utils';
+import type { Field as RjsfField, FieldProps as RjsfFieldProps, RJSFSchema, UiSchema } from '@rjsf/utils';
 import { createPrecompiledValidator, type ValidatorFunctions } from '@rjsf/validator-ajv8';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import buildSchema from '../../../../internal/rules/rule-package.schema.json';
-import { Button, ErrorState, Field, Select } from '../../design';
+import { Button, ErrorState, Select } from '../../design';
 import { describeError, errorCode, errorCorrelationId } from '../../shared/errors';
 import { useRuleExamples, useRuleSchema } from '../api';
 import { ConfirmAction } from '../ui';
 import validatorFunctions from '../ruleSchemaValidator.gen.cjs';
-import { cloneRuleValue, isRecord, parseRuleValue, ruleValuesEqual, stringifyRuleValue } from './lossless';
-
-interface RuleFormContext extends FormContextType {
-  currentValue: Record<string, unknown>;
-  baselineValue: Record<string, unknown>;
-  setOpaqueInvalid: (path: string, invalid: boolean) => void;
-  changeOpaque: (path: readonly (string | number)[], value: unknown) => void;
-  restoreField: (path: readonly (string | number)[]) => void;
-}
+import { cloneRuleValue, isRecord, ruleValuesEqual, stringifyRuleValue } from './lossless';
+import {
+  ExtensionsField,
+  OpaqueJsonField,
+  ParameterSchemaField,
+  patchRuleValue,
+  type RuleFormContext,
+  RuleTestsField,
+  ruleFieldPointer,
+  valueAtPath,
+  valueExistsAtPath
+} from './RuleStructuredFields';
 
 interface RuleSchemaFormProps {
   value: Record<string, unknown>;
@@ -44,26 +41,6 @@ interface ChangedRuleField {
 }
 
 const OPAQUE_ROOT_FIELDS = new Set(['parameter_schema', 'tests', 'extensions', 'ui_metadata']);
-
-function ruleFieldPointer(path: RuleFieldPath): string {
-  return `/${path.map((segment) => String(segment).replaceAll('~', '~0').replaceAll('/', '~1')).join('/')}`;
-}
-
-function valueExistsAtPath(source: Record<string, unknown>, path: RuleFieldPath): boolean {
-  let current: unknown = source;
-  for (const segment of path) {
-    if (typeof segment === 'number' && Array.isArray(current)) {
-      if (segment < 0 || segment >= current.length) return false;
-      current = current[segment];
-    } else if (typeof segment === 'string' && isRecord(current)) {
-      if (!Object.prototype.hasOwnProperty.call(current, segment)) return false;
-      current = current[segment];
-    } else {
-      return false;
-    }
-  }
-  return true;
-}
 
 function collectChangedRuleFields(
   current: unknown,
@@ -103,125 +80,6 @@ function stableJson(value: unknown): string {
       .join(',')}}`;
   }
   return JSON.stringify(value);
-}
-
-function schemaTypeMatches(value: unknown, schema: RJSFSchema): boolean {
-  const expected = schema.type;
-  if (expected === undefined) return true;
-  const types = Array.isArray(expected) ? expected : [expected];
-  return types.some((type) => {
-    if (type === 'object') return isRecord(value);
-    if (type === 'array') return Array.isArray(value);
-    if (type === 'null') return value === null;
-    return typeof value === type;
-  });
-}
-
-function OpaqueJsonField({
-  fieldPathId,
-  formData,
-  schema,
-  name,
-  required,
-  disabled,
-  readonly,
-  rawErrors,
-  onBlur,
-  onFocus,
-  registry
-}: RjsfFieldProps<unknown, RJSFSchema, RuleFormContext>) {
-  const exactValue = valueAtPath(registry.formContext.currentValue, fieldPathId.path) ?? formData;
-  const externalText = useMemo(
-    () => (exactValue === undefined ? '' : stringifyRuleValue(exactValue, 2)),
-    [exactValue]
-  );
-  const baselineExists = valueExistsAtPath(registry.formContext.baselineValue, fieldPathId.path);
-  const baselineValue = baselineExists
-    ? valueAtPath(registry.formContext.baselineValue, fieldPathId.path)
-    : undefined;
-  const baselineText = baselineExists ? stringifyRuleValue(baselineValue, 2) : '';
-  const [text, setText] = useState(externalText);
-  const [syntaxError, setSyntaxError] = useState<string>();
-  const path = fieldPathId.path.join('/');
-
-  useEffect(() => {
-    if (syntaxError === undefined) setText(externalText);
-  }, [externalText, syntaxError]);
-
-  const setOpaqueInvalid = registry.formContext.setOpaqueInvalid;
-  useEffect(() => () => setOpaqueInvalid(path, false), [path, setOpaqueInvalid]);
-
-  const setInvalid = (message: string | undefined) => {
-    setSyntaxError(message);
-    registry.formContext.setOpaqueInvalid(path, message !== undefined);
-  };
-  const schemaErrors = rawErrors?.filter(Boolean).join('；');
-  const errorMessage = syntaxError ?? schemaErrors;
-
-  const canRestore = syntaxError !== undefined || text !== baselineText;
-  const pointer = ruleFieldPointer(fieldPathId.path);
-
-  return (
-    <div className="manage-opaque-field">
-      <Field
-        controlId={fieldPathId.$id}
-        label={schema.title ?? name}
-        description={schema.description ?? '此字段保留为无损 JSON；表单不会展开或删除未知内容。'}
-        errorMessage={errorMessage}
-        isRequired={required}
-      >
-        {({ controlId, describedBy, isInvalid }) => (
-          <textarea
-            id={controlId}
-            className="ui-textarea manage-code"
-            value={text}
-            rows={8}
-            disabled={disabled}
-            readOnly={readonly}
-            aria-describedby={describedBy}
-            aria-invalid={isInvalid || undefined}
-            onFocus={() => onFocus(fieldPathId.$id, exactValue)}
-            onBlur={() => onBlur(fieldPathId.$id, exactValue)}
-            onChange={(event) => {
-              const nextText = event.currentTarget.value;
-              setText(nextText);
-              try {
-                if (nextText.trim() === '' && !required) {
-                  setInvalid(undefined);
-                  registry.formContext.changeOpaque(fieldPathId.path, undefined);
-                  return;
-                }
-                const next = parseRuleValue(nextText);
-                if (!schemaTypeMatches(next, schema)) {
-                  throw new TypeError(`必须是 ${String(schema.type)} 类型的 JSON 值`);
-                }
-                setInvalid(undefined);
-                registry.formContext.changeOpaque(fieldPathId.path, next);
-              } catch (error) {
-                setInvalid(error instanceof Error ? error.message : '不是合法的 JSON');
-              }
-            }}
-          />
-        )}
-      </Field>
-      {canRestore ? (
-        <div className="manage-form__actions">
-          <Button
-            variant="secondary"
-            isDisabled={disabled === true || readonly === true}
-            aria-label={`撤销字段 ${pointer}`}
-            onPress={() => {
-              setText(baselineText);
-              setInvalid(undefined);
-              registry.formContext.restoreField(fieldPathId.path);
-            }}
-          >
-            撤销此字段
-          </Button>
-        </div>
-      ) : null}
-    </div>
-  );
 }
 
 const schema = buildSchema as RJSFSchema;
@@ -270,6 +128,21 @@ const fields = {
     Record<string, unknown>,
     RJSFSchema,
     RuleFormContext
+  >,
+  ParameterSchemaField: ParameterSchemaField as unknown as RjsfField<
+    Record<string, unknown>,
+    RJSFSchema,
+    RuleFormContext
+  >,
+  RuleTestsField: RuleTestsField as unknown as RjsfField<
+    Record<string, unknown>,
+    RJSFSchema,
+    RuleFormContext
+  >,
+  ExtensionsField: ExtensionsField as unknown as RjsfField<
+    Record<string, unknown>,
+    RJSFSchema,
+    RuleFormContext
   >
 };
 
@@ -281,15 +154,15 @@ const uiSchema: UiSchema<Record<string, unknown>, RJSFSchema, RuleFormContext> =
   normalization_algorithm_version: { 'ui:title': '规范化算法', 'ui:readonly': true },
   compiler_requirement: { 'ui:title': '编译器要求', 'ui:readonly': true },
   cel_profile_version: { 'ui:title': 'CEL Profile', 'ui:readonly': true },
-  parameter_schema: { 'ui:title': '参数 Schema', 'ui:field': 'OpaqueJsonField' },
+  parameter_schema: { 'ui:title': '参数 Schema', 'ui:field': 'ParameterSchemaField' },
   provider_namespaces: { 'ui:title': 'Provider namespaces' },
   primitives: {
     'ui:title': '规则原语',
     items: { config: { 'ui:title': '原语配置', 'ui:field': 'PrimitiveConfigField' } }
   },
   cel_expressions: { 'ui:title': 'CEL 表达式' },
-  tests: { 'ui:title': '规则测试', 'ui:field': 'OpaqueJsonField' },
-  extensions: { 'ui:title': '扩展', 'ui:field': 'OpaqueJsonField' },
+  tests: { 'ui:title': '规则测试', 'ui:field': 'RuleTestsField' },
+  extensions: { 'ui:title': '扩展', 'ui:field': 'ExtensionsField' },
   ui_metadata: { 'ui:title': '表单元数据', 'ui:field': 'OpaqueJsonField' },
   package_hash: { 'ui:widget': 'hidden' },
   semantic_hash: { 'ui:widget': 'hidden' }
@@ -297,41 +170,6 @@ const uiSchema: UiSchema<Record<string, unknown>, RJSFSchema, RuleFormContext> =
 
 const hasOwn = (value: Record<string, unknown>, key: string): boolean =>
   Object.prototype.hasOwnProperty.call(value, key);
-
-function patchRuleValue(
-  source: Record<string, unknown>,
-  path: readonly (string | number)[],
-  value: unknown
-): Record<string, unknown> {
-  const next = cloneRuleValue(source);
-  let parent: unknown = next;
-  for (const segment of path.slice(0, -1)) {
-    if (typeof segment === 'number' && Array.isArray(parent)) parent = parent[segment];
-    else if (typeof segment === 'string' && isRecord(parent)) parent = parent[segment];
-    else throw new TypeError('无法定位不透明规则字段');
-  }
-  const leaf = path.at(-1);
-  if (typeof leaf === 'number' && Array.isArray(parent)) {
-    if (value === undefined) parent.splice(leaf, 1);
-    else parent[leaf] = value;
-  } else if (typeof leaf === 'string' && isRecord(parent)) {
-    if (value === undefined) Reflect.deleteProperty(parent, leaf);
-    else parent[leaf] = value;
-  } else {
-    throw new TypeError('无法更新不透明规则字段');
-  }
-  return next;
-}
-
-function valueAtPath(source: Record<string, unknown>, path: readonly (string | number)[]): unknown {
-  let current: unknown = source;
-  for (const segment of path) {
-    if (typeof segment === 'number' && Array.isArray(current)) current = current[segment];
-    else if (typeof segment === 'string' && isRecord(current)) current = current[segment];
-    else return undefined;
-  }
-  return current;
-}
 
 function restoreOpaqueValues(
   changed: Record<string, unknown>,

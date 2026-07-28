@@ -209,6 +209,94 @@
   overflow-wrap: anywhere;
 }
 
+.manage-structured-field,
+.manage-structured-list,
+.manage-structured-card,
+.manage-structured-field__tree,
+.manage-structured-field__raw,
+.manage-json-node,
+.manage-json-node__children,
+.manage-json-entry {
+  display: grid;
+  min-width: 0;
+  gap: var(--space-3);
+}
+
+.manage-structured-field {
+  padding: var(--space-3);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-sm);
+  background: var(--color-bg);
+}
+
+.manage-structured-field__header,
+.manage-structured-field h3,
+.manage-structured-field h4 {
+  margin: 0;
+}
+
+.manage-structured-field__header {
+  display: grid;
+  gap: var(--space-1);
+}
+
+.manage-structured-field h3 {
+  font-size: var(--text-md);
+}
+
+.manage-structured-field h4,
+.manage-json-node__header strong {
+  font-size: var(--text-sm);
+}
+
+.manage-structured-card,
+.manage-json-node {
+  padding: var(--space-3);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-sm);
+  background: color-mix(in srgb, var(--color-surface) 72%, transparent);
+}
+
+.manage-json-node__header {
+  display: grid;
+  min-width: 0;
+  gap: var(--space-2);
+  grid-template-columns: minmax(0, 1fr) minmax(12rem, 0.8fr);
+  align-items: end;
+}
+
+.manage-json-node__children {
+  padding-inline-start: var(--space-3);
+  border-inline-start: 2px solid var(--color-border);
+}
+
+.manage-json-entry {
+  padding-block: var(--space-2);
+}
+
+.manage-json-entry + .manage-json-entry {
+  border-top: 1px solid var(--color-border);
+}
+
+.manage-inline-warning {
+  margin: 0;
+  padding: var(--space-2) var(--space-3);
+  border-inline-start: 3px solid var(--color-warning);
+  background: color-mix(in srgb, var(--color-warning) 9%, transparent);
+  color: var(--color-text-muted);
+  font-size: var(--text-sm);
+}
+
+@media (max-width: 42rem) {
+  .manage-json-node__header {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .manage-json-node__children {
+    padding-inline-start: var(--space-2);
+  }
+}
+
 /* RJSF 只负责从权威 Schema 生成语义结构；视觉仍使用 Gallery 的 token。选择器限制在
    manage-rule-schema-form 内，避免第三方类名影响其它管理页面。 */
 .manage-rule-schema-form,

@@ -48,6 +48,17 @@ describe('按钮', () => {
     await userEvent.click(screen.getByRole('button', { name: /提交/ }));
     expect(onPress).not.toHaveBeenCalled();
   });
+
+  it('透传 disclosure 控件的展开状态与关联面板', () => {
+    render(
+      <Button aria-expanded={false} aria-controls="json-tree">
+        展开完整 JSON 结构
+      </Button>
+    );
+    const button = screen.getByRole('button', { name: '展开完整 JSON 结构' });
+    expect(button).toHaveAttribute('aria-expanded', 'false');
+    expect(button).toHaveAttribute('aria-controls', 'json-tree');
+  });
 });
 
 describe('SkipLink', () => {

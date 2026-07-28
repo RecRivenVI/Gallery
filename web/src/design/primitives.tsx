@@ -99,6 +99,8 @@ export interface ButtonProps {
   autoFocus?: boolean;
   'aria-label'?: string;
   'aria-describedby'?: string;
+  'aria-expanded'?: boolean;
+  'aria-controls'?: string;
   className?: string;
 }
 
@@ -123,6 +125,8 @@ export function Button({
       autoFocus={autoFocus}
       aria-label={aria['aria-label']}
       aria-describedby={aria['aria-describedby']}
+      aria-expanded={aria['aria-expanded']}
+      aria-controls={aria['aria-controls']}
       className={classes('ui-button', `ui-button--${variant}`, isBlock && 'ui-button--block', className)}
     >
       {isPending ? <Spinner decorative /> : null}

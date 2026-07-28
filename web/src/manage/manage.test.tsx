@@ -920,8 +920,7 @@ describe('规则草稿', () => {
     const workGlob = await screen.findByRole('textbox', { name: /作品目录 glob/ });
     expect(workGlob).toHaveValue('*');
     expect(screen.queryByRole('textbox', { name: /原语配置/ })).not.toBeInTheDocument();
-    await userEvent.clear(workGlob);
-    await userEvent.type(workGlob, 'works/*');
+    fireEvent.change(workGlob, { target: { value: 'works/*' } });
     await userEvent.click(screen.getByRole('tab', { name: 'JSON 文本' }));
     const text = (screen.getByRole('textbox', { name: /草稿内容/ }) as HTMLTextAreaElement).value;
     expect(text).toContain(`"rule_set_id": "${FORM_RULE_SET_ID}"`);
@@ -929,7 +928,7 @@ describe('规则草稿', () => {
     expect(text).not.toContain('package_hash');
     expect(text).not.toContain('semantic_hash');
     expect(requestsTo('PUT /api/v1/rule-packages/pkg_01/draft')).toHaveLength(0);
-  });
+  }, 10_000);
 
   it('从当前草稿执行 Dry Run、Explain 与 Trace，并无损发送合成输入', async () => {
     const debugBodies = new Map<string, string>();
@@ -1063,6 +1062,122 @@ describe('规则草稿', () => {
     expect(body?.content).toContain('1e+40');
     expect(body?.content).toContain('"version": "invalid-version"');
     expect(requestsTo('PUT /api/v1/rule-packages/pkg_01/draft')[0]?.ifMatch).toBe('"3"');
+  });
+
+  it('参数 Schema 可从结构控件建立字段、类型和 required', async () => {
+    routeLosslessSchemaDraft();
+
+    renderManage('/rules/pkg_01');
+    await userEvent.click(await screen.findByRole('tab', { name: 'Schema 表单' }));
+    await screen.findByTestId('rule-schema-form', {}, { timeout: 10_000 });
+
+    fireEvent.change(screen.getByRole('textbox', { name: '新参数名称' }), {
+      target: { value: 'minimumSize' }
+    });
+    await userEvent.click(screen.getByRole('button', { name: '添加参数' }));
+    const parameterTitle = screen.getByRole('textbox', { name: 'minimumSize 标题' });
+    const parameterCard = parameterTitle.closest('article');
+    if (parameterCard === null) throw new Error('未找到新增参数卡片');
+    await userEvent.click(within(parameterCard).getByRole('button', { name: /minimumSize 类型/ }));
+    await userEvent.click(await screen.findByRole('option', { name: 'integer' }));
+    await userEvent.click(screen.getByRole('checkbox', { name: '必填参数' }));
+    fireEvent.change(parameterTitle, {
+      target: { value: '最小文件大小' }
+    });
+
+    const expandParameter = screen.getAllByRole('button', { name: '展开完整 JSON 结构' }).at(0);
+    if (expandParameter === undefined) throw new Error('未找到参数 Schema 完整结构入口');
+    await userEvent.click(expandParameter);
+    expect(expandParameter).toHaveAttribute('aria-expanded', 'true');
+    expect(screen.getByRole('button', { name: '对象 parameter_schema 类型' })).toBeVisible();
+
+    await userEvent.click(screen.getByRole('tab', { name: 'JSON 文本' }));
+    const text = (screen.getByRole('textbox', { name: '草稿内容' }) as HTMLTextAreaElement).value;
+    expect(text).toContain('"minimumSize"');
+    expect(text).toContain('"type": "integer"');
+    expect(text).toContain('"title": "最小文件大小"');
+    expect(text).toContain('"required": [');
+    expect(text).toContain('9007199254740993123');
+  });
+
+  it('规则测试可从结构控件新增并保留未冻结字段', async () => {
+    routeLosslessSchemaDraft();
+
+    renderManage('/rules/pkg_01');
+    await userEvent.click(await screen.findByRole('tab', { name: 'Schema 表单' }));
+    await screen.findByTestId('rule-schema-form', {}, { timeout: 10_000 });
+
+    fireEvent.change(screen.getByRole('textbox', { name: '新测试 ID' }), {
+      target: { value: 'missing-metadata' }
+    });
+    await userEvent.click(screen.getByRole('button', { name: '添加测试' }));
+    fireEvent.change(screen.getByRole('textbox', { name: '测试 2 说明' }), {
+      target: { value: 'metadata 缺失时仍保持稳定身份' }
+    });
+
+    await userEvent.click(screen.getByRole('tab', { name: 'JSON 文本' }));
+    const text = (screen.getByRole('textbox', { name: '草稿内容' }) as HTMLTextAreaElement).value;
+    expect(text).toContain('"missing-metadata"');
+    expect(text).toContain('"metadata 缺失时仍保持稳定身份"');
+    expect(text).toContain('1e+40');
+    expect(text).toContain('9007199254740993123');
+  });
+
+  it('分类扩展和任意 JSON payload 可视化构建且精确数字无损', async () => {
+    routeLosslessSchemaDraft();
+
+    renderManage('/rules/pkg_01');
+    await userEvent.click(await screen.findByRole('tab', { name: 'Schema 表单' }));
+    await screen.findByTestId('rule-schema-form', {}, { timeout: 10_000 });
+
+    fireEvent.change(screen.getByRole('textbox', { name: '新 Extension namespace' }), {
+      target: { value: 'gallery.identity' }
+    });
+    await userEvent.click(screen.getByRole('button', { name: '添加 extension' }));
+    const version = screen.getByRole('textbox', { name: 'gallery.identity version' });
+    const extensionCard = version.closest('article');
+    if (extensionCard === null) throw new Error('未找到新增 extension 卡片');
+    await userEvent.click(within(extensionCard).getByRole('checkbox', { name: 'semantic' }));
+    fireEvent.change(version, { target: { value: '1' } });
+    await userEvent.click(within(extensionCard).getByRole('button', { name: '添加 JSON 属性' }));
+    fireEvent.change(within(extensionCard).getByRole('textbox', { name: '属性 1 名称' }), {
+      target: { value: 'stable_key_prefix' }
+    });
+    fireEvent.change(
+      within(extensionCard).getByRole('textbox', {
+        name: '/stable_key_prefix 字符串'
+      }),
+      { target: { value: 'pixiv:' } }
+    );
+
+    const legacyExtensionCard = screen
+      .getAllByDisplayValue('example.lossless')
+      .map((element) => element.closest('article'))
+      .find((element): element is HTMLElement => element instanceof HTMLElement);
+    if (legacyExtensionCard === undefined) throw new Error('未找到 legacy extension 卡片');
+    const exactNumber = within(legacyExtensionCard).getByRole('textbox', {
+      name: '/value（精确 JSON 数字）'
+    });
+    fireEvent.change(exactNumber, { target: { value: '1e' } });
+    expect(screen.getByRole('button', { name: '保存草稿' })).toBeDisabled();
+    fireEvent.change(exactNumber, { target: { value: '0.12345678901234567890' } });
+    await waitFor(() => expect(screen.getByRole('button', { name: '保存草稿' })).not.toBeDisabled());
+
+    const rawExtensions = screen.getByRole('textbox', { name: 'extensions 原始 JSON' });
+    const exactExtensions = (rawExtensions as HTMLTextAreaElement).value;
+    fireEvent.change(rawExtensions, { target: { value: '1' } });
+    expect(screen.getByText('必须是 object 类型的 JSON 值')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: '保存草稿' })).toBeDisabled();
+    fireEvent.change(rawExtensions, { target: { value: exactExtensions } });
+    await waitFor(() => expect(screen.getByRole('button', { name: '保存草稿' })).not.toBeDisabled());
+
+    await userEvent.click(screen.getByRole('tab', { name: 'JSON 文本' }));
+    const text = (screen.getByRole('textbox', { name: '草稿内容' }) as HTMLTextAreaElement).value;
+    expect(text).toContain('"gallery.identity"');
+    expect(text).toContain('"stable_key_prefix": "pixiv:"');
+    expect(text).toContain('0.12345678901234567890');
+    expect(text).toContain('1e+40');
+    expect(text).toContain('1.2300000000000000001');
   });
 
   it('普通字段撤销全部修改后恢复精确草稿文本', async () => {

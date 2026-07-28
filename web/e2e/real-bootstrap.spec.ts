@@ -177,7 +177,66 @@ test('真实 galleryd 从空实例完成规则 UI 生命周期、绑定与 publi
   await page.getByRole('option', { name: '作者—作品—媒体层级' }).click();
   await page.getByRole('button', { name: '载入起始模板' }).click();
   await page.getByRole('textbox', { name: /规则版本/ }).fill('1.0.1');
-  await page.getByRole('button', { name: '执行 Dry Run' }).click();
+
+  await page.getByRole('textbox', { name: '新参数名称' }).fill('minimumSize');
+  await page.getByRole('button', { name: '添加参数' }).click();
+  await page.getByRole('button', { name: /minimumSize 类型/ }).click();
+  await page.getByRole('option', { name: 'integer' }).click();
+  await page.getByRole('textbox', { name: 'minimumSize 标题' }).fill('最小文件大小');
+  const requiredParameter = page.getByRole('checkbox', { name: '必填参数' });
+  await requiredParameter.press('Space');
+  await expect(requiredParameter).toBeChecked();
+
+  await page.getByRole('textbox', { name: '新测试 ID' }).fill('missing-metadata');
+  await page.getByRole('button', { name: '添加测试' }).click();
+  await page.getByRole('textbox', { name: '测试 2 说明' }).fill('metadata 缺失时仍保持稳定身份');
+
+  const newExtension = page.getByRole('textbox', { name: '新 Extension namespace' });
+  await newExtension.fill('gallery.identity');
+  await page.getByRole('button', { name: '添加 extension' }).click();
+  const identityExtension = page
+    .getByRole('textbox', { name: 'Extension namespace' })
+    .locator('xpath=ancestor::article[1]');
+  await expect(identityExtension).toBeVisible();
+  await expect(identityExtension.getByRole('textbox', { name: 'Extension namespace' })).toHaveValue(
+    'gallery.identity'
+  );
+  const semanticExtension = identityExtension.getByRole('checkbox', { name: 'semantic' });
+  await semanticExtension.press('Space');
+  await expect(semanticExtension).toBeChecked();
+  await identityExtension.getByRole('textbox', { name: 'gallery.identity version' }).fill('1');
+  await identityExtension.getByRole('button', { name: '添加 JSON 属性' }).click();
+  await identityExtension.getByRole('textbox', { name: '属性 1 名称' }).fill('stable_key_prefix');
+  await identityExtension.getByRole('textbox', { name: '/stable_key_prefix 字符串' }).fill('pixiv:');
+
+  await newExtension.fill('example.lossless');
+  await page.getByRole('button', { name: '添加 extension' }).click();
+  const losslessExtension = page
+    .getByRole('textbox', { name: 'Extension namespace' })
+    .nth(1)
+    .locator('xpath=ancestor::article[1]');
+  await expect(losslessExtension).toBeVisible();
+  await expect(losslessExtension.getByRole('textbox', { name: 'Extension namespace' })).toHaveValue(
+    'example.lossless'
+  );
+  await losslessExtension.getByRole('button', { name: '添加 JSON 属性' }).click();
+  await losslessExtension.getByRole('textbox', { name: '属性 1 名称' }).fill('value');
+  await losslessExtension.getByRole('button', { name: '字符串 /value 类型' }).click();
+  await page.getByRole('option', { name: '数字' }).click();
+  const exactNumber = losslessExtension.getByRole('textbox', {
+    name: '/value（精确 JSON 数字）'
+  });
+  await exactNumber.fill('1e');
+  await expect(page.getByRole('button', { name: '保存草稿' })).toBeDisabled();
+  await exactNumber.fill('0.12345678901234567890');
+  await expect(page.getByRole('button', { name: '保存草稿' })).toBeEnabled();
+
+  await page.getByRole('textbox', { name: '调试参数 JSON' }).fill('{"minimumSize":0}');
+  const [structuredDryRunResponse] = await Promise.all([
+    page.waitForResponse((response) => pathIs(response, '/api/v1/rules/dry-run', 'POST')),
+    page.getByRole('button', { name: '执行 Dry Run' }).click()
+  ]);
+  expect(structuredDryRunResponse.status()).toBe(200);
   await expect(page.getByLabel('Dry Run 作品结果')).toBeVisible();
   await page.getByRole('button', { name: '查看 Explain' }).click();
   await expect(page.getByLabel('Explain 字段来源')).toBeVisible();
@@ -192,6 +251,12 @@ test('真实 galleryd 从空实例完成规则 UI 生命周期、绑定与 publi
   const templatedText = await textEditor.inputValue();
   expect(templatedText).toContain(ruleSetId);
   expect(templatedText).toContain('"glob": "visual-proof/*"');
+  expect(templatedText).toContain('"minimumSize"');
+  expect(templatedText).toContain('"type": "integer"');
+  expect(templatedText).toContain('"missing-metadata"');
+  expect(templatedText).toContain('"gallery.identity"');
+  expect(templatedText).toContain('"stable_key_prefix": "pixiv:"');
+  expect(templatedText).toContain('0.12345678901234567890');
   expect(templatedText).not.toContain('package_hash');
   expect(templatedText).not.toContain('semantic_hash');
 
