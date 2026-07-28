@@ -62,25 +62,35 @@ func TestSeedGovernanceFixturesUsesApplicationStateMachines(t *testing.T) {
 		t.Fatal(err)
 	}
 	for name, value := range map[string]string{
-		"issue source":      fixtures.IssueSourceID,
-		"issue":             fixtures.IssueID,
-		"structure source":  fixtures.StructureSourceID,
-		"structure issue":   fixtures.StructureIssueID,
-		"merge source":      fixtures.MergeSourceID,
-		"merge issue":       fixtures.MergeIssueID,
-		"merge target":      fixtures.MergeTargetWorkID,
-		"consumed decision": fixtures.ConsumedDecisionID,
-		"orphan source":     fixtures.OrphanSourceID,
-		"orphan binding":    fixtures.OrphanBindingID,
-		"orphan unbind":     fixtures.OrphanUnbindBindingID,
-		"orphan creator":    fixtures.OrphanCreatorBindingID,
-		"orphan media":      fixtures.OrphanMediaBindingID,
-		"media source":      fixtures.MediaSourceID,
-		"media source key":  fixtures.MediaSourceKey,
+		"issue source":         fixtures.IssueSourceID,
+		"issue":                fixtures.IssueID,
+		"bind issue":           fixtures.IssueBindID,
+		"bind target":          fixtures.IssueBindTargetID,
+		"separate issue":       fixtures.IssueSeparateID,
+		"lifecycle source":     fixtures.LifecycleSourceID,
+		"lifecycle superseded": fixtures.LifecycleSupersededID,
+		"lifecycle stale":      fixtures.LifecycleStaleID,
+		"pagination source":    fixtures.PaginationSourceID,
+		"structure source":     fixtures.StructureSourceID,
+		"structure issue":      fixtures.StructureIssueID,
+		"merge source":         fixtures.MergeSourceID,
+		"merge issue":          fixtures.MergeIssueID,
+		"merge target":         fixtures.MergeTargetWorkID,
+		"consumed decision":    fixtures.ConsumedDecisionID,
+		"orphan source":        fixtures.OrphanSourceID,
+		"orphan binding":       fixtures.OrphanBindingID,
+		"orphan unbind":        fixtures.OrphanUnbindBindingID,
+		"orphan creator":       fixtures.OrphanCreatorBindingID,
+		"orphan media":         fixtures.OrphanMediaBindingID,
+		"media source":         fixtures.MediaSourceID,
+		"media source key":     fixtures.MediaSourceKey,
 	} {
 		if value == "" {
 			t.Fatalf("%s 未建立", name)
 		}
+	}
+	if fixtures.PaginationIssueCount != 51 {
+		t.Fatalf("分页问题数量=%d，期望 51", fixtures.PaginationIssueCount)
 	}
 	statePath := filepath.Join(testRoot, "governance-state.json")
 	if err := writeGovernanceFixtureState(statePath, fixtures); err != nil {

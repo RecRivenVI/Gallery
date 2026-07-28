@@ -12,6 +12,21 @@ interface GovernanceFixtureState {
   issueSourceName: string;
   issueId: string;
   issueSourceKey: string;
+  issueBindId: string;
+  issueBindSourceKey: string;
+  issueBindTargetId: string;
+  issueSeparateId: string;
+  issueSeparateSourceKey: string;
+  lifecycleSourceId: string;
+  lifecycleSourceName: string;
+  lifecycleSourceKey: string;
+  lifecycleSupersededId: string;
+  lifecycleSupersededVersion: number;
+  lifecycleStaleId: string;
+  lifecycleStaleVersion: number;
+  paginationSourceId: string;
+  paginationSourceName: string;
+  paginationIssueCount: number;
   structureSourceId: string;
   structureSourceName: string;
   structureIssueId: string;
@@ -92,7 +107,7 @@ async function selectOption(page: Page, scope: Page | Locator, label: RegExp, op
   await page.getByRole('option', { name: option, exact: true }).click();
 }
 
-test('绑定问题、结构决策、孤儿与媒体解绑真实治理链 @real-governance', async ({ page }) => {
+test('绑定问题、生命周期、分页、结构决策、孤儿与媒体解绑真实治理链 @real-governance', async ({ page }) => {
   const state = JSON.parse(await readFile(statePath ?? '', 'utf8')) as GovernanceFixtureState;
   await pair(page);
   await expect(page.getByText('实时通道：已连接', { exact: true })).toBeVisible();
@@ -103,6 +118,39 @@ test('绑定问题、结构决策、孤儿与媒体解绑真实治理链 @real-g
     sourceId: state.issueSourceId,
     sourceKey: state.issueSourceKey,
     status: 'open'
+  });
+  const bindIssue = await readJSON<BindingIssueSnapshot>(page, `/api/v1/binding-issues/${state.issueBindId}`);
+  expect(bindIssue).toMatchObject({
+    id: state.issueBindId,
+    sourceKey: state.issueBindSourceKey,
+    status: 'open'
+  });
+  const separateIssue = await readJSON<BindingIssueSnapshot>(
+    page,
+    `/api/v1/binding-issues/${state.issueSeparateId}`
+  );
+  expect(separateIssue).toMatchObject({
+    id: state.issueSeparateId,
+    sourceKey: state.issueSeparateSourceKey,
+    status: 'open'
+  });
+  const lifecycleSuperseded = await readJSON<BindingIssueSnapshot>(
+    page,
+    `/api/v1/binding-issues/${state.lifecycleSupersededId}`
+  );
+  expect(lifecycleSuperseded).toMatchObject({
+    sourceKey: state.lifecycleSourceKey,
+    status: 'superseded',
+    version: state.lifecycleSupersededVersion
+  });
+  const lifecycleStale = await readJSON<BindingIssueSnapshot>(
+    page,
+    `/api/v1/binding-issues/${state.lifecycleStaleId}`
+  );
+  expect(lifecycleStale).toMatchObject({
+    sourceKey: state.lifecycleSourceKey,
+    status: 'stale',
+    version: state.lifecycleStaleVersion
   });
 
   await page.goto('/manage/governance');
@@ -166,6 +214,155 @@ test('绑定问题、结构决策、孤儿与媒体解绑真实治理链 @real-g
   issueRow = issuesTable.getByRole('row').filter({ hasText: state.issueSourceKey });
   await expect(issueRow).toHaveCount(1);
   await expect(issueRow.getByRole('button', { name: '重新打开', exact: true })).toHaveCount(0);
+
+  await selectOption(page, page, /状态/, '待处理');
+  const bindIssueRow = issuesTable.getByRole('row').filter({ hasText: state.issueBindSourceKey });
+  await expect(bindIssueRow).toHaveCount(1);
+  await bindIssueRow.getByRole('button', { name: '修复', exact: true }).click();
+  const bindDialog = page.getByRole('dialog', { name: '修复绑定问题', exact: true });
+  await bindDialog
+    .getByRole('textbox', { name: '目标 Canonical ID', exact: true })
+    .fill(state.issueBindTargetId);
+  const bindPromise = page.waitForResponse((response) =>
+    pathIs(response, `/api/v1/binding-issues/${state.issueBindId}/resolve`, 'POST')
+  );
+  await bindDialog.getByRole('button', { name: '提交修复', exact: true }).click();
+  const bindResponse = await bindPromise;
+  expect(bindResponse.status()).toBe(200);
+  expect(bindResponse.request().postDataJSON()).toEqual({
+    decision: 'bind_existing',
+    targetId: state.issueBindTargetId,
+    version: bindIssue.version
+  });
+  expect((await bindResponse.json()) as BindingIssueSnapshot).toMatchObject({
+    id: state.issueBindId,
+    status: 'resolved',
+    version: bindIssue.version + 1
+  });
+
+  const separateIssueRow = issuesTable.getByRole('row').filter({ hasText: state.issueSeparateSourceKey });
+  await expect(separateIssueRow).toHaveCount(1);
+  await separateIssueRow.getByRole('button', { name: '修复', exact: true }).click();
+  const separateDialog = page.getByRole('dialog', { name: '修复绑定问题', exact: true });
+  await selectOption(page, separateDialog, /决定/, '保持独立，不绑定');
+  const separatePromise = page.waitForResponse((response) =>
+    pathIs(response, `/api/v1/binding-issues/${state.issueSeparateId}/resolve`, 'POST')
+  );
+  await separateDialog.getByRole('button', { name: '提交修复', exact: true }).click();
+  const separateResponse = await separatePromise;
+  expect(separateResponse.status()).toBe(200);
+  expect(separateResponse.request().postDataJSON()).toEqual({
+    decision: 'keep_separate',
+    version: separateIssue.version
+  });
+  expect((await separateResponse.json()) as BindingIssueSnapshot).toMatchObject({
+    id: state.issueSeparateId,
+    status: 'resolved',
+    version: separateIssue.version + 1
+  });
+
+  await selectOption(page, page, /来源/, `${state.lifecycleSourceName} · ${state.lifecycleSourceId}`);
+  await selectOption(page, page, /状态/, '已过期');
+  const staleRow = issuesTable.getByRole('row').filter({ hasText: state.lifecycleSourceKey });
+  await expect(staleRow).toHaveCount(1);
+
+  const concurrentPage = await page.context().newPage();
+  await concurrentPage.goto('/manage/governance');
+  await expect(concurrentPage.getByRole('heading', { name: '治理', exact: true })).toBeVisible();
+  await selectOption(
+    concurrentPage,
+    concurrentPage,
+    /来源/,
+    `${state.lifecycleSourceName} · ${state.lifecycleSourceId}`
+  );
+  await selectOption(concurrentPage, concurrentPage, /状态/, '已被取代');
+  const concurrentIssuesTable = concurrentPage.getByRole('table', { name: '绑定问题', exact: true });
+  const supersededRow = concurrentIssuesTable.getByRole('row').filter({ hasText: state.lifecycleSourceKey });
+  await expect(supersededRow).toHaveCount(1);
+  await concurrentPage.route('**/api/v1/binding-issues?**', async (route) => {
+    if (route.request().method() === 'GET') {
+      await route.abort();
+      return;
+    }
+    await route.continue();
+  });
+
+  const reopenStalePromise = page.waitForResponse((response) =>
+    pathIs(response, `/api/v1/binding-issues/${state.lifecycleStaleId}/reopen`, 'POST')
+  );
+  await staleRow.getByRole('button', { name: '重新打开', exact: true }).click();
+  const reopenStaleResponse = await reopenStalePromise;
+  expect(reopenStaleResponse.status()).toBe(200);
+  expect(reopenStaleResponse.request().postDataJSON()).toEqual({ version: state.lifecycleStaleVersion });
+  const reopenedStale = (await reopenStaleResponse.json()) as BindingIssueSnapshot;
+  expect(reopenedStale).toMatchObject({
+    id: state.lifecycleStaleId,
+    status: 'open',
+    version: state.lifecycleStaleVersion + 1
+  });
+
+  const conflictPromise = concurrentPage.waitForResponse((response) =>
+    pathIs(response, `/api/v1/binding-issues/${state.lifecycleSupersededId}/reopen`, 'POST')
+  );
+  await supersededRow.getByRole('button', { name: '重新打开', exact: true }).click();
+  const conflictResponse = await conflictPromise;
+  expect(conflictResponse.status()).toBe(409);
+  expect(conflictResponse.request().postDataJSON()).toEqual({
+    version: state.lifecycleSupersededVersion
+  });
+  await expect(concurrentPage.getByText('重新打开未能完成', { exact: true })).toBeVisible();
+  await expect(
+    concurrentPage.getByText('资源已被其他操作改变，请刷新后基于最新状态重试。', { exact: true })
+  ).toBeVisible();
+  await concurrentPage.close();
+
+  await selectOption(page, page, /状态/, '待处理');
+  const reopenedStaleRow = issuesTable.getByRole('row').filter({ hasText: state.lifecycleSourceKey });
+  await expect(reopenedStaleRow).toHaveCount(1);
+  await reopenedStaleRow.getByRole('button', { name: '修复', exact: true }).click();
+  const lifecycleResolveDialog = page.getByRole('dialog', { name: '修复绑定问题', exact: true });
+  await selectOption(page, lifecycleResolveDialog, /决定/, '保持独立，不绑定');
+  const lifecycleResolvePromise = page.waitForResponse((response) =>
+    pathIs(response, `/api/v1/binding-issues/${state.lifecycleStaleId}/resolve`, 'POST')
+  );
+  await lifecycleResolveDialog.getByRole('button', { name: '提交修复', exact: true }).click();
+  expect((await lifecycleResolvePromise).status()).toBe(200);
+
+  await selectOption(page, page, /状态/, '已被取代');
+  const historicalRow = issuesTable.getByRole('row').filter({ hasText: state.lifecycleSourceKey });
+  await expect(historicalRow).toHaveCount(1);
+  const reopenHistoricalPromise = page.waitForResponse((response) =>
+    pathIs(response, `/api/v1/binding-issues/${state.lifecycleSupersededId}/reopen`, 'POST')
+  );
+  await historicalRow.getByRole('button', { name: '重新打开', exact: true }).click();
+  const reopenHistoricalResponse = await reopenHistoricalPromise;
+  expect(reopenHistoricalResponse.status()).toBe(200);
+  expect(reopenHistoricalResponse.request().postDataJSON()).toEqual({
+    version: state.lifecycleSupersededVersion
+  });
+
+  await selectOption(page, page, /来源/, `${state.paginationSourceName} · ${state.paginationSourceId}`);
+  await selectOption(page, page, /状态/, '待处理');
+  await expect(page.getByText(/已载入 50 条（还有更多未载入）/)).toBeVisible();
+  await expect(page.getByText(/逐条处理需要 50 次独立请求/)).toBeVisible();
+  const nextPagePromise = page.waitForResponse((response) => {
+    if (!pathIs(response, '/api/v1/binding-issues')) return false;
+    const url = new URL(response.url());
+    return url.searchParams.get('sourceId') === state.paginationSourceId && url.searchParams.has('cursor');
+  });
+  await page.getByRole('button', { name: '载入下一页', exact: true }).click();
+  const nextPageResponse = await nextPagePromise;
+  expect(nextPageResponse.status()).toBe(200);
+  expect(new URL(nextPageResponse.url()).searchParams.get('limit')).toBe('50');
+  const nextPageBody = (await nextPageResponse.json()) as {
+    issues: BindingIssueSnapshot[];
+    nextCursor?: string;
+  };
+  expect(nextPageBody.issues).toHaveLength(state.paginationIssueCount - 50);
+  expect(nextPageBody.nextCursor).toBeUndefined();
+  await expect(page.getByText(`已载入 ${state.paginationIssueCount} 条`, { exact: false })).toBeVisible();
+  await expect(page.getByText(/逐条处理需要 51 次独立请求/)).toBeVisible();
+  await expect(page.getByRole('button', { name: '载入下一页', exact: true })).toHaveCount(0);
 
   await selectOption(page, page, /来源/, `${state.structureSourceName} · ${state.structureSourceId}`);
   await selectOption(page, page, /状态/, '待处理');

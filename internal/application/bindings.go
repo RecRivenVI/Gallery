@@ -396,7 +396,7 @@ func (r *Resources) ResolveBindingIssue(ctx context.Context, issueID, resolvedBy
 		return BindingIssue{}, fault.New(fault.CodeInternal, true, err)
 	}
 	defer tx.Rollback()
-	sourceID, entityType, sourceKey, status, currentVersion, err := lockIssue(ctx, tx, issueID)
+	sourceID, entityType, sourceKey, _, status, currentVersion, err := lockIssue(ctx, tx, issueID)
 	if err != nil {
 		return BindingIssue{}, err
 	}
@@ -446,17 +446,26 @@ resolved_target_id=?, resolved_by=?, version=version+1, updated_at=?, resolved_a
 // 的记录）。
 func (r *Resources) DismissBindingIssue(ctx context.Context, issueID, resolvedBy string, version int) (BindingIssue, error) {
 	return r.transitionIssue(ctx, issueID, resolvedBy, version, []string{"open"}, `UPDATE binding_issues
-SET status='dismissed', resolution='dismissed', resolved_by=?, version=version+1, updated_at=? WHERE issue_id=? AND version=?`)
+SET status='dismissed', resolution='dismissed', resolved_by=?, version=version+1, updated_at=? WHERE issue_id=? AND version=?`, false)
 }
 
-// ReopenBindingIssue 重新打开一个被忽略、过时或被替代的 issue，清除解决信息。
+// ReopenBindingIssue 重新打开一个被忽略、过时或被替代的 issue，清除解决信息。同一
+// (source_id, entity_type, source_key, code) 已有 open/dismissed 记录时拒绝重开，避免历史
+// issue 绕过 recordBindingIssue 的 active uniqueness 基线。
 func (r *Resources) ReopenBindingIssue(ctx context.Context, issueID, resolvedBy string, version int) (BindingIssue, error) {
 	return r.transitionIssue(ctx, issueID, resolvedBy, version, []string{"dismissed", "stale", "superseded"}, `UPDATE binding_issues
 SET status='open', resolution=NULL, resolved_target_id=NULL, resolved_by=?, resolved_at=NULL,
-version=version+1, updated_at=? WHERE issue_id=? AND version=?`)
+version=version+1, updated_at=? WHERE issue_id=? AND version=?`, true)
 }
 
-func (r *Resources) transitionIssue(ctx context.Context, issueID, resolvedBy string, version int, allowed []string, update string) (BindingIssue, error) {
+func (r *Resources) transitionIssue(
+	ctx context.Context,
+	issueID, resolvedBy string,
+	version int,
+	allowed []string,
+	update string,
+	requireActiveUnique bool,
+) (BindingIssue, error) {
 	if strings.TrimSpace(resolvedBy) == "" {
 		return BindingIssue{}, fault.New(fault.CodeValidation, false, nil)
 	}
@@ -468,7 +477,7 @@ func (r *Resources) transitionIssue(ctx context.Context, issueID, resolvedBy str
 		return BindingIssue{}, fault.New(fault.CodeInternal, true, err)
 	}
 	defer tx.Rollback()
-	_, _, _, status, currentVersion, err := lockIssue(ctx, tx, issueID)
+	sourceID, entityType, sourceKey, code, status, currentVersion, err := lockIssue(ctx, tx, issueID)
 	if err != nil {
 		return BindingIssue{}, err
 	}
@@ -477,6 +486,17 @@ func (r *Resources) transitionIssue(ctx context.Context, issueID, resolvedBy str
 	}
 	if !containsString(allowed, status) {
 		return BindingIssue{}, fault.New(fault.CodeConflict, false, nil)
+	}
+	if requireActiveUnique {
+		var active int
+		if err := tx.QueryRowContext(ctx, `SELECT count(*) FROM binding_issues
+WHERE issue_id<>? AND source_id=? AND entity_type=? AND source_key=? AND code=?
+AND status IN ('open', 'dismissed')`, issueID, sourceID, entityType, sourceKey, code).Scan(&active); err != nil {
+			return BindingIssue{}, fault.New(fault.CodeInternal, true, err)
+		}
+		if active != 0 {
+			return BindingIssue{}, fault.New(fault.CodeConflict, false, nil)
+		}
 	}
 	now := r.clock.Now().UTC().Unix()
 	if _, err := tx.ExecContext(ctx, update, resolvedBy, now, issueID, version); err != nil {
@@ -764,16 +784,21 @@ func mediaWorkID(ctx context.Context, tx *sql.Tx, mediaID string) (string, error
 	return workID, nil
 }
 
-func lockIssue(ctx context.Context, tx *sql.Tx, issueID string) (sourceID, entityType, sourceKey, status string, version int, err error) {
-	scanErr := tx.QueryRowContext(ctx, `SELECT source_id, entity_type, source_key, status, version
-FROM binding_issues WHERE issue_id=?`, issueID).Scan(&sourceID, &entityType, &sourceKey, &status, &version)
+func lockIssue(ctx context.Context, tx *sql.Tx, issueID string) (
+	sourceID, entityType, sourceKey, code, status string,
+	version int,
+	err error,
+) {
+	scanErr := tx.QueryRowContext(ctx, `SELECT source_id, entity_type, source_key, code, status, version
+FROM binding_issues WHERE issue_id=?`, issueID).
+		Scan(&sourceID, &entityType, &sourceKey, &code, &status, &version)
 	if errors.Is(scanErr, sql.ErrNoRows) {
-		return "", "", "", "", 0, fault.New(fault.CodeNotFound, false, nil)
+		return "", "", "", "", "", 0, fault.New(fault.CodeNotFound, false, nil)
 	}
 	if scanErr != nil {
-		return "", "", "", "", 0, fault.New(fault.CodeInternal, true, scanErr)
+		return "", "", "", "", "", 0, fault.New(fault.CodeInternal, true, scanErr)
 	}
-	return sourceID, entityType, sourceKey, status, version, nil
+	return sourceID, entityType, sourceKey, code, status, version, nil
 }
 
 func candidateIDs(ctx context.Context, tx *sql.Tx, issueID string) ([]string, error) {

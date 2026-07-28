@@ -118,6 +118,8 @@ func run() (exitCode int) {
 		appRoot, lanAppRoot, sourceRoot, runningCancelSourceRoot, processInterruptSourceRoot,
 		governanceSourceRoot,
 		filepath.Join(governanceSourceRoot, "binding-issue"),
+		filepath.Join(governanceSourceRoot, "binding-lifecycle"),
+		filepath.Join(governanceSourceRoot, "binding-pagination"),
 		filepath.Join(governanceSourceRoot, "structure"),
 		filepath.Join(governanceSourceRoot, "structure-merge"),
 		filepath.Join(governanceSourceRoot, "structure-consumed"),

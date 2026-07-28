@@ -18,43 +18,60 @@ import (
 )
 
 const (
-	governanceIssueSourceName     = "治理 E2E · 绑定问题"
-	governanceStructureSourceName = "治理 E2E · 结构决策"
-	governanceMergeSourceName     = "治理 E2E · 合并决策"
-	governanceConsumedSourceName  = "治理 E2E · 已消费决策"
-	governanceOrphanSourceName    = "治理 E2E · 孤儿候选"
-	governanceMediaSourceName     = "治理 E2E · 媒体解绑"
+	governanceIssueSourceName      = "治理 E2E · 绑定问题"
+	governanceLifecycleSourceName  = "治理 E2E · 问题生命周期"
+	governancePaginationSourceName = "治理 E2E · 问题分页"
+	governanceStructureSourceName  = "治理 E2E · 结构决策"
+	governanceMergeSourceName      = "治理 E2E · 合并决策"
+	governanceConsumedSourceName   = "治理 E2E · 已消费决策"
+	governanceOrphanSourceName     = "治理 E2E · 孤儿候选"
+	governanceMediaSourceName      = "治理 E2E · 媒体解绑"
 )
 
 type governanceFixtureState struct {
-	IssueSourceID            string `json:"issueSourceId"`
-	IssueSourceName          string `json:"issueSourceName"`
-	IssueID                  string `json:"issueId"`
-	IssueSourceKey           string `json:"issueSourceKey"`
-	StructureSourceID        string `json:"structureSourceId"`
-	StructureSourceName      string `json:"structureSourceName"`
-	StructureIssueID         string `json:"structureIssueId"`
-	StructureTargetSourceKey string `json:"structureTargetSourceKey"`
-	MergeSourceID            string `json:"mergeSourceId"`
-	MergeSourceName          string `json:"mergeSourceName"`
-	MergeIssueID             string `json:"mergeIssueId"`
-	MergeTargetWorkID        string `json:"mergeTargetWorkId"`
-	ConsumedDecisionID       string `json:"consumedDecisionId"`
-	ConsumedDecisionIssueID  string `json:"consumedDecisionIssueId"`
-	ConsumedDecisionVersion  int    `json:"consumedDecisionVersion"`
-	OrphanSourceID           string `json:"orphanSourceId"`
-	OrphanSourceName         string `json:"orphanSourceName"`
-	OrphanBindingID          string `json:"orphanBindingId"`
-	OrphanSourceKey          string `json:"orphanSourceKey"`
-	OrphanUnbindBindingID    string `json:"orphanUnbindBindingId"`
-	OrphanUnbindSourceKey    string `json:"orphanUnbindSourceKey"`
-	OrphanCreatorBindingID   string `json:"orphanCreatorBindingId"`
-	OrphanCreatorSourceKey   string `json:"orphanCreatorSourceKey"`
-	OrphanMediaBindingID     string `json:"orphanMediaBindingId"`
-	OrphanMediaSourceKey     string `json:"orphanMediaSourceKey"`
-	MediaSourceID            string `json:"mediaSourceId"`
-	MediaSourceName          string `json:"mediaSourceName"`
-	MediaSourceKey           string `json:"mediaSourceKey"`
+	IssueSourceID              string `json:"issueSourceId"`
+	IssueSourceName            string `json:"issueSourceName"`
+	IssueID                    string `json:"issueId"`
+	IssueSourceKey             string `json:"issueSourceKey"`
+	IssueBindID                string `json:"issueBindId"`
+	IssueBindSourceKey         string `json:"issueBindSourceKey"`
+	IssueBindTargetID          string `json:"issueBindTargetId"`
+	IssueSeparateID            string `json:"issueSeparateId"`
+	IssueSeparateSourceKey     string `json:"issueSeparateSourceKey"`
+	LifecycleSourceID          string `json:"lifecycleSourceId"`
+	LifecycleSourceName        string `json:"lifecycleSourceName"`
+	LifecycleSourceKey         string `json:"lifecycleSourceKey"`
+	LifecycleSupersededID      string `json:"lifecycleSupersededId"`
+	LifecycleSupersededVersion int    `json:"lifecycleSupersededVersion"`
+	LifecycleStaleID           string `json:"lifecycleStaleId"`
+	LifecycleStaleVersion      int    `json:"lifecycleStaleVersion"`
+	PaginationSourceID         string `json:"paginationSourceId"`
+	PaginationSourceName       string `json:"paginationSourceName"`
+	PaginationIssueCount       int    `json:"paginationIssueCount"`
+	StructureSourceID          string `json:"structureSourceId"`
+	StructureSourceName        string `json:"structureSourceName"`
+	StructureIssueID           string `json:"structureIssueId"`
+	StructureTargetSourceKey   string `json:"structureTargetSourceKey"`
+	MergeSourceID              string `json:"mergeSourceId"`
+	MergeSourceName            string `json:"mergeSourceName"`
+	MergeIssueID               string `json:"mergeIssueId"`
+	MergeTargetWorkID          string `json:"mergeTargetWorkId"`
+	ConsumedDecisionID         string `json:"consumedDecisionId"`
+	ConsumedDecisionIssueID    string `json:"consumedDecisionIssueId"`
+	ConsumedDecisionVersion    int    `json:"consumedDecisionVersion"`
+	OrphanSourceID             string `json:"orphanSourceId"`
+	OrphanSourceName           string `json:"orphanSourceName"`
+	OrphanBindingID            string `json:"orphanBindingId"`
+	OrphanSourceKey            string `json:"orphanSourceKey"`
+	OrphanUnbindBindingID      string `json:"orphanUnbindBindingId"`
+	OrphanUnbindSourceKey      string `json:"orphanUnbindSourceKey"`
+	OrphanCreatorBindingID     string `json:"orphanCreatorBindingId"`
+	OrphanCreatorSourceKey     string `json:"orphanCreatorSourceKey"`
+	OrphanMediaBindingID       string `json:"orphanMediaBindingId"`
+	OrphanMediaSourceKey       string `json:"orphanMediaSourceKey"`
+	MediaSourceID              string `json:"mediaSourceId"`
+	MediaSourceName            string `json:"mediaSourceName"`
+	MediaSourceKey             string `json:"mediaSourceKey"`
 }
 
 // seedGovernanceFixtures 只通过正式 application.Resources 建立治理事实。调用方必须先停止
@@ -66,12 +83,14 @@ func seedGovernanceFixtures(ctx context.Context, appRoot, sourceRoot string) (fi
 		return governanceFixtureState{}, err
 	}
 	sourceRoots := map[string]string{
-		"issue":     filepath.Join(sourceRoot, "binding-issue"),
-		"structure": filepath.Join(sourceRoot, "structure"),
-		"merge":     filepath.Join(sourceRoot, "structure-merge"),
-		"consumed":  filepath.Join(sourceRoot, "structure-consumed"),
-		"orphan":    filepath.Join(sourceRoot, "orphan"),
-		"media":     filepath.Join(sourceRoot, "media"),
+		"issue":      filepath.Join(sourceRoot, "binding-issue"),
+		"lifecycle":  filepath.Join(sourceRoot, "binding-lifecycle"),
+		"pagination": filepath.Join(sourceRoot, "binding-pagination"),
+		"structure":  filepath.Join(sourceRoot, "structure"),
+		"merge":      filepath.Join(sourceRoot, "structure-merge"),
+		"consumed":   filepath.Join(sourceRoot, "structure-consumed"),
+		"orphan":     filepath.Join(sourceRoot, "orphan"),
+		"media":      filepath.Join(sourceRoot, "media"),
 	}
 	for _, root := range sourceRoots {
 		if err := os.MkdirAll(root, 0o700); err != nil {
@@ -100,6 +119,14 @@ func seedGovernanceFixtures(ctx context.Context, appRoot, sourceRoot string) (fi
 	if err != nil {
 		return governanceFixtureState{}, err
 	}
+	lifecycleSource, err := resources.CreateSource(ctx, library.ID, governanceLifecycleSourceName, sourceRoots["lifecycle"])
+	if err != nil {
+		return governanceFixtureState{}, err
+	}
+	paginationSource, err := resources.CreateSource(ctx, library.ID, governancePaginationSourceName, sourceRoots["pagination"])
+	if err != nil {
+		return governanceFixtureState{}, err
+	}
 	structureSource, err := resources.CreateSource(ctx, library.ID, governanceStructureSourceName, sourceRoots["structure"])
 	if err != nil {
 		return governanceFixtureState{}, err
@@ -121,6 +148,14 @@ func seedGovernanceFixtures(ctx context.Context, appRoot, sourceRoot string) (fi
 		return governanceFixtureState{}, err
 	}
 
+	bindCandidates, err := prepareWorkConflictCandidates(ctx, resources, issueSource.ID, "bind", "bind-external")
+	if err != nil {
+		return governanceFixtureState{}, fmt.Errorf("建立 bind_existing 候选: %w", err)
+	}
+	if _, err := prepareWorkConflictCandidates(ctx, resources, issueSource.ID, "separate", "separate-external"); err != nil {
+		return governanceFixtureState{}, fmt.Errorf("建立 keep_separate 候选: %w", err)
+	}
+
 	const issueSourceKey = "duplicate-work"
 	_, issueErr := resources.EnsureCanonical(ctx, issueSource.ID, []application.DiscoveredWork{
 		{SourceKey: issueSourceKey, Title: "重复作品甲"},
@@ -129,9 +164,119 @@ func seedGovernanceFixtures(ctx context.Context, appRoot, sourceRoot string) (fi
 	if err := requireBindingReview(issueErr); err != nil {
 		return governanceFixtureState{}, fmt.Errorf("建立绑定问题夹具: %w", err)
 	}
-	issue, err := uniqueBindingIssue(ctx, resources, issueSource.ID, string(fault.CodeBindingReviewRequired))
+	issue, err := bindingIssueByKey(ctx, resources, issueSource.ID, issueSourceKey, "open")
 	if err != nil {
 		return governanceFixtureState{}, err
+	}
+	const issueBindSourceKey = "bind-new"
+	_, issueBindErr := resources.EnsureCanonical(ctx, issueSource.ID, []application.DiscoveredWork{{
+		SourceKey: issueBindSourceKey, ProviderID: "e2e", ExternalID: "bind-external", Title: "绑定到已有作品",
+	}})
+	if err := requireBindingReview(issueBindErr); err != nil {
+		return governanceFixtureState{}, fmt.Errorf("建立 bind_existing 问题: %w", err)
+	}
+	issueBind, err := bindingIssueByKey(ctx, resources, issueSource.ID, issueBindSourceKey, "open")
+	if err != nil {
+		return governanceFixtureState{}, err
+	}
+	if len(issueBind.Candidates) != 2 || !containsFixtureCandidate(issueBind.Candidates, bindCandidates[0]) {
+		return governanceFixtureState{}, fmt.Errorf("bind_existing 问题候选不完整: %+v", issueBind.Candidates)
+	}
+	const issueSeparateSourceKey = "separate-new"
+	_, issueSeparateErr := resources.EnsureCanonical(ctx, issueSource.ID, []application.DiscoveredWork{{
+		SourceKey: issueSeparateSourceKey, ProviderID: "e2e", ExternalID: "separate-external", Title: "保持独立作品",
+	}})
+	if err := requireBindingReview(issueSeparateErr); err != nil {
+		return governanceFixtureState{}, fmt.Errorf("建立 keep_separate 问题: %w", err)
+	}
+	issueSeparate, err := bindingIssueByKey(ctx, resources, issueSource.ID, issueSeparateSourceKey, "open")
+	if err != nil {
+		return governanceFixtureState{}, err
+	}
+
+	if _, err := prepareWorkConflictCandidates(ctx, resources, lifecycleSource.ID, "lifecycle", "lifecycle-external"); err != nil {
+		return governanceFixtureState{}, fmt.Errorf("建立生命周期候选: %w", err)
+	}
+	const lifecycleCandidateKey = "lifecycle-c"
+	if _, err := resources.EnsureCanonical(ctx, lifecycleSource.ID, []application.DiscoveredWork{{
+		SourceKey: lifecycleCandidateKey, Title: "生命周期候选丙",
+	}}); err != nil {
+		return governanceFixtureState{}, fmt.Errorf("建立生命周期第三候选: %w", err)
+	}
+	const lifecycleSourceKey = "lifecycle-new"
+	_, lifecycleFirstErr := resources.EnsureCanonical(ctx, lifecycleSource.ID, []application.DiscoveredWork{{
+		SourceKey: lifecycleSourceKey, ProviderID: "e2e", ExternalID: "lifecycle-external", Title: "生命周期冲突",
+	}})
+	if err := requireBindingReview(lifecycleFirstErr); err != nil {
+		return governanceFixtureState{}, fmt.Errorf("建立生命周期首次问题: %w", err)
+	}
+	lifecycleSuperseded, err := bindingIssueByKey(ctx, resources, lifecycleSource.ID, lifecycleSourceKey, "open")
+	if err != nil {
+		return governanceFixtureState{}, err
+	}
+	_, lifecycleSecondErr := resources.EnsureCanonical(ctx, lifecycleSource.ID, []application.DiscoveredWork{{
+		SourceKey: lifecycleCandidateKey, ProviderID: "e2e", ExternalID: "lifecycle-external", Title: "生命周期候选丙",
+	}, {
+		SourceKey: lifecycleSourceKey, ProviderID: "e2e", ExternalID: "lifecycle-external", Title: "生命周期冲突",
+	}})
+	if err := requireBindingReview(lifecycleSecondErr); err != nil {
+		return governanceFixtureState{}, fmt.Errorf("建立生命周期证据变化: %w", err)
+	}
+	lifecycleStale, err := bindingIssueByKey(ctx, resources, lifecycleSource.ID, lifecycleSourceKey, "open")
+	if err != nil {
+		return governanceFixtureState{}, err
+	}
+	if lifecycleStale.ID == lifecycleSuperseded.ID {
+		return governanceFixtureState{}, fmt.Errorf("生命周期证据变化未产生新 issue")
+	}
+	if _, err := resources.EnsureCanonical(ctx, lifecycleSource.ID, []application.DiscoveredWork{{
+		SourceKey: "lifecycle-stable", Title: "生命周期稳定作品",
+	}}); err != nil {
+		return governanceFixtureState{}, fmt.Errorf("收敛生命周期问题: %w", err)
+	}
+	lifecycleSuperseded, err = resources.GetBindingIssue(ctx, lifecycleSuperseded.ID)
+	if err != nil {
+		return governanceFixtureState{}, err
+	}
+	if lifecycleSuperseded.Status != "superseded" {
+		return governanceFixtureState{}, fmt.Errorf("生命周期旧 issue 未 superseded: %+v", lifecycleSuperseded)
+	}
+	lifecycleStale, err = resources.GetBindingIssue(ctx, lifecycleStale.ID)
+	if err != nil {
+		return governanceFixtureState{}, err
+	}
+	if lifecycleStale.Status != "stale" {
+		return governanceFixtureState{}, fmt.Errorf("生命周期新 issue 未 stale: %+v", lifecycleStale)
+	}
+
+	const paginationIssueCount = 51
+	for index := range paginationIssueCount {
+		sourceKey := fmt.Sprintf("page-%02d", index)
+		_, issueErr := resources.EnsureCanonical(ctx, paginationSource.ID, []application.DiscoveredWork{
+			{SourceKey: sourceKey, Title: fmt.Sprintf("分页作品 %02d 甲", index)},
+			{SourceKey: sourceKey, Title: fmt.Sprintf("分页作品 %02d 乙", index)},
+		})
+		if err := requireBindingReview(issueErr); err != nil {
+			return governanceFixtureState{}, fmt.Errorf("建立分页问题 %d: %w", index, err)
+		}
+	}
+	paginationFirst, err := resources.ListBindingIssues(ctx, application.BindingIssueFilter{
+		SourceID: paginationSource.ID, Status: "open",
+	}, "", 50)
+	if err != nil {
+		return governanceFixtureState{}, err
+	}
+	if len(paginationFirst.Items) != 50 || paginationFirst.NextCursor == "" {
+		return governanceFixtureState{}, fmt.Errorf("分页问题首页不完整: count=%d cursor=%q", len(paginationFirst.Items), paginationFirst.NextCursor)
+	}
+	paginationSecond, err := resources.ListBindingIssues(ctx, application.BindingIssueFilter{
+		SourceID: paginationSource.ID, Status: "open",
+	}, paginationFirst.NextCursor, 50)
+	if err != nil {
+		return governanceFixtureState{}, err
+	}
+	if len(paginationSecond.Items) != 1 || paginationSecond.NextCursor != "" {
+		return governanceFixtureState{}, fmt.Errorf("分页问题次页不完整: count=%d cursor=%q", len(paginationSecond.Items), paginationSecond.NextCursor)
 	}
 
 	initialStructure := application.DiscoveredWork{
@@ -309,8 +454,16 @@ func seedGovernanceFixtures(ctx context.Context, appRoot, sourceRoot string) (fi
 
 	return governanceFixtureState{
 		IssueSourceID: issueSource.ID, IssueSourceName: issueSource.DisplayName, IssueID: issue.ID,
-		IssueSourceKey:    issueSourceKey,
-		StructureSourceID: structureSource.ID, StructureSourceName: structureSource.DisplayName,
+		IssueSourceKey: issueSourceKey,
+		IssueBindID:    issueBind.ID, IssueBindSourceKey: issueBindSourceKey, IssueBindTargetID: bindCandidates[0],
+		IssueSeparateID: issueSeparate.ID, IssueSeparateSourceKey: issueSeparateSourceKey,
+		LifecycleSourceID: lifecycleSource.ID, LifecycleSourceName: lifecycleSource.DisplayName,
+		LifecycleSourceKey:    lifecycleSourceKey,
+		LifecycleSupersededID: lifecycleSuperseded.ID, LifecycleSupersededVersion: lifecycleSuperseded.Version,
+		LifecycleStaleID: lifecycleStale.ID, LifecycleStaleVersion: lifecycleStale.Version,
+		PaginationSourceID: paginationSource.ID, PaginationSourceName: paginationSource.DisplayName,
+		PaginationIssueCount: paginationIssueCount,
+		StructureSourceID:    structureSource.ID, StructureSourceName: structureSource.DisplayName,
 		StructureIssueID: structureIssue.ID, StructureTargetSourceKey: "wkA1",
 		MergeSourceID: mergeSource.ID, MergeSourceName: mergeSource.DisplayName,
 		MergeIssueID: mergeIssue.ID, MergeTargetWorkID: mergeTargetWorkID,
@@ -323,6 +476,47 @@ func seedGovernanceFixtures(ctx context.Context, appRoot, sourceRoot string) (fi
 		OrphanMediaBindingID: orphanMedia.BindingID, OrphanMediaSourceKey: orphanMedia.SourceKey,
 		MediaSourceID: mediaSource.ID, MediaSourceName: mediaSource.DisplayName, MediaSourceKey: mediaSourceKey,
 	}, nil
+}
+
+func prepareWorkConflictCandidates(
+	ctx context.Context,
+	resources *application.Resources,
+	sourceID, prefix, externalID string,
+) ([]string, error) {
+	firstKey, secondKey := prefix+"-a", prefix+"-b"
+	first, err := resources.EnsureCanonical(ctx, sourceID, []application.DiscoveredWork{{
+		SourceKey: firstKey, ProviderID: "e2e", ExternalID: externalID, Title: prefix + " 候选甲",
+	}})
+	if err != nil {
+		return nil, err
+	}
+	firstID := first[firstKey].ID
+	if _, err := resources.ManualUnbindWork(ctx, sourceID, firstKey); err != nil {
+		return nil, err
+	}
+	second, err := resources.EnsureCanonical(ctx, sourceID, []application.DiscoveredWork{{
+		SourceKey: secondKey, ProviderID: "e2e", ExternalID: externalID, Title: prefix + " 候选乙",
+	}})
+	if err != nil {
+		return nil, err
+	}
+	secondID := second[secondKey].ID
+	if _, err := resources.UndoManualUnbind(ctx, sourceID, firstKey); err != nil {
+		return nil, err
+	}
+	if firstID == "" || secondID == "" || firstID == secondID {
+		return nil, fmt.Errorf("候选身份未分离: first=%q second=%q", firstID, secondID)
+	}
+	return []string{firstID, secondID}, nil
+}
+
+func containsFixtureCandidate(candidates []application.BindingIssueCandidate, candidateID string) bool {
+	for _, candidate := range candidates {
+		if candidate.CandidateID == candidateID {
+			return true
+		}
+	}
+	return false
 }
 
 func requireOrphanCandidate(items []application.OrphanCandidate, sourceKey string) (application.OrphanCandidate, error) {
@@ -361,6 +555,23 @@ func uniqueBindingIssue(ctx context.Context, resources *application.Resources, s
 		return application.BindingIssue{}, fmt.Errorf("Source %s 的 open issue 不唯一或 code 不符: %+v", sourceID, page.Items)
 	}
 	return page.Items[0], nil
+}
+
+func bindingIssueByKey(
+	ctx context.Context,
+	resources *application.Resources,
+	sourceID, sourceKey, status string,
+) (application.BindingIssue, error) {
+	page, err := resources.ListBindingIssues(ctx, application.BindingIssueFilter{SourceID: sourceID, Status: status}, "", 200)
+	if err != nil {
+		return application.BindingIssue{}, err
+	}
+	for _, item := range page.Items {
+		if item.SourceKey == sourceKey {
+			return resources.GetBindingIssue(ctx, item.ID)
+		}
+	}
+	return application.BindingIssue{}, fmt.Errorf("Source %s 缺少 status=%s sourceKey=%s 的 issue", sourceID, status, sourceKey)
 }
 
 func writeGovernanceFixtureState(path string, fixtures governanceFixtureState) error {

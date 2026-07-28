@@ -134,6 +134,48 @@ func TestBindingIssueOptimisticVersionConflict(t *testing.T) {
 	}
 }
 
+func TestBindingIssueReopenPreservesActiveUniqueness(t *testing.T) {
+	f := newIssueFixture(t)
+	f.seedOrphanWork(t, "作品甲", "alias-a", "post-42")
+	f.seedOrphanWork(t, "作品乙", "alias-b", "post-42")
+	if _, err := f.resources.EnsureCanonical(f.ctx, f.source.ID, f.discover("alias-new", "post-42", "冲突")); !f.hasCode(t, err, fault.CodeBindingReviewRequired) {
+		t.Fatalf("未产生首次冲突: %v", err)
+	}
+	first := f.firstOpenIssue(t)
+
+	f.seedOrphanWork(t, "作品丙", "alias-c", "post-42")
+	if _, err := f.resources.EnsureCanonical(f.ctx, f.source.ID, f.discover("alias-new", "post-42", "冲突")); !f.hasCode(t, err, fault.CodeBindingReviewRequired) {
+		t.Fatalf("证据变化未产生冲突: %v", err)
+	}
+	second := f.firstOpenIssue(t)
+	if second.ID == first.ID {
+		t.Fatalf("证据变化复用了旧 issue: %s", first.ID)
+	}
+	if _, err := f.resources.EnsureCanonical(f.ctx, f.source.ID, f.discover("alias-other", "post-99", "独立作品")); err != nil {
+		t.Fatalf("收敛 open issue 失败: %v", err)
+	}
+	first, err := f.resources.GetBindingIssue(f.ctx, first.ID)
+	if err != nil || first.Status != "superseded" {
+		t.Fatalf("旧 issue 未保持 superseded: %+v %v", first, err)
+	}
+	second, err = f.resources.GetBindingIssue(f.ctx, second.ID)
+	if err != nil || second.Status != "stale" {
+		t.Fatalf("新 issue 未收敛为 stale: %+v %v", second, err)
+	}
+
+	reopened, err := f.resources.ReopenBindingIssue(f.ctx, first.ID, "owner", first.Version)
+	if err != nil || reopened.Status != "open" {
+		t.Fatalf("首条历史 issue 重开失败: %+v %v", reopened, err)
+	}
+	if _, err := f.resources.ReopenBindingIssue(f.ctx, second.ID, "owner", second.Version); !f.hasCode(t, err, fault.CodeConflict) {
+		t.Fatalf("已有 active 同身份 issue 时仍允许重开: %v", err)
+	}
+	unchanged, err := f.resources.GetBindingIssue(f.ctx, second.ID)
+	if err != nil || unchanged.Status != "stale" || unchanged.Version != second.Version {
+		t.Fatalf("冲突后历史 issue 被部分修改: %+v %v", unchanged, err)
+	}
+}
+
 func TestManualUnbindWorkUndoAndConflict(t *testing.T) {
 	f := newIssueFixture(t)
 	first, err := f.resources.EnsureCanonical(f.ctx, f.source.ID, f.discover("clean-key", "", "干净作品"))
