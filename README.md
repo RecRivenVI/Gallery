@@ -6,6 +6,8 @@ Gallery（画廊）是一个本地优先、只读来源、规则驱动的个人�
 
 > [!IMPORTANT]
 > Gallery 当前仍处于 pre-alpha 开发阶段。阶段 0～4 后端主线、阶段 5 安全代码基线及阶段 6 Web/PWA 页面代码基线均已实现；Chrome/Edge 已完成真实认证主路径验证，Chromium/Firefox 已完成合成 smoke 与隔离真实后端完整业务链，但阶段 5 Security Gate 和阶段 6 Web Gate 均未通过。2026-07-23 的独立审计（[验证记录 EV-39](Documents/证据/验证记录.md)）发现实时 WebSocket 与权限名阻断；这些缺陷已由 [EV-40](Documents/证据/验证记录.md) 修复。[EV-54～EV-59](Documents/证据/验证记录.md) 随后以隔离 Chromium/真实 `galleryd` 打通管理自举、publication-bound 画廊/媒体、CustomCover、规则草稿→发布→Binding→扫描、无损规则文本、模板驱动 Schema 表单及规则回滚/弃用/ParameterSet；[EV-60](Documents/证据/验证记录.md) 又补齐 Personal Session/API Token/Share、安全管理写链和真实 WebSocket 断线后的 snapshot 恢复，并覆盖独立 loopback LAN 账户/Grant/Session 管理；[EV-61](Documents/证据/验证记录.md) 覆盖 control 备份、恢复干跑/待重启登记和 Catalog GC dry-run；[EV-62](Documents/证据/验证记录.md) 再覆盖规则绑定暂停/恢复、作品人工解绑/撤销，以及 retry-backoff Job 取消、同 ID 重试和 Attempt 历史；[EV-64](Documents/证据/验证记录.md) 进一步以同一隔离 AppDirs 的实际重启证明 control 恢复生效；[EV-65](Documents/证据/验证记录.md) 把以上 Personal/LAN 完整链扩展到桌面 Firefox 并纳入 CI；[EV-66](Documents/证据/验证记录.md) 再关闭显式扫描与 Watcher 状态脱节、扫描期间事件可能丢失和维护 Job 终态不刷新任务表的竞态。这些仍不等于真实媒体或完整业务闭环，任意规则的完整可视化构建、其余治理决策、长任务运行中取消与进程中断恢复仍未覆盖。当前没有安装发行版本或完整使用教程，也尚未完成真实全量性能、SMB/NAS、真实 LAN 多设备、目标低端设备、真实移动设备和跨平台发行门禁。
+>
+> [EV-67](Documents/证据/验证记录.md) 已把 15 类现有 primitive config 从整块 JSON 文本提升为同一权威 Schema 驱动的可视化字段，并通过 Chromium/Firefox 真实后端链；参数 Schema/tests/extensions、字段撤销与 Dry Run/Explain 的完整规则编辑闭环仍未完成，因此 Web Gate 与 pre-alpha 状态不变。
 
 ## 特色功能
 
