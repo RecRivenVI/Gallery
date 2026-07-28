@@ -515,6 +515,62 @@ WHERE source_id=? AND source_key=? AND status='active'`, now, sourceID, sourceKe
 	return mediaID, nil
 }
 
+// UndoMediaUnbind 撤销一次针对某来源稳定键的手动 Media 解绑。若解绑后已由重扫建立新的
+// active MediaBinding，或存在多个 manual_unbound 历史而无法确定唯一目标，则拒绝撤销。
+func (r *Resources) UndoMediaUnbind(ctx context.Context, sourceID, sourceKey string) (string, error) {
+	tx, err := r.control.BeginTx(ctx, nil)
+	if err != nil {
+		return "", fault.New(fault.CodeInternal, true, err)
+	}
+	defer tx.Rollback()
+	var activeCount int
+	if err := tx.QueryRowContext(ctx, `SELECT count(*) FROM media_bindings
+WHERE source_id=? AND source_key=? AND status='active'`, sourceID, sourceKey).Scan(&activeCount); err != nil {
+		return "", fault.New(fault.CodeInternal, true, err)
+	}
+	if activeCount > 0 {
+		return "", fault.New(fault.CodeConflict, false, nil)
+	}
+	rows, err := tx.QueryContext(ctx, `SELECT binding_id, media_id FROM media_bindings
+WHERE source_id=? AND source_key=? AND status='manual_unbound'`, sourceID, sourceKey)
+	if err != nil {
+		return "", fault.New(fault.CodeInternal, true, err)
+	}
+	type unbound struct{ bindingID, mediaID string }
+	var candidates []unbound
+	for rows.Next() {
+		var item unbound
+		if err := rows.Scan(&item.bindingID, &item.mediaID); err != nil {
+			rows.Close()
+			return "", fault.New(fault.CodeInternal, true, err)
+		}
+		candidates = append(candidates, item)
+	}
+	if err := rows.Err(); err != nil {
+		rows.Close()
+		return "", fault.New(fault.CodeInternal, true, err)
+	}
+	if err := rows.Close(); err != nil {
+		return "", fault.New(fault.CodeInternal, true, err)
+	}
+	if len(candidates) == 0 {
+		return "", fault.New(fault.CodeNotFound, false, nil)
+	}
+	if len(candidates) > 1 {
+		return "", fault.New(fault.CodeConflict, false, nil)
+	}
+	restored := candidates[0]
+	now := r.clock.Now().UTC().Unix()
+	if _, err := tx.ExecContext(ctx, `UPDATE media_bindings SET status='active', updated_at=? WHERE binding_id=?`,
+		now, restored.bindingID); err != nil {
+		return "", fault.New(fault.CodeInternal, true, err)
+	}
+	if err := tx.Commit(); err != nil {
+		return "", fault.New(fault.CodeInternal, true, err)
+	}
+	return restored.mediaID, nil
+}
+
 // UndoManualUnbind 撤销一次针对某来源稳定键的手动 Work 解绑，把 manual_unbound Binding 及其
 // 媒体 Binding 恢复为 active。若解绑后已有新的 active Binding 依赖该稳定键（例如已经重扫拆分），
 // 或存在多个 manual_unbound 无法确定唯一目标，则返回结构化冲突。

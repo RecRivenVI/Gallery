@@ -153,7 +153,11 @@ test('从可见 UI 建立真实运行中的 Scan/Hash 供进程强杀 @real-proc
         const currentScan = await readJSON<JobSnapshot>(page, `/api/v1/jobs/${encodeURIComponent(scan.id)}`);
         const active = await readJSON<{ jobs: JobSnapshot[] }>(page, '/api/v1/jobs?status=running&limit=200');
         const hashes = active.jobs.filter((item) => item.type === 'hash' && item.sourceId === source.id);
-        expect(hashes).toHaveLength(1);
+        expect(hashes.length).toBeLessThanOrEqual(1);
+        if (hashes.length === 0) {
+          hash = undefined;
+          return false;
+        }
         hash = hashes[0];
         return currentScan.status === 'running' && hash.status === 'running';
       },

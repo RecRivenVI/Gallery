@@ -1,8 +1,11 @@
 package main
 
 import (
+	"context"
+	"encoding/json"
 	"os"
 	"path/filepath"
+	"reflect"
 	"testing"
 )
 
@@ -47,5 +50,44 @@ func TestRetainDiagnosticsPreservesDistinctLogNames(t *testing.T) {
 		if string(got) != want {
 			t.Fatalf("%s 内容=%q，期望 %q", name, got, want)
 		}
+	}
+}
+
+func TestSeedGovernanceFixturesUsesApplicationStateMachines(t *testing.T) {
+	testRoot := t.TempDir()
+	appRoot := filepath.Join(testRoot, "app")
+	sourceRoot := filepath.Join(testRoot, "sources")
+	fixtures, err := seedGovernanceFixtures(context.Background(), appRoot, sourceRoot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for name, value := range map[string]string{
+		"issue source":     fixtures.IssueSourceID,
+		"issue":            fixtures.IssueID,
+		"structure source": fixtures.StructureSourceID,
+		"structure issue":  fixtures.StructureIssueID,
+		"orphan source":    fixtures.OrphanSourceID,
+		"orphan binding":   fixtures.OrphanBindingID,
+		"media source":     fixtures.MediaSourceID,
+		"media source key": fixtures.MediaSourceKey,
+	} {
+		if value == "" {
+			t.Fatalf("%s 未建立", name)
+		}
+	}
+	statePath := filepath.Join(testRoot, "governance-state.json")
+	if err := writeGovernanceFixtureState(statePath, fixtures); err != nil {
+		t.Fatal(err)
+	}
+	content, err := os.ReadFile(statePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var decoded governanceFixtureState
+	if err := json.Unmarshal(content, &decoded); err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(decoded, fixtures) {
+		t.Fatalf("治理夹具状态往返不一致: got=%+v want=%+v", decoded, fixtures)
 	}
 }

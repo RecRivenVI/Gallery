@@ -1489,9 +1489,29 @@ VALUES (?, ?, ?, ?, 1, 'active', 0, 1, 1)`, newID(domain.IDWorkBinding), sourceI
 		t.Fatalf("unbind-work 接口失败: %v status=%d body=%s", err, unbind.StatusCode(), unbind.Body)
 	}
 	undo, err := client.UndoManualUnbindWithResponse(ctx, &api.UndoManualUnbindParams{XGalleryCSRF: csrf},
-		api.BindingUnbindRequest{SourceId: sourceID, SourceKey: unbindKey}, editor)
-	if err != nil || undo.JSON200 == nil || undo.JSON200.CanonicalId != workB {
+		api.BindingUndoRequest{SourceId: sourceID, SourceKey: unbindKey, EntityKind: api.BindingUndoRequestEntityKindWork}, editor)
+	if err != nil || undo.JSON200 == nil || undo.JSON200.CanonicalId != workB || string(undo.JSON200.EntityKind) != "work" {
 		t.Fatalf("undo-unbind 接口失败: %v status=%d body=%s", err, undo.StatusCode(), undo.Body)
+	}
+
+	// unbind-media + 带显式实体类型的 undo，避免 Work/Media sourceKey 命名空间碰撞。
+	mediaID, mediaKey := newID(domain.IDCanonicalMedia), "clean-key/media.jpg"
+	exec(`INSERT INTO canonical_media (media_id, work_id, role, ordinal, created_at)
+VALUES (?, ?, 'content', 0, 1)`, mediaID, workB)
+	exec(`INSERT INTO media_bindings
+(binding_id, source_id, source_key, media_id, work_id, identity_version, status, last_seen_generation, created_at, updated_at)
+VALUES (?, ?, ?, ?, ?, 1, 'active', 0, 1, 1)`, newID(domain.IDMediaBinding), sourceID, mediaKey, mediaID, workB)
+	mediaUnbind, err := client.UnbindMediaWithResponse(ctx, &api.UnbindMediaParams{XGalleryCSRF: csrf},
+		api.BindingUnbindRequest{SourceId: sourceID, SourceKey: mediaKey}, editor)
+	if err != nil || mediaUnbind.JSON200 == nil || mediaUnbind.JSON200.CanonicalId != mediaID ||
+		string(mediaUnbind.JSON200.EntityKind) != "media" {
+		t.Fatalf("unbind-media 接口失败: %v status=%d body=%s", err, mediaUnbind.StatusCode(), mediaUnbind.Body)
+	}
+	mediaUndo, err := client.UndoManualUnbindWithResponse(ctx, &api.UndoManualUnbindParams{XGalleryCSRF: csrf},
+		api.BindingUndoRequest{SourceId: sourceID, SourceKey: mediaKey, EntityKind: api.BindingUndoRequestEntityKindMedia}, editor)
+	if err != nil || mediaUndo.JSON200 == nil || mediaUndo.JSON200.CanonicalId != mediaID ||
+		string(mediaUndo.JSON200.EntityKind) != "media" {
+		t.Fatalf("undo media unbind 接口失败: %v status=%d body=%s", err, mediaUndo.StatusCode(), mediaUndo.Body)
 	}
 
 	// dismiss + reopen 另一个 issue。

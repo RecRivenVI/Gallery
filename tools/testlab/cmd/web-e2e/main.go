@@ -59,9 +59,11 @@ func run() (exitCode int) {
 	var repoRoot string
 	var browserProject string
 	var keep bool
+	var governanceOnly bool
 	flag.StringVar(&repoRoot, "repo-root", ".", "Gallery 仓库根目录")
 	flag.StringVar(&browserProject, "browser-project", "chromium", "Playwright 浏览器项目（chromium 或 firefox）")
 	flag.BoolVar(&keep, "keep", false, "保留临时验证目录")
+	flag.BoolVar(&governanceOnly, "governance-only", false, "只执行正式应用层治理浏览器 E2E")
 	flag.Parse()
 	if err := validateBrowserProject(browserProject); err != nil {
 		return fail("验证浏览器项目", err)
@@ -110,8 +112,17 @@ func run() (exitCode int) {
 	sourceRoot := filepath.Join(sourceGuardRoot, "baseline")
 	runningCancelSourceRoot := filepath.Join(sourceGuardRoot, "running-cancel")
 	processInterruptSourceRoot := filepath.Join(sourceGuardRoot, "process-interrupt")
+	governanceSourceRoot := filepath.Join(sourceGuardRoot, "governance")
 	logsRoot := filepath.Join(testRoot, "logs")
-	for _, dir := range []string{appRoot, lanAppRoot, sourceRoot, runningCancelSourceRoot, processInterruptSourceRoot, logsRoot} {
+	for _, dir := range []string{
+		appRoot, lanAppRoot, sourceRoot, runningCancelSourceRoot, processInterruptSourceRoot,
+		governanceSourceRoot,
+		filepath.Join(governanceSourceRoot, "binding-issue"),
+		filepath.Join(governanceSourceRoot, "structure"),
+		filepath.Join(governanceSourceRoot, "orphan"),
+		filepath.Join(governanceSourceRoot, "media"),
+		logsRoot,
+	} {
 		if err := os.MkdirAll(dir, 0o700); err != nil {
 			return fail("创建隔离目录", err)
 		}
@@ -169,6 +180,16 @@ func run() (exitCode int) {
 	if err != nil {
 		return fail("构建隔离 galleryd", err)
 	}
+	if governanceOnly {
+		if err := runGovernanceOnly(
+			runCtx, nodeBin, galleryd, appRoot, logsRoot, diagnosticsRoot, webRoot, testRoot,
+			browserProject, before, sourceGuardRoot, sourceRoot, runningCancelSourceRoot,
+			processInterruptSourceRoot, governanceSourceRoot,
+		); err != nil {
+			return fail("真实治理浏览器 E2E", err)
+		}
+		return 0
+	}
 
 	gallerydLog := filepath.Join(logsRoot, "galleryd.log")
 	const runningCancelRelativePath = "work-cancel/media-block.png"
@@ -183,6 +204,7 @@ func run() (exitCode int) {
 		sourceRoot,
 		runningCancelSourceRoot,
 		processInterruptSourceRoot,
+		governanceSourceRoot,
 	)
 	if err != nil {
 		return fail("启动隔离 galleryd", errors.Join(err, retainDiagnostics(gallerydLog, diagnosticsRoot)))
@@ -200,6 +222,7 @@ func run() (exitCode int) {
 
 	rulePackage := filepath.Join(testRoot, "web-e2e-rule-package.json")
 	processInterruptState := filepath.Join(testRoot, "process-interrupt-state.json")
+	governanceState := filepath.Join(testRoot, "governance-state.json")
 	if err := prepareRulePackage(
 		filepath.Join(root, "internal", "rules", "testdata", "minimal-rule-package.json"),
 		rulePackage,
@@ -212,6 +235,7 @@ func run() (exitCode int) {
 		"GALLERY_REAL_RUNNING_CANCEL_SOURCE_ROOT=" + runningCancelSourceRoot,
 		"GALLERY_REAL_PROCESS_INTERRUPT_SOURCE_ROOT=" + processInterruptSourceRoot,
 		"GALLERY_REAL_PROCESS_INTERRUPT_STATE=" + processInterruptState,
+		"GALLERY_REAL_GOVERNANCE_STATE=" + governanceState,
 		"GALLERY_REAL_RULE_PACKAGE=" + rulePackage,
 		"GALLERY_REAL_CANCEL_JOB_ID=" + retryPendingJobs.CancelID,
 		"GALLERY_REAL_RETRY_JOB_ID=" + retryPendingJobs.RetryID,
@@ -244,6 +268,50 @@ func run() (exitCode int) {
 	if testErr == nil {
 		testErr = command(runCtx, 3*time.Minute, webRoot, env, nodeBin, playwright, "test",
 			"e2e/real-running-cancel.spec.ts",
+			projectArgument, "--workers=1", "--retries=0")
+	}
+	// 其余治理写路径需要由正式应用层预置持久 Binding 状态。先优雅停止当前单写者，使用
+	// application.Resources 建立合成事实并写出非敏感 ID 清单，再以同一 AppDirs 重新启动。
+	// 四个 Source 根在初始只读 guard 前已经存在，夹具阶段不创建、改写或删除 Source 内容。
+	governanceRestartedLog := filepath.Join(logsRoot, "galleryd-governance-restarted.log")
+	if testErr == nil {
+		stop := server.Stop()
+		serverStopped = true
+		testErr = stopError(stop)
+	}
+	if testErr == nil {
+		fixtures, seedErr := seedGovernanceFixtures(runCtx, appRoot, governanceSourceRoot)
+		if seedErr != nil {
+			testErr = fmt.Errorf("建立治理应用层夹具: %w", seedErr)
+		} else if writeErr := writeGovernanceFixtureState(governanceState, fixtures); writeErr != nil {
+			testErr = fmt.Errorf("写入治理夹具状态: %w", writeErr)
+		}
+	}
+	if testErr == nil {
+		governanceServer, startErr := testprocess.StartGallerydWithSourceRootsEnvironmentContext(
+			runCtx,
+			galleryd,
+			appRoot,
+			governanceRestartedLog,
+			60*time.Second,
+			testEnvironment,
+			sourceRoot,
+			runningCancelSourceRoot,
+			processInterruptSourceRoot,
+			governanceSourceRoot,
+		)
+		if startErr != nil {
+			testErr = fmt.Errorf("治理夹具后以同一 AppDirs 重启 galleryd: %w", startErr)
+		} else {
+			server = governanceServer
+			serverStopped = false
+			env[0] = "GALLERY_REAL_BASE_URL=" + server.BaseURL
+			testErr = waitHealthy(runCtx, server.BaseURL, 30*time.Second)
+		}
+	}
+	if testErr == nil {
+		testErr = command(runCtx, 3*time.Minute, webRoot, env, nodeBin, playwright, "test",
+			"e2e/real-governance.spec.ts",
 			projectArgument, "--workers=1", "--retries=0")
 	}
 	// 规则绑定状态链必须在规则生命周期用例永久弃用规则包之前完成；否则服务端会按正式
@@ -282,6 +350,7 @@ func run() (exitCode int) {
 			sourceRoot,
 			runningCancelSourceRoot,
 			processInterruptSourceRoot,
+			governanceSourceRoot,
 		)
 		if startErr != nil {
 			testErr = fmt.Errorf("强杀后以同一 AppDirs 立即重启 galleryd: %w", startErr)
@@ -332,6 +401,7 @@ func run() (exitCode int) {
 			sourceRoot,
 			runningCancelSourceRoot,
 			processInterruptSourceRoot,
+			governanceSourceRoot,
 		)
 		if startErr != nil {
 			testErr = fmt.Errorf("以同一 AppDirs 重启 galleryd: %w", startErr)
@@ -363,6 +433,9 @@ func run() (exitCode int) {
 		}
 		if _, statErr := os.Stat(interruptRestartedLog); statErr == nil {
 			diagnosticErr = errors.Join(diagnosticErr, retainDiagnostics(interruptRestartedLog, diagnosticsRoot))
+		}
+		if _, statErr := os.Stat(governanceRestartedLog); statErr == nil {
+			diagnosticErr = errors.Join(diagnosticErr, retainDiagnostics(governanceRestartedLog, diagnosticsRoot))
 		}
 		if diagnosticErr == nil {
 			fmt.Printf("失败诊断已保存到：%s\n", diagnosticsRoot)
@@ -413,6 +486,63 @@ func run() (exitCode int) {
 
 	fmt.Printf("真实 %s Personal/LAN galleryd 浏览器 E2E 通过；Personal 同 AppDirs control 恢复及强杀恢复通过；合成 Source 只读 guard 通过；预期强杀场景外 galleryd 均已优雅停止\n", browserProject)
 	return 0
+}
+
+func runGovernanceOnly(
+	ctx context.Context,
+	nodeBin, galleryd, appRoot, logsRoot, diagnosticsRoot, webRoot, testRoot, browserProject string,
+	before map[string]fileFact,
+	sourceGuardRoot string,
+	sourceRoots ...string,
+) (err error) {
+	governanceSourceRoot := sourceRoots[len(sourceRoots)-1]
+	statePath := filepath.Join(testRoot, "governance-state.json")
+	fixtures, err := seedGovernanceFixtures(ctx, appRoot, governanceSourceRoot)
+	if err != nil {
+		return fmt.Errorf("建立治理应用层夹具: %w", err)
+	}
+	if err := writeGovernanceFixtureState(statePath, fixtures); err != nil {
+		return fmt.Errorf("写入治理夹具状态: %w", err)
+	}
+	logPath := filepath.Join(logsRoot, "galleryd-governance-only.log")
+	server, err := testprocess.StartGallerydWithSourceRootsEnvironmentContext(
+		ctx, galleryd, appRoot, logPath, 60*time.Second, nil, sourceRoots...,
+	)
+	if err != nil {
+		return errors.Join(err, retainDiagnostics(logPath, diagnosticsRoot))
+	}
+	stopped := false
+	defer func() {
+		if !stopped {
+			err = errors.Join(err, stopError(server.Stop()))
+		}
+	}()
+	env := []string{
+		"GALLERY_REAL_BASE_URL=" + server.BaseURL,
+		"GALLERY_REAL_GOVERNANCE_STATE=" + statePath,
+	}
+	playwright := filepath.Join(webRoot, "node_modules", "@playwright", "test", "cli.js")
+	testErr := waitHealthy(ctx, server.BaseURL, 30*time.Second)
+	if testErr == nil {
+		testErr = command(ctx, 3*time.Minute, webRoot, env, nodeBin, playwright, "test",
+			"e2e/real-governance.spec.ts", "--project="+browserProject, "--workers=1", "--retries=0")
+	}
+	stop := server.Stop()
+	stopped = true
+	testErr = errors.Join(testErr, stopError(stop))
+	after, guardErr := snapshot(sourceGuardRoot)
+	if guardErr == nil && !reflect.DeepEqual(before, after) {
+		guardErr = describeGuardDifference(before, after)
+	}
+	if testErr != nil || guardErr != nil {
+		diagnosticErr := retainDiagnostics(logPath, diagnosticsRoot)
+		if diagnosticErr == nil {
+			fmt.Printf("失败诊断已保存到：%s\n", diagnosticsRoot)
+		}
+		return errors.Join(testErr, guardErr, diagnosticErr)
+	}
+	fmt.Printf("真实 %s 治理浏览器 E2E 与合成 Source 只读 guard 通过\n", browserProject)
+	return nil
 }
 
 func validateBrowserProject(project string) error {

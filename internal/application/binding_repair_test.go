@@ -169,6 +169,50 @@ func TestManualUnbindWorkUndoAndConflict(t *testing.T) {
 	}
 }
 
+func TestManualUnbindMediaUndoAndConflict(t *testing.T) {
+	f := newIssueFixture(t)
+	input := application.DiscoveredWork{
+		SourceKey: "media-work",
+		Title:     "媒体作品",
+		Media: []application.DiscoveredMedia{{
+			SourceKey: "media-work/asset.jpg",
+			RuleKey:   "asset.jpg",
+			Algorithm: "sha256-v1",
+			Digest:    "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+			Ordinal:   0,
+		}},
+	}
+	first, err := f.resources.EnsureCanonical(f.ctx, f.source.ID, []application.DiscoveredWork{input})
+	if err != nil {
+		t.Fatal(err)
+	}
+	mediaID := first[input.SourceKey].Media[input.Media[0].SourceKey].ID
+
+	unbound, err := f.resources.UnbindMedia(f.ctx, f.source.ID, input.Media[0].SourceKey)
+	if err != nil || unbound != mediaID {
+		t.Fatalf("媒体解绑失败: %s %v", unbound, err)
+	}
+	restored, err := f.resources.UndoMediaUnbind(f.ctx, f.source.ID, input.Media[0].SourceKey)
+	if err != nil || restored != mediaID {
+		t.Fatalf("撤销媒体解绑失败: %s %v", restored, err)
+	}
+	again, err := f.resources.EnsureCanonical(f.ctx, f.source.ID, []application.DiscoveredWork{input})
+	if err != nil || again[input.SourceKey].Media[input.Media[0].SourceKey].ID != mediaID {
+		t.Fatalf("撤销后未复用原媒体: %+v %v", again, err)
+	}
+
+	if _, err := f.resources.UnbindMedia(f.ctx, f.source.ID, input.Media[0].SourceKey); err != nil {
+		t.Fatal(err)
+	}
+	split, err := f.resources.EnsureCanonical(f.ctx, f.source.ID, []application.DiscoveredWork{input})
+	if err != nil || split[input.SourceKey].Media[input.Media[0].SourceKey].ID == mediaID {
+		t.Fatalf("解绑后重扫未建立新媒体 occurrence: %+v %v", split, err)
+	}
+	if _, err := f.resources.UndoMediaUnbind(f.ctx, f.source.ID, input.Media[0].SourceKey); !f.hasCode(t, err, fault.CodeConflict) {
+		t.Fatalf("已有后续媒体 Binding 的撤销未冲突: %v", err)
+	}
+}
+
 func TestManualUnbindIsolatedAcrossSources(t *testing.T) {
 	f := newIssueFixture(t)
 	// 第二个 Source 指向同一个 CanonicalWork。

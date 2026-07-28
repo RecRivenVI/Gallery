@@ -229,6 +229,24 @@ func (e BindingIssueResolveRequestDecision) Valid() bool {
 	}
 }
 
+// Defines values for BindingUndoRequestEntityKind.
+const (
+	BindingUndoRequestEntityKindMedia BindingUndoRequestEntityKind = "media"
+	BindingUndoRequestEntityKindWork  BindingUndoRequestEntityKind = "work"
+)
+
+// Valid indicates whether the value is a known member of the BindingUndoRequestEntityKind enum.
+func (e BindingUndoRequestEntityKind) Valid() bool {
+	switch e {
+	case BindingUndoRequestEntityKindMedia:
+		return true
+	case BindingUndoRequestEntityKindWork:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for BootstrapResponseApiVersion.
 const (
 	BootstrapResponseApiVersionV1 BootstrapResponseApiVersion = "v1"
@@ -2364,6 +2382,16 @@ type BindingUnbindRequest struct {
 	SourceId  SourceId `json:"sourceId"`
 	SourceKey string   `json:"sourceKey"`
 }
+
+// BindingUndoRequest defines model for BindingUndoRequest.
+type BindingUndoRequest struct {
+	EntityKind BindingUndoRequestEntityKind `json:"entityKind"`
+	SourceId   SourceId                     `json:"sourceId"`
+	SourceKey  string                       `json:"sourceKey"`
+}
+
+// BindingUndoRequestEntityKind defines model for BindingUndoRequest.EntityKind.
+type BindingUndoRequestEntityKind string
 
 // BootstrapResponse defines model for BootstrapResponse.
 type BootstrapResponse struct {
@@ -4543,7 +4571,7 @@ type UnbindMediaJSONRequestBody = BindingUnbindRequest
 type UnbindWorkJSONRequestBody = BindingUnbindRequest
 
 // UndoManualUnbindJSONRequestBody defines body for UndoManualUnbind for application/json ContentType.
-type UndoManualUnbindJSONRequestBody = BindingUnbindRequest
+type UndoManualUnbindJSONRequestBody = BindingUndoRequest
 
 // DismissBindingIssueJSONRequestBody defines body for DismissBindingIssue for application/json ContentType.
 type DismissBindingIssueJSONRequestBody = BindingIssueVersionRequest

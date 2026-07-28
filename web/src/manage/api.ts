@@ -1543,7 +1543,7 @@ export function useDecideOrphanCandidate(): UseMutationResult<
   });
 }
 
-export type BindingActionKind = 'unbind-work' | 'unbind-media' | 'undo-unbind';
+export type BindingActionKind = 'unbind-work' | 'unbind-media' | 'undo-work-unbind' | 'undo-media-unbind';
 
 export interface BindingActionInput {
   kind: BindingActionKind;
@@ -1568,7 +1568,15 @@ export function useBindingAction(): UseMutationResult<BindingActionResult, unkno
           await api.POST('/api/v1/binding-actions/unbind-media', { params: { header }, body })
         );
       }
-      return expectData(await api.POST('/api/v1/binding-actions/undo-unbind', { params: { header }, body }));
+      return expectData(
+        await api.POST('/api/v1/binding-actions/undo-unbind', {
+          params: { header },
+          body: {
+            ...body,
+            entityKind: input.kind === 'undo-work-unbind' ? 'work' : 'media'
+          }
+        })
+      );
     },
     onSuccess: () => {
       invalidate(['governance', 'bindings']);

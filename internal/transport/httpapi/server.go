@@ -2127,7 +2127,38 @@ func (s *Server) unbindMedia(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) undoManualUnbind(w http.ResponseWriter, r *http.Request) {
-	s.bindingAction(w, r, "work", s.data.UndoManualUnbind)
+	session, err := s.authenticate(r)
+	if err != nil {
+		s.writeRequestError(w, err)
+		return
+	}
+	if err := s.validateMutation(r, session); err != nil {
+		s.writeRequestError(w, err)
+		return
+	}
+	var request api.BindingUndoRequest
+	if err := decodeJSON(r, &request); err != nil {
+		s.writeRequestError(w, fault.WithField(fault.CodeValidation, "body", err))
+		return
+	}
+	if err := s.authorizeSession(r, session, "bindings.write", auth.ResourceScope{Kind: "source", ID: request.SourceId}); err != nil {
+		s.writeRequestError(w, concealForbidden(err))
+		return
+	}
+	var canonicalID string
+	switch request.EntityKind {
+	case api.BindingUndoRequestEntityKindWork:
+		canonicalID, err = s.data.UndoManualUnbind(r.Context(), request.SourceId, request.SourceKey)
+	case api.BindingUndoRequestEntityKindMedia:
+		canonicalID, err = s.data.UndoMediaUnbind(r.Context(), request.SourceId, request.SourceKey)
+	default:
+		err = fault.WithField(fault.CodeValidation, "entityKind", nil)
+	}
+	if err != nil {
+		s.writeRequestError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, api.BindingActionResult{CanonicalId: canonicalID, EntityKind: api.BindingActionResultEntityKind(request.EntityKind)})
 }
 
 func (s *Server) bindingAction(w http.ResponseWriter, r *http.Request, kind string, action func(context.Context, string, string) (string, error)) {

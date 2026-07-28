@@ -2753,7 +2753,7 @@ paths:
   /api/v1/binding-actions/undo-unbind:
     post:
       operationId: undoManualUnbind
-      summary: 撤销一次手动 Work 解绑，恢复原 Binding
+      summary: 撤销一次指定实体类型的手动解绑，恢复原 Binding
       parameters:
         - $ref: "#/components/parameters/CSRFHeader"
       requestBody:
@@ -2761,7 +2761,7 @@ paths:
         content:
           application/json:
             schema:
-              $ref: "#/components/schemas/BindingUnbindRequest"
+              $ref: "#/components/schemas/BindingUndoRequest"
       responses:
         "200":
           description: 已撤销
@@ -4051,6 +4051,20 @@ components:
           type: string
           minLength: 1
           maxLength: 4096
+    BindingUndoRequest:
+      type: object
+      additionalProperties: false
+      required: [sourceId, sourceKey, entityKind]
+      properties:
+        sourceId:
+          $ref: "#/components/schemas/SourceId"
+        sourceKey:
+          type: string
+          minLength: 1
+          maxLength: 4096
+        entityKind:
+          type: string
+          enum: [work, media]
     BindingActionResult:
       type: object
       additionalProperties: false

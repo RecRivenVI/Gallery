@@ -1763,7 +1763,7 @@ export interface paths {
         };
         get?: never;
         put?: never;
-        /** 撤销一次手动 Work 解绑，恢复原 Binding */
+        /** 撤销一次指定实体类型的手动解绑，恢复原 Binding */
         post: operations["undoManualUnbind"];
         delete?: never;
         options?: never;
@@ -2323,6 +2323,12 @@ export interface components {
         BindingUnbindRequest: {
             sourceId: components["schemas"]["SourceId"];
             sourceKey: string;
+        };
+        BindingUndoRequest: {
+            sourceId: components["schemas"]["SourceId"];
+            sourceKey: string;
+            /** @enum {string} */
+            entityKind: "work" | "media";
         };
         BindingActionResult: {
             canonicalId: string;
@@ -6577,7 +6583,7 @@ export interface operations {
         };
         requestBody: {
             content: {
-                "application/json": components["schemas"]["BindingUnbindRequest"];
+                "application/json": components["schemas"]["BindingUndoRequest"];
             };
         };
         responses: {

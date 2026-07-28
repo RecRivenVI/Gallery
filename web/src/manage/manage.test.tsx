@@ -812,6 +812,54 @@ describe('同名 Source 写入身份', () => {
     expect(screen.queryByText(/服务端没有返回生效绑定/)).not.toBeInTheDocument();
   });
 
+  it.each([
+    ['open', false],
+    ['resolved', false],
+    ['dismissed', true],
+    ['superseded', true],
+    ['stale', true]
+  ] as const)('绑定问题状态 %s 的重新打开动作与后端状态机一致', async (status, canReopen) => {
+    let reopenBody: Promise<unknown> | undefined;
+    const issue = {
+      id: 'bissue_01',
+      sourceId: 'src_b',
+      entityType: 'work' as const,
+      sourceKey: 'work/source-key',
+      code: 'BINDING_REVIEW_REQUIRED',
+      candidateCount: 2,
+      status,
+      resolution: status === 'dismissed' ? ('dismissed' as const) : null,
+      resolvedTargetId: null,
+      resolvedBy: status === 'open' ? null : 'principal_manage',
+      version: 7,
+      createdAt: '2026-07-27T03:00:00Z',
+      updatedAt: '2026-07-27T03:00:00Z',
+      resolvedAt: status === 'resolved' ? '2026-07-27T03:00:00Z' : null,
+      candidates: []
+    };
+    route('GET /api/v1/sources', () => jsonResponse({ sources: duplicateSources }));
+    route('GET /api/v1/binding-issues', () => jsonResponse({ issues: [issue] }));
+    route('POST /api/v1/binding-issues/bissue_01/reopen', (request) => {
+      reopenBody = request.clone().json();
+      return jsonResponse({ ...issue, status: 'open', version: 8 });
+    });
+
+    renderManage('/governance');
+    const table = await screen.findByRole('table', { name: '绑定问题' });
+    const reopenButton = within(table).queryByRole('button', { name: '重新打开' });
+    if (!canReopen) {
+      expect(reopenButton).not.toBeInTheDocument();
+      return;
+    }
+    expect(reopenButton).toBeInTheDocument();
+    if (status === 'dismissed') {
+      if (reopenButton === null) throw new Error('允许重新打开的状态缺少操作按钮');
+      await userEvent.click(reopenButton);
+      await waitFor(() => expect(requestsTo('POST /api/v1/binding-issues/bissue_01/reopen')).toHaveLength(1));
+      expect(await reopenBody).toEqual({ version: 7 });
+    }
+  });
+
   it('人工解绑确认框回显 Source ID，并把同一 ID 放入请求', async () => {
     let body: Promise<unknown> | undefined;
     route('GET /api/v1/sources', () => jsonResponse({ sources: duplicateSources }));

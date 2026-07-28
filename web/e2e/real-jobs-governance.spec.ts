@@ -175,16 +175,20 @@ test('规则绑定、人工解绑与 retry-backoff Job 真实管理链 @real-job
   await expect(page.getByText('绑定动作已完成', { exact: true })).toBeVisible();
 
   await page.getByRole('button', { name: /动作/ }).click();
-  await page.getByRole('option', { name: '撤销解绑', exact: true }).click();
+  await page.getByRole('option', { name: '撤销作品解绑', exact: true }).click();
   const undoPromise = page.waitForResponse((response) =>
     pathIs(response, '/api/v1/binding-actions/undo-unbind', 'POST')
   );
-  await page.getByRole('button', { name: '撤销解绑', exact: true }).click();
-  const undoDialog = page.getByRole('dialog', { name: '撤销解绑', exact: true });
+  await page.getByRole('button', { name: '撤销作品解绑', exact: true }).click();
+  const undoDialog = page.getByRole('dialog', { name: '撤销作品解绑', exact: true });
   await undoDialog.getByRole('button', { name: '确认执行', exact: true }).click();
   const undoResponse = await undoPromise;
   expect(undoResponse.status()).toBe(200);
-  expect(undoResponse.request().postDataJSON()).toEqual({ sourceId: source.id, sourceKey });
+  expect(undoResponse.request().postDataJSON()).toEqual({
+    sourceId: source.id,
+    sourceKey,
+    entityKind: 'work'
+  });
   expect((await undoResponse.json()) as BindingActionResult).toEqual(unbound);
 
   // 两个 Job 都是运行器通过正式状态机形成的失败 Attempt；不是浏览器伪造出的 DTO。

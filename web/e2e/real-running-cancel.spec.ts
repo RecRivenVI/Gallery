@@ -172,7 +172,11 @@ test('真实 incremental 扫描从 UI 运行中取消并收敛 Attempt @real-run
         running = await readJSON<JobSnapshot>(page, `/api/v1/jobs/${encodeURIComponent(created.id)}`);
         const active = await readJSON<{ jobs: JobSnapshot[] }>(page, '/api/v1/jobs?status=running&limit=200');
         const runningHashes = active.jobs.filter((job) => job.type === 'hash' && job.sourceId === source.id);
-        expect(runningHashes).toHaveLength(1);
+        expect(runningHashes.length).toBeLessThanOrEqual(1);
+        if (runningHashes.length === 0) {
+          runningHash = undefined;
+          return false;
+        }
         runningHash = runningHashes[0];
         return running.status === 'running' && runningHash.status === 'running';
       },

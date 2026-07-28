@@ -364,7 +364,10 @@ function BindingIssuesPanel() {
                           }}
                         />
                       ) : null}
-                      {canWrite && (row.status === 'dismissed' || row.status === 'resolved') ? (
+                      {canWrite &&
+                      (row.status === 'dismissed' ||
+                        row.status === 'stale' ||
+                        row.status === 'superseded') ? (
                         <Button
                           variant="secondary"
                           onPress={() => {
@@ -650,9 +653,14 @@ const BINDING_ACTIONS: readonly { id: BindingActionKind; label: string; descript
     description: '把该 sourceKey 对应的媒体 Binding 标记为 manual_unbound。'
   },
   {
-    id: 'undo-unbind',
-    label: '撤销解绑',
-    description: '把之前的人工解绑撤回，使 Binding 重新可被扫描激活。'
+    id: 'undo-work-unbind',
+    label: '撤销作品解绑',
+    description: '撤回之前的作品解绑，使 Work Binding 重新可被扫描激活。'
+  },
+  {
+    id: 'undo-media-unbind',
+    label: '撤销媒体解绑',
+    description: '撤回之前的媒体解绑，使 Media Binding 重新可被扫描激活。'
   }
 ];
 
