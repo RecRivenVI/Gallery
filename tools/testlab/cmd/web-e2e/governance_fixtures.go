@@ -20,6 +20,8 @@ import (
 const (
 	governanceIssueSourceName     = "治理 E2E · 绑定问题"
 	governanceStructureSourceName = "治理 E2E · 结构决策"
+	governanceMergeSourceName     = "治理 E2E · 合并决策"
+	governanceConsumedSourceName  = "治理 E2E · 已消费决策"
 	governanceOrphanSourceName    = "治理 E2E · 孤儿候选"
 	governanceMediaSourceName     = "治理 E2E · 媒体解绑"
 )
@@ -33,10 +35,23 @@ type governanceFixtureState struct {
 	StructureSourceName      string `json:"structureSourceName"`
 	StructureIssueID         string `json:"structureIssueId"`
 	StructureTargetSourceKey string `json:"structureTargetSourceKey"`
+	MergeSourceID            string `json:"mergeSourceId"`
+	MergeSourceName          string `json:"mergeSourceName"`
+	MergeIssueID             string `json:"mergeIssueId"`
+	MergeTargetWorkID        string `json:"mergeTargetWorkId"`
+	ConsumedDecisionID       string `json:"consumedDecisionId"`
+	ConsumedDecisionIssueID  string `json:"consumedDecisionIssueId"`
+	ConsumedDecisionVersion  int    `json:"consumedDecisionVersion"`
 	OrphanSourceID           string `json:"orphanSourceId"`
 	OrphanSourceName         string `json:"orphanSourceName"`
 	OrphanBindingID          string `json:"orphanBindingId"`
 	OrphanSourceKey          string `json:"orphanSourceKey"`
+	OrphanUnbindBindingID    string `json:"orphanUnbindBindingId"`
+	OrphanUnbindSourceKey    string `json:"orphanUnbindSourceKey"`
+	OrphanCreatorBindingID   string `json:"orphanCreatorBindingId"`
+	OrphanCreatorSourceKey   string `json:"orphanCreatorSourceKey"`
+	OrphanMediaBindingID     string `json:"orphanMediaBindingId"`
+	OrphanMediaSourceKey     string `json:"orphanMediaSourceKey"`
 	MediaSourceID            string `json:"mediaSourceId"`
 	MediaSourceName          string `json:"mediaSourceName"`
 	MediaSourceKey           string `json:"mediaSourceKey"`
@@ -53,6 +68,8 @@ func seedGovernanceFixtures(ctx context.Context, appRoot, sourceRoot string) (fi
 	sourceRoots := map[string]string{
 		"issue":     filepath.Join(sourceRoot, "binding-issue"),
 		"structure": filepath.Join(sourceRoot, "structure"),
+		"merge":     filepath.Join(sourceRoot, "structure-merge"),
+		"consumed":  filepath.Join(sourceRoot, "structure-consumed"),
 		"orphan":    filepath.Join(sourceRoot, "orphan"),
 		"media":     filepath.Join(sourceRoot, "media"),
 	}
@@ -84,6 +101,14 @@ func seedGovernanceFixtures(ctx context.Context, appRoot, sourceRoot string) (fi
 		return governanceFixtureState{}, err
 	}
 	structureSource, err := resources.CreateSource(ctx, library.ID, governanceStructureSourceName, sourceRoots["structure"])
+	if err != nil {
+		return governanceFixtureState{}, err
+	}
+	mergeSource, err := resources.CreateSource(ctx, library.ID, governanceMergeSourceName, sourceRoots["merge"])
+	if err != nil {
+		return governanceFixtureState{}, err
+	}
+	consumedSource, err := resources.CreateSource(ctx, library.ID, governanceConsumedSourceName, sourceRoots["consumed"])
 	if err != nil {
 		return governanceFixtureState{}, err
 	}
@@ -137,18 +162,99 @@ func seedGovernanceFixtures(ctx context.Context, appRoot, sourceRoot string) (fi
 		return governanceFixtureState{}, err
 	}
 
+	if _, err := resources.EnsureCanonical(ctx, mergeSource.ID, []application.DiscoveredWork{
+		{SourceKey: "wkM1", Title: "待合并作品一", Media: []application.DiscoveredMedia{governanceMedia("wkM1/m1", "6", 0)}},
+		{SourceKey: "wkM2", Title: "待合并作品二", Media: []application.DiscoveredMedia{governanceMedia("wkM2/m2", "7", 0)}},
+	}); err != nil {
+		return governanceFixtureState{}, fmt.Errorf("建立合并初始事实: %w", err)
+	}
+	_, mergeErr := resources.EnsureCanonical(ctx, mergeSource.ID, []application.DiscoveredWork{{
+		SourceKey: "wkM", Title: "合并作品", Media: []application.DiscoveredMedia{
+			governanceMedia("wkM/m1", "6", 0), governanceMedia("wkM/m2", "7", 1),
+		},
+	}})
+	if err := requireBindingReview(mergeErr); err != nil {
+		return governanceFixtureState{}, fmt.Errorf("建立合并决策夹具: %w", err)
+	}
+	mergeIssue, err := uniqueBindingIssue(ctx, resources, mergeSource.ID, "SOURCE_WORK_MERGE_REVIEW_REQUIRED")
+	if err != nil {
+		return governanceFixtureState{}, err
+	}
+	mergeIssue, err = resources.GetBindingIssue(ctx, mergeIssue.ID)
+	if err != nil {
+		return governanceFixtureState{}, err
+	}
+	mergeTargetWorkID := ""
+	for _, candidate := range mergeIssue.Candidates {
+		if candidate.MatchSignal == "origin_canonical" {
+			mergeTargetWorkID = candidate.CandidateID
+			break
+		}
+	}
+	if mergeTargetWorkID == "" {
+		return governanceFixtureState{}, fmt.Errorf("合并决策夹具缺少 origin_canonical 候选")
+	}
+
+	consumedInitial := application.DiscoveredWork{
+		SourceKey: "wkC", Title: "已消费决策作品", Media: []application.DiscoveredMedia{
+			governanceMedia("wkC/m1", "c", 0), governanceMedia("wkC/m2", "d", 1),
+		},
+	}
+	if _, err := resources.EnsureCanonical(ctx, consumedSource.ID, []application.DiscoveredWork{consumedInitial}); err != nil {
+		return governanceFixtureState{}, fmt.Errorf("建立已消费决策初始事实: %w", err)
+	}
+	consumedSplit := []application.DiscoveredWork{
+		{SourceKey: "wkC1", Title: "已消费拆分一", Media: []application.DiscoveredMedia{governanceMedia("wkC1/m1", "c", 0)}},
+		{SourceKey: "wkC2", Title: "已消费拆分二", Media: []application.DiscoveredMedia{governanceMedia("wkC2/m2", "d", 0)}},
+	}
+	_, consumedErr := resources.EnsureCanonical(ctx, consumedSource.ID, consumedSplit)
+	if err := requireBindingReview(consumedErr); err != nil {
+		return governanceFixtureState{}, fmt.Errorf("建立已消费决策 issue: %w", err)
+	}
+	consumedIssue, err := uniqueBindingIssue(ctx, resources, consumedSource.ID, "SOURCE_WORK_SPLIT_REVIEW_REQUIRED")
+	if err != nil {
+		return governanceFixtureState{}, err
+	}
+	consumedDecision, err := resources.ResolveSourceStructureIssue(
+		ctx, consumedIssue.ID, "governance-e2e", "split_inherit", "wkC1", "", consumedIssue.Version,
+	)
+	if err != nil {
+		return governanceFixtureState{}, fmt.Errorf("建立待消费结构决策: %w", err)
+	}
+	if _, err := resources.EnsureCanonical(ctx, consumedSource.ID, consumedSplit); err != nil {
+		return governanceFixtureState{}, fmt.Errorf("消费结构决策: %w", err)
+	}
+
 	const orphanSourceKey = "orphan-work"
-	orphanWork := application.DiscoveredWork{
+	orphanWorks := []application.DiscoveredWork{{
 		SourceKey:  orphanSourceKey,
 		ProviderID: "e2e",
 		ExternalID: "orphan-work-1",
 		Title:      "待处理孤儿作品",
 		Creator: application.DiscoveredCreator{
-			SourceKey: "orphan-creator", ProviderID: "e2e", ExternalID: "orphan-creator-1", Name: "孤儿创作者",
+			SourceKey: "orphan-creator-extend", ProviderID: "e2e", ExternalID: "orphan-creator-1", Name: "延长候选创作者",
 		},
-		Media: []application.DiscoveredMedia{governanceMedia("orphan-work/asset.jpg", "4", 0)},
-	}
-	if _, err := resources.EnsureCanonical(ctx, orphanSource.ID, []application.DiscoveredWork{orphanWork}); err != nil {
+		Media: []application.DiscoveredMedia{governanceMedia("orphan-work/asset.jpg", "8", 0)},
+	}, {
+		SourceKey: "orphan-unbind-work", ProviderID: "e2e", ExternalID: "orphan-work-2", Title: "解绑孤儿作品",
+		Creator: application.DiscoveredCreator{
+			SourceKey: "orphan-creator-unbind", ProviderID: "e2e", ExternalID: "orphan-creator-2", Name: "解绑候选创作者",
+		},
+		Media: []application.DiscoveredMedia{governanceMedia("orphan-unbind-work/asset.jpg", "9", 0)},
+	}, {
+		SourceKey: "orphan-creator-work", ProviderID: "e2e", ExternalID: "orphan-work-3", Title: "创作者孤儿作品",
+		Creator: application.DiscoveredCreator{
+			SourceKey: "orphan-confirm-creator", ProviderID: "e2e", ExternalID: "orphan-creator-3", Name: "确认孤儿创作者",
+		},
+		Media: []application.DiscoveredMedia{governanceMedia("orphan-creator-work/asset.jpg", "a", 0)},
+	}, {
+		SourceKey: "orphan-media-work", ProviderID: "e2e", ExternalID: "orphan-work-4", Title: "媒体孤儿作品",
+		Creator: application.DiscoveredCreator{
+			SourceKey: "orphan-creator-retain", ProviderID: "e2e", ExternalID: "orphan-creator-4", Name: "保留候选创作者",
+		},
+		Media: []application.DiscoveredMedia{governanceMedia("orphan-retain-media/asset.jpg", "b", 0)},
+	}}
+	if _, err := resources.EnsureCanonical(ctx, orphanSource.ID, orphanWorks); err != nil {
 		return governanceFixtureState{}, fmt.Errorf("建立孤儿初始事实: %w", err)
 	}
 	for range 3 {
@@ -156,14 +262,39 @@ func seedGovernanceFixtures(ctx context.Context, appRoot, sourceRoot string) (fi
 			return governanceFixtureState{}, fmt.Errorf("推进孤儿保留窗口: %w", err)
 		}
 	}
-	orphans, err := resources.ListOrphanCandidates(ctx, application.OrphanCandidateFilter{
+	workOrphans, err := resources.ListOrphanCandidates(ctx, application.OrphanCandidateFilter{
 		SourceID: orphanSource.ID, EntityType: "work",
 	}, "", 50)
 	if err != nil {
 		return governanceFixtureState{}, err
 	}
-	if len(orphans.Items) != 1 || orphans.Items[0].SourceKey != orphanSourceKey {
-		return governanceFixtureState{}, fmt.Errorf("孤儿作品夹具不是唯一候选: %+v", orphans.Items)
+	creatorOrphans, err := resources.ListOrphanCandidates(ctx, application.OrphanCandidateFilter{
+		SourceID: orphanSource.ID, EntityType: "creator",
+	}, "", 50)
+	if err != nil {
+		return governanceFixtureState{}, err
+	}
+	mediaOrphans, err := resources.ListOrphanCandidates(ctx, application.OrphanCandidateFilter{
+		SourceID: orphanSource.ID, EntityType: "media",
+	}, "", 50)
+	if err != nil {
+		return governanceFixtureState{}, err
+	}
+	orphanExtend, err := requireOrphanCandidate(workOrphans.Items, orphanSourceKey)
+	if err != nil {
+		return governanceFixtureState{}, err
+	}
+	orphanUnbind, err := requireOrphanCandidate(workOrphans.Items, "orphan-unbind-work")
+	if err != nil {
+		return governanceFixtureState{}, err
+	}
+	orphanCreator, err := requireOrphanCandidate(creatorOrphans.Items, "orphan-confirm-creator")
+	if err != nil {
+		return governanceFixtureState{}, err
+	}
+	orphanMedia, err := requireOrphanCandidate(mediaOrphans.Items, "orphan-retain-media/asset.jpg")
+	if err != nil {
+		return governanceFixtureState{}, err
 	}
 
 	const mediaSourceKey = "media-work/asset.jpg"
@@ -181,10 +312,26 @@ func seedGovernanceFixtures(ctx context.Context, appRoot, sourceRoot string) (fi
 		IssueSourceKey:    issueSourceKey,
 		StructureSourceID: structureSource.ID, StructureSourceName: structureSource.DisplayName,
 		StructureIssueID: structureIssue.ID, StructureTargetSourceKey: "wkA1",
-		OrphanSourceID: orphanSource.ID, OrphanSourceName: orphanSource.DisplayName,
-		OrphanBindingID: orphans.Items[0].BindingID, OrphanSourceKey: orphanSourceKey,
+		MergeSourceID: mergeSource.ID, MergeSourceName: mergeSource.DisplayName,
+		MergeIssueID: mergeIssue.ID, MergeTargetWorkID: mergeTargetWorkID,
+		ConsumedDecisionID: consumedDecision.DecisionID, ConsumedDecisionIssueID: consumedDecision.IssueID,
+		ConsumedDecisionVersion: consumedDecision.Version,
+		OrphanSourceID:          orphanSource.ID, OrphanSourceName: orphanSource.DisplayName,
+		OrphanBindingID: orphanExtend.BindingID, OrphanSourceKey: orphanSourceKey,
+		OrphanUnbindBindingID: orphanUnbind.BindingID, OrphanUnbindSourceKey: orphanUnbind.SourceKey,
+		OrphanCreatorBindingID: orphanCreator.BindingID, OrphanCreatorSourceKey: orphanCreator.SourceKey,
+		OrphanMediaBindingID: orphanMedia.BindingID, OrphanMediaSourceKey: orphanMedia.SourceKey,
 		MediaSourceID: mediaSource.ID, MediaSourceName: mediaSource.DisplayName, MediaSourceKey: mediaSourceKey,
 	}, nil
+}
+
+func requireOrphanCandidate(items []application.OrphanCandidate, sourceKey string) (application.OrphanCandidate, error) {
+	for _, item := range items {
+		if item.SourceKey == sourceKey {
+			return item, nil
+		}
+	}
+	return application.OrphanCandidate{}, fmt.Errorf("缺少孤儿候选 sourceKey=%s: %+v", sourceKey, items)
 }
 
 func governanceMedia(sourceKey, digit string, ordinal int) application.DiscoveredMedia {

@@ -16,10 +16,23 @@ interface GovernanceFixtureState {
   structureSourceName: string;
   structureIssueId: string;
   structureTargetSourceKey: string;
+  mergeSourceId: string;
+  mergeSourceName: string;
+  mergeIssueId: string;
+  mergeTargetWorkId: string;
+  consumedDecisionId: string;
+  consumedDecisionIssueId: string;
+  consumedDecisionVersion: number;
   orphanSourceId: string;
   orphanSourceName: string;
   orphanBindingId: string;
   orphanSourceKey: string;
+  orphanUnbindBindingId: string;
+  orphanUnbindSourceKey: string;
+  orphanCreatorBindingId: string;
+  orphanCreatorSourceKey: string;
+  orphanMediaBindingId: string;
+  orphanMediaSourceKey: string;
   mediaSourceId: string;
   mediaSourceName: string;
   mediaSourceKey: string;
@@ -45,6 +58,7 @@ interface OrphanDecisionResult {
   entityType: string;
   decision: string;
   newStatus: string;
+  canonicalId: string;
 }
 
 interface BindingActionResult {
@@ -203,6 +217,70 @@ test('绑定问题、结构决策、孤儿与媒体解绑真实治理链 @real-g
     status: 'open'
   });
 
+  await page.getByRole('tab', { name: '绑定问题', exact: true }).click();
+  await selectOption(page, page, /来源/, `${state.mergeSourceName} · ${state.mergeSourceId}`);
+  await selectOption(page, page, /状态/, '待处理');
+  const mergeIssueRow = issuesTable.getByRole('row').filter({ hasText: 'wkM' });
+  await expect(mergeIssueRow).toHaveCount(1);
+  await mergeIssueRow.getByRole('button', { name: '确认结构', exact: true }).click();
+  const mergeDialog = page.getByRole('dialog', { name: '确认作品合并', exact: true });
+  await mergeDialog
+    .getByRole('textbox', { name: '目标 Work ID（可选）', exact: true })
+    .fill(state.mergeTargetWorkId);
+  const mergePromise = page.waitForResponse((response) =>
+    pathIs(response, `/api/v1/binding-issues/${state.mergeIssueId}/resolve-structure`, 'POST')
+  );
+  await mergeDialog.getByRole('button', { name: '提交决策', exact: true }).click();
+  const mergeResponse = await mergePromise;
+  expect(mergeResponse.status()).toBe(200);
+  expect(mergeResponse.request().postDataJSON()).toEqual({
+    action: 'merge_bind_existing',
+    version: 1,
+    targetWorkId: state.mergeTargetWorkId
+  });
+  const mergeDecision = (await mergeResponse.json()) as StructureDecisionSnapshot;
+  expect(mergeDecision).toMatchObject({ issueId: state.mergeIssueId, status: 'applied', version: 1 });
+
+  await page.getByRole('tab', { name: '结构决策', exact: true }).click();
+  const mergeDecisionRow = decisionsTable.getByRole('row').filter({ hasText: state.mergeIssueId });
+  await expect(mergeDecisionRow).toHaveCount(1);
+  const undoMergePromise = page.waitForResponse((response) =>
+    pathIs(response, `/api/v1/source-structure-decisions/${mergeDecision.decisionId}/undo`, 'POST')
+  );
+  await mergeDecisionRow.getByRole('button', { name: '撤回', exact: true }).click();
+  await page
+    .getByRole('dialog', { name: '撤回结构决策', exact: true })
+    .getByRole('button', { name: '确认撤回', exact: true })
+    .click();
+  const undoMergeResponse = await undoMergePromise;
+  expect(undoMergeResponse.status()).toBe(200);
+  expect(undoMergeResponse.request().postDataJSON()).toEqual({ version: mergeDecision.version });
+  expect((await undoMergeResponse.json()) as StructureDecisionSnapshot).toMatchObject({
+    decisionId: mergeDecision.decisionId,
+    status: 'undone',
+    version: mergeDecision.version + 1
+  });
+
+  const consumedDecisionRow = decisionsTable
+    .getByRole('row')
+    .filter({ hasText: state.consumedDecisionIssueId });
+  await expect(consumedDecisionRow).toHaveCount(1);
+  const undoConsumedPromise = page.waitForResponse((response) =>
+    pathIs(response, `/api/v1/source-structure-decisions/${state.consumedDecisionId}/undo`, 'POST')
+  );
+  await consumedDecisionRow.getByRole('button', { name: '撤回', exact: true }).click();
+  await page
+    .getByRole('dialog', { name: '撤回结构决策', exact: true })
+    .getByRole('button', { name: '确认撤回', exact: true })
+    .click();
+  const undoConsumedResponse = await undoConsumedPromise;
+  expect(undoConsumedResponse.status()).toBe(409);
+  expect(undoConsumedResponse.request().postDataJSON()).toEqual({ version: state.consumedDecisionVersion });
+  await expect(page.getByText('撤回未能完成', { exact: true })).toBeVisible();
+  await expect(
+    page.getByText('资源已被其他操作改变，请刷新后基于最新状态重试。', { exact: true })
+  ).toBeVisible();
+
   await page.getByRole('tab', { name: '孤儿候选', exact: true }).click();
   await selectOption(page, page, /实体类型/, '作品');
   const orphansTable = page.getByRole('table', { name: '孤儿候选', exact: true });
@@ -227,7 +305,90 @@ test('绑定问题、结构决策、孤儿与媒体解绑真实治理链 @real-g
   });
   await expect(orphanRow).toHaveCount(0);
 
+  const orphanUnbindRow = orphansTable.getByRole('row').filter({ hasText: state.orphanUnbindSourceKey });
+  await expect(orphanUnbindRow).toHaveCount(1);
+  await orphanUnbindRow.getByRole('button', { name: '处理', exact: true }).click();
+  const orphanUnbindDialog = page.getByRole('dialog', { name: '处理孤儿候选', exact: true });
+  await selectOption(page, orphanUnbindDialog, /决定/, '人工解绑');
+  const orphanUnbindPromise = page.waitForResponse((response) =>
+    pathIs(response, `/api/v1/orphan-candidates/${state.orphanUnbindBindingId}/decide`, 'POST')
+  );
+  await orphanUnbindDialog.getByRole('button', { name: '提交决策', exact: true }).click();
+  const orphanUnbindResponse = await orphanUnbindPromise;
+  expect(orphanUnbindResponse.status()).toBe(200);
+  expect(orphanUnbindResponse.request().postDataJSON()).toEqual({ decision: 'unbind' });
+  const orphanUnbound = (await orphanUnbindResponse.json()) as OrphanDecisionResult;
+  expect(orphanUnbound).toMatchObject({
+    bindingId: state.orphanUnbindBindingId,
+    entityType: 'work',
+    decision: 'unbind',
+    newStatus: 'manual_unbound'
+  });
+
+  await selectOption(page, page, /实体类型/, '创作者');
+  const orphanCreatorRow = orphansTable.getByRole('row').filter({ hasText: state.orphanCreatorSourceKey });
+  await expect(orphanCreatorRow).toHaveCount(1);
+  await orphanCreatorRow.getByRole('button', { name: '处理', exact: true }).click();
+  const orphanCreatorDialog = page.getByRole('dialog', { name: '处理孤儿候选', exact: true });
+  await selectOption(page, orphanCreatorDialog, /决定/, '确认为孤儿');
+  const orphanCreatorPromise = page.waitForResponse((response) =>
+    pathIs(response, `/api/v1/orphan-candidates/${state.orphanCreatorBindingId}/decide`, 'POST')
+  );
+  await orphanCreatorDialog.getByRole('button', { name: '提交决策', exact: true }).click();
+  const orphanCreatorResponse = await orphanCreatorPromise;
+  expect(orphanCreatorResponse.status()).toBe(200);
+  expect(orphanCreatorResponse.request().postDataJSON()).toEqual({ decision: 'confirm_orphaned' });
+  expect((await orphanCreatorResponse.json()) as OrphanDecisionResult).toMatchObject({
+    bindingId: state.orphanCreatorBindingId,
+    entityType: 'creator',
+    decision: 'confirm_orphaned',
+    newStatus: 'orphaned'
+  });
+
+  await selectOption(page, page, /实体类型/, '媒体');
+  const orphanMediaRow = orphansTable.getByRole('row').filter({ hasText: state.orphanMediaSourceKey });
+  await expect(orphanMediaRow).toHaveCount(1);
+  await orphanMediaRow.getByRole('button', { name: '处理', exact: true }).click();
+  const orphanMediaDialog = page.getByRole('dialog', { name: '处理孤儿候选', exact: true });
+  await selectOption(page, orphanMediaDialog, /决定/, '保留（重置缺席计数）');
+  const orphanMediaPromise = page.waitForResponse((response) =>
+    pathIs(response, `/api/v1/orphan-candidates/${state.orphanMediaBindingId}/decide`, 'POST')
+  );
+  await orphanMediaDialog.getByRole('button', { name: '提交决策', exact: true }).click();
+  const orphanMediaResponse = await orphanMediaPromise;
+  expect(orphanMediaResponse.status()).toBe(200);
+  expect(orphanMediaResponse.request().postDataJSON()).toEqual({ decision: 'retain' });
+  expect((await orphanMediaResponse.json()) as OrphanDecisionResult).toMatchObject({
+    bindingId: state.orphanMediaBindingId,
+    entityType: 'media',
+    decision: 'retain',
+    newStatus: 'inactive'
+  });
+
   await page.getByRole('tab', { name: '人工解绑', exact: true }).click();
+  await selectOption(page, page, /动作/, '撤销作品解绑');
+  await selectOption(page, page, /来源/, `${state.orphanSourceName} · ${state.orphanSourceId}`);
+  await page.getByRole('textbox', { name: 'sourceKey', exact: true }).fill(state.orphanUnbindSourceKey);
+  const undoOrphanWorkPromise = page.waitForResponse((response) =>
+    pathIs(response, '/api/v1/binding-actions/undo-unbind', 'POST')
+  );
+  await page.getByRole('button', { name: '撤销作品解绑', exact: true }).click();
+  await page
+    .getByRole('dialog', { name: '撤销作品解绑', exact: true })
+    .getByRole('button', { name: '确认执行', exact: true })
+    .click();
+  const undoOrphanWorkResponse = await undoOrphanWorkPromise;
+  expect(undoOrphanWorkResponse.status()).toBe(200);
+  expect(undoOrphanWorkResponse.request().postDataJSON()).toEqual({
+    sourceId: state.orphanSourceId,
+    sourceKey: state.orphanUnbindSourceKey,
+    entityKind: 'work'
+  });
+  expect((await undoOrphanWorkResponse.json()) as BindingActionResult).toEqual({
+    canonicalId: orphanUnbound.canonicalId,
+    entityKind: 'work'
+  });
+
   await selectOption(page, page, /动作/, '解绑媒体');
   await selectOption(page, page, /来源/, `${state.mediaSourceName} · ${state.mediaSourceId}`);
   await page.getByRole('textbox', { name: 'sourceKey', exact: true }).fill(state.mediaSourceKey);

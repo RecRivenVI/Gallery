@@ -119,6 +119,8 @@ func run() (exitCode int) {
 		governanceSourceRoot,
 		filepath.Join(governanceSourceRoot, "binding-issue"),
 		filepath.Join(governanceSourceRoot, "structure"),
+		filepath.Join(governanceSourceRoot, "structure-merge"),
+		filepath.Join(governanceSourceRoot, "structure-consumed"),
 		filepath.Join(governanceSourceRoot, "orphan"),
 		filepath.Join(governanceSourceRoot, "media"),
 		logsRoot,
