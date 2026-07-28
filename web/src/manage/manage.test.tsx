@@ -849,7 +849,19 @@ describe('规则草稿', () => {
       cel_profile_version: 'gallery-cel-v1',
       parameter_schema: { type: 'object', additionalProperties: false },
       provider_namespaces: [],
-      primitives: [],
+      primitives: [
+        {
+          id: 'works',
+          kind: 'path_match',
+          config: {
+            scope: 'work_directory',
+            glob: '*',
+            title: 'directory_name',
+            stable_key: 'relative_path',
+            metadata_file: 'metadata.json'
+          }
+        }
+      ],
       cel_expressions: [],
       tests: [{}],
       extensions: {},
@@ -886,9 +898,15 @@ describe('规则草稿', () => {
 
     expect(screen.getByText('有未保存修改')).toBeInTheDocument();
     expect(screen.getByRole('button', { name: '保存草稿' })).not.toBeDisabled();
+    const workGlob = await screen.findByRole('textbox', { name: /作品目录 glob/ });
+    expect(workGlob).toHaveValue('*');
+    expect(screen.queryByRole('textbox', { name: /原语配置/ })).not.toBeInTheDocument();
+    await userEvent.clear(workGlob);
+    await userEvent.type(workGlob, 'works/*');
     await userEvent.click(screen.getByRole('tab', { name: 'JSON 文本' }));
     const text = (screen.getByRole('textbox', { name: /草稿内容/ }) as HTMLTextAreaElement).value;
     expect(text).toContain(`"rule_set_id": "${FORM_RULE_SET_ID}"`);
+    expect(text).toContain('"glob": "works/*"');
     expect(text).not.toContain('package_hash');
     expect(text).not.toContain('semantic_hash');
     expect(requestsTo('PUT /api/v1/rule-packages/pkg_01/draft')).toHaveLength(0);

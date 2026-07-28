@@ -2,6 +2,288 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://gallery.local/schemas/rule-package-v1.json",
   "title": "Gallery Canonical Rule Package v1",
+  "$defs": {
+    "primitive_config_path_match": {
+      "title": "作品目录匹配",
+      "description": "从 Source 根下的目录建立作品边界与稳定键。",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["scope", "glob", "title", "stable_key"],
+      "properties": {
+        "scope": {"title": "作用域", "const": "work_directory", "default": "work_directory"},
+        "glob": {"title": "作品目录 glob", "type": "string", "minLength": 1},
+        "title": {"title": "默认标题来源", "const": "directory_name", "default": "directory_name"},
+        "stable_key": {"title": "稳定键来源", "const": "relative_path", "default": "relative_path"},
+        "metadata_file": {"title": "Metadata 文件名", "type": "string"}
+      }
+    },
+    "primitive_config_selector": {
+      "title": "Metadata 取值",
+      "description": "按 pointer 或 pointers 从 metadata 选择字段值。",
+      "type": "object",
+      "additionalProperties": true,
+      "required": ["target"],
+      "properties": {
+        "target": {"title": "目标字段", "type": "string", "enum": ["title", "external_id", "provider_id", "creator", "tags", "description", "source_url"]},
+        "pointer": {"title": "JSON Pointer", "type": "string", "pattern": "^/"},
+        "pointers": {"title": "JSON Pointer 回退链", "type": "array", "minItems": 1, "items": {"type": "string", "pattern": "^/"}},
+        "default": {"title": "缺省值", "description": "任意 JSON 值；空字符串会被编译器拒绝。"},
+        "required": {"title": "缺失时报错", "type": "boolean", "default": false}
+      }
+    },
+    "primitive_config_fallback": {
+      "title": "Metadata 回退取值",
+      "description": "按 pointer 回退链取得第一个可用字段值。",
+      "type": "object",
+      "additionalProperties": true,
+      "required": ["target"],
+      "properties": {
+        "target": {"title": "目标字段", "type": "string", "enum": ["title", "external_id", "provider_id", "creator", "tags", "description", "source_url"]},
+        "pointer": {"title": "JSON Pointer", "type": "string", "pattern": "^/"},
+        "pointers": {"title": "JSON Pointer 回退链", "type": "array", "minItems": 1, "items": {"type": "string", "pattern": "^/"}},
+        "default": {"title": "缺省值", "description": "任意 JSON 值；空字符串会被编译器拒绝。"},
+        "required": {"title": "缺失时报错", "type": "boolean", "default": false}
+      }
+    },
+    "primitive_config_stable_key": {
+      "title": "稳定外部键",
+      "type": "object",
+      "additionalProperties": true,
+      "required": ["target", "pointer"],
+      "properties": {
+        "target": {"title": "实体", "type": "string", "enum": ["work", "creator"]},
+        "pointer": {"title": "JSON Pointer", "type": "string", "pattern": "^/"},
+        "prefix": {"title": "稳定键前缀", "type": "string"}
+      }
+    },
+    "primitive_config_media_classify": {
+      "title": "媒体分类",
+      "description": "按文件 glob 分类媒体，并声明对外 MIME。",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["glob", "kind", "mime"],
+      "properties": {
+        "glob": {"title": "文件 glob", "type": "string", "minLength": 1},
+        "kind": {"title": "媒体种类", "type": "string", "minLength": 1},
+        "mime": {"title": "MIME", "type": "string", "minLength": 1},
+        "condition": {"title": "CEL 表达式 ID", "type": "string"}
+      }
+    },
+    "primitive_config_media_hidden": {
+      "title": "默认隐藏媒体",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["globs"],
+      "properties": {
+        "globs": {
+          "title": "文件名 globs",
+          "type": "array",
+          "minItems": 1,
+          "items": {"type": "string", "minLength": 1}
+        }
+      }
+    },
+    "primitive_config_media_order": {
+      "title": "媒体自然顺序",
+      "type": "object",
+      "additionalProperties": true,
+      "required": ["by", "direction"],
+      "properties": {
+        "by": {"title": "排序字段", "type": "string", "enum": ["path"]},
+        "direction": {"title": "方向", "type": "string", "enum": ["asc", "desc"]}
+      }
+    },
+    "primitive_config_cover_candidate": {
+      "title": "封面候选",
+      "type": "object",
+      "additionalProperties": true,
+      "required": ["glob"],
+      "properties": {
+        "glob": {"title": "文件 glob", "type": "string", "minLength": 1},
+        "priority": {"title": "优先级", "type": "integer", "minimum": 0},
+        "score": {"title": "兼容分数", "type": "integer"},
+        "media_type": {"title": "媒体类型限制", "type": "string", "minLength": 1}
+      }
+    },
+    "primitive_config_cover_disable_marker": {
+      "title": "禁用封面标记",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["filename"],
+      "properties": {
+        "filename": {"title": "标记文件名", "type": "string", "minLength": 1}
+      }
+    },
+    "primitive_config_badge": {
+      "title": "作品角标",
+      "description": "按标签、metadata 或媒体后缀生成 Source-derived 角标。",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["badge_id", "order", "position", "label", "style", "when"],
+      "properties": {
+        "badge_id": {"title": "角标 ID", "type": "string", "minLength": 1},
+        "order": {"title": "顺序", "type": "integer"},
+        "position": {
+          "title": "位置",
+          "type": "string",
+          "enum": ["cover_top_left", "cover_top_right", "tag_leading"]
+        },
+        "label": {"title": "标签", "type": "string", "minLength": 1},
+        "style": {
+          "title": "样式",
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "color": {"type": "string"},
+            "background": {"type": "string"},
+            "border": {"type": "string"},
+            "color_light": {"type": "string"},
+            "background_light": {"type": "string"},
+            "border_light": {"type": "string"}
+          }
+        },
+        "when": {
+          "title": "触发条件（多类同时声明时取交集）",
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "tags": {"type": "array", "items": {"type": "string"}},
+            "metadata_pointer": {"title": "Metadata JSON Pointer", "type": "string", "pattern": "^/"},
+            "metadata_values": {"title": "Metadata 匹配值", "type": "array"},
+            "media_suffix": {"type": "array", "items": {"type": "string"}},
+            "case_insensitive": {"type": "boolean", "default": false}
+          }
+        }
+      }
+    },
+    "primitive_config_work_date": {
+      "title": "作品发布时间",
+      "description": "按 metadata pointer 链或相对路径命名捕获组解析时间。",
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "pointers": {"title": "JSON Pointer 回退链", "type": "array", "minItems": 1, "items": {"type": "string", "pattern": "^/"}},
+        "path_pattern": {"title": "路径正则", "type": "string", "maxLength": 512},
+        "input_timezone": {"title": "Metadata 输入时区", "type": "string"},
+        "path_timezone": {"title": "路径输入时区", "type": "string"}
+      }
+    },
+    "primitive_config_path_capture": {
+      "title": "路径命名捕获",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["pattern", "targets"],
+      "properties": {
+        "pattern": {"title": "路径正则", "type": "string", "minLength": 1, "maxLength": 512},
+        "targets": {
+          "title": "目标字段到捕获组",
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "title": {"type": "string"},
+            "external_id": {"type": "string"},
+            "provider_id": {"type": "string"},
+            "creator": {"type": "string"},
+            "description": {"type": "string"},
+            "source_url": {"type": "string"}
+          }
+        }
+      }
+    },
+    "primitive_config_presentation": {
+      "title": "平台呈现",
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "name": {"title": "名称", "type": "string"},
+        "description": {"title": "说明", "type": "string"},
+        "author_label": {"title": "作者字段名称", "type": "string"},
+        "show_in_sidebar": {"title": "显示在侧栏", "type": "boolean", "default": true},
+        "show_in_manager": {"title": "显示在管理端", "type": "boolean", "default": true},
+        "icon": {
+          "title": "图标",
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["kind", "glyph"],
+          "properties": {
+            "kind": {"const": "glyph", "default": "glyph"},
+            "glyph": {"type": "string", "minLength": 1},
+            "background": {"type": "string"},
+            "color": {"type": "string"},
+            "border": {"type": "string"}
+          }
+        },
+        "sort": {
+          "title": "排序菜单",
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "collation": {"type": "string"},
+            "work_default": {"type": "string"},
+            "work_options": {
+              "type": "array",
+              "uniqueItems": true,
+              "items": {"type": "string", "enum": ["date_desc", "date_asc", "title_asc", "title_desc", "name_asc", "name_desc", "progress_asc", "progress_desc"]}
+            },
+            "author_default": {"type": "string"},
+            "author_options": {
+              "type": "array",
+              "uniqueItems": true,
+              "items": {"type": "string", "enum": ["name_asc", "name_desc", "latest_desc", "latest_asc", "posts_desc", "posts_asc"]}
+            },
+            "browse_default": {"type": "string"},
+            "browse_options": {
+              "type": "array",
+              "uniqueItems": true,
+              "items": {"type": "string", "enum": ["natural_asc", "natural_desc"]}
+            }
+          }
+        },
+        "time": {
+          "title": "时间显示",
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "display_timezone": {"type": "string"},
+            "display_format": {"type": "string"}
+          }
+        }
+      }
+    },
+    "primitive_config_metadata_map": {
+      "title": "Metadata 字段映射",
+      "type": "object",
+      "additionalProperties": true,
+      "required": ["fields"],
+      "properties": {
+        "fields": {
+          "title": "目标字段映射",
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "title": {"type": "array", "minItems": 1, "items": {"type": "string", "pattern": "^/"}},
+            "external_id": {"type": "array", "minItems": 1, "items": {"type": "string", "pattern": "^/"}},
+            "provider_id": {"type": "array", "minItems": 1, "items": {"type": "string", "pattern": "^/"}},
+            "creator": {"type": "array", "minItems": 1, "items": {"type": "string", "pattern": "^/"}},
+            "tags": {"type": "array", "minItems": 1, "items": {"type": "string", "pattern": "^/"}},
+            "description": {"type": "array", "minItems": 1, "items": {"type": "string", "pattern": "^/"}},
+            "source_url": {"type": "array", "minItems": 1, "items": {"type": "string", "pattern": "^/"}}
+          }
+        }
+      }
+    },
+    "primitive_config_condition": {
+      "title": "CEL 条件效果",
+      "type": "object",
+      "additionalProperties": true,
+      "required": ["scope", "expression", "effect"],
+      "properties": {
+        "scope": {"title": "作用域", "type": "string", "enum": ["work", "media"]},
+        "expression": {"title": "CEL 表达式 ID", "type": "string", "minLength": 1},
+        "effect": {"title": "效果", "type": "string", "enum": ["hide"]}
+      }
+    }
+  },
   "type": "object",
   "additionalProperties": false,
   "required": [

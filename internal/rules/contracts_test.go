@@ -2,12 +2,53 @@ package rules_test
 
 import (
 	"bytes"
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"testing"
 
 	"github.com/RecRivenVI/gallery/internal/rules"
 )
+
+func TestEveryPrimitiveKindHasAuthoritativeEditorSchema(t *testing.T) {
+	var document struct {
+		Defs       map[string]json.RawMessage `json:"$defs"`
+		Properties struct {
+			Primitives struct {
+				Items struct {
+					Properties struct {
+						Kind struct {
+							Enum []string `json:"enum"`
+						} `json:"kind"`
+					} `json:"properties"`
+				} `json:"items"`
+			} `json:"primitives"`
+		} `json:"properties"`
+	}
+	if err := json.Unmarshal(rules.RulePackageSchema(), &document); err != nil {
+		t.Fatal(err)
+	}
+	if len(document.Properties.Primitives.Items.Properties.Kind.Enum) == 0 {
+		t.Fatal("primitive kind 词表为空")
+	}
+	for _, kind := range document.Properties.Primitives.Items.Properties.Kind.Enum {
+		name := "primitive_config_" + kind
+		raw, ok := document.Defs[name]
+		if !ok {
+			t.Errorf("primitive %q 缺少 %s 编辑 Schema", kind, name)
+			continue
+		}
+		var definition struct {
+			Type       string                     `json:"type"`
+			Properties map[string]json.RawMessage `json:"properties"`
+		}
+		if err := json.Unmarshal(raw, &definition); err != nil {
+			t.Errorf("primitive %q 编辑 Schema 无法解析: %v", kind, err)
+		} else if definition.Type != "object" || len(definition.Properties) == 0 {
+			t.Errorf("primitive %q 编辑 Schema 不是含字段的 object: %+v", kind, definition)
+		}
+	}
+}
 
 func TestMinimalRulePackageAndForbiddenScriptField(t *testing.T) {
 	validator, err := rules.NewRulePackageValidator()

@@ -173,11 +173,15 @@ test('真实 galleryd 从空实例完成规则 UI 生命周期、绑定与 publi
   await page.getByRole('option', { name: '作者—作品—媒体层级' }).click();
   await page.getByRole('button', { name: '载入起始模板' }).click();
   await page.getByRole('textbox', { name: /规则版本/ }).fill('1.0.1');
+  const visualWorkGlob = page.getByRole('textbox', { name: /作品目录 glob/ }).first();
+  await expect(visualWorkGlob).toBeVisible();
+  await visualWorkGlob.fill('visual-proof/*');
   await expect(page.getByText('有未保存修改', { exact: true })).toBeVisible();
   await page.getByRole('tab', { name: 'JSON 文本' }).click();
   const textEditor = page.getByRole('textbox', { name: '草稿内容' });
   const templatedText = await textEditor.inputValue();
   expect(templatedText).toContain(ruleSetId);
+  expect(templatedText).toContain('"glob": "visual-proof/*"');
   expect(templatedText).not.toContain('package_hash');
   expect(templatedText).not.toContain('semantic_hash');
 

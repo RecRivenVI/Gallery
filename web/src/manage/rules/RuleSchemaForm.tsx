@@ -7,7 +7,7 @@ import type {
   UiSchema
 } from '@rjsf/utils';
 import { createPrecompiledValidator, type ValidatorFunctions } from '@rjsf/validator-ajv8';
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import buildSchema from '../../../../internal/rules/rule-package.schema.json';
 import { Button, ErrorState, Field, Select } from '../../design';
 import { describeError, errorCode, errorCorrelationId } from '../../shared/errors';
@@ -17,9 +17,9 @@ import validatorFunctions from '../ruleSchemaValidator.gen.cjs';
 import { cloneRuleValue, isRecord, parseRuleValue, stringifyRuleValue } from './lossless';
 
 interface RuleFormContext extends FormContextType {
+  currentValue: Record<string, unknown>;
   setOpaqueInvalid: (path: string, invalid: boolean) => void;
   changeOpaque: (path: readonly (string | number)[], value: unknown) => void;
-  getOpaque: (path: readonly (string | number)[]) => unknown;
 }
 
 interface RuleSchemaFormProps {
@@ -67,7 +67,7 @@ function OpaqueJsonField({
   onFocus,
   registry
 }: RjsfFieldProps<unknown, RJSFSchema, RuleFormContext>) {
-  const exactValue = registry.formContext.getOpaque(fieldPathId.path) ?? formData;
+  const exactValue = valueAtPath(registry.formContext.currentValue, fieldPathId.path) ?? formData;
   const externalText = useMemo(
     () => (exactValue === undefined ? '' : stringifyRuleValue(exactValue, 2)),
     [exactValue]
@@ -80,12 +80,8 @@ function OpaqueJsonField({
     if (syntaxError === undefined) setText(externalText);
   }, [externalText, syntaxError]);
 
-  useEffect(
-    () => () => {
-      registry.formContext.setOpaqueInvalid(path, false);
-    },
-    [path, registry.formContext]
-  );
+  const setOpaqueInvalid = registry.formContext.setOpaqueInvalid;
+  useEffect(() => () => setOpaqueInvalid(path, false), [path, setOpaqueInvalid]);
 
   const setInvalid = (message: string | undefined) => {
     setSyntaxError(message);
@@ -140,33 +136,48 @@ function OpaqueJsonField({
 }
 
 const schema = buildSchema as RJSFSchema;
-function buildPresentationSchema(source: RJSFSchema): RJSFSchema {
-  const presentation = structuredClone(source);
-  const properties = presentation.properties;
-  if (!isRecord(properties)) return presentation;
 
-  // 这些子树的结构由规则原语/extension 版本定义，不由根 Schema 展开。把它们在渲染层
-  // 收窄为原子 JSON 字段，避免 RJSF 的 default-state 遍历克隆 LosslessNumber；AJV 仍使用
-  // 下方完整的权威 schema 预编译校验器，所以这里只改变控件生成，不改变验证语义。
-  properties.parameter_schema = { type: 'object' };
-  properties.tests = { type: 'array' };
-  properties.extensions = { type: 'object' };
-  properties.ui_metadata = { type: 'object' };
-  const primitives = properties.primitives;
-  if (isRecord(primitives) && isRecord(primitives.items)) {
-    const primitiveProperties = primitives.items.properties;
-    if (isRecord(primitiveProperties)) primitiveProperties.config = { type: 'object' };
+function primitiveConfigUiSchema(kind: string): UiSchema<unknown, RJSFSchema, RuleFormContext> {
+  if (kind === 'selector' || kind === 'fallback') {
+    return { default: { 'ui:field': 'OpaqueJsonField' } };
   }
-  return presentation;
+  if (kind === 'badge') {
+    return { when: { metadata_values: { 'ui:field': 'OpaqueJsonField' } } };
+  }
+  return {};
 }
 
-const presentationSchema = buildPresentationSchema(schema);
+/**
+ * 根据同一 primitive 的 kind 选择后端权威 Schema 中的配置定义。根 Schema 刻意只把
+ * `config` 约束为对象：完整语义仍由 CompilePackage 校验，以保持既有 RuleVersion 的错误契约；
+ * `$defs.primitive_config_*` 则是服务端和 Web 共用的可视化字段词表，不在前端复制平台规则。
+ */
+function PrimitiveConfigField(props: RjsfFieldProps<unknown, RJSFSchema, RuleFormContext>) {
+  const primitive = valueAtPath(props.registry.formContext.currentValue, props.fieldPathId.path.slice(0, -1));
+  const kind = isRecord(primitive) && typeof primitive.kind === 'string' ? primitive.kind : '';
+  const definitions = schema.$defs;
+  const selected = isRecord(definitions) ? definitions[`primitive_config_${kind}`] : undefined;
+  if (!isRecord(selected)) return <OpaqueJsonField {...props} />;
+
+  const ObjectField = props.registry.fields.ObjectField;
+  if (ObjectField === undefined) return <OpaqueJsonField {...props} />;
+  // RJSF 会在处理 additional properties/default state 时给传入的局部 Schema 加内部标记；
+  // 不能把根 Schema 的 `$defs` 节点原样交给它，否则会改写预编译校验器用来比对的根对象。
+  const fieldSchema = structuredClone(selected) as RJSFSchema;
+  return <ObjectField {...props} schema={fieldSchema} uiSchema={primitiveConfigUiSchema(kind)} />;
+}
+
 const validator = createPrecompiledValidator<Record<string, unknown>, RJSFSchema, RuleFormContext>(
   validatorFunctions as ValidatorFunctions,
-  presentationSchema
+  schema
 );
 const fields = {
   OpaqueJsonField: OpaqueJsonField as unknown as RjsfField<
+    Record<string, unknown>,
+    RJSFSchema,
+    RuleFormContext
+  >,
+  PrimitiveConfigField: PrimitiveConfigField as unknown as RjsfField<
     Record<string, unknown>,
     RJSFSchema,
     RuleFormContext
@@ -185,7 +196,7 @@ const uiSchema: UiSchema<Record<string, unknown>, RJSFSchema, RuleFormContext> =
   provider_namespaces: { 'ui:title': 'Provider namespaces' },
   primitives: {
     'ui:title': '规则原语',
-    items: { config: { 'ui:title': '原语配置', 'ui:field': 'OpaqueJsonField' } }
+    items: { config: { 'ui:title': '原语配置', 'ui:field': 'PrimitiveConfigField' } }
   },
   cel_expressions: { 'ui:title': 'CEL 表达式' },
   tests: { 'ui:title': '规则测试', 'ui:field': 'OpaqueJsonField' },
@@ -243,20 +254,6 @@ function restoreOpaqueValues(
     else Reflect.deleteProperty(next, key);
   }
 
-  if (Array.isArray(changed.primitives)) {
-    const changedPrimitives = changed.primitives as unknown[];
-    const sourcePrimitives = Array.isArray(source.primitives) ? (source.primitives as unknown[]) : [];
-    next.primitives = changedPrimitives.map((item, index) => {
-      if (!isRecord(item)) return item;
-      const sourceItem = sourcePrimitives.find(
-        (candidate) => isRecord(candidate) && candidate.id === item.id
-      );
-      const fallback = sourcePrimitives[index];
-      const exact = isRecord(sourceItem) ? sourceItem : isRecord(fallback) ? fallback : undefined;
-      if (exact !== undefined && hasOwn(exact, 'config')) return { ...item, config: exact.config };
-      return item;
-    });
-  }
   return next;
 }
 
@@ -272,8 +269,6 @@ export default function RuleSchemaForm({
   const examples = useRuleExamples();
   const [templateId, setTemplateId] = useState<string | null>(null);
   const [invalidPaths, setInvalidPaths] = useState<ReadonlySet<string>>(new Set());
-  const valueRef = useRef(value);
-  const onChangeRef = useRef(onChange);
   const schemaMatches =
     remoteSchema.data !== undefined && stableJson(remoteSchema.data) === stableJson(schema);
 
@@ -281,28 +276,23 @@ export default function RuleSchemaForm({
     onOpaqueValidityChange(invalidPaths.size > 0);
   }, [invalidPaths, onOpaqueValidityChange]);
 
-  useEffect(() => {
-    valueRef.current = value;
-    onChangeRef.current = onChange;
-  }, [onChange, value]);
-
+  const setOpaqueInvalid = useCallback((path: string, invalid: boolean) => {
+    setInvalidPaths((current) => {
+      const next = new Set(current);
+      if (invalid) next.add(path);
+      else next.delete(path);
+      return next;
+    });
+  }, []);
+  const changeOpaque = useCallback(
+    (path: readonly (string | number)[], nextValue: unknown) => {
+      onChange(stringifyRuleValue(patchRuleValue(value, path, nextValue), 2));
+    },
+    [onChange, value]
+  );
   const formContext = useMemo<RuleFormContext>(
-    () => ({
-      setOpaqueInvalid: (path, invalid) => {
-        setInvalidPaths((current) => {
-          const next = new Set(current);
-          if (invalid) next.add(path);
-          else next.delete(path);
-          return next;
-        });
-      },
-      changeOpaque: (path, nextValue) => {
-        const patched = patchRuleValue(valueRef.current, path, nextValue);
-        onChangeRef.current(stringifyRuleValue(patched, 2));
-      },
-      getOpaque: (path) => valueAtPath(valueRef.current, path)
-    }),
-    []
+    () => ({ currentValue: value, setOpaqueInvalid, changeOpaque }),
+    [changeOpaque, setOpaqueInvalid, value]
   );
 
   const applyTemplate = () => {
@@ -353,7 +343,7 @@ export default function RuleSchemaForm({
           <>
             <Select
               label="起始模板"
-              description="内置模板只填入当前编辑器，不会自动保存；复杂 primitive 配置仍在无损 JSON 字段中编辑。"
+              description="内置模板只填入当前编辑器，不会自动保存；也可以不载入模板，直接从空白表单建立规则包。"
               options={(examples.data?.items ?? []).map((item) => ({ id: item.id, label: item.name }))}
               selectedKey={templateId}
               isDisabled={isDisabled || examples.isPending}
@@ -380,7 +370,7 @@ export default function RuleSchemaForm({
         Schema 错误是即时预检，不会阻止保存无效草稿；服务端保存与校验结果才是规范化和诊断的权威事实。
       </p>
       <Form<Record<string, unknown>, RJSFSchema, RuleFormContext>
-        schema={presentationSchema}
+        schema={schema}
         validator={validator}
         uiSchema={uiSchema}
         fields={fields}

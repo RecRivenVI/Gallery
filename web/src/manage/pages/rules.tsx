@@ -553,8 +553,8 @@ function SchemaEntryPanel() {
 
   return (
     <Section
-      title="配置编辑器入口"
-      description="GET /api/v1/rules/schema 返回 application/schema+json，是 Schema 驱动配置编辑器的输入。表单生成属于另一条工作线，这里只核对端点可达。"
+      title="规则 Schema 契约"
+      description="GET /api/v1/rules/schema 返回 application/schema+json；规则包详情使用同一文档生成字段并核对预编译校验器版本。这里可以独立探测服务端契约。"
       actions={
         canRead ? (
           <Button variant="secondary" onPress={() => setProbe(true)}>
@@ -563,7 +563,7 @@ function SchemaEntryPanel() {
         ) : undefined
       }
     >
-      <ContractNoteList area="rules" only={['rules-schema-editor-elsewhere']} />
+      <ContractNoteList area="rules" only={['rules-schema-editor-active']} />
       {probe ? (
         <AsyncPanel query={schema}>
           {(data) => {

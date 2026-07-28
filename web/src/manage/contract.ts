@@ -115,11 +115,11 @@ export const CONTRACT_NOTES: readonly ContractNote[] = [
     gap: false
   },
   {
-    id: 'rules-schema-editor-elsewhere',
+    id: 'rules-schema-editor-active',
     area: 'rules',
-    title: '配置编辑器由另一条工作线实现',
+    title: '规则包详情使用权威 Schema 生成表单',
     detail:
-      'GET /api/v1/rules/schema 返回 application/schema+json，是 Schema 驱动配置编辑器的输入。本界面只保留入口并核对该端点可达，不在这里生成表单。',
+      'GET /api/v1/rules/schema 返回 application/schema+json；规则包详情会核对运行时 Schema 与前端预编译版本，并用其中的 primitive 配置定义生成表单。版本漂移时表单会停用，避免旧客户端改写新规则。',
     gap: false
   },
   {
