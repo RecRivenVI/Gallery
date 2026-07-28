@@ -5,6 +5,7 @@
  *   - 每次连接与重连都必须重取快照；
  *   - sequence 出现缺口必须重取快照；
  *   - 4401 / 4403 是终态，不再重连；
+ *   - 普通断线持续封顶退避，不因长停机永久耗尽；
  *   - 客户端从不向服务端发送任何消息。
  */
 
@@ -333,14 +334,16 @@ describe('RealtimeProvider', () => {
     }
   });
 
-  it('连续失败按指数退避重连，8 次后停止', async () => {
+  it('在线服务长时间不可用时持续封顶退避，恢复后重新拉取快照', async () => {
     vi.useFakeTimers({ shouldAdvanceTime: true });
+    const onlineSpy = vi.spyOn(window.navigator, 'onLine', 'get').mockReturnValue(true);
     const transport = new FakeTransport();
     render(<Harness transport={transport} />);
     await screen.findByTestId('status');
 
-    // 一次都没连上：每次失败都推进退避，且不早于对应时长重连。
-    for (let attempt = 1; attempt <= 8; attempt += 1) {
+    // 一次都没连上：即使超过旧的 8 次预算也继续重连，且第五次后稳定为 15 秒，
+    // 避免服务长停机既变成永久故障，也变成无界请求风暴。
+    for (let attempt = 1; attempt <= 9; attempt += 1) {
       transport.close(1006);
       expect(screen.getByTestId('status')).toHaveTextContent('reconnecting');
       act(() => {
@@ -353,13 +356,12 @@ describe('RealtimeProvider', () => {
       expect(transport.connections).toHaveLength(attempt + 1);
     }
 
-    transport.close(1006);
-    act(() => {
-      vi.advanceTimersByTime(60_000);
-    });
-    expect(screen.getByTestId('status')).toHaveTextContent('closed');
-    expect(screen.getByTestId('closed-reason')).toHaveTextContent('retries-exhausted');
-    expect(transport.connections).toHaveLength(9);
+    expect(screen.getByTestId('closed-reason')).toHaveTextContent('');
+    const beforeRecovery = epoch();
+    transport.open();
+    expect(screen.getByTestId('status')).toHaveTextContent('open');
+    expect(epoch()).toBeGreaterThan(beforeRecovery);
+    onlineSpy.mockRestore();
   });
 
   it('成功连上之后退避计数归零', async () => {

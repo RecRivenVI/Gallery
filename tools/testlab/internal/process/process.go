@@ -9,6 +9,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net/netip"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -106,7 +107,7 @@ func StartGallerydWithSourceRootsContext(
 	sourceRoots ...string,
 ) (*Process, error) {
 	return startGallerydWithSourceRootsContext(
-		ctx, "personal", binPath, appRoot, logPath, timeout, nil, sourceRoots...,
+		ctx, "personal", "127.0.0.1:0", binPath, appRoot, logPath, timeout, nil, sourceRoots...,
 	)
 }
 
@@ -120,8 +121,34 @@ func StartGallerydWithSourceRootsEnvironmentContext(
 	sourceRoots ...string,
 ) (*Process, error) {
 	return startGallerydWithSourceRootsContext(
-		ctx, "personal", binPath, appRoot, logPath, timeout, environment, sourceRoots...,
+		ctx, "personal", "127.0.0.1:0", binPath, appRoot, logPath, timeout, environment, sourceRoots...,
 	)
+}
+
+// StartGallerydAtLoopbackAddressContext 在显式 loopback 地址启动 Personal galleryd。
+// 它只用于必须保持浏览器 origin 不变的停机恢复门禁；普通测试仍应使用动态端口 helper，
+// 避免固定端口碰撞。调用方只能传入先前由隔离 galleryd descriptor 返回的 IPv4 loopback 地址。
+func StartGallerydAtLoopbackAddressContext(
+	ctx context.Context,
+	listenAddress, binPath, appRoot, logPath string,
+	timeout time.Duration,
+	environment []string,
+	sourceRoots ...string,
+) (*Process, error) {
+	if err := validateFixedLoopbackAddress(listenAddress); err != nil {
+		return nil, err
+	}
+	return startGallerydWithSourceRootsContext(
+		ctx, "personal", listenAddress, binPath, appRoot, logPath, timeout, environment, sourceRoots...,
+	)
+}
+
+func validateFixedLoopbackAddress(listenAddress string) error {
+	address, err := netip.ParseAddrPort(listenAddress)
+	if err != nil || !address.Addr().Is4() || !address.Addr().IsLoopback() || address.Port() == 0 {
+		return fmt.Errorf("固定监听地址必须是已分配的 IPv4 loopback 端口")
+	}
+	return nil
 }
 
 // StartGallerydLANContext 以 LAN 模式但仍只监听 loopback 自动端口启动真实 galleryd。
@@ -132,12 +159,12 @@ func StartGallerydLANContext(
 	binPath, appRoot, logPath string,
 	timeout time.Duration,
 ) (*Process, error) {
-	return startGallerydWithSourceRootsContext(ctx, "lan", binPath, appRoot, logPath, timeout, nil)
+	return startGallerydWithSourceRootsContext(ctx, "lan", "127.0.0.1:0", binPath, appRoot, logPath, timeout, nil)
 }
 
 func startGallerydWithSourceRootsContext(
 	ctx context.Context,
-	mode, binPath, appRoot, logPath string,
+	mode, listenAddress, binPath, appRoot, logPath string,
 	timeout time.Duration,
 	environment []string,
 	sourceRoots ...string,
@@ -145,7 +172,7 @@ func startGallerydWithSourceRootsContext(
 	if err := ctx.Err(); err != nil {
 		return nil, fmt.Errorf("启动 galleryd 已取消: %w", err)
 	}
-	args := []string{"-mode=" + mode, "-listen=127.0.0.1:0", "-app-root=" + appRoot}
+	args := []string{"-mode=" + mode, "-listen=" + listenAddress, "-app-root=" + appRoot}
 	for _, root := range sourceRoots {
 		if root == "" {
 			return nil, fmt.Errorf("source root 不能为空")

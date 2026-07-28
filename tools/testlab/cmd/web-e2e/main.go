@@ -1,8 +1,9 @@
 // Command web-e2e 在完全隔离的真实 galleryd 上执行浏览器业务 E2E。
 //
 // 它只复制仓库合成 fixture 到系统临时目录，不接触真实 Source；运行前后比较文件清单、
-// 大小、mtime 与 SHA-256，证明 Gallery 没有写入 Source。galleryd 使用动态 loopback 端口和
-// 临时 AppDirs，结束时复用 testlab 的跨平台优雅停止路径。
+// 大小、mtime 与 SHA-256，证明 Gallery 没有写入 Source。galleryd 使用隔离 loopback 端口和
+// 临时 AppDirs；长停机恢复切片只在同一 origin 重启时复用先前动态分配的端口，结束时复用
+// testlab 的跨平台优雅停止路径。
 package main
 
 import (
@@ -230,6 +231,9 @@ func run() (exitCode int) {
 	rulePackage := filepath.Join(testRoot, "web-e2e-rule-package.json")
 	processInterruptState := filepath.Join(testRoot, "process-interrupt-state.json")
 	governanceState := filepath.Join(testRoot, "governance-state.json")
+	serviceOutageReady := filepath.Join(testRoot, "service-outage-ready")
+	serviceOutageBudget := filepath.Join(testRoot, "service-outage-budget")
+	serviceOutageRestarted := filepath.Join(testRoot, "service-outage-restarted")
 	if err := prepareRulePackage(
 		filepath.Join(root, "internal", "rules", "testdata", "minimal-rule-package.json"),
 		rulePackage,
@@ -246,6 +250,9 @@ func run() (exitCode int) {
 		"GALLERY_REAL_RULE_PACKAGE=" + rulePackage,
 		"GALLERY_REAL_CANCEL_JOB_ID=" + retryPendingJobs.CancelID,
 		"GALLERY_REAL_RETRY_JOB_ID=" + retryPendingJobs.RetryID,
+		"GALLERY_REAL_SERVICE_OUTAGE_READY=" + serviceOutageReady,
+		"GALLERY_REAL_SERVICE_OUTAGE_BUDGET=" + serviceOutageBudget,
+		"GALLERY_REAL_SERVICE_OUTAGE_RESTARTED=" + serviceOutageRestarted,
 	}
 	playwright := filepath.Join(webRoot, "node_modules", "@playwright", "test", "cli.js")
 	projectArgument := "--project=" + browserProject
@@ -468,6 +475,60 @@ func run() (exitCode int) {
 			}
 		}
 	}
+	// 保持同一浏览器页面、Session、AppDirs 与 origin：Playwright 先进入管理任务页并登记 ready，
+	// 运行器随后优雅停止 galleryd。浏览器用真实墙钟走过旧实现会永久耗尽的 90 秒连接预算，
+	// 登记 budget 后运行器才在原端口重启；最终必须由实时连接恢复触发 HTTP Job 快照重取。
+	longOutageLog := filepath.Join(logsRoot, "galleryd-long-outage-restarted.log")
+	if testErr == nil {
+		outageCtx, cancelOutage := context.WithCancel(runCtx)
+		outageDone := make(chan error, 1)
+		go func() {
+			outageDone <- command(outageCtx, 4*time.Minute, webRoot, restoredEnv, nodeBin, playwright, "test",
+				"e2e/real-service-outage.spec.ts", projectArgument, "--workers=1", "--retries=0")
+		}()
+
+		outageErr := waitForFile(outageCtx, serviceOutageReady, 60*time.Second)
+		listenAddress := strings.TrimPrefix(server.BaseURL, "http://")
+		if outageErr == nil {
+			stop := server.Stop()
+			serverStopped = true
+			outageErr = stopError(stop)
+		}
+		if outageErr == nil {
+			outageErr = waitForFile(outageCtx, serviceOutageBudget, 150*time.Second)
+		}
+		if outageErr == nil {
+			outageServer, startErr := testprocess.StartGallerydAtLoopbackAddressContext(
+				runCtx,
+				listenAddress,
+				galleryd,
+				appRoot,
+				longOutageLog,
+				60*time.Second,
+				testEnvironment,
+				sourceRoot,
+				runningCancelSourceRoot,
+				processInterruptSourceRoot,
+				governanceSourceRoot,
+			)
+			if startErr != nil {
+				outageErr = fmt.Errorf("长停机后在同一 origin 重启 galleryd: %w", startErr)
+			} else {
+				server = outageServer
+				serverStopped = false
+				outageErr = waitHealthy(runCtx, server.BaseURL, 30*time.Second)
+			}
+		}
+		if outageErr == nil {
+			outageErr = os.WriteFile(serviceOutageRestarted, []byte("restarted\n"), 0o600)
+		}
+		if outageErr != nil {
+			cancelOutage()
+		}
+		playwrightErr := <-outageDone
+		cancelOutage()
+		testErr = errors.Join(outageErr, playwrightErr)
+	}
 	if !serverStopped {
 		stop := server.Stop()
 		serverStopped = true
@@ -490,6 +551,9 @@ func run() (exitCode int) {
 		}
 		if _, statErr := os.Stat(governanceAppliedLog); statErr == nil {
 			diagnosticErr = errors.Join(diagnosticErr, retainDiagnostics(governanceAppliedLog, diagnosticsRoot))
+		}
+		if _, statErr := os.Stat(longOutageLog); statErr == nil {
+			diagnosticErr = errors.Join(diagnosticErr, retainDiagnostics(longOutageLog, diagnosticsRoot))
 		}
 		if diagnosticErr == nil {
 			fmt.Printf("失败诊断已保存到：%s\n", diagnosticsRoot)
@@ -538,7 +602,7 @@ func run() (exitCode int) {
 		return fail("真实 LAN 浏览器 E2E", errors.Join(lanErr, diagnosticErr))
 	}
 
-	fmt.Printf("真实 %s Personal/LAN galleryd 浏览器 E2E 通过；Personal 同 AppDirs control 恢复及强杀恢复通过；合成 Source 只读 guard 通过；预期强杀场景外 galleryd 均已优雅停止\n", browserProject)
+	fmt.Printf("真实 %s Personal/LAN galleryd 浏览器 E2E 通过；Personal 同 AppDirs control 恢复、强杀恢复及同 origin 长停机自愈通过；合成 Source 只读 guard 通过；预期强杀场景外 galleryd 均已优雅停止\n", browserProject)
 	return 0
 }
 
@@ -641,6 +705,25 @@ func validateBrowserProject(project string) error {
 		return nil
 	default:
 		return fmt.Errorf("不支持的 Playwright 浏览器项目 %q；只允许 chromium 或 firefox", project)
+	}
+}
+
+func waitForFile(ctx context.Context, path string, timeout time.Duration) error {
+	waitCtx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+	ticker := time.NewTicker(25 * time.Millisecond)
+	defer ticker.Stop()
+	for {
+		if info, err := os.Stat(path); err == nil && !info.IsDir() {
+			return nil
+		} else if err != nil && !errors.Is(err, fs.ErrNotExist) {
+			return fmt.Errorf("检查浏览器协调状态: %w", err)
+		}
+		select {
+		case <-waitCtx.Done():
+			return fmt.Errorf("等待浏览器协调状态超时: %w", waitCtx.Err())
+		case <-ticker.C:
+		}
 	}
 }
 

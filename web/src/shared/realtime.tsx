@@ -207,8 +207,8 @@ const browserTransport: RealtimeTransport = (url, handlers) => {
 const CLOSE_SESSION_REVOKED = 4401;
 /** 授权被吊销。终态，不重连。 */
 const CLOSE_GRANT_REVOKED = 4403;
-const MAX_RECONNECT_ATTEMPTS = 8;
 const MAX_BACKOFF_MS = 15_000;
+const MAX_BACKOFF_ATTEMPT = 5;
 
 /** 第 n 次重连（n 从 1 开始）之前的等待时长：1s、2s、4s、8s，之后固定 15s。 */
 export function backoffDelayMs(attempt: number): number {
@@ -219,8 +219,7 @@ export function backoffDelayMs(attempt: number): number {
 
 export type RealtimeStatus = 'idle' | 'connecting' | 'open' | 'reconnecting' | 'closed';
 
-export type RealtimeClosedReason =
-  'session-revoked' | 'grant-revoked' | 'retries-exhausted' | 'protocol-mismatch';
+export type RealtimeClosedReason = 'session-revoked' | 'grant-revoked' | 'protocol-mismatch';
 
 export interface RealtimeValue {
   status: RealtimeStatus;
@@ -406,14 +405,11 @@ export function RealtimeProvider({ children, transport = browserTransport, url }
             finish('grant-revoked');
             return;
           }
-          attempts += 1;
-          if (attempts > MAX_RECONNECT_ATTEMPTS) {
-            finish('retries-exhausted');
-            return;
-          }
+          // 服务可能在浏览器仍报告 online 时长时间停止。重连必须持续自愈，但退避代次在 15 秒
+          // 封顶，既不因累计失败永久停机，也不让指数或请求频率无限增长。
+          attempts = Math.min(attempts + 1, MAX_BACKOFF_ATTEMPT);
           setStatus('reconnecting');
-          // 离线不是一次又一次的连接失败。暂停计时和预算，等待浏览器确认网络恢复；否则
-          // 约 75 秒后会永久耗尽 8 次重连，用户稍后联网也只能刷新整页。
+          // 离线不是一次又一次的连接失败。暂停计时，等待浏览器确认网络恢复。
           if (!navigator.onLine) {
             waitingForOnline = true;
             return;

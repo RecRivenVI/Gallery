@@ -263,3 +263,23 @@ func TestRunCommandContextCancelsEntireProcessTree(t *testing.T) {
 		t.Fatalf("派生子进程 %d 在命令树取消后仍存活", childPID)
 	}
 }
+
+func TestValidateFixedLoopbackAddress(t *testing.T) {
+	t.Parallel()
+	if err := validateFixedLoopbackAddress("127.0.0.1:54321"); err != nil {
+		t.Fatalf("合法 loopback 地址被拒绝: %v", err)
+	}
+	for _, value := range []string{
+		"",
+		"localhost:54321",
+		"0.0.0.0:54321",
+		"192.0.2.1:54321",
+		"[::1]:54321",
+		"127.0.0.1:0",
+		"127.0.0.1:not-a-port",
+	} {
+		if err := validateFixedLoopbackAddress(value); err == nil {
+			t.Errorf("非法固定监听地址 %q 未被拒绝", value)
+		}
+	}
+}

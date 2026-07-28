@@ -181,8 +181,6 @@ function closedReasonLabel(reason: string): string {
       return '会话已被吊销，需要重新认证';
     case 'grant-revoked':
       return '授权已被吊销，需要重新认证';
-    case 'retries-exhausted':
-      return '重连次数已用尽，请用上方按钮手动拉取快照';
     case 'protocol-mismatch':
       return '协议版本不一致，请刷新页面';
     default:

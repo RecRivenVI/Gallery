@@ -26,12 +26,18 @@ const bootstrap = {
 
 async function mockGallery(page: Page) {
   await page.addInitScript(() => {
+    let connectionCount = 0;
     class OfflineSocket extends EventTarget {
       static readonly OPEN = 1;
       readonly readyState = OfflineSocket.OPEN;
       constructor() {
         super();
-        queueMicrotask(() => this.dispatchEvent(new Event('open')));
+        connectionCount += 1;
+        const configuredFailures = Number(new URLSearchParams(location.search).get('e2eWsFailures') ?? '0');
+        const shouldFail = Number.isSafeInteger(configuredFailures) && connectionCount <= configuredFailures;
+        queueMicrotask(() =>
+          this.dispatchEvent(shouldFail ? new CloseEvent('close', { code: 1006 }) : new Event('open'))
+        );
       }
       close() {
         this.dispatchEvent(new CloseEvent('close', { code: 1000 }));
@@ -43,6 +49,10 @@ async function mockGallery(page: Page) {
         super.addEventListener(type, listener);
       }
     }
+    Object.defineProperty(window, '__galleryE2EWebSocketConnections', {
+      configurable: true,
+      get: () => connectionCount
+    });
     Object.defineProperty(window, 'WebSocket', { value: OfflineSocket });
   });
   await page.route('**/api/v1/**', async (route) => respond(route));
@@ -333,6 +343,26 @@ test('迟到的旧分页响应不会覆盖较新的搜索结果 @smoke', async (
   await expect.poll(() => oldPageSettled).toBe(true);
   await expect(page.getByText('迟到的旧分页第二页', { exact: true })).toHaveCount(0);
   await expect(page.getByText('最新查询结果', { exact: true })).toBeVisible();
+});
+
+test('服务停机超过旧重连预算后仍会自动恢复快照通道 @smoke', async ({ page }) => {
+  await page.clock.install();
+  await page.goto('/manage?e2eWsFailures=9');
+  await expect(page.getByText('实时通道：重连中', { exact: true })).toBeVisible();
+
+  // 第九次失败发生在旧实现约 75 秒的永久停止点；再经过一次 15 秒封顶退避后，
+  // 第十条连接恢复。Clock 只压缩测试墙钟，不改变生产资产实际执行的 timer/状态机。
+  await page.clock.runFor(90_000);
+  await expect(page.getByText('实时通道：已连接', { exact: true })).toBeVisible();
+  await expect
+    .poll(() =>
+      page.evaluate(() => {
+        const value: unknown = Reflect.get(window, '__galleryE2EWebSocketConnections');
+        return typeof value === 'number' ? value : -1;
+      })
+    )
+    .toBe(10);
+  await expect(page.getByText(/停止原因：/)).toHaveCount(0);
 });
 
 test('两个入口都没有严重可访问性违规 @smoke', async ({ page }) => {
