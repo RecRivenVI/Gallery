@@ -106,9 +106,11 @@ func run() (exitCode int) {
 
 	appRoot := filepath.Join(testRoot, "app")
 	lanAppRoot := filepath.Join(testRoot, "app-lan")
-	sourceRoot := filepath.Join(testRoot, "source")
+	sourceGuardRoot := filepath.Join(testRoot, "sources")
+	sourceRoot := filepath.Join(sourceGuardRoot, "baseline")
+	runningCancelSourceRoot := filepath.Join(sourceGuardRoot, "running-cancel")
 	logsRoot := filepath.Join(testRoot, "logs")
-	for _, dir := range []string{appRoot, lanAppRoot, sourceRoot, logsRoot} {
+	for _, dir := range []string{appRoot, lanAppRoot, sourceRoot, runningCancelSourceRoot, logsRoot} {
 		if err := os.MkdirAll(dir, 0o700); err != nil {
 			return fail("创建隔离目录", err)
 		}
@@ -130,10 +132,13 @@ func run() (exitCode int) {
 	if err := os.WriteFile(filepath.Join(sourceRoot, "work-one", "metadata.json"), metadata, 0o600); err != nil {
 		return fail("写入合成 metadata", err)
 	}
-	if err := normalizeSyntheticTimes(sourceRoot); err != nil {
+	if err := writeRunningCancelSource(runningCancelSourceRoot); err != nil {
+		return fail("写入运行中取消合成 Source", err)
+	}
+	if err := normalizeSyntheticTimes(sourceGuardRoot); err != nil {
 		return fail("稳定合成 Source 时间戳", err)
 	}
-	before, err := snapshot(sourceRoot)
+	before, err := snapshot(sourceGuardRoot)
 	if err != nil {
 		return fail("记录 Source 只读基线", err)
 	}
@@ -169,6 +174,7 @@ func run() (exitCode int) {
 		gallerydLog,
 		60*time.Second,
 		sourceRoot,
+		runningCancelSourceRoot,
 	)
 	if err != nil {
 		return fail("启动隔离 galleryd", errors.Join(err, retainDiagnostics(gallerydLog, diagnosticsRoot)))
@@ -194,6 +200,7 @@ func run() (exitCode int) {
 	env := []string{
 		"GALLERY_REAL_BASE_URL=" + server.BaseURL,
 		"GALLERY_REAL_SOURCE_ROOT=" + sourceRoot,
+		"GALLERY_REAL_RUNNING_CANCEL_SOURCE_ROOT=" + runningCancelSourceRoot,
 		"GALLERY_REAL_RULE_PACKAGE=" + rulePackage,
 		"GALLERY_REAL_CANCEL_JOB_ID=" + retryPendingJobs.CancelID,
 		"GALLERY_REAL_RETRY_JOB_ID=" + retryPendingJobs.RetryID,
@@ -221,6 +228,11 @@ func run() (exitCode int) {
 	if testErr == nil {
 		testErr = command(runCtx, 2*time.Minute, webRoot, env, nodeBin, playwright, "test",
 			"e2e/real-gallery.spec.ts",
+			projectArgument, "--workers=1", "--retries=0")
+	}
+	if testErr == nil {
+		testErr = command(runCtx, 3*time.Minute, webRoot, env, nodeBin, playwright, "test",
+			"e2e/real-running-cancel.spec.ts",
 			projectArgument, "--workers=1", "--retries=0")
 	}
 	// 规则绑定状态链必须在规则生命周期用例永久弃用规则包之前完成；否则服务端会按正式
@@ -261,6 +273,7 @@ func run() (exitCode int) {
 			restoredLog,
 			60*time.Second,
 			sourceRoot,
+			runningCancelSourceRoot,
 		)
 		if startErr != nil {
 			testErr = fmt.Errorf("以同一 AppDirs 重启 galleryd: %w", startErr)
@@ -281,7 +294,7 @@ func run() (exitCode int) {
 		serverStopped = true
 		testErr = errors.Join(testErr, stopError(stop))
 	}
-	after, guardErr := snapshot(sourceRoot)
+	after, guardErr := snapshot(sourceGuardRoot)
 	if guardErr == nil && !reflect.DeepEqual(before, after) {
 		guardErr = describeGuardDifference(before, after)
 	}
@@ -435,6 +448,36 @@ func writeSyntheticPNG(path string, width, height int, seed uint8) error {
 	encodeErr := png.Encode(file, imageData)
 	closeErr := file.Close()
 	return errors.Join(encodeErr, closeErr)
+}
+
+// writeRunningCancelSource 建立只供真实浏览器运行中取消门禁使用的独立合成 Source。
+// 2048 个小媒体让 incremental Scan 必须建立并等待真实 Hash Job，足以在首个媒体完成后
+// 从 UI 请求取消；内容本身很小，避免用大文件或高 CPU 吞吐制造不必要的资源压力。
+func writeRunningCancelSource(root string) error {
+	const mediaCount = 2048
+	workRoot := filepath.Join(root, "work-cancel")
+	if err := os.MkdirAll(workRoot, 0o700); err != nil {
+		return err
+	}
+	if err := os.WriteFile(filepath.Join(workRoot, "metadata.json"),
+		[]byte("{\"creator\":{\"name\":\"Cancellation Creator\"}}\n"), 0o600); err != nil {
+		return err
+	}
+	firstPath := filepath.Join(workRoot, "media-0000.png")
+	if err := writeSyntheticPNG(firstPath, 1, 1, 173); err != nil {
+		return err
+	}
+	content, err := os.ReadFile(firstPath)
+	if err != nil {
+		return err
+	}
+	for index := 1; index < mediaCount; index++ {
+		path := filepath.Join(workRoot, fmt.Sprintf("media-%04d.png", index))
+		if err := os.WriteFile(path, content, 0o600); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func prepareRulePackage(sourcePath, targetPath string) error {
