@@ -289,28 +289,50 @@ export function RealtimeProvider({ children, transport = browserTransport, url }
     }
 
     let disposed = false;
+    let terminal = false;
     let attempts = 0;
     let connection: RealtimeConnection | undefined;
     let timer: ReturnType<typeof setTimeout> | undefined;
     let sequence = 0;
+    let generation = 0;
+    let waitingForOnline = false;
+    let hasOpened = false;
 
     const target = url ?? `${location.protocol === 'https:' ? 'wss:' : 'ws:'}//${location.host}/ws/v1`;
 
+    const clearReconnectTimer = () => {
+      if (timer === undefined) return;
+      clearTimeout(timer);
+      timer = undefined;
+    };
+
     const finish = (reason: RealtimeClosedReason) => {
+      terminal = true;
+      waitingForOnline = false;
+      clearReconnectTimer();
       setStatus('closed');
       setClosedReason(reason);
     };
 
     const connect = () => {
-      if (disposed) return;
-      setStatus(attempts === 0 ? 'connecting' : 'reconnecting');
+      if (disposed || terminal) return;
+      if (!navigator.onLine) {
+        waitingForOnline = true;
+        setStatus(hasOpened || attempts > 0 ? 'reconnecting' : 'connecting');
+        return;
+      }
+      waitingForOnline = false;
+      clearReconnectTimer();
+      setStatus(hasOpened || attempts > 0 ? 'reconnecting' : 'connecting');
       sequence = 0;
       setLastSequence(0);
+      const currentGeneration = ++generation;
 
       connection = transport(target, {
         onOpen: () => {
-          if (disposed) return;
+          if (disposed || terminal || currentGeneration !== generation) return;
           attempts = 0;
+          hasOpened = true;
           setStatus('open');
           setClosedReason(undefined);
           // 每次连接与重连都必须重新拉取 HTTP 快照：连接期间发生的变化不会补发。
@@ -320,7 +342,7 @@ export function RealtimeProvider({ children, transport = browserTransport, url }
           invalidateSnapshots();
         },
         onMessage: (data) => {
-          if (disposed) return;
+          if (disposed || terminal || currentGeneration !== generation) return;
           const envelope = parseEnvelope(data);
           if (!envelope) {
             // 无法解析的帧意味着我们可能漏掉了状态变化，按缺口处理。
@@ -372,7 +394,8 @@ export function RealtimeProvider({ children, transport = browserTransport, url }
           }
         },
         onClose: (code) => {
-          if (disposed) return;
+          if (disposed || terminal || currentGeneration !== generation) return;
+          connection = undefined;
           if (code === CLOSE_SESSION_REVOKED) {
             void refresh();
             finish('session-revoked');
@@ -389,15 +412,48 @@ export function RealtimeProvider({ children, transport = browserTransport, url }
             return;
           }
           setStatus('reconnecting');
+          // 离线不是一次又一次的连接失败。暂停计时和预算，等待浏览器确认网络恢复；否则
+          // 约 75 秒后会永久耗尽 8 次重连，用户稍后联网也只能刷新整页。
+          if (!navigator.onLine) {
+            waitingForOnline = true;
+            return;
+          }
+          // Firefox 等浏览器在部分网络/服务端关闭时可能只暴露 1006，丢失 4401/4403。
+          // 因此在线异常关闭必须立即重读 bootstrap，再由 HTTP 事实判断是否仍应重连。
+          void refresh();
           timer = setTimeout(connect, backoffDelayMs(attempts));
         }
       });
     };
 
+    const onOffline = () => {
+      if (disposed || terminal) return;
+      clearReconnectTimer();
+      waitingForOnline = true;
+      setStatus('reconnecting');
+      // 主动结束仍呈 OPEN/CONNECTING 的旧连接，避免浏览器在网络切换后长时间保留半开 socket。
+      // generation 会让迟到的旧连接回调无法覆盖恢复后的新连接状态。
+      const staleConnection = connection;
+      connection = undefined;
+      generation += 1;
+      staleConnection?.close(4000, 'network offline');
+    };
+
+    const onOnline = () => {
+      if (disposed || terminal || !waitingForOnline) return;
+      // 离线期间不发送注定失败的 HTTP；恢复信号到达后先重读认证事实，同时建立实时通道。
+      void refresh();
+      connect();
+    };
+
+    window.addEventListener('offline', onOffline);
+    window.addEventListener('online', onOnline);
     connect();
     return () => {
       disposed = true;
-      if (timer !== undefined) clearTimeout(timer);
+      clearReconnectTimer();
+      window.removeEventListener('offline', onOffline);
+      window.removeEventListener('online', onOnline);
       connection?.close(1000, 'provider disposed');
     };
   }, [authenticated, protocolVersion, transport, url, queryClient, refresh, invalidateSnapshots]);

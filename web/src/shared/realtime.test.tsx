@@ -9,7 +9,7 @@
  */
 
 import { QueryClientProvider } from '@tanstack/react-query';
-import { act, render, screen } from '@testing-library/react';
+import { act, render, screen, waitFor } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { ReactNode } from 'react';
 import { jsonResponse, setFetchHandler } from '../../tests/http';
@@ -383,6 +383,71 @@ describe('RealtimeProvider', () => {
       vi.advanceTimersByTime(backoffDelayMs(1));
     });
     expect(transport.connections).toHaveLength(5);
+  });
+
+  it('在线异常关闭立即刷新 bootstrap，不依赖浏览器保留 4401 close code', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    let bootstrapRequests = 0;
+    setFetchHandler(() => {
+      bootstrapRequests += 1;
+      return jsonResponse(AUTHENTICATED_BOOTSTRAP);
+    });
+
+    const transport = new FakeTransport();
+    render(<Harness transport={transport} />);
+    await screen.findByTestId('status');
+    transport.open();
+    const beforeDisconnect = bootstrapRequests;
+
+    // Firefox 可能把服务端 4401 暴露成 1006；HTTP bootstrap 仍必须在第一次退避结束前重取。
+    transport.close(1006);
+    expect(transport.connections).toHaveLength(1);
+    await waitFor(() => expect(bootstrapRequests).toBeGreaterThan(beforeDisconnect));
+    expect(screen.getByTestId('status')).toHaveTextContent('reconnecting');
+  });
+
+  it('设备离线期间暂停重连预算，恢复网络后立即重连并刷新 bootstrap 与快照', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    let online = true;
+    const onlineSpy = vi.spyOn(window.navigator, 'onLine', 'get').mockImplementation(() => online);
+    let bootstrapRequests = 0;
+    setFetchHandler(() => {
+      bootstrapRequests += 1;
+      return jsonResponse(AUTHENTICATED_BOOTSTRAP);
+    });
+
+    const transport = new FakeTransport();
+    render(<Harness transport={transport} />);
+    await screen.findByTestId('status');
+    transport.open();
+    const bootstrapBeforeDisconnect = bootstrapRequests;
+    const epochBeforeDisconnect = epoch();
+
+    online = false;
+    act(() => {
+      window.dispatchEvent(new Event('offline'));
+    });
+    transport.close(1006);
+    expect(screen.getByTestId('status')).toHaveTextContent('reconnecting');
+
+    // 离线时间远超既有 75 秒总退避预算，也不能制造新连接或进入永久 closed。
+    act(() => {
+      vi.advanceTimersByTime(10 * 60_000);
+    });
+    expect(transport.connections).toHaveLength(1);
+    expect(screen.getByTestId('status')).toHaveTextContent('reconnecting');
+    expect(screen.getByTestId('closed-reason')).toHaveTextContent('');
+
+    online = true;
+    act(() => {
+      window.dispatchEvent(new Event('online'));
+    });
+    expect(transport.connections).toHaveLength(2);
+    transport.open();
+    expect(screen.getByTestId('status')).toHaveTextContent('open');
+    expect(epoch()).toBeGreaterThan(epochBeforeDisconnect);
+    await waitFor(() => expect(bootstrapRequests).toBeGreaterThan(bootstrapBeforeDisconnect));
+    onlineSpy.mockRestore();
   });
 
   it('重连后 sequence 从零重新开始', async () => {

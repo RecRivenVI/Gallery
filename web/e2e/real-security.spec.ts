@@ -14,6 +14,14 @@ interface WorkList {
   works: { id: string }[];
 }
 
+interface RealtimeProbe {
+  socketsCreated: number;
+  socketsOpened: number;
+  closeOpenSockets: () => void;
+}
+
+type RealtimeProbeWindow = Window & { __galleryE2ERealtime: RealtimeProbe };
+
 function pathIs(response: Response, path: string, method = 'GET'): boolean {
   return response.request().method() === method && new URL(response.url()).pathname === path;
 }
@@ -79,25 +87,40 @@ async function revokeFromRow(page: Page, rowText: string, dialogTitle: string, p
   expect((await responsePromise).status()).toBe(204);
 }
 
-test('Personal 安全资源、断线快照恢复与一次性密文真实链 @real-security', async ({ browser, request }) => {
+test('Personal 安全资源、连续断线快照恢复与一次性密文真实链 @real-security', async ({ browser, request }) => {
   const ownerContext = await browser.newContext();
   const ownerPage = await ownerContext.newPage();
   await ownerPage.addInitScript(() => {
     const NativeWebSocket = window.WebSocket;
     const sockets: WebSocket[] = [];
+    const probe: RealtimeProbe = {
+      socketsCreated: 0,
+      socketsOpened: 0,
+      closeOpenSockets: () => {
+        for (const socket of sockets) {
+          if (socket.readyState === WebSocket.OPEN) socket.close(4000, 'EV-80 reconnect');
+        }
+      }
+    };
+    (window as unknown as RealtimeProbeWindow).__galleryE2ERealtime = probe;
     const ObservedWebSocket = new Proxy(NativeWebSocket, {
       construct(Target, argumentsList) {
         const socket = Reflect.construct(Target, argumentsList) as WebSocket;
         sockets.push(socket);
+        probe.socketsCreated += 1;
+        socket.addEventListener('open', () => {
+          probe.socketsOpened += 1;
+        });
         return socket;
       }
     });
     Object.defineProperty(window, 'WebSocket', { value: ObservedWebSocket });
-    (window as typeof window & { __galleryE2ECloseSockets?: () => void }).__galleryE2ECloseSockets = () => {
-      for (const socket of sockets) {
-        if (socket.readyState === WebSocket.OPEN) socket.close(4000, 'EV-60 reconnect');
-      }
-    };
+  });
+  let bootstrapSnapshots = 0;
+  let tokenSnapshots = 0;
+  ownerPage.on('response', (response) => {
+    if (pathIs(response, '/api/v1/bootstrap')) bootstrapSnapshots += 1;
+    if (pathIs(response, '/api/v1/api-tokens')) tokenSnapshots += 1;
   });
   await pair(ownerPage);
 
@@ -108,20 +131,55 @@ test('Personal 安全资源、断线快照恢复与一次性密文真实链 @rea
   await openSecurity(ownerPage, 'API Token');
   await expect(ownerPage.getByText('实时通道：已连接', { exact: true })).toBeVisible();
 
-  // 让 Owner A 真正离线，Owner B 在断线窗口经 UI 创建 Token。A 恢复网络后不能依赖事件重播，
-  // 必须由新连接的 HTTP snapshot 自动看到这项变化。
-  await ownerContext.setOffline(true);
-  await ownerPage.evaluate(() => {
-    (window as typeof window & { __galleryE2ECloseSockets?: () => void }).__galleryE2ECloseSockets?.();
-  });
-  await expect(ownerPage.getByText('实时通道：重连中', { exact: true })).toBeVisible({ timeout: 10_000 });
-  const tokenName = 'EV-60 断线窗口只读 Token';
-  const token = await createToken(peerPage, tokenName);
-  await ownerContext.setOffline(false);
-  await expect(ownerPage.getByText('实时通道：已连接', { exact: true })).toBeVisible({ timeout: 15_000 });
-  const tokenRow = ownerPage.getByRole('row').filter({ hasText: tokenName });
-  await expect(tokenRow).toHaveCount(1);
-  await expectTokenStatus(request, token.secret, 200);
+  // 连续三次切断 Owner A 的真实浏览器网络；每个断线窗口都由 Owner B 创建一项新事实。
+  // A 恢复后必须建立新 socket、刷新 bootstrap 与安全 HTTP snapshot，并看到断线期间的变化，
+  // 不能依赖 WebSocket 事件重播，也不能让短时抖动累积为永久“重试耗尽”。
+  const tokens: { id: string; name: string; secret: string }[] = [];
+  for (let cycle = 1; cycle <= 3; cycle += 1) {
+    const socketsBefore = await ownerPage.evaluate(
+      () => (window as unknown as RealtimeProbeWindow).__galleryE2ERealtime.socketsCreated
+    );
+    const openedBefore = await ownerPage.evaluate(
+      () => (window as unknown as RealtimeProbeWindow).__galleryE2ERealtime.socketsOpened
+    );
+    const bootstrapBefore = bootstrapSnapshots;
+    const tokenSnapshotsBefore = tokenSnapshots;
+
+    await ownerContext.setOffline(true);
+    await ownerPage.evaluate(() => {
+      (window as unknown as RealtimeProbeWindow).__galleryE2ERealtime.closeOpenSockets();
+    });
+    await expect(ownerPage.getByText('实时通道：重连中', { exact: true })).toBeVisible({ timeout: 10_000 });
+
+    const name = `EV-80 抖动窗口只读 Token ${cycle}`;
+    const token = await createToken(peerPage, name);
+    tokens.push({ ...token, name });
+
+    await ownerContext.setOffline(false);
+    await expect(ownerPage.getByText('实时通道：已连接', { exact: true })).toBeVisible({ timeout: 15_000 });
+    await expect
+      .poll(
+        () =>
+          ownerPage.evaluate(
+            () => (window as unknown as RealtimeProbeWindow).__galleryE2ERealtime.socketsCreated
+          ),
+        { timeout: 15_000 }
+      )
+      .toBeGreaterThan(socketsBefore);
+    await expect
+      .poll(
+        () =>
+          ownerPage.evaluate(
+            () => (window as unknown as RealtimeProbeWindow).__galleryE2ERealtime.socketsOpened
+          ),
+        { timeout: 15_000 }
+      )
+      .toBeGreaterThan(openedBefore);
+    await expect.poll(() => bootstrapSnapshots, { timeout: 15_000 }).toBeGreaterThan(bootstrapBefore);
+    await expect.poll(() => tokenSnapshots, { timeout: 15_000 }).toBeGreaterThan(tokenSnapshotsBefore);
+    await expect(ownerPage.getByRole('row').filter({ hasText: name })).toHaveCount(1);
+    await expectTokenStatus(request, token.secret, 200);
+  }
 
   // Session ID 必须在 UI 中可辨认，否则同一浏览器标签的多条 Session 无法安全选择。
   await ownerPage.getByRole('tab', { name: '会话', exact: true }).click();
@@ -131,8 +189,10 @@ test('Personal 安全资源、断线快照恢复与一次性密文真实链 @rea
   });
 
   await ownerPage.getByRole('tab', { name: 'API Token', exact: true }).click();
-  await revokeFromRow(ownerPage, tokenName, '吊销 API Token', `/api/v1/api-tokens/${token.id}`);
-  await expectTokenStatus(request, token.secret, 401);
+  for (const token of tokens) {
+    await revokeFromRow(ownerPage, token.name, '吊销 API Token', `/api/v1/api-tokens/${token.id}`);
+    await expectTokenStatus(request, token.secret, 401);
+  }
 
   const works = await ownerPage.evaluate(async () => {
     const response = await fetch('/api/v1/works?sort=title_asc&limit=1', { credentials: 'same-origin' });
