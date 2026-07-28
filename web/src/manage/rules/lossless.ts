@@ -48,3 +48,28 @@ export function stringifyRuleValue(value: unknown, space = 2): string {
 export function cloneRuleValue<T>(value: T): T {
   return parseLossless(stringifyRuleValue(value)) as T;
 }
+
+/** 比较规则值的精确语义；对象键顺序无关，LosslessNumber 的原始十进制文本必须相同。 */
+export function ruleValuesEqual(left: unknown, right: unknown): boolean {
+  if (isLosslessNumber(left) || isLosslessNumber(right)) {
+    return isLosslessNumber(left) && isLosslessNumber(right) && left.toString() === right.toString();
+  }
+  if (Array.isArray(left) || Array.isArray(right)) {
+    return (
+      Array.isArray(left) &&
+      Array.isArray(right) &&
+      left.length === right.length &&
+      left.every((value, index) => ruleValuesEqual(value, right[index]))
+    );
+  }
+  if (isRecord(left) || isRecord(right)) {
+    if (!isRecord(left) || !isRecord(right)) return false;
+    const leftKeys = Object.keys(left).sort();
+    const rightKeys = Object.keys(right).sort();
+    return (
+      leftKeys.length === rightKeys.length &&
+      leftKeys.every((key, index) => key === rightKeys[index] && ruleValuesEqual(left[key], right[key]))
+    );
+  }
+  return Object.is(left, right);
+}

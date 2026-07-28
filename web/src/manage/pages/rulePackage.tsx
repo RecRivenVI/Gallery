@@ -29,7 +29,7 @@ import {
   type RuleVersion
 } from '../api';
 import { IMPACT_CATEGORY_LABELS, IMPACT_CATEGORY_TONES } from '../labels';
-import { isRecord, parseRuleText } from '../rules/lossless';
+import { isRecord, parseRuleText, ruleValuesEqual } from '../rules/lossless';
 import { RuleParameterSetsPanel } from '../rules/RuleParameterSetsPanel';
 import { RuleDebugPanel } from '../rules/RuleDebugPanel';
 import { RuleVersionLifecyclePanel } from '../rules/RuleVersionLifecyclePanel';
@@ -77,7 +77,10 @@ interface DraftWorkspace {
   serverDraft: RuleDraft | null;
   text: string;
   format: DraftFormat;
-  /** 本地文本或格式是否偏离 serverDraft。 */
+  /** 本地编辑开始时的精确服务端快照；远端 revision 漂移时仍用于安全的按字段撤销。 */
+  baseText: string;
+  baseFormat: DraftFormat;
+  /** 本地值偏离 base 快照，或服务端 revision 已越过 baseRevision。 */
   dirty: boolean;
   /** 本地编辑基于的服务端 revision；0 是“草稿尚不存在”的 CAS 基线。 */
   baseRevision: number;
@@ -109,6 +112,8 @@ function workspaceFromDraft(
       serverDraft: null,
       text: '',
       format: 'json',
+      baseText: '',
+      baseFormat: 'json',
       dirty: false,
       baseRevision: 0,
       ...((normalizedOverride ?? normalizedCurrent) === undefined
@@ -123,6 +128,8 @@ function workspaceFromDraft(
     serverDraft: draft,
     text,
     format: draft.format,
+    baseText: text,
+    baseFormat: draft.format,
     dirty: false,
     baseRevision: draft.revision,
     ...(baseSemanticHash === undefined ? {} : { baseSemanticHash })
@@ -188,6 +195,7 @@ function DraftEditor({
   const [modeError, setModeError] = useState<string>();
   const missing = draft.isError && errorCode(draft.error) === 'NOT_FOUND';
   const parsed = parseDraft(workspace?.text ?? '', workspace?.format ?? 'json');
+  const parsedBaseline = parseDraft(workspace?.baseText ?? '', workspace?.baseFormat ?? 'json');
   const emptyJSONDraft = workspace?.format === 'json' && workspace.text.trim() === '';
   const conflict =
     errorCode(save.error) === 'RULE_DRAFT_CONFLICT' || errorCode(validate.error) === 'RULE_DRAFT_CONFLICT';
@@ -304,10 +312,23 @@ function DraftEditor({
                 <Suspense fallback={<p className="manage-section__description">正在载入 Schema 表单…</p>}>
                   <RuleSchemaForm
                     value={isRecord(parsed.value) ? parsed.value : {}}
+                    baselineValue={isRecord(parsedBaseline.value) ? parsedBaseline.value : {}}
+                    baselineText={workspace.baseText}
+                    baselineRevision={workspace.baseRevision}
                     ruleSetId={ruleSetId}
                     isDisabled={!canWrite || isLocked}
                     isDirty={workspace.dirty}
-                    onChange={(next) => onEdit(next, 'json')}
+                    onChange={(next) => {
+                      const parsedNext = parseRuleText(next);
+                      onEdit(
+                        isRecord(parsedNext.value) &&
+                          isRecord(parsedBaseline.value) &&
+                          ruleValuesEqual(parsedNext.value, parsedBaseline.value)
+                          ? workspace.baseText
+                          : next,
+                        'json'
+                      );
+                    }}
                     onOpaqueValidityChange={setOpaqueInvalid}
                   />
                 </Suspense>
@@ -786,15 +807,14 @@ function RulePackageContent({ packageId }: { packageId: string }) {
     if (publish.isPending || publishRefreshPending) return;
     setWorkspace((current) => {
       if (current === null) return current;
-      const server = workspaceFromDraft(current.serverDraft, currentSemanticHash, current.baseSemanticHash);
       return {
         ...current,
         text,
         format,
         dirty:
           (current.serverDraft?.revision ?? 0) !== current.baseRevision ||
-          text !== server.text ||
-          format !== server.format
+          text !== current.baseText ||
+          format !== current.baseFormat
       };
     });
     // pending mutation 的 per-call 回调负责吸收精确服务端 revision；reset 会移除该回调并

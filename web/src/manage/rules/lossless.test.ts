@@ -1,6 +1,6 @@
 import { isLosslessNumber } from 'lossless-json';
 import { describe, expect, it } from 'vitest';
-import { cloneRuleValue, parseRuleText, stringifyRuleValue } from './lossless';
+import { cloneRuleValue, parseRuleText, ruleValuesEqual, stringifyRuleValue } from './lossless';
 
 describe('规则 JSON 无损往返', () => {
   it('保留未知字段中的大整数、高精度小数和指数词法', () => {
@@ -35,5 +35,13 @@ describe('规则 JSON 无损往返', () => {
     const exact = ((clone?.tests as unknown[])[0] as Record<string, unknown>).exact;
     expect(isLosslessNumber(exact)).toBe(true);
     expect(stringifyRuleValue(clone)).toContain('9007199254740993');
+  });
+
+  it('对象键顺序不影响等价判断，但精确数字词法仍参与比较', () => {
+    const left = parseRuleText('{"schema_version":1,"extensions":{"exact":1.2300}}').value;
+    const reordered = parseRuleText('{"extensions":{"exact":1.2300},"schema_version":1}').value;
+    const rounded = parseRuleText('{"extensions":{"exact":1.23},"schema_version":1}').value;
+    expect(ruleValuesEqual(left, reordered)).toBe(true);
+    expect(ruleValuesEqual(left, rounded)).toBe(false);
   });
 });

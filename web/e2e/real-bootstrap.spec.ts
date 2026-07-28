@@ -77,6 +77,10 @@ test('真实 galleryd 从空实例完成规则 UI 生命周期、绑定与 publi
   if (typeof ruleSetId !== 'string' || ruleSetId === '') {
     throw new Error('隔离规则包缺少有效的 rule_set_id');
   }
+  const initialRuleVersion = rulePackage.version;
+  if (typeof initialRuleVersion !== 'string' || initialRuleVersion === '') {
+    throw new Error('隔离规则包缺少有效的 version');
+  }
   const firstParameterText = '{"minimumSize":9007199254740993123}';
   const v1RulePackage = {
     ...rulePackage,
@@ -224,6 +228,16 @@ test('真实 galleryd 从空实例完成规则 UI 生命周期、绑定与 publi
     .locator('xpath=following-sibling::dd[1]');
   await expect(serverDraftRevision).toHaveText(String(savedRevision));
   await expect(localDraftRevision).toHaveText(String(savedRevision));
+
+  await page.getByRole('tab', { name: 'Schema 表单' }).click();
+  await expect(page.getByText('当前没有可撤销的字段修改。')).toBeVisible();
+  const savedVersion = page.getByRole('textbox', { name: /规则版本/ });
+  await savedVersion.fill('1.0.2');
+  await expect(page.getByRole('button', { name: '撤销字段 /version' })).toBeVisible();
+  await page.getByRole('button', { name: '撤销字段 /version' }).click();
+  await expect(savedVersion).toHaveValue(initialRuleVersion);
+  await expect(page.getByText('当前没有可撤销的字段修改。')).toBeVisible();
+  await expect(page.getByText('已与服务端同步', { exact: true })).toBeVisible();
 
   const [validationResponse] = await Promise.all([
     page.waitForResponse((response) =>

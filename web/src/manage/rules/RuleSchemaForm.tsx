@@ -7,28 +7,91 @@ import type {
   UiSchema
 } from '@rjsf/utils';
 import { createPrecompiledValidator, type ValidatorFunctions } from '@rjsf/validator-ajv8';
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import buildSchema from '../../../../internal/rules/rule-package.schema.json';
 import { Button, ErrorState, Field, Select } from '../../design';
 import { describeError, errorCode, errorCorrelationId } from '../../shared/errors';
 import { useRuleExamples, useRuleSchema } from '../api';
 import { ConfirmAction } from '../ui';
 import validatorFunctions from '../ruleSchemaValidator.gen.cjs';
-import { cloneRuleValue, isRecord, parseRuleValue, stringifyRuleValue } from './lossless';
+import { cloneRuleValue, isRecord, parseRuleValue, ruleValuesEqual, stringifyRuleValue } from './lossless';
 
 interface RuleFormContext extends FormContextType {
   currentValue: Record<string, unknown>;
+  baselineValue: Record<string, unknown>;
   setOpaqueInvalid: (path: string, invalid: boolean) => void;
   changeOpaque: (path: readonly (string | number)[], value: unknown) => void;
+  restoreField: (path: readonly (string | number)[]) => void;
 }
 
 interface RuleSchemaFormProps {
   value: Record<string, unknown>;
+  baselineValue: Record<string, unknown>;
+  baselineText: string;
+  baselineRevision: number;
   ruleSetId: string;
   isDisabled: boolean;
   isDirty: boolean;
   onChange: (text: string) => void;
   onOpaqueValidityChange: (invalid: boolean) => void;
+}
+
+type RuleFieldPath = readonly (string | number)[];
+
+interface ChangedRuleField {
+  path: RuleFieldPath;
+  pointer: string;
+}
+
+const OPAQUE_ROOT_FIELDS = new Set(['parameter_schema', 'tests', 'extensions', 'ui_metadata']);
+
+function ruleFieldPointer(path: RuleFieldPath): string {
+  return `/${path.map((segment) => String(segment).replaceAll('~', '~0').replaceAll('/', '~1')).join('/')}`;
+}
+
+function valueExistsAtPath(source: Record<string, unknown>, path: RuleFieldPath): boolean {
+  let current: unknown = source;
+  for (const segment of path) {
+    if (typeof segment === 'number' && Array.isArray(current)) {
+      if (segment < 0 || segment >= current.length) return false;
+      current = current[segment];
+    } else if (typeof segment === 'string' && isRecord(current)) {
+      if (!Object.prototype.hasOwnProperty.call(current, segment)) return false;
+      current = current[segment];
+    } else {
+      return false;
+    }
+  }
+  return true;
+}
+
+function collectChangedRuleFields(
+  current: unknown,
+  baseline: unknown,
+  path: RuleFieldPath = [],
+  currentPresent = true,
+  baselinePresent = true
+): ChangedRuleField[] {
+  if (currentPresent === baselinePresent && ruleValuesEqual(current, baseline)) return [];
+  if (!currentPresent || !baselinePresent) return [{ path, pointer: ruleFieldPointer(path) }];
+  if (path.length === 1 && typeof path[0] === 'string' && OPAQUE_ROOT_FIELDS.has(path[0])) {
+    return [{ path, pointer: ruleFieldPointer(path) }];
+  }
+  if (Array.isArray(current) && Array.isArray(baseline)) {
+    if (current.length !== baseline.length) return [{ path, pointer: ruleFieldPointer(path) }];
+    return current.flatMap((value, index) =>
+      collectChangedRuleFields(value, baseline[index], [...path, index])
+    );
+  }
+  if (isRecord(current) && isRecord(baseline)) {
+    const keys = [...new Set([...Object.keys(current), ...Object.keys(baseline)])].sort();
+    return keys.flatMap((key) => {
+      const currentHas = Object.prototype.hasOwnProperty.call(current, key);
+      const baselineHas = Object.prototype.hasOwnProperty.call(baseline, key);
+      return collectChangedRuleFields(current[key], baseline[key], [...path, key], currentHas, baselineHas);
+    });
+  }
+  return [{ path, pointer: ruleFieldPointer(path) }];
 }
 
 function stableJson(value: unknown): string {
@@ -72,6 +135,11 @@ function OpaqueJsonField({
     () => (exactValue === undefined ? '' : stringifyRuleValue(exactValue, 2)),
     [exactValue]
   );
+  const baselineExists = valueExistsAtPath(registry.formContext.baselineValue, fieldPathId.path);
+  const baselineValue = baselineExists
+    ? valueAtPath(registry.formContext.baselineValue, fieldPathId.path)
+    : undefined;
+  const baselineText = baselineExists ? stringifyRuleValue(baselineValue, 2) : '';
   const [text, setText] = useState(externalText);
   const [syntaxError, setSyntaxError] = useState<string>();
   const path = fieldPathId.path.join('/');
@@ -90,48 +158,69 @@ function OpaqueJsonField({
   const schemaErrors = rawErrors?.filter(Boolean).join('；');
   const errorMessage = syntaxError ?? schemaErrors;
 
+  const canRestore = syntaxError !== undefined || text !== baselineText;
+  const pointer = ruleFieldPointer(fieldPathId.path);
+
   return (
-    <Field
-      controlId={fieldPathId.$id}
-      label={schema.title ?? name}
-      description={schema.description ?? '此字段保留为无损 JSON；表单不会展开或删除未知内容。'}
-      errorMessage={errorMessage}
-      isRequired={required}
-    >
-      {({ controlId, describedBy, isInvalid }) => (
-        <textarea
-          id={controlId}
-          className="ui-textarea manage-code"
-          value={text}
-          rows={8}
-          disabled={disabled}
-          readOnly={readonly}
-          aria-describedby={describedBy}
-          aria-invalid={isInvalid || undefined}
-          onFocus={() => onFocus(fieldPathId.$id, exactValue)}
-          onBlur={() => onBlur(fieldPathId.$id, exactValue)}
-          onChange={(event) => {
-            const nextText = event.currentTarget.value;
-            setText(nextText);
-            try {
-              if (nextText.trim() === '' && !required) {
+    <div className="manage-opaque-field">
+      <Field
+        controlId={fieldPathId.$id}
+        label={schema.title ?? name}
+        description={schema.description ?? '此字段保留为无损 JSON；表单不会展开或删除未知内容。'}
+        errorMessage={errorMessage}
+        isRequired={required}
+      >
+        {({ controlId, describedBy, isInvalid }) => (
+          <textarea
+            id={controlId}
+            className="ui-textarea manage-code"
+            value={text}
+            rows={8}
+            disabled={disabled}
+            readOnly={readonly}
+            aria-describedby={describedBy}
+            aria-invalid={isInvalid || undefined}
+            onFocus={() => onFocus(fieldPathId.$id, exactValue)}
+            onBlur={() => onBlur(fieldPathId.$id, exactValue)}
+            onChange={(event) => {
+              const nextText = event.currentTarget.value;
+              setText(nextText);
+              try {
+                if (nextText.trim() === '' && !required) {
+                  setInvalid(undefined);
+                  registry.formContext.changeOpaque(fieldPathId.path, undefined);
+                  return;
+                }
+                const next = parseRuleValue(nextText);
+                if (!schemaTypeMatches(next, schema)) {
+                  throw new TypeError(`必须是 ${String(schema.type)} 类型的 JSON 值`);
+                }
                 setInvalid(undefined);
-                registry.formContext.changeOpaque(fieldPathId.path, undefined);
-                return;
+                registry.formContext.changeOpaque(fieldPathId.path, next);
+              } catch (error) {
+                setInvalid(error instanceof Error ? error.message : '不是合法的 JSON');
               }
-              const next = parseRuleValue(nextText);
-              if (!schemaTypeMatches(next, schema)) {
-                throw new TypeError(`必须是 ${String(schema.type)} 类型的 JSON 值`);
-              }
+            }}
+          />
+        )}
+      </Field>
+      {canRestore ? (
+        <div className="manage-form__actions">
+          <Button
+            variant="secondary"
+            isDisabled={disabled === true || readonly === true}
+            aria-label={`撤销字段 ${pointer}`}
+            onPress={() => {
+              setText(baselineText);
               setInvalid(undefined);
-              registry.formContext.changeOpaque(fieldPathId.path, next);
-            } catch (error) {
-              setInvalid(error instanceof Error ? error.message : '不是合法的 JSON');
-            }
-          }}
-        />
-      )}
-    </Field>
+              registry.formContext.restoreField(fieldPathId.path);
+            }}
+          >
+            撤销此字段
+          </Button>
+        </div>
+      ) : null}
+    </div>
   );
 }
 
@@ -257,8 +346,53 @@ function restoreOpaqueValues(
   return next;
 }
 
+function FieldUndoPanel({
+  changes,
+  baselineRevision,
+  isDisabled,
+  onRestore
+}: {
+  changes: readonly ChangedRuleField[];
+  baselineRevision: number;
+  isDisabled: boolean;
+  onRestore: (path: RuleFieldPath) => void;
+}) {
+  return (
+    <section className="manage-field-changes" aria-labelledby="rule-field-changes-title">
+      <div>
+        <h3 id="rule-field-changes-title">按字段撤销</h3>
+        <p className="manage-section__description">
+          恢复到本地编辑所基于的服务端草稿 revision {baselineRevision}；不会合并或载入后来到达的远端修改。
+        </p>
+      </div>
+      {changes.length === 0 ? (
+        <p className="manage-section__description">当前没有可撤销的字段修改。</p>
+      ) : (
+        <ul className="manage-field-changes__list">
+          {changes.map((change) => (
+            <li className="manage-field-changes__item" key={change.pointer}>
+              <code className="manage-field-changes__path">{change.pointer}</code>
+              <Button
+                variant="secondary"
+                isDisabled={isDisabled}
+                aria-label={`撤销字段 ${change.pointer}`}
+                onPress={() => onRestore(change.path)}
+              >
+                撤销
+              </Button>
+            </li>
+          ))}
+        </ul>
+      )}
+    </section>
+  );
+}
+
 export default function RuleSchemaForm({
   value,
+  baselineValue,
+  baselineText,
+  baselineRevision,
   ruleSetId,
   isDisabled,
   isDirty,
@@ -269,12 +403,18 @@ export default function RuleSchemaForm({
   const examples = useRuleExamples();
   const [templateId, setTemplateId] = useState<string | null>(null);
   const [invalidPaths, setInvalidPaths] = useState<ReadonlySet<string>>(new Set());
+  const currentValueRef = useRef(value);
+  const changedFields = useMemo(() => collectChangedRuleFields(value, baselineValue), [baselineValue, value]);
   const schemaMatches =
     remoteSchema.data !== undefined && stableJson(remoteSchema.data) === stableJson(schema);
 
   useEffect(() => {
     onOpaqueValidityChange(invalidPaths.size > 0);
   }, [invalidPaths, onOpaqueValidityChange]);
+
+  useEffect(() => {
+    currentValueRef.current = value;
+  }, [value]);
 
   const setOpaqueInvalid = useCallback((path: string, invalid: boolean) => {
     setInvalidPaths((current) => {
@@ -284,15 +424,29 @@ export default function RuleSchemaForm({
       return next;
     });
   }, []);
+  const emitValue = useCallback(
+    (nextValue: Record<string, unknown>) => {
+      onChange(ruleValuesEqual(nextValue, baselineValue) ? baselineText : stringifyRuleValue(nextValue, 2));
+    },
+    [baselineText, baselineValue, onChange]
+  );
   const changeOpaque = useCallback(
     (path: readonly (string | number)[], nextValue: unknown) => {
-      onChange(stringifyRuleValue(patchRuleValue(value, path, nextValue), 2));
+      emitValue(patchRuleValue(currentValueRef.current, path, nextValue));
     },
-    [onChange, value]
+    [emitValue]
+  );
+  const restoreField = useCallback(
+    (path: RuleFieldPath) => {
+      const baselineExists = valueExistsAtPath(baselineValue, path);
+      const restoredValue = baselineExists ? cloneRuleValue(valueAtPath(baselineValue, path)) : undefined;
+      emitValue(patchRuleValue(currentValueRef.current, path, restoredValue));
+    },
+    [baselineValue, emitValue]
   );
   const formContext = useMemo<RuleFormContext>(
-    () => ({ currentValue: value, setOpaqueInvalid, changeOpaque }),
-    [changeOpaque, setOpaqueInvalid, value]
+    () => ({ currentValue: value, baselineValue, setOpaqueInvalid, changeOpaque, restoreField }),
+    [baselineValue, changeOpaque, restoreField, setOpaqueInvalid, value]
   );
 
   const applyTemplate = () => {
@@ -369,6 +523,12 @@ export default function RuleSchemaForm({
       <p className="manage-section__description">
         Schema 错误是即时预检，不会阻止保存无效草稿；服务端保存与校验结果才是规范化和诊断的权威事实。
       </p>
+      <FieldUndoPanel
+        changes={changedFields}
+        baselineRevision={baselineRevision}
+        isDisabled={isDisabled}
+        onRestore={restoreField}
+      />
       <Form<Record<string, unknown>, RJSFSchema, RuleFormContext>
         schema={schema}
         validator={validator}
@@ -392,7 +552,7 @@ export default function RuleSchemaForm({
           if (event.formData === undefined) return;
           const restored = restoreOpaqueValues(event.formData, value);
           if (stringifyRuleValue(restored, 0) === stringifyRuleValue(value, 0)) return;
-          onChange(stringifyRuleValue(restored, 2));
+          emitValue(restored);
         }}
       >
         <></>

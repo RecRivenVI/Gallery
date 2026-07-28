@@ -1028,25 +1028,39 @@ describe('规则草稿', () => {
     const formState = await screen.findByText(/运行时 Schema 与前端预编译版本不一致|Schema 错误是即时预检/);
     expect(formState).toHaveTextContent('Schema 错误是即时预检');
     await screen.findByTestId('rule-schema-form', {}, { timeout: 10_000 });
+    expect(screen.getByText('当前没有可撤销的字段修改。')).toBeInTheDocument();
     const extensions = screen.getByRole('textbox', { name: /extensions/ }) as HTMLTextAreaElement;
     const exactExtensions = extensions.value;
     expect(exactExtensions).toContain('9007199254740993123');
     const version = await screen.findByRole('textbox', { name: /规则版本/ });
     await userEvent.clear(version);
     await userEvent.type(version, '1.0.1');
-    fireEvent.change(extensions, { target: { value: '{' } });
+    await userEvent.click(screen.getByRole('button', { name: '撤销字段 /version' }));
+    expect(version).toHaveValue('1.0.0');
+    expect(screen.getByText('当前没有可撤销的字段修改。')).toBeInTheDocument();
+    await userEvent.click(screen.getByRole('tab', { name: 'JSON 文本' }));
+    expect(screen.getByRole('textbox', { name: '草稿内容' })).toHaveValue(LOSSLESS_RULE_TEXT);
+    await userEvent.click(screen.getByRole('tab', { name: 'Schema 表单' }));
+    await waitFor(() => expect(screen.getByRole('button', { name: '保存草稿' })).toBeDisabled());
+
+    const activeVersion = await screen.findByRole('textbox', { name: /规则版本/ });
+    const activeExtensions = screen.getByRole('textbox', { name: /extensions/ }) as HTMLTextAreaElement;
+    await userEvent.clear(activeVersion);
+    await userEvent.type(activeVersion, '1.0.1');
+    fireEvent.change(activeExtensions, { target: { value: '{' } });
     expect(screen.getByRole('button', { name: '保存草稿' })).toBeDisabled();
     await userEvent.click(screen.getByRole('tab', { name: 'JSON 文本' }));
     expect(screen.getByRole('tab', { name: 'Schema 表单' })).toHaveAttribute('aria-selected', 'true');
     expect(
       screen.getByText('请先修复表单中无损 JSON 字段的语法错误，再切换到文本模式。')
     ).toBeInTheDocument();
-    fireEvent.change(extensions, { target: { value: exactExtensions } });
+    await userEvent.click(screen.getByRole('button', { name: '撤销字段 /extensions' }));
+    expect(activeExtensions).toHaveValue(exactExtensions);
     await waitFor(() => expect(screen.getByRole('button', { name: '保存草稿' })).not.toBeDisabled());
 
-    await userEvent.clear(version);
-    await userEvent.type(version, 'invalid-version');
-    fireEvent.blur(version);
+    await userEvent.clear(activeVersion);
+    await userEvent.type(activeVersion, 'invalid-version');
+    fireEvent.blur(activeVersion);
 
     expect((await screen.findAllByText(/must match pattern/i)).length).toBeGreaterThan(0);
     // 本地 AJV 是预检：服务端明确允许保存 invalid 草稿，因此按钮仍可用。
@@ -1092,6 +1106,49 @@ describe('规则草稿', () => {
 
     // 编辑器仍保留用户的内容：界面绝不静默丢弃它，也不自动覆盖服务端。
     expect(screen.getByRole('textbox', { name: /草稿内容/ })).toHaveValue('{"version":2}');
+  });
+
+  it('远端 revision 漂移后按字段撤销仍恢复本地 base 快照', async () => {
+    let remoteChanged = false;
+    const remoteText = LOSSLESS_RULE_TEXT.replace('"version": "1.0.0"', '"version": "2.0.0"');
+    route('GET /api/v1/rule-packages/pkg_01', () =>
+      jsonResponse(rulePackage({ ruleSetId: FORM_RULE_SET_ID }))
+    );
+    route('GET /api/v1/rule-packages/pkg_01/draft', () => {
+      const contentText = remoteChanged ? remoteText : LOSSLESS_RULE_TEXT;
+      return jsonResponse(
+        ruleDraft({
+          content: JSON.parse(contentText),
+          contentText,
+          revision: remoteChanged ? 4 : 3
+        })
+      );
+    });
+    route('GET /api/v1/rule-packages/pkg_01/versions', () => jsonResponse({ items: [] }));
+    route('GET /api/v1/rule-packages/pkg_01/audits', () => jsonResponse({ items: [] }));
+    route('GET /api/v1/rules/schema', () => jsonResponse(RULE_SCHEMA));
+    route('GET /api/v1/rules/examples', () => jsonResponse({ items: [] }));
+    route('PUT /api/v1/rule-packages/pkg_01/draft', () => {
+      remoteChanged = true;
+      return faultResponse('RULE_DRAFT_CONFLICT', 409, 'corr-field-undo');
+    });
+
+    renderManage('/rules/pkg_01');
+    await userEvent.click(await screen.findByRole('tab', { name: 'Schema 表单' }));
+    const version = await screen.findByRole('textbox', { name: /规则版本/ });
+    await userEvent.clear(version);
+    await userEvent.type(version, '1.0.1');
+    await userEvent.click(screen.getByRole('button', { name: '保存草稿' }));
+
+    await screen.findByText('服务端草稿已经变化，本地编辑仍被保留');
+    await waitFor(() =>
+      expect(screen.getByText('服务端草稿 revision').nextElementSibling).toHaveTextContent('4')
+    );
+    expect(version).toHaveValue('1.0.1');
+    await userEvent.click(screen.getByRole('button', { name: '撤销字段 /version' }));
+    expect(version).toHaveValue('1.0.0');
+    expect(version).not.toHaveValue('2.0.0');
+    expect(screen.getByText('服务端草稿已经变化，本地编辑仍被保留')).toBeInTheDocument();
   });
 
   it('首次草稿从 revision 0 保存、吸收校验 revision，并以 before=null 评估', async () => {
