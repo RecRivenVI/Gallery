@@ -501,6 +501,52 @@ describe('迟到 HTTP 响应', () => {
     expect(screen.queryByRole('heading', { name: '迟到的旧路由作品' })).not.toBeInTheDocument();
     expect(screen.getByRole('heading', { name: '较新的路由作品' })).toBeInTheDocument();
   });
+
+  it('旧搜索的迟到错误即使无视取消，也不能覆盖较新的搜索结果', async () => {
+    let releaseOldError: ((response: Response) => void) | undefined;
+    let oldSearchSignal: AbortSignal | undefined;
+    setFetchHandler((request) => {
+      const url = new URL(request.url);
+      if (url.pathname === '/api/v1/bootstrap') return jsonResponse(BOOTSTRAP);
+      if (url.pathname === '/api/v1/works') {
+        const query = url.searchParams.get('q') ?? '';
+        if (query === '会失败的旧查询') {
+          oldSearchSignal = request.signal;
+          return new Promise<Response>((resolve) => {
+            releaseOldError = resolve;
+          });
+        }
+        if (query === '最新查询') {
+          return jsonResponse(workList({ works: [work({ id: 'work_fresh', title: '最新查询结果' })] }));
+        }
+        return jsonResponse(workList({ works: [work({ id: 'work_initial', title: '初始查询结果' })] }));
+      }
+      return faultResponse('NOT_FOUND', 404);
+    });
+
+    renderGallery(<WorkBrowser />);
+    expect(await screen.findByText('初始查询结果')).toBeInTheDocument();
+    const search = screen.getByRole('searchbox', { name: '搜索作品' });
+    await userEvent.clear(search);
+    await userEvent.type(search, '会失败的旧查询');
+    await userEvent.click(screen.getByRole('button', { name: '搜索' }));
+    await waitFor(() => expect(releaseOldError).toBeDefined());
+
+    await userEvent.clear(search);
+    await userEvent.type(search, '最新查询');
+    await userEvent.click(screen.getByRole('button', { name: '搜索' }));
+    expect(await screen.findByText('最新查询结果')).toBeInTheDocument();
+    await waitFor(() => expect(oldSearchSignal?.aborted).toBe(true));
+
+    await act(async () => {
+      // 测试传输层故意无视 AbortSignal，把旧查询的结构化错误继续交还调用方。
+      releaseOldError?.(faultResponse('FORBIDDEN', 403));
+      await Promise.resolve();
+    });
+    expect(screen.queryByText('FORBIDDEN')).not.toBeInTheDocument();
+    expect(screen.queryByText(/当前账户没有执行此操作的权限/)).not.toBeInTheDocument();
+    expect(screen.getByText('最新查询结果')).toBeInTheDocument();
+  });
 });
 
 describe('媒体读取的降级表现', () => {

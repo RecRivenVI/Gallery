@@ -279,6 +279,13 @@ func run() (exitCode int) {
 			"e2e/real-gallery.spec.ts",
 			projectArgument, "--workers=1", "--retries=0")
 	}
+	// 保留真实 galleryd 响应，只在浏览器传输边界注入一次中断、受控延迟和一个无视取消的
+	// 迟到旧错误；验证 GET 自动恢复与查询代次隔离，不把 mock 结果冒充真实后端证据。
+	if testErr == nil {
+		testErr = command(runCtx, 2*time.Minute, webRoot, env, nodeBin, playwright, "test",
+			"e2e/real-network-degradation.spec.ts",
+			projectArgument, "--workers=1", "--retries=0")
+	}
 	if testErr == nil {
 		testErr = command(runCtx, 3*time.Minute, webRoot, env, nodeBin, playwright, "test",
 			"e2e/real-running-cancel.spec.ts",
