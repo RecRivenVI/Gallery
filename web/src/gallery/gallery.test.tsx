@@ -11,7 +11,7 @@
  */
 
 import { QueryClientProvider } from '@tanstack/react-query';
-import { render, screen, waitFor, within } from '@testing-library/react';
+import { act, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { Link, MemoryRouter, Route, Routes } from 'react-router-dom';
 import { beforeEach, describe, expect, it } from 'vitest';
@@ -370,6 +370,136 @@ describe('游标失效', () => {
     await waitFor(() => {
       expect(recorded.filter((entry) => entry.cursor === null)).toHaveLength(2);
     });
+  });
+
+  it('新搜索不继承旧查询的游标通知，并能独立续页', async () => {
+    setFetchHandler((request) => {
+      const url = new URL(request.url);
+      if (url.pathname === '/api/v1/bootstrap') return jsonResponse(BOOTSTRAP);
+      if (url.pathname === '/api/v1/works') {
+        const query = url.searchParams.get('q') ?? '';
+        const cursor = url.searchParams.get('cursor');
+        if (query === '新的查询') {
+          if (cursor === 'fresh-page-2') {
+            return jsonResponse(workList({ works: [work({ id: 'work_fresh_2', title: '新查询第二页' })] }));
+          }
+          return jsonResponse(
+            workList({
+              works: [work({ id: 'work_fresh_1', title: '新查询第一页' })],
+              nextCursor: 'fresh-page-2'
+            })
+          );
+        }
+        if (cursor !== null) return faultResponse('CURSOR_INVALID', 400);
+        return jsonResponse(workList({ nextCursor: 'old-page-2' }));
+      }
+      return faultResponse('NOT_FOUND', 404);
+    });
+
+    renderGallery(<WorkBrowser />);
+    await screen.findByRole('button', { name: '从第一页重新开始' });
+
+    const search = screen.getByRole('searchbox', { name: '搜索作品' });
+    await userEvent.clear(search);
+    await userEvent.type(search, '新的查询');
+    await userEvent.click(screen.getByRole('button', { name: '搜索' }));
+
+    expect(await screen.findByText('新查询第一页')).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: '从第一页重新开始' })).not.toBeInTheDocument();
+    expect(await screen.findByText('新查询第二页')).toBeInTheDocument();
+  });
+});
+
+describe('迟到 HTTP 响应', () => {
+  it('旧搜索的迟到分页响应不能追加到较新的搜索结果', async () => {
+    let releaseOldPage: ((response: Response) => void) | undefined;
+    let oldPageSignal: AbortSignal | undefined;
+    setFetchHandler((request) => {
+      const url = new URL(request.url);
+      if (url.pathname === '/api/v1/bootstrap') return jsonResponse(BOOTSTRAP);
+      if (url.pathname === '/api/v1/works') {
+        const query = url.searchParams.get('q') ?? '';
+        const cursor = url.searchParams.get('cursor');
+        if (query === '最新查询') {
+          return jsonResponse(workList({ works: [work({ id: 'work_fresh', title: '最新查询结果' })] }));
+        }
+        if (cursor === 'old-page-2') {
+          oldPageSignal = request.signal;
+          return new Promise<Response>((resolve) => {
+            releaseOldPage = resolve;
+          });
+        }
+        return jsonResponse(
+          workList({ works: [work({ id: 'work_old_1', title: '旧查询第一页' })], nextCursor: 'old-page-2' })
+        );
+      }
+      return faultResponse('NOT_FOUND', 404);
+    });
+
+    renderGallery(<WorkBrowser />);
+    expect(await screen.findByText('旧查询第一页')).toBeInTheDocument();
+    await waitFor(() => expect(releaseOldPage).toBeDefined());
+
+    const search = screen.getByRole('searchbox', { name: '搜索作品' });
+    await userEvent.clear(search);
+    await userEvent.type(search, '最新查询');
+    await userEvent.click(screen.getByRole('button', { name: '搜索' }));
+
+    expect(await screen.findByText('最新查询结果')).toBeInTheDocument();
+    await waitFor(() => expect(oldPageSignal?.aborted).toBe(true));
+    await act(async () => {
+      releaseOldPage?.(
+        jsonResponse(workList({ works: [work({ id: 'work_old_2', title: '迟到的旧查询第二页' })] }))
+      );
+      await Promise.resolve();
+    });
+    expect(screen.queryByText('迟到的旧查询第二页')).not.toBeInTheDocument();
+    expect(screen.getByText('最新查询结果')).toBeInTheDocument();
+  });
+
+  it('旧路由详情响应即使在取消后返回，也不能覆盖新路由', async () => {
+    let releaseOldWork: ((response: Response) => void) | undefined;
+    let oldWorkSignal: AbortSignal | undefined;
+    setFetchHandler((request) => {
+      const url = new URL(request.url);
+      if (url.pathname === '/api/v1/bootstrap') return jsonResponse(BOOTSTRAP);
+      if (url.pathname === '/api/v1/works/work_1') {
+        oldWorkSignal = request.signal;
+        return new Promise<Response>((resolve) => {
+          releaseOldWork = resolve;
+        });
+      }
+      if (url.pathname === '/api/v1/works/work_2') {
+        return jsonResponse(work({ id: 'work_2', title: '较新的路由作品' }));
+      }
+      if (url.pathname === '/api/v1/works/work_2/media') {
+        return jsonResponse({ queryPublicationId: PUBLICATION, media: [] });
+      }
+      return faultResponse('NOT_FOUND', 404);
+    });
+
+    renderGallery(
+      <>
+        <nav>
+          <Link to={`/works/work_2?queryPublicationId=${PUBLICATION}`}>切换到新作品</Link>
+        </nav>
+        <Routes>
+          <Route path="/works/:workId" element={<WorkPage />} />
+        </Routes>
+      </>,
+      `/works/work_1?queryPublicationId=${PUBLICATION}`
+    );
+    await waitFor(() => expect(releaseOldWork).toBeDefined());
+
+    await userEvent.click(screen.getByRole('link', { name: '切换到新作品' }));
+    expect(await screen.findByRole('heading', { name: '较新的路由作品' })).toBeInTheDocument();
+    await waitFor(() => expect(oldWorkSignal?.aborted).toBe(true));
+    await act(async () => {
+      releaseOldWork?.(jsonResponse(work({ id: 'work_1', title: '迟到的旧路由作品' })));
+      await Promise.resolve();
+    });
+    expect(screen.queryByRole('heading', { name: '迟到的旧路由作品' })).not.toBeInTheDocument();
+    expect(screen.getByRole('heading', { name: '较新的路由作品' })).toBeInTheDocument();
   });
 });
 

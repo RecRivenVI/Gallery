@@ -255,6 +255,86 @@ test('主题选择跨两个入口共享 @smoke', async ({ page }) => {
   await expect(page.locator('html')).toHaveAttribute('data-theme', 'dark');
 });
 
+test('迟到的旧分页响应不会覆盖较新的搜索结果 @smoke', async ({ page }) => {
+  let releaseOldPage: (() => void) | undefined;
+  let oldPageSettled = false;
+  const list = (id: string, title: string, nextCursor?: string) => ({
+    queryPublicationId: publication,
+    sortProtocolVersion: 2,
+    rankProtocolVersion: 2,
+    catalogRevision: 'cat_weak_network',
+    overlayProjectionRevision: 'overlay_weak_network',
+    total: { mode: 'exact', value: 1, protocolVersion: 1 },
+    dependencySet: [],
+    liveUserStateFields: ['favorite', 'progress'],
+    works: [
+      {
+        id,
+        title,
+        creator: '弱网测试创作者',
+        tags: ['合成'],
+        mediaCount: 0,
+        coverMediaId: null,
+        favorite: false,
+        progress: 0,
+        queryPublicationId: publication
+      }
+    ],
+    ...(nextCursor === undefined ? {} : { nextCursor })
+  });
+
+  // 该路由在 beforeEach 的通用 API 桩之后注册，因此只接管本用例的作品查询；其余请求
+  // 继续回落到同一合成 bootstrap。第二页故意无视客户端取消并迟到返回，锁定 UI 代次。
+  await page.route('**/api/v1/works?*', async (route) => {
+    const url = new URL(route.request().url());
+    const query = url.searchParams.get('q') ?? '';
+    const cursor = url.searchParams.get('cursor');
+    const fulfill = (body: unknown) =>
+      route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(body) });
+
+    if (query === '旧分页查询' && cursor === null) {
+      await fulfill(list('work_old_first', '旧分页第一页', 'old-late-page'));
+      return;
+    }
+    if (query === '旧分页查询' && cursor === 'old-late-page') {
+      try {
+        await new Promise<void>((resolve) => {
+          releaseOldPage = resolve;
+        });
+        await fulfill(list('work_old_late', '迟到的旧分页第二页'));
+      } catch {
+        // Chromium/Firefox 都允许已取消的 fetch 不再接收 fulfill；无论传输层是否保留迟到
+        // 字节，页面都必须保持较新的查询。settled 标记让断言等到该分支确实收尾。
+      } finally {
+        oldPageSettled = true;
+      }
+      return;
+    }
+    if (query === '最新查询') {
+      await fulfill(list('work_latest', '最新查询结果'));
+      return;
+    }
+    await route.fallback();
+  });
+
+  await page.goto('/browse');
+  await expect(page.getByText('合成作品', { exact: true })).toBeVisible();
+  const search = page.getByRole('searchbox', { name: '搜索作品' });
+  await search.fill('旧分页查询');
+  await page.getByRole('button', { name: '搜索', exact: true }).click();
+  await expect(page.getByText('旧分页第一页', { exact: true })).toBeVisible();
+  await page.getByRole('button', { name: '加载更多', exact: true }).click();
+  await expect.poll(() => releaseOldPage !== undefined).toBe(true);
+
+  await search.fill('最新查询');
+  await page.getByRole('button', { name: '搜索', exact: true }).click();
+  await expect(page.getByText('最新查询结果', { exact: true })).toBeVisible();
+  releaseOldPage?.();
+  await expect.poll(() => oldPageSettled).toBe(true);
+  await expect(page.getByText('迟到的旧分页第二页', { exact: true })).toHaveCount(0);
+  await expect(page.getByText('最新查询结果', { exact: true })).toBeVisible();
+});
+
 test('两个入口都没有严重可访问性违规 @smoke', async ({ page }) => {
   for (const path of ['/', '/manage']) {
     await page.goto(path);

@@ -141,6 +141,14 @@ export interface CursorNotice {
   kind: Exclude<CursorRecovery, 'none'>;
 }
 
+interface StoredCursorNotice extends CursorNotice {
+  /**
+   * 通知只属于产生它的那组查询条件。用户已经换了搜索、排序或范围时，旧游标错误即使
+   * 稍后才进入 React effect，也不能继续阻止新查询自动续页。
+   */
+  querySignature: string;
+}
+
 export interface WorkListView {
   works: PublishedWork[];
   pages: WorkListResponse[];
@@ -177,10 +185,15 @@ function workQuery(params: WorkQueryParams, cursor: string | undefined) {
 export function useWorkList(params: WorkQueryParams): WorkListView {
   // generation 参与 queryKey：游标失效后 +1，等于丢弃整个已加载序列从第一页重来。
   const [generation, setGeneration] = useState(0);
-  const [notice, setNotice] = useState<CursorNotice | undefined>(undefined);
+  const [storedNotice, setStoredNotice] = useState<StoredCursorNotice | undefined>(undefined);
+  const queryScope = workQuery(params, undefined);
+  // workQuery 按固定字段顺序构造纯 JSON；签名只用于把局部 UI 通知绑定到同一组查询条件，
+  // 服务端事实身份仍由 query_publication_id 与签名游标决定。
+  const querySignature = JSON.stringify(queryScope);
+  const notice = storedNotice?.querySignature === querySignature ? storedNotice : undefined;
 
   const query = useInfiniteQuery({
-    queryKey: ['works', 'list', workQuery(params, undefined), generation],
+    queryKey: ['works', 'list', queryScope, generation],
     initialPageParam: undefined as string | undefined,
     queryFn: async ({ pageParam, signal }): Promise<WorkListResponse> =>
       expectData(await api.GET('/api/v1/works', { params: { query: workQuery(params, pageParam) }, signal })),
@@ -199,23 +212,23 @@ export function useWorkList(params: WorkQueryParams): WorkListView {
   }, [refetch]);
 
   const restart = useCallback(() => {
-    setNotice(undefined);
+    setStoredNotice(undefined);
     setGeneration((value) => value + 1);
   }, []);
 
   const dismissNotice = useCallback(() => {
-    setNotice(undefined);
+    setStoredNotice(undefined);
   }, []);
 
   const failure = query.error;
   useEffect(() => {
     const recovery = classifyCursorFailure(failure);
     if (recovery === 'none') return;
-    setNotice({ kind: recovery });
+    setStoredNotice({ kind: recovery, querySignature });
     // CURSOR_EXPIRED 服务端声明可重试，且“重来”本身是有意义的动作：自动从第一页重新加载。
     // CURSOR_INVALID 不可重试，只登记通知，等用户按下按钮。
     if (recovery === 'restart-auto') setGeneration((value) => value + 1);
-  }, [failure]);
+  }, [failure, querySignature]);
 
   const pages = query.data?.pages ?? [];
   const first = pages[0];
