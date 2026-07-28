@@ -160,19 +160,22 @@ func run() (exitCode int) {
 		galleryd += ".exe"
 	}
 	buildCtx, cancelBuild := context.WithTimeout(runCtx, 2*time.Minute)
-	err = testprocess.BuildGallerydContext(buildCtx, goBin, root, galleryd)
+	err = testprocess.BuildGallerydE2EContext(buildCtx, goBin, root, galleryd)
 	cancelBuild()
 	if err != nil {
 		return fail("构建隔离 galleryd", err)
 	}
 
 	gallerydLog := filepath.Join(logsRoot, "galleryd.log")
-	server, err := testprocess.StartGallerydWithSourceRootsContext(
+	const runningCancelRelativePath = "work-cancel/media-block.png"
+	testEnvironment := []string{"GALLERY_E2E_BLOCK_HASH_RELATIVE_PATH=" + runningCancelRelativePath}
+	server, err := testprocess.StartGallerydWithSourceRootsEnvironmentContext(
 		runCtx,
 		galleryd,
 		appRoot,
 		gallerydLog,
 		60*time.Second,
+		testEnvironment,
 		sourceRoot,
 		runningCancelSourceRoot,
 	)
@@ -266,12 +269,13 @@ func run() (exitCode int) {
 		testErr = stopError(stop)
 	}
 	if testErr == nil {
-		restoredServer, startErr := testprocess.StartGallerydWithSourceRootsContext(
+		restoredServer, startErr := testprocess.StartGallerydWithSourceRootsEnvironmentContext(
 			runCtx,
 			galleryd,
 			appRoot,
 			restoredLog,
 			60*time.Second,
+			testEnvironment,
 			sourceRoot,
 			runningCancelSourceRoot,
 		)
@@ -451,10 +455,9 @@ func writeSyntheticPNG(path string, width, height int, seed uint8) error {
 }
 
 // writeRunningCancelSource 建立只供真实浏览器运行中取消门禁使用的独立合成 Source。
-// 2048 个小媒体让 incremental Scan 必须建立并等待真实 Hash Job，足以在首个媒体完成后
-// 从 UI 请求取消；内容本身很小，避免用大文件或高 CPU 吞吐制造不必要的资源压力。
+// 单个小媒体由 web-e2e 专用 galleryd 在实际读取首批字节后等待 context 取消；运行窗口
+// 不再依赖文件数量、主机吞吐或调度时序，也不会用大文件制造不必要的资源压力。
 func writeRunningCancelSource(root string) error {
-	const mediaCount = 2048
 	workRoot := filepath.Join(root, "work-cancel")
 	if err := os.MkdirAll(workRoot, 0o700); err != nil {
 		return err
@@ -463,21 +466,7 @@ func writeRunningCancelSource(root string) error {
 		[]byte("{\"creator\":{\"name\":\"Cancellation Creator\"}}\n"), 0o600); err != nil {
 		return err
 	}
-	firstPath := filepath.Join(workRoot, "media-0000.png")
-	if err := writeSyntheticPNG(firstPath, 1, 1, 173); err != nil {
-		return err
-	}
-	content, err := os.ReadFile(firstPath)
-	if err != nil {
-		return err
-	}
-	for index := 1; index < mediaCount; index++ {
-		path := filepath.Join(workRoot, fmt.Sprintf("media-%04d.png", index))
-		if err := os.WriteFile(path, content, 0o600); err != nil {
-			return err
-		}
-	}
-	return nil
+	return writeSyntheticPNG(filepath.Join(workRoot, "media-block.png"), 1, 1, 173)
 }
 
 func prepareRulePackage(sourcePath, targetPath string) error {

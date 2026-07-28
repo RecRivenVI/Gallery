@@ -21,8 +21,11 @@ interface SourceSnapshot {
 }
 
 interface BindingSnapshot {
+  id: string;
+  sourceId: string;
   semanticHash: string;
   parametersText: string;
+  status?: 'active' | 'paused' | 'invalid';
 }
 
 interface JobSnapshot {
@@ -144,6 +147,8 @@ test('真实 incremental 扫描从 UI 运行中取消并收敛 Attempt @real-run
     parameters: baselineBinding.parametersText,
     priority: 0
   });
+  const binding = (await bindingResponse.json()) as BindingSnapshot;
+  expect(binding).toMatchObject({ id: expect.any(String), sourceId: source.id, status: 'active' });
 
   await page.goto('/manage/scans');
   await page.getByRole('button', { name: /来源/ }).click();
@@ -160,16 +165,21 @@ test('真实 incremental 扫描从 UI 运行中取消并收敛 Attempt @real-run
   const created = (await scanResponse.json()) as JobSnapshot;
 
   let running: JobSnapshot | undefined;
+  let runningHash: JobSnapshot | undefined;
   await expect
     .poll(
       async () => {
         running = await readJSON<JobSnapshot>(page, `/api/v1/jobs/${encodeURIComponent(created.id)}`);
-        return running.status === 'running' && running.progress.current > 0;
+        const active = await readJSON<{ jobs: JobSnapshot[] }>(page, '/api/v1/jobs?status=running&limit=200');
+        const runningHashes = active.jobs.filter((job) => job.type === 'hash' && job.sourceId === source.id);
+        expect(runningHashes).toHaveLength(1);
+        runningHash = runningHashes[0];
+        return running.status === 'running' && runningHash.status === 'running';
       },
       { timeout: 30_000 }
     )
     .toBe(true);
-  expect(running?.progress.total).toBeGreaterThan(1_000);
+  expect(runningHash?.id).toBeTruthy();
 
   const jobsTable = page.getByRole('table', { name: '任务快照', exact: true });
   const jobRow = jobsTable.getByRole('row').filter({ hasText: created.id });
@@ -224,19 +234,30 @@ test('真实 incremental 扫描从 UI 运行中取消并收敛 Attempt @real-run
   });
   expect(attempts.attempts[0]?.errorCode ?? null).toBeNull();
 
-  // Scan 正在等待第二条 Hash 时取消；服务端必须把活动子 Job 一并持久收敛，不能只让
-  // 父 Job 的 UI 看起来已取消而把实际文件读取留在后台继续执行。
-  const cancelledJobs = await readJSON<{ jobs: JobSnapshot[] }>(
+  // Scan 正在等待已实际读取首批字节的 Hash 时取消；服务端必须把同一个活动子 Job
+  // 一并持久收敛，不能只让父 Job 的 UI 看起来已取消而把实际文件读取留在后台继续执行。
+  const cancelledHash = await readJSON<JobSnapshot>(
     page,
-    '/api/v1/jobs?status=cancelled&limit=200'
+    `/api/v1/jobs/${encodeURIComponent(runningHash?.id ?? '')}`
   );
-  const cancelledHashes = cancelledJobs.jobs.filter(
-    (job) => job.type === 'hash' && job.sourceId === source.id
+  expect(cancelledHash).toMatchObject({
+    id: runningHash?.id,
+    type: 'hash',
+    sourceId: source.id,
+    status: 'cancelled',
+    stage: 'cancelled',
+    cancelRequested: true
+  });
+  const hashAttempts = await readJSON<{ attempts: JobAttemptSnapshot[] }>(
+    page,
+    `/api/v1/jobs/${encodeURIComponent(cancelledHash.id)}/attempts`
   );
-  expect(cancelledHashes.length).toBeGreaterThan(0);
-  expect(cancelledHashes).toEqual(
-    expect.arrayContaining([expect.objectContaining({ status: 'cancelled', cancelRequested: true })])
-  );
+  expect(hashAttempts.attempts).toHaveLength(1);
+  expect(hashAttempts.attempts[0]).toMatchObject({
+    attempt: 1,
+    status: 'cancelled',
+    errorRetryable: false
+  });
 
   const scanState = await readJSON<SourceScanState>(
     page,
@@ -244,4 +265,29 @@ test('真实 incremental 扫描从 UI 运行中取消并收敛 Attempt @real-run
   );
   expect(scanState).toMatchObject({ sourceId: source.id, pendingHashCount: 0 });
   expect(scanState.currentPublicationId ?? null).toBeNull();
+
+  // 该 Source 只服务于本用例。通过可见规则页面暂停其 direct Binding，避免 Watcher 在
+  // 后续用例运行期间再次收敛并改变全局 current publication。
+  await page.goto('/manage/rules');
+  await expect(page.getByRole('heading', { name: '规则', exact: true })).toBeVisible();
+  await page.getByRole('button', { name: /来源/ }).click();
+  await page.getByRole('option', { name: `${source.displayName} · ${source.id}`, exact: true }).click();
+  const bindingTable = page.getByRole('table', { name: 'Source 规则绑定', exact: true });
+  const bindingRow = bindingTable.getByRole('row').filter({ hasText: binding.id });
+  await expect(bindingRow).toHaveCount(1);
+  const pausePromise = page.waitForResponse((response) =>
+    pathIs(response, `/api/v1/source-rule-bindings/${binding.id}`, 'PATCH')
+  );
+  await bindingRow.getByRole('button', { name: '暂停', exact: true }).click();
+  const pauseDialog = page.getByRole('dialog', { name: '暂停规则绑定', exact: true });
+  await pauseDialog.getByRole('button', { name: '确认暂停', exact: true }).click();
+  const pauseResponse = await pausePromise;
+  expect(pauseResponse.status()).toBe(200);
+  expect(pauseResponse.request().postDataJSON()).toEqual({ status: 'paused' });
+  expect((await pauseResponse.json()) as BindingSnapshot).toMatchObject({
+    id: binding.id,
+    sourceId: source.id,
+    status: 'paused'
+  });
+  await expect(bindingRow.getByText('paused', { exact: true })).toBeVisible();
 });

@@ -231,7 +231,7 @@ func (s *Service) Execute(ctx context.Context, jobID string) error {
 			}
 		}
 	}()
-	hashed, hashErr := media.HashSourceFileWithOptions(source.RootPath, request.RelativePath, media.HashOptions{
+	hashed, hashErr := hashSourceFileWithOptions(source.RootPath, request.RelativePath, media.HashOptions{
 		Context: hashContext, ExpectedSize: request.ExpectedSize, ExpectedModTimeNanos: request.ExpectedModTimeNanos,
 		HasExpectedIdentity: request.HasExpectedIdentity,
 		Progress: func(bytes int64) {

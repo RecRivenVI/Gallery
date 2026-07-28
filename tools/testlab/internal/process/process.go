@@ -12,6 +12,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"time"
 )
 
@@ -49,7 +50,22 @@ func BuildGalleryd(goBin, repoRoot, outPath string) error {
 // BuildGallerydContext 与 BuildGalleryd 相同，但允许验证运行器在超时或收到终止信号时
 // 取消编译，避免 CI 或本地中断后遗留无界等待的 go 子进程。
 func BuildGallerydContext(ctx context.Context, goBin, repoRoot, outPath string) error {
-	cmd := exec.Command(goBin, "build", "-o", outPath, "./cmd/galleryd")
+	return buildGallerydContext(ctx, goBin, repoRoot, outPath)
+}
+
+// BuildGallerydE2EContext 仅供隔离浏览器运行器构建带确定性测试钩子的 galleryd；
+// 普通构建、probe 与正式发行均不携带该 build tag。
+func BuildGallerydE2EContext(ctx context.Context, goBin, repoRoot, outPath string) error {
+	return buildGallerydContext(ctx, goBin, repoRoot, outPath, "gallery_e2e_testhooks")
+}
+
+func buildGallerydContext(ctx context.Context, goBin, repoRoot, outPath string, tags ...string) error {
+	args := []string{"build"}
+	if len(tags) > 0 {
+		args = append(args, "-tags="+strings.Join(tags, ","))
+	}
+	args = append(args, "-o", outPath, "./cmd/galleryd")
+	cmd := exec.Command(goBin, args...)
 	cmd.Dir = repoRoot
 	cmd.Env = append(os.Environ(), "GOTOOLCHAIN=local", "CGO_ENABLED=0")
 	var output bytes.Buffer
@@ -89,7 +105,21 @@ func StartGallerydWithSourceRootsContext(
 	sourceRoots ...string,
 ) (*Process, error) {
 	return startGallerydWithSourceRootsContext(
-		ctx, "personal", binPath, appRoot, logPath, timeout, sourceRoots...,
+		ctx, "personal", binPath, appRoot, logPath, timeout, nil, sourceRoots...,
+	)
+}
+
+// StartGallerydWithSourceRootsEnvironmentContext 只为隔离测试进程增加显式环境；调用方仍
+// 不能覆盖 Personal、loopback、临时 AppDirs 或 Source 根边界。
+func StartGallerydWithSourceRootsEnvironmentContext(
+	ctx context.Context,
+	binPath, appRoot, logPath string,
+	timeout time.Duration,
+	environment []string,
+	sourceRoots ...string,
+) (*Process, error) {
+	return startGallerydWithSourceRootsContext(
+		ctx, "personal", binPath, appRoot, logPath, timeout, environment, sourceRoots...,
 	)
 }
 
@@ -101,13 +131,14 @@ func StartGallerydLANContext(
 	binPath, appRoot, logPath string,
 	timeout time.Duration,
 ) (*Process, error) {
-	return startGallerydWithSourceRootsContext(ctx, "lan", binPath, appRoot, logPath, timeout)
+	return startGallerydWithSourceRootsContext(ctx, "lan", binPath, appRoot, logPath, timeout, nil)
 }
 
 func startGallerydWithSourceRootsContext(
 	ctx context.Context,
 	mode, binPath, appRoot, logPath string,
 	timeout time.Duration,
+	environment []string,
 	sourceRoots ...string,
 ) (*Process, error) {
 	if err := ctx.Err(); err != nil {
@@ -121,6 +152,7 @@ func startGallerydWithSourceRootsContext(
 		args = append(args, "-source-root="+root)
 	}
 	cmd := exec.Command(binPath, args...)
+	cmd.Env = append(os.Environ(), environment...)
 	configureProcessGroup(cmd)
 	logFile, err := os.Create(logPath)
 	if err != nil {
