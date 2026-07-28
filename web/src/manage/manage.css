@@ -115,8 +115,10 @@
 
 .manage-main {
   display: grid;
+  min-width: 0;
   align-content: start;
   gap: var(--space-4);
+  grid-template-columns: minmax(0, 1fr);
   padding: var(--space-4);
 }
 
@@ -136,7 +138,9 @@
 
 .manage-section {
   display: grid;
+  min-width: 0;
   gap: var(--space-3);
+  grid-template-columns: minmax(0, 1fr);
   padding: var(--space-4);
   border: 1px solid var(--color-border);
   border-radius: var(--radius-md);
@@ -145,6 +149,7 @@
 
 .manage-section__header {
   display: flex;
+  min-width: 0;
   flex-wrap: wrap;
   align-items: baseline;
   gap: var(--space-3);
@@ -554,7 +559,9 @@
 
 .manage-note {
   display: grid;
+  min-width: 0;
   gap: var(--space-1);
+  grid-template-columns: minmax(0, 1fr);
   padding: var(--space-3);
   border: 1px solid var(--color-border);
   border-inline-start: 3px solid var(--color-accent);
@@ -568,6 +575,7 @@
 
 .manage-note__title {
   display: flex;
+  min-width: 0;
   flex-wrap: wrap;
   align-items: center;
   gap: var(--space-2);
@@ -577,10 +585,16 @@
 }
 
 .manage-note__detail {
+  min-width: 0;
   margin: 0;
   color: var(--color-text-muted);
   font-size: var(--text-sm);
   line-height: var(--leading-normal);
+}
+
+.manage-note__title,
+.manage-note__detail {
+  overflow-wrap: anywhere;
 }
 
 /* ————————————————————————————— 状态条 ————————————————————————————— */

@@ -286,6 +286,37 @@ async function expectDialogFocusBoundary(page: Page, dialogName: string, trigger
   await expect(trigger).toBeFocused();
 }
 
+async function expectNoHorizontalOverflow(page: Page) {
+  const overflow = await page.evaluate(() => {
+    const clientWidth = document.documentElement.clientWidth;
+    const scrollWidth = document.documentElement.scrollWidth;
+    const elements: Element[] = Array.from(document.querySelectorAll('*'));
+    const offenders = elements
+      .map((element: Element) => {
+        const rect = element.getBoundingClientRect();
+        return {
+          element: `${element.tagName.toLowerCase()}${element.id ? `#${element.id}` : ''}${
+            typeof element.className === 'string' && element.className
+              ? `.${element.className.trim().replace(/\s+/g, '.')}`
+              : ''
+          }`,
+          right: Math.round(rect.right * 100) / 100,
+          width: Math.round(rect.width * 100) / 100
+        };
+      })
+      .filter((item) => item.right > clientWidth + 0.5)
+      .sort((left, right) => right.right - left.right)
+      .slice(0, 10);
+    return { clientWidth, scrollWidth, offenders };
+  });
+
+  expect(
+    overflow.scrollWidth,
+    `页面发生横向溢出：clientWidth=${overflow.clientWidth}, scrollWidth=${overflow.scrollWidth}, ` +
+      `elements=${JSON.stringify(overflow.offenders)}`
+  ).toBeLessThanOrEqual(overflow.clientWidth);
+}
+
 test('窄屏导航限制焦点并由 Escape 关闭后返还触发点 @smoke', async ({ page }) => {
   await page.setViewportSize({ width: 390, height: 844 });
 
@@ -300,9 +331,7 @@ test('窄屏导航限制焦点并由 Escape 关闭后返还触发点 @smoke', as
   await expect(page).toHaveURL(/\/browse$/);
   await expect(page.getByRole('dialog', { name: '画廊导航', exact: true })).toBeHidden();
   await expect(page.getByRole('button', { name: '导航', exact: true })).toBeFocused();
-  expect(
-    await page.evaluate(() => document.documentElement.scrollWidth <= document.documentElement.clientWidth)
-  ).toBe(true);
+  await expectNoHorizontalOverflow(page);
 
   await page.goto('/manage');
   await expect(page.getByRole('navigation', { name: '管理功能' })).toBeHidden();
@@ -315,7 +344,9 @@ test('窄屏导航限制焦点并由 Escape 关闭后返还触发点 @smoke', as
   await expect(page).toHaveURL(/\/manage\/scans$/);
   await expect(page.getByRole('dialog', { name: '管理导航', exact: true })).toBeHidden();
   await expect(page.getByRole('button', { name: '导航', exact: true })).toBeFocused();
-  expect(
-    await page.evaluate(() => document.documentElement.scrollWidth <= document.documentElement.clientWidth)
-  ).toBe(true);
+  await expectNoHorizontalOverflow(page);
+
+  await page.setViewportSize({ width: 320, height: 844 });
+  await expect(page.getByRole('navigation', { name: '管理功能' })).toBeHidden();
+  await expectNoHorizontalOverflow(page);
 });
