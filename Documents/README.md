@@ -1,6 +1,6 @@
 # Gallery 工程文档
 
-本目录是 Gallery（中文名“画廊”、代码代号 `gallery`）未来正式实现的唯一工程文档入口。这里保存当前规范、实施指南、验证证据和架构决策，不保存调研过程、阶段汇报或已完成任务清单。
+本目录是 Gallery（中文名“画廊”、代码代号 `gallery`）未来正式实现的唯一工程文档入口。这里保存当前规范、实施指南、验证证据、架构决策，以及集中待评审的前端设计材料，不保存分散的调研过程、阶段汇报或已完成任务清单。
 
 2026-07-28 的 [EV-65](证据/验证记录.md) 已把当时的 Personal 11/11、LAN 1/1、同 AppDirs 恢复重启和只读 Source guard 的隔离真实后端链从 Chromium 扩展到桌面 Firefox，并让 Chromium/Firefox smoke 与完整隔离链进入 CI；[EV-66](证据/验证记录.md) 又关闭显式扫描/Watcher 状态脱节、扫描期间事件丢失与维护 Job 终态不刷新的竞态；[EV-67](证据/验证记录.md) 再把全部 15 类现有 primitive config 接入权威 Schema 可视化字段；[EV-68](证据/验证记录.md) 让当前规范 JSON 草稿以无损参数和显式合成 Sample 执行 Dry Run、Explain、Trace；[EV-69](证据/验证记录.md) 补齐基于本地精确基线的按字段撤销；[EV-70](证据/验证记录.md) 继续为 `parameter_schema`、tests、extensions 建立无损结构化编辑和任意 JSON 树；[EV-71](证据/验证记录.md) 再用真实单帧丢失证明 sequence gap 会重取 jobs、libraries 与 sources HTTP snapshot；[EV-72](证据/验证记录.md) 又从双浏览器 UI 证明运行中 Scan、活动 Hash、Attempt 与 publication 的取消收敛；[EV-73](证据/验证记录.md) 继续以真实 `galleryd` 强杀、同 AppDirs 立即重启和未来租约不改表，证明启动期单写者能立即接管遗留 Attempt，并让 UI 解释和治理 `PROCESS_INTERRUPTED`；[EV-74](证据/验证记录.md) 建立首批治理链，[EV-75](证据/验证记录.md) 再覆盖 SourceWork merge、全部 orphan decision/实体类型与已消费决策冲突，[EV-76](证据/验证记录.md) 又补齐普通 Binding issue 三决定、真实生命周期、双标签页冲突与 51 条 keyset 分页并修复活动唯一性，[EV-77](证据/验证记录.md) 再实际消费三种剩余结构 action，并经同 AppDirs 重启验证 Work/Creator/Media 孤儿重现身份语义。阶段 6 Web Gate 仍因真实移动设备/屏幕阅读器、完整弱网矩阵与正式可用性门禁缺口而未通过。
 
@@ -48,6 +48,7 @@ EV-67 延续上述真实后端持续门禁：当前 primitive config 的 15 个 
 | 规范 | [09 跨平台与客户端](规范/09-跨平台与客户端.md) | 平台适配层、最低支持矩阵、Web UI 与桌面壳边界 |
 | 指南 | [01 v1 实施计划](指南/01-v1实施计划.md) | Walking Skeleton、Architecture Proof、阶段顺序与交付范围 |
 | 指南 | [02 测试与发布门禁](指南/02-测试与发布门禁.md) | Correctness、Reference Performance、Degradation 与发布验收 |
+| 设计材料 | [前端设计材料索引](前端设计/README.md) | 待评审的视觉、信息架构、交互、响应式与可访问性改版输入；不直接覆盖规范或 ADR |
 | 证据 | [验证记录](证据/验证记录.md) | 仍影响当前决策的原型、样本、结果和局限 |
 | 证据 | [历史重写记录](证据/历史重写记录.md) | 已发生的 Git 历史重写事实、备份位置与恢复方式 |
 | 决策 | [ADR 索引](ADR/README.md) | 所有当前 ADR 的唯一状态入口 |
@@ -89,3 +90,4 @@ EV-67 延续上述真实后端持续门禁：当前 primitive config 的 15 个 
 4. 实施进度、一次性测试日志和修复汇报不进入本目录；代码、测试和 Git 历史承担追溯。
 5. 任何新主题必须先判断能否并入现有权威文档，避免再次形成多份“最终结论”。
 6. 文档不得以任何现有应用的数据库、API、配置或行为作为 Gallery 的兼容目标。
+7. `前端设计/` 中的新材料默认是待评审候选；采纳后必须把产品语义同步到对应规范，涉及已接受决策时同步 ADR，不以设计稿本身替代权威文档。
