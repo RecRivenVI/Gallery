@@ -122,6 +122,9 @@ func run() (exitCode int) {
 		filepath.Join(governanceSourceRoot, "binding-pagination"),
 		filepath.Join(governanceSourceRoot, "structure"),
 		filepath.Join(governanceSourceRoot, "structure-merge"),
+		filepath.Join(governanceSourceRoot, "structure-keep-same"),
+		filepath.Join(governanceSourceRoot, "structure-create-new"),
+		filepath.Join(governanceSourceRoot, "structure-merge-new"),
 		filepath.Join(governanceSourceRoot, "structure-consumed"),
 		filepath.Join(governanceSourceRoot, "orphan"),
 		filepath.Join(governanceSourceRoot, "media"),
@@ -276,7 +279,7 @@ func run() (exitCode int) {
 	}
 	// 其余治理写路径需要由正式应用层预置持久 Binding 状态。先优雅停止当前单写者，使用
 	// application.Resources 建立合成事实并写出非敏感 ID 清单，再以同一 AppDirs 重新启动。
-	// 四个 Source 根在初始只读 guard 前已经存在，夹具阶段不创建、改写或删除 Source 内容。
+	// 11 个治理 Source 子根在初始只读 guard 前已经存在，夹具阶段不创建、改写或删除 Source 内容。
 	governanceRestartedLog := filepath.Join(logsRoot, "galleryd-governance-restarted.log")
 	if testErr == nil {
 		stop := server.Stop()
@@ -316,6 +319,50 @@ func run() (exitCode int) {
 	if testErr == nil {
 		testErr = command(runCtx, 3*time.Minute, webRoot, env, nodeBin, playwright, "test",
 			"e2e/real-governance.spec.ts",
+			projectArgument, "--workers=1", "--retries=0")
+	}
+	// 三种剩余结构 action 由上面的可见 UI 写入。随后再次释放 AppDirs 单写锁，只通过正式
+	// application.Resources 消费 pre-seed Binding 并重放孤儿发现事实；再以同一 AppDirs 重启，
+	// 从新浏览器上下文核对持久决策、不可撤回边界与重现后候选收敛。
+	governanceAppliedLog := filepath.Join(logsRoot, "galleryd-governance-applied.log")
+	if testErr == nil {
+		stop := server.Stop()
+		serverStopped = true
+		testErr = stopError(stop)
+	}
+	if testErr == nil {
+		advanced, advanceErr := advanceGovernanceFixtures(runCtx, appRoot, governanceState)
+		if advanceErr != nil {
+			testErr = fmt.Errorf("消费结构决策并重放孤儿: %w", advanceErr)
+		} else if writeErr := writeGovernanceFixtureState(governanceState, advanced); writeErr != nil {
+			testErr = fmt.Errorf("写入治理延续状态: %w", writeErr)
+		}
+	}
+	if testErr == nil {
+		advancedServer, startErr := testprocess.StartGallerydWithSourceRootsEnvironmentContext(
+			runCtx,
+			galleryd,
+			appRoot,
+			governanceAppliedLog,
+			60*time.Second,
+			testEnvironment,
+			sourceRoot,
+			runningCancelSourceRoot,
+			processInterruptSourceRoot,
+			governanceSourceRoot,
+		)
+		if startErr != nil {
+			testErr = fmt.Errorf("治理延续后以同一 AppDirs 重启 galleryd: %w", startErr)
+		} else {
+			server = advancedServer
+			serverStopped = false
+			env[0] = "GALLERY_REAL_BASE_URL=" + server.BaseURL
+			testErr = waitHealthy(runCtx, server.BaseURL, 30*time.Second)
+		}
+	}
+	if testErr == nil {
+		testErr = command(runCtx, 2*time.Minute, webRoot, env, nodeBin, playwright, "test",
+			"e2e/real-governance-reappearance.spec.ts",
 			projectArgument, "--workers=1", "--retries=0")
 	}
 	// 规则绑定状态链必须在规则生命周期用例永久弃用规则包之前完成；否则服务端会按正式
@@ -441,6 +488,9 @@ func run() (exitCode int) {
 		if _, statErr := os.Stat(governanceRestartedLog); statErr == nil {
 			diagnosticErr = errors.Join(diagnosticErr, retainDiagnostics(governanceRestartedLog, diagnosticsRoot))
 		}
+		if _, statErr := os.Stat(governanceAppliedLog); statErr == nil {
+			diagnosticErr = errors.Join(diagnosticErr, retainDiagnostics(governanceAppliedLog, diagnosticsRoot))
+		}
 		if diagnosticErr == nil {
 			fmt.Printf("失败诊断已保存到：%s\n", diagnosticsRoot)
 		}
@@ -531,15 +581,51 @@ func runGovernanceOnly(
 		testErr = command(ctx, 3*time.Minute, webRoot, env, nodeBin, playwright, "test",
 			"e2e/real-governance.spec.ts", "--project="+browserProject, "--workers=1", "--retries=0")
 	}
-	stop := server.Stop()
-	stopped = true
-	testErr = errors.Join(testErr, stopError(stop))
+	if testErr == nil {
+		stop := server.Stop()
+		stopped = true
+		testErr = stopError(stop)
+	}
+	if testErr == nil {
+		advanced, advanceErr := advanceGovernanceFixtures(ctx, appRoot, statePath)
+		if advanceErr != nil {
+			testErr = fmt.Errorf("消费结构决策并重放孤儿: %w", advanceErr)
+		} else if writeErr := writeGovernanceFixtureState(statePath, advanced); writeErr != nil {
+			testErr = fmt.Errorf("写入治理延续状态: %w", writeErr)
+		}
+	}
+	advancedLogPath := filepath.Join(logsRoot, "galleryd-governance-only-applied.log")
+	if testErr == nil {
+		advancedServer, startErr := testprocess.StartGallerydWithSourceRootsEnvironmentContext(
+			ctx, galleryd, appRoot, advancedLogPath, 60*time.Second, nil, sourceRoots...,
+		)
+		if startErr != nil {
+			testErr = fmt.Errorf("治理延续后重启 galleryd: %w", startErr)
+		} else {
+			server = advancedServer
+			stopped = false
+			env[0] = "GALLERY_REAL_BASE_URL=" + server.BaseURL
+			testErr = waitHealthy(ctx, server.BaseURL, 30*time.Second)
+		}
+	}
+	if testErr == nil {
+		testErr = command(ctx, 2*time.Minute, webRoot, env, nodeBin, playwright, "test",
+			"e2e/real-governance-reappearance.spec.ts", "--project="+browserProject, "--workers=1", "--retries=0")
+	}
+	if !stopped {
+		stop := server.Stop()
+		stopped = true
+		testErr = errors.Join(testErr, stopError(stop))
+	}
 	after, guardErr := snapshot(sourceGuardRoot)
 	if guardErr == nil && !reflect.DeepEqual(before, after) {
 		guardErr = describeGuardDifference(before, after)
 	}
 	if testErr != nil || guardErr != nil {
 		diagnosticErr := retainDiagnostics(logPath, diagnosticsRoot)
+		if _, statErr := os.Stat(advancedLogPath); statErr == nil {
+			diagnosticErr = errors.Join(diagnosticErr, retainDiagnostics(advancedLogPath, diagnosticsRoot))
+		}
 		if diagnosticErr == nil {
 			fmt.Printf("失败诊断已保存到：%s\n", diagnosticsRoot)
 		}

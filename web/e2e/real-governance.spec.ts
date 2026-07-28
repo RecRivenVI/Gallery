@@ -35,6 +35,18 @@ interface GovernanceFixtureState {
   mergeSourceName: string;
   mergeIssueId: string;
   mergeTargetWorkId: string;
+  keepSameSourceId: string;
+  keepSameSourceName: string;
+  keepSameIssueId: string;
+  keepSameIssueSourceKey: string;
+  createNewSourceId: string;
+  createNewSourceName: string;
+  createNewIssueId: string;
+  createNewIssueSourceKey: string;
+  mergeNewSourceId: string;
+  mergeNewSourceName: string;
+  mergeNewIssueId: string;
+  mergeNewIssueSourceKey: string;
   consumedDecisionId: string;
   consumedDecisionIssueId: string;
   consumedDecisionVersion: number;
@@ -48,6 +60,8 @@ interface GovernanceFixtureState {
   orphanCreatorSourceKey: string;
   orphanMediaBindingId: string;
   orphanMediaSourceKey: string;
+  orphanReappearUnbindId: string;
+  orphanReappearUnbindKey: string;
   mediaSourceId: string;
   mediaSourceName: string;
   mediaSourceKey: string;
@@ -105,6 +119,35 @@ async function readJSON<T>(page: Page, path: string): Promise<T> {
 async function selectOption(page: Page, scope: Page | Locator, label: RegExp, option: string): Promise<void> {
   await scope.getByRole('button', { name: label }).click();
   await page.getByRole('option', { name: option, exact: true }).click();
+}
+
+async function resolveStructureAction(
+  page: Page,
+  issuesTable: Locator,
+  sourceLabel: string,
+  issueSourceKey: string,
+  issueId: string,
+  dialogName: '确认作品拆分' | '确认作品合并',
+  actionLabel: string,
+  action: 'split_keep_same' | 'split_create_new' | 'merge_create_new'
+): Promise<StructureDecisionSnapshot> {
+  await selectOption(page, page, /来源/, sourceLabel);
+  await selectOption(page, page, /状态/, '待处理');
+  const row = issuesTable.getByRole('row').filter({ hasText: issueSourceKey });
+  await expect(row).toHaveCount(1);
+  await row.getByRole('button', { name: '确认结构', exact: true }).click();
+  const dialog = page.getByRole('dialog', { name: dialogName, exact: true });
+  await selectOption(page, dialog, / 决策$/, actionLabel);
+  const responsePromise = page.waitForResponse((response) =>
+    pathIs(response, `/api/v1/binding-issues/${issueId}/resolve-structure`, 'POST')
+  );
+  await dialog.getByRole('button', { name: '提交决策', exact: true }).click();
+  const response = await responsePromise;
+  expect(response.status()).toBe(200);
+  expect(response.request().postDataJSON()).toEqual({ action, version: 1 });
+  const decision = (await response.json()) as StructureDecisionSnapshot;
+  expect(decision).toMatchObject({ issueId, status: 'applied', version: 1 });
+  return decision;
 }
 
 test('绑定问题、生命周期、分页、结构决策、孤儿与媒体解绑真实治理链 @real-governance', async ({ page }) => {
@@ -458,6 +501,43 @@ test('绑定问题、生命周期、分页、结构决策、孤儿与媒体解�
     version: mergeDecision.version + 1
   });
 
+  await page.getByRole('tab', { name: '绑定问题', exact: true }).click();
+  const keepSameDecision = await resolveStructureAction(
+    page,
+    issuesTable,
+    `${state.keepSameSourceName} · ${state.keepSameSourceId}`,
+    state.keepSameIssueSourceKey,
+    state.keepSameIssueId,
+    '确认作品拆分',
+    '拆分：保持同一作品',
+    'split_keep_same'
+  );
+  const createNewDecision = await resolveStructureAction(
+    page,
+    issuesTable,
+    `${state.createNewSourceName} · ${state.createNewSourceId}`,
+    state.createNewIssueSourceKey,
+    state.createNewIssueId,
+    '确认作品拆分',
+    '拆分：创建新作品',
+    'split_create_new'
+  );
+  const mergeNewDecision = await resolveStructureAction(
+    page,
+    issuesTable,
+    `${state.mergeNewSourceName} · ${state.mergeNewSourceId}`,
+    state.mergeNewIssueSourceKey,
+    state.mergeNewIssueId,
+    '确认作品合并',
+    '合并：创建新作品',
+    'merge_create_new'
+  );
+  expect(
+    new Set([keepSameDecision.decisionId, createNewDecision.decisionId, mergeNewDecision.decisionId]).size
+  ).toBe(3);
+
+  await page.getByRole('tab', { name: '结构决策', exact: true }).click();
+
   const consumedDecisionRow = decisionsTable
     .getByRole('row')
     .filter({ hasText: state.consumedDecisionIssueId });
@@ -517,6 +597,27 @@ test('绑定问题、生命周期、分页、结构决策、孤儿与媒体解�
   const orphanUnbound = (await orphanUnbindResponse.json()) as OrphanDecisionResult;
   expect(orphanUnbound).toMatchObject({
     bindingId: state.orphanUnbindBindingId,
+    entityType: 'work',
+    decision: 'unbind',
+    newStatus: 'manual_unbound'
+  });
+
+  const orphanReappearUnbindRow = orphansTable
+    .getByRole('row')
+    .filter({ hasText: state.orphanReappearUnbindKey });
+  await expect(orphanReappearUnbindRow).toHaveCount(1);
+  await orphanReappearUnbindRow.getByRole('button', { name: '处理', exact: true }).click();
+  const orphanReappearUnbindDialog = page.getByRole('dialog', { name: '处理孤儿候选', exact: true });
+  await selectOption(page, orphanReappearUnbindDialog, /决定/, '人工解绑');
+  const orphanReappearUnbindPromise = page.waitForResponse((response) =>
+    pathIs(response, `/api/v1/orphan-candidates/${state.orphanReappearUnbindId}/decide`, 'POST')
+  );
+  await orphanReappearUnbindDialog.getByRole('button', { name: '提交决策', exact: true }).click();
+  const orphanReappearUnbindResponse = await orphanReappearUnbindPromise;
+  expect(orphanReappearUnbindResponse.status()).toBe(200);
+  expect(orphanReappearUnbindResponse.request().postDataJSON()).toEqual({ decision: 'unbind' });
+  expect((await orphanReappearUnbindResponse.json()) as OrphanDecisionResult).toMatchObject({
+    bindingId: state.orphanReappearUnbindId,
     entityType: 'work',
     decision: 'unbind',
     newStatus: 'manual_unbound'

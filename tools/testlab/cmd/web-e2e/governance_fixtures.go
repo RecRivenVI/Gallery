@@ -23,55 +23,92 @@ const (
 	governancePaginationSourceName = "治理 E2E · 问题分页"
 	governanceStructureSourceName  = "治理 E2E · 结构决策"
 	governanceMergeSourceName      = "治理 E2E · 合并决策"
+	governanceKeepSameSourceName   = "治理 E2E · 拆分保持同一"
+	governanceCreateNewSourceName  = "治理 E2E · 拆分全部新建"
+	governanceMergeNewSourceName   = "治理 E2E · 合并新建"
 	governanceConsumedSourceName   = "治理 E2E · 已消费决策"
 	governanceOrphanSourceName     = "治理 E2E · 孤儿候选"
 	governanceMediaSourceName      = "治理 E2E · 媒体解绑"
 )
 
 type governanceFixtureState struct {
-	IssueSourceID              string `json:"issueSourceId"`
-	IssueSourceName            string `json:"issueSourceName"`
-	IssueID                    string `json:"issueId"`
-	IssueSourceKey             string `json:"issueSourceKey"`
-	IssueBindID                string `json:"issueBindId"`
-	IssueBindSourceKey         string `json:"issueBindSourceKey"`
-	IssueBindTargetID          string `json:"issueBindTargetId"`
-	IssueSeparateID            string `json:"issueSeparateId"`
-	IssueSeparateSourceKey     string `json:"issueSeparateSourceKey"`
-	LifecycleSourceID          string `json:"lifecycleSourceId"`
-	LifecycleSourceName        string `json:"lifecycleSourceName"`
-	LifecycleSourceKey         string `json:"lifecycleSourceKey"`
-	LifecycleSupersededID      string `json:"lifecycleSupersededId"`
-	LifecycleSupersededVersion int    `json:"lifecycleSupersededVersion"`
-	LifecycleStaleID           string `json:"lifecycleStaleId"`
-	LifecycleStaleVersion      int    `json:"lifecycleStaleVersion"`
-	PaginationSourceID         string `json:"paginationSourceId"`
-	PaginationSourceName       string `json:"paginationSourceName"`
-	PaginationIssueCount       int    `json:"paginationIssueCount"`
-	StructureSourceID          string `json:"structureSourceId"`
-	StructureSourceName        string `json:"structureSourceName"`
-	StructureIssueID           string `json:"structureIssueId"`
-	StructureTargetSourceKey   string `json:"structureTargetSourceKey"`
-	MergeSourceID              string `json:"mergeSourceId"`
-	MergeSourceName            string `json:"mergeSourceName"`
-	MergeIssueID               string `json:"mergeIssueId"`
-	MergeTargetWorkID          string `json:"mergeTargetWorkId"`
-	ConsumedDecisionID         string `json:"consumedDecisionId"`
-	ConsumedDecisionIssueID    string `json:"consumedDecisionIssueId"`
-	ConsumedDecisionVersion    int    `json:"consumedDecisionVersion"`
-	OrphanSourceID             string `json:"orphanSourceId"`
-	OrphanSourceName           string `json:"orphanSourceName"`
-	OrphanBindingID            string `json:"orphanBindingId"`
-	OrphanSourceKey            string `json:"orphanSourceKey"`
-	OrphanUnbindBindingID      string `json:"orphanUnbindBindingId"`
-	OrphanUnbindSourceKey      string `json:"orphanUnbindSourceKey"`
-	OrphanCreatorBindingID     string `json:"orphanCreatorBindingId"`
-	OrphanCreatorSourceKey     string `json:"orphanCreatorSourceKey"`
-	OrphanMediaBindingID       string `json:"orphanMediaBindingId"`
-	OrphanMediaSourceKey       string `json:"orphanMediaSourceKey"`
-	MediaSourceID              string `json:"mediaSourceId"`
-	MediaSourceName            string `json:"mediaSourceName"`
-	MediaSourceKey             string `json:"mediaSourceKey"`
+	IssueSourceID              string   `json:"issueSourceId"`
+	IssueSourceName            string   `json:"issueSourceName"`
+	IssueID                    string   `json:"issueId"`
+	IssueSourceKey             string   `json:"issueSourceKey"`
+	IssueBindID                string   `json:"issueBindId"`
+	IssueBindSourceKey         string   `json:"issueBindSourceKey"`
+	IssueBindTargetID          string   `json:"issueBindTargetId"`
+	IssueSeparateID            string   `json:"issueSeparateId"`
+	IssueSeparateSourceKey     string   `json:"issueSeparateSourceKey"`
+	LifecycleSourceID          string   `json:"lifecycleSourceId"`
+	LifecycleSourceName        string   `json:"lifecycleSourceName"`
+	LifecycleSourceKey         string   `json:"lifecycleSourceKey"`
+	LifecycleSupersededID      string   `json:"lifecycleSupersededId"`
+	LifecycleSupersededVersion int      `json:"lifecycleSupersededVersion"`
+	LifecycleStaleID           string   `json:"lifecycleStaleId"`
+	LifecycleStaleVersion      int      `json:"lifecycleStaleVersion"`
+	PaginationSourceID         string   `json:"paginationSourceId"`
+	PaginationSourceName       string   `json:"paginationSourceName"`
+	PaginationIssueCount       int      `json:"paginationIssueCount"`
+	StructureSourceID          string   `json:"structureSourceId"`
+	StructureSourceName        string   `json:"structureSourceName"`
+	StructureIssueID           string   `json:"structureIssueId"`
+	StructureTargetSourceKey   string   `json:"structureTargetSourceKey"`
+	MergeSourceID              string   `json:"mergeSourceId"`
+	MergeSourceName            string   `json:"mergeSourceName"`
+	MergeIssueID               string   `json:"mergeIssueId"`
+	MergeTargetWorkID          string   `json:"mergeTargetWorkId"`
+	KeepSameSourceID           string   `json:"keepSameSourceId"`
+	KeepSameSourceName         string   `json:"keepSameSourceName"`
+	KeepSameIssueID            string   `json:"keepSameIssueId"`
+	KeepSameIssueSourceKey     string   `json:"keepSameIssueSourceKey"`
+	KeepSameOriginalWorkID     string   `json:"keepSameOriginalWorkId"`
+	KeepSameDecisionID         string   `json:"keepSameDecisionId"`
+	KeepSameDecisionVersion    int      `json:"keepSameDecisionVersion"`
+	CreateNewSourceID          string   `json:"createNewSourceId"`
+	CreateNewSourceName        string   `json:"createNewSourceName"`
+	CreateNewIssueID           string   `json:"createNewIssueId"`
+	CreateNewIssueSourceKey    string   `json:"createNewIssueSourceKey"`
+	CreateNewOriginalWorkID    string   `json:"createNewOriginalWorkId"`
+	CreateNewDecisionID        string   `json:"createNewDecisionId"`
+	CreateNewDecisionVersion   int      `json:"createNewDecisionVersion"`
+	MergeNewSourceID           string   `json:"mergeNewSourceId"`
+	MergeNewSourceName         string   `json:"mergeNewSourceName"`
+	MergeNewIssueID            string   `json:"mergeNewIssueId"`
+	MergeNewIssueSourceKey     string   `json:"mergeNewIssueSourceKey"`
+	MergeNewOriginalWorkIDs    []string `json:"mergeNewOriginalWorkIds"`
+	MergeNewDecisionID         string   `json:"mergeNewDecisionId"`
+	MergeNewDecisionVersion    int      `json:"mergeNewDecisionVersion"`
+	ConsumedDecisionID         string   `json:"consumedDecisionId"`
+	ConsumedDecisionIssueID    string   `json:"consumedDecisionIssueId"`
+	ConsumedDecisionVersion    int      `json:"consumedDecisionVersion"`
+	OrphanSourceID             string   `json:"orphanSourceId"`
+	OrphanSourceName           string   `json:"orphanSourceName"`
+	OrphanBindingID            string   `json:"orphanBindingId"`
+	OrphanSourceKey            string   `json:"orphanSourceKey"`
+	OrphanUnbindBindingID      string   `json:"orphanUnbindBindingId"`
+	OrphanUnbindSourceKey      string   `json:"orphanUnbindSourceKey"`
+	OrphanCreatorBindingID     string   `json:"orphanCreatorBindingId"`
+	OrphanCreatorSourceKey     string   `json:"orphanCreatorSourceKey"`
+	OrphanMediaBindingID       string   `json:"orphanMediaBindingId"`
+	OrphanMediaSourceKey       string   `json:"orphanMediaSourceKey"`
+	OrphanOriginalWorkID       string   `json:"orphanOriginalWorkId"`
+	OrphanOriginalCreatorID    string   `json:"orphanOriginalCreatorId"`
+	OrphanOriginalMediaID      string   `json:"orphanOriginalMediaId"`
+	OrphanReappearUnbindID     string   `json:"orphanReappearUnbindId"`
+	OrphanReappearUnbindKey    string   `json:"orphanReappearUnbindKey"`
+	OrphanUnboundOldWorkID     string   `json:"orphanUnboundOldWorkId"`
+	OrphanUnboundOldMediaID    string   `json:"orphanUnboundOldMediaId"`
+	OrphanUnboundOldMediaKey   string   `json:"orphanUnboundOldMediaSourceKey"`
+	OrphanReappearedWorkID     string   `json:"orphanReappearedWorkId"`
+	OrphanReappearedCreatorID  string   `json:"orphanReappearedCreatorId"`
+	OrphanReappearedMediaID    string   `json:"orphanReappearedMediaId"`
+	OrphanUnboundNewWorkID     string   `json:"orphanUnboundNewWorkId"`
+	OrphanUnboundNewMediaID    string   `json:"orphanUnboundNewMediaId"`
+	MediaSourceID              string   `json:"mediaSourceId"`
+	MediaSourceName            string   `json:"mediaSourceName"`
+	MediaSourceKey             string   `json:"mediaSourceKey"`
 }
 
 // seedGovernanceFixtures 只通过正式 application.Resources 建立治理事实。调用方必须先停止
@@ -88,6 +125,9 @@ func seedGovernanceFixtures(ctx context.Context, appRoot, sourceRoot string) (fi
 		"pagination": filepath.Join(sourceRoot, "binding-pagination"),
 		"structure":  filepath.Join(sourceRoot, "structure"),
 		"merge":      filepath.Join(sourceRoot, "structure-merge"),
+		"keep-same":  filepath.Join(sourceRoot, "structure-keep-same"),
+		"create-new": filepath.Join(sourceRoot, "structure-create-new"),
+		"merge-new":  filepath.Join(sourceRoot, "structure-merge-new"),
 		"consumed":   filepath.Join(sourceRoot, "structure-consumed"),
 		"orphan":     filepath.Join(sourceRoot, "orphan"),
 		"media":      filepath.Join(sourceRoot, "media"),
@@ -132,6 +172,18 @@ func seedGovernanceFixtures(ctx context.Context, appRoot, sourceRoot string) (fi
 		return governanceFixtureState{}, err
 	}
 	mergeSource, err := resources.CreateSource(ctx, library.ID, governanceMergeSourceName, sourceRoots["merge"])
+	if err != nil {
+		return governanceFixtureState{}, err
+	}
+	keepSameSource, err := resources.CreateSource(ctx, library.ID, governanceKeepSameSourceName, sourceRoots["keep-same"])
+	if err != nil {
+		return governanceFixtureState{}, err
+	}
+	createNewSource, err := resources.CreateSource(ctx, library.ID, governanceCreateNewSourceName, sourceRoots["create-new"])
+	if err != nil {
+		return governanceFixtureState{}, err
+	}
+	mergeNewSource, err := resources.CreateSource(ctx, library.ID, governanceMergeNewSourceName, sourceRoots["merge-new"])
 	if err != nil {
 		return governanceFixtureState{}, err
 	}
@@ -340,6 +392,48 @@ func seedGovernanceFixtures(ctx context.Context, appRoot, sourceRoot string) (fi
 		return governanceFixtureState{}, fmt.Errorf("合并决策夹具缺少 origin_canonical 候选")
 	}
 
+	keepSameInitial, keepSameSplit := governanceKeepSameWorks()
+	keepSameFirst, err := resources.EnsureCanonical(ctx, keepSameSource.ID, []application.DiscoveredWork{keepSameInitial})
+	if err != nil {
+		return governanceFixtureState{}, fmt.Errorf("建立拆分保持同一初始事实: %w", err)
+	}
+	_, keepSameErr := resources.EnsureCanonical(ctx, keepSameSource.ID, keepSameSplit)
+	if err := requireBindingReview(keepSameErr); err != nil {
+		return governanceFixtureState{}, fmt.Errorf("建立拆分保持同一 issue: %w", err)
+	}
+	keepSameIssue, err := uniqueBindingIssue(ctx, resources, keepSameSource.ID, "SOURCE_WORK_SPLIT_REVIEW_REQUIRED")
+	if err != nil {
+		return governanceFixtureState{}, err
+	}
+
+	createNewInitial, createNewSplit := governanceCreateNewWorks()
+	createNewFirst, err := resources.EnsureCanonical(ctx, createNewSource.ID, []application.DiscoveredWork{createNewInitial})
+	if err != nil {
+		return governanceFixtureState{}, fmt.Errorf("建立拆分全部新建初始事实: %w", err)
+	}
+	_, createNewErr := resources.EnsureCanonical(ctx, createNewSource.ID, createNewSplit)
+	if err := requireBindingReview(createNewErr); err != nil {
+		return governanceFixtureState{}, fmt.Errorf("建立拆分全部新建 issue: %w", err)
+	}
+	createNewIssue, err := uniqueBindingIssue(ctx, resources, createNewSource.ID, "SOURCE_WORK_SPLIT_REVIEW_REQUIRED")
+	if err != nil {
+		return governanceFixtureState{}, err
+	}
+
+	mergeNewInitial, mergeNewWork := governanceMergeNewWorks()
+	mergeNewFirst, err := resources.EnsureCanonical(ctx, mergeNewSource.ID, mergeNewInitial)
+	if err != nil {
+		return governanceFixtureState{}, fmt.Errorf("建立合并新建初始事实: %w", err)
+	}
+	_, mergeNewErr := resources.EnsureCanonical(ctx, mergeNewSource.ID, []application.DiscoveredWork{mergeNewWork})
+	if err := requireBindingReview(mergeNewErr); err != nil {
+		return governanceFixtureState{}, fmt.Errorf("建立合并新建 issue: %w", err)
+	}
+	mergeNewIssue, err := uniqueBindingIssue(ctx, resources, mergeNewSource.ID, "SOURCE_WORK_MERGE_REVIEW_REQUIRED")
+	if err != nil {
+		return governanceFixtureState{}, err
+	}
+
 	consumedInitial := application.DiscoveredWork{
 		SourceKey: "wkC", Title: "已消费决策作品", Media: []application.DiscoveredMedia{
 			governanceMedia("wkC/m1", "c", 0), governanceMedia("wkC/m2", "d", 1),
@@ -370,36 +464,9 @@ func seedGovernanceFixtures(ctx context.Context, appRoot, sourceRoot string) (fi
 		return governanceFixtureState{}, fmt.Errorf("消费结构决策: %w", err)
 	}
 
-	const orphanSourceKey = "orphan-work"
-	orphanWorks := []application.DiscoveredWork{{
-		SourceKey:  orphanSourceKey,
-		ProviderID: "e2e",
-		ExternalID: "orphan-work-1",
-		Title:      "待处理孤儿作品",
-		Creator: application.DiscoveredCreator{
-			SourceKey: "orphan-creator-extend", ProviderID: "e2e", ExternalID: "orphan-creator-1", Name: "延长候选创作者",
-		},
-		Media: []application.DiscoveredMedia{governanceMedia("orphan-work/asset.jpg", "8", 0)},
-	}, {
-		SourceKey: "orphan-unbind-work", ProviderID: "e2e", ExternalID: "orphan-work-2", Title: "解绑孤儿作品",
-		Creator: application.DiscoveredCreator{
-			SourceKey: "orphan-creator-unbind", ProviderID: "e2e", ExternalID: "orphan-creator-2", Name: "解绑候选创作者",
-		},
-		Media: []application.DiscoveredMedia{governanceMedia("orphan-unbind-work/asset.jpg", "9", 0)},
-	}, {
-		SourceKey: "orphan-creator-work", ProviderID: "e2e", ExternalID: "orphan-work-3", Title: "创作者孤儿作品",
-		Creator: application.DiscoveredCreator{
-			SourceKey: "orphan-confirm-creator", ProviderID: "e2e", ExternalID: "orphan-creator-3", Name: "确认孤儿创作者",
-		},
-		Media: []application.DiscoveredMedia{governanceMedia("orphan-creator-work/asset.jpg", "a", 0)},
-	}, {
-		SourceKey: "orphan-media-work", ProviderID: "e2e", ExternalID: "orphan-work-4", Title: "媒体孤儿作品",
-		Creator: application.DiscoveredCreator{
-			SourceKey: "orphan-creator-retain", ProviderID: "e2e", ExternalID: "orphan-creator-4", Name: "保留候选创作者",
-		},
-		Media: []application.DiscoveredMedia{governanceMedia("orphan-retain-media/asset.jpg", "b", 0)},
-	}}
-	if _, err := resources.EnsureCanonical(ctx, orphanSource.ID, orphanWorks); err != nil {
+	orphanWorks := governanceOrphanWorks()
+	orphanFirst, err := resources.EnsureCanonical(ctx, orphanSource.ID, orphanWorks)
+	if err != nil {
 		return governanceFixtureState{}, fmt.Errorf("建立孤儿初始事实: %w", err)
 	}
 	for range 3 {
@@ -425,7 +492,7 @@ func seedGovernanceFixtures(ctx context.Context, appRoot, sourceRoot string) (fi
 	if err != nil {
 		return governanceFixtureState{}, err
 	}
-	orphanExtend, err := requireOrphanCandidate(workOrphans.Items, orphanSourceKey)
+	orphanExtend, err := requireOrphanCandidate(workOrphans.Items, governanceOrphanWorkKey)
 	if err != nil {
 		return governanceFixtureState{}, err
 	}
@@ -441,6 +508,10 @@ func seedGovernanceFixtures(ctx context.Context, appRoot, sourceRoot string) (fi
 	if err != nil {
 		return governanceFixtureState{}, err
 	}
+	orphanReappearUnbind, err := requireOrphanCandidate(workOrphans.Items, governanceOrphanSplitKey)
+	if err != nil {
+		return governanceFixtureState{}, err
+	}
 
 	const mediaSourceKey = "media-work/asset.jpg"
 	mediaWork := application.DiscoveredWork{
@@ -450,6 +521,13 @@ func seedGovernanceFixtures(ctx context.Context, appRoot, sourceRoot string) (fi
 	}
 	if _, err := resources.EnsureCanonical(ctx, mediaSource.ID, []application.DiscoveredWork{mediaWork}); err != nil {
 		return governanceFixtureState{}, fmt.Errorf("建立媒体解绑事实: %w", err)
+	}
+	orphanWork := orphanFirst[governanceOrphanWorkKey]
+	orphanCreatorWork := orphanFirst[governanceOrphanCreatorWorkKey]
+	orphanMediaWork := orphanFirst[governanceOrphanMediaWorkKey]
+	orphanSplitWork := orphanFirst[governanceOrphanSplitKey]
+	if len(orphanCreatorWork.Creators) != 1 || len(orphanMediaWork.Media) != 1 || len(orphanSplitWork.Media) != 1 {
+		return governanceFixtureState{}, fmt.Errorf("孤儿重现初始身份不完整")
 	}
 
 	return governanceFixtureState{
@@ -467,14 +545,32 @@ func seedGovernanceFixtures(ctx context.Context, appRoot, sourceRoot string) (fi
 		StructureIssueID: structureIssue.ID, StructureTargetSourceKey: "wkA1",
 		MergeSourceID: mergeSource.ID, MergeSourceName: mergeSource.DisplayName,
 		MergeIssueID: mergeIssue.ID, MergeTargetWorkID: mergeTargetWorkID,
+		KeepSameSourceID: keepSameSource.ID, KeepSameSourceName: keepSameSource.DisplayName,
+		KeepSameIssueID: keepSameIssue.ID, KeepSameIssueSourceKey: keepSameIssue.SourceKey,
+		KeepSameOriginalWorkID: keepSameFirst[governanceKeepSameOriginKey].ID,
+		CreateNewSourceID:      createNewSource.ID, CreateNewSourceName: createNewSource.DisplayName,
+		CreateNewIssueID: createNewIssue.ID, CreateNewIssueSourceKey: createNewIssue.SourceKey,
+		CreateNewOriginalWorkID: createNewFirst[governanceCreateNewOriginKey].ID,
+		MergeNewSourceID:        mergeNewSource.ID, MergeNewSourceName: mergeNewSource.DisplayName,
+		MergeNewIssueID: mergeNewIssue.ID, MergeNewIssueSourceKey: mergeNewIssue.SourceKey,
+		MergeNewOriginalWorkIDs: []string{
+			mergeNewFirst[governanceMergeNewOriginOneKey].ID,
+			mergeNewFirst[governanceMergeNewOriginTwoKey].ID,
+		},
 		ConsumedDecisionID: consumedDecision.DecisionID, ConsumedDecisionIssueID: consumedDecision.IssueID,
 		ConsumedDecisionVersion: consumedDecision.Version,
 		OrphanSourceID:          orphanSource.ID, OrphanSourceName: orphanSource.DisplayName,
-		OrphanBindingID: orphanExtend.BindingID, OrphanSourceKey: orphanSourceKey,
+		OrphanBindingID: orphanExtend.BindingID, OrphanSourceKey: governanceOrphanWorkKey,
 		OrphanUnbindBindingID: orphanUnbind.BindingID, OrphanUnbindSourceKey: orphanUnbind.SourceKey,
 		OrphanCreatorBindingID: orphanCreator.BindingID, OrphanCreatorSourceKey: orphanCreator.SourceKey,
 		OrphanMediaBindingID: orphanMedia.BindingID, OrphanMediaSourceKey: orphanMedia.SourceKey,
-		MediaSourceID: mediaSource.ID, MediaSourceName: mediaSource.DisplayName, MediaSourceKey: mediaSourceKey,
+		OrphanOriginalWorkID: orphanWork.ID, OrphanOriginalCreatorID: orphanCreatorWork.Creators[0].ID,
+		OrphanOriginalMediaID:  orphanMediaWork.Media[governanceOrphanMediaSourceKey].ID,
+		OrphanReappearUnbindID: orphanReappearUnbind.BindingID, OrphanReappearUnbindKey: orphanReappearUnbind.SourceKey,
+		OrphanUnboundOldWorkID:   orphanSplitWork.ID,
+		OrphanUnboundOldMediaID:  orphanSplitWork.Media[governanceOrphanSplitMediaKey].ID,
+		OrphanUnboundOldMediaKey: governanceOrphanSplitMediaKey,
+		MediaSourceID:            mediaSource.ID, MediaSourceName: mediaSource.DisplayName, MediaSourceKey: mediaSourceKey,
 	}, nil
 }
 
