@@ -1,5 +1,5 @@
 /*
- * 规则包详情：草稿 → 校验 → 影响评估 → 发布 → 回滚。
+ * 规则包详情：草稿 → 校验/调试 → 影响评估 → 发布 → 回滚。
  *
  * 这一页承载规则闭环里最容易出错的两处并发语义：
  *
@@ -31,6 +31,7 @@ import {
 import { IMPACT_CATEGORY_LABELS, IMPACT_CATEGORY_TONES } from '../labels';
 import { isRecord, parseRuleText } from '../rules/lossless';
 import { RuleParameterSetsPanel } from '../rules/RuleParameterSetsPanel';
+import { RuleDebugPanel } from '../rules/RuleDebugPanel';
 import { RuleVersionLifecyclePanel } from '../rules/RuleVersionLifecyclePanel';
 import {
   Absent,
@@ -991,6 +992,14 @@ function RulePackageContent({ packageId }: { packageId: string }) {
               onAdoptLatest={adoptLatestDraft}
             />
           </Section>
+
+          {workspace === null ? null : (
+            <RuleDebugPanel
+              packageText={workspace.text}
+              format={workspace.format}
+              isLocked={publish.isPending || publishRefreshPending}
+            />
+          )}
 
           <ImpactPanel
             currentSemanticHash={currentSemanticHash}

@@ -101,9 +101,9 @@ export const CONTRACT_NOTES: readonly ContractNote[] = [
   {
     id: 'rules-analysis-needs-write',
     area: 'rules',
-    title: '只读分析也要求写权限',
+    title: '规则分析按 capability 分离',
     detail:
-      'validate、compile、impact 三个只读分析端点要求 rules.write；dry-run、explain、trace 要求 rules.debug。这是已知的过度限制，界面如实呈现，不做本地放宽。',
+      'validate、compile、impact 三个只读分析端点仍要求 rules.write；规则包详情的 Dry Run、Explain、Trace 则严格要求 rules.debug，并且只发送用户显式填写的合成 Sample。界面按 effective capability 隐藏入口，不在本地放宽。',
     gap: false
   },
   {

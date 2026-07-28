@@ -912,6 +912,77 @@ describe('规则草稿', () => {
     expect(requestsTo('PUT /api/v1/rule-packages/pkg_01/draft')).toHaveLength(0);
   });
 
+  it('从当前草稿执行 Dry Run、Explain 与 Trace，并无损发送合成输入', async () => {
+    const debugBodies = new Map<string, string>();
+    route('GET /api/v1/rule-packages/pkg_01', () =>
+      jsonResponse(rulePackage({ ruleSetId: FORM_RULE_SET_ID }))
+    );
+    route('GET /api/v1/rule-packages/pkg_01/draft', () =>
+      jsonResponse(
+        ruleDraft({
+          content: JSON.parse(LOSSLESS_RULE_TEXT),
+          contentText: LOSSLESS_RULE_TEXT,
+          validationStatus: 'draft'
+        })
+      )
+    );
+    route('GET /api/v1/rule-packages/pkg_01/versions', () => jsonResponse({ items: [] }));
+    route('GET /api/v1/rule-packages/pkg_01/audits', () => jsonResponse({ items: [] }));
+    route('POST /api/v1/rules/dry-run', async (request) => {
+      debugBodies.set('dry-run', await request.text());
+      return new Response(
+        `{"ruleVersion":"${'1'.repeat(64)}","ruleIrHash":"${'2'.repeat(64)}","work":{"title":"合成作品","exact":9007199254740993123},"trace":[{"primitiveId":"work","reasonCode":"MATCHED"}],"issues":[]}`,
+        { status: 200, headers: { 'Content-Type': 'application/json' } }
+      );
+    });
+    route('POST /api/v1/rules/explain', async (request) => {
+      debugBodies.set('explain', await request.text());
+      return jsonResponse({
+        ruleVersion: '1'.repeat(64),
+        ruleIrHash: '2'.repeat(64),
+        fields: [{ target: 'title', primitiveId: 'work' }],
+        trace: [{ reasonCode: 'MATCHED' }]
+      });
+    });
+    route('POST /api/v1/rules/trace', async (request) => {
+      debugBodies.set('trace', await request.text());
+      return jsonResponse({
+        ruleVersion: '1'.repeat(64),
+        ruleIrHash: '2'.repeat(64),
+        trace: [{ primitiveId: 'work', inputPointer: '/path' }],
+        issues: []
+      });
+    });
+
+    renderManage('/rules/pkg_01');
+    const parameters = await screen.findByRole('textbox', { name: '调试参数 JSON' });
+    fireEvent.change(parameters, { target: { value: '{"threshold":9007199254740993123}' } });
+
+    await userEvent.click(screen.getByRole('button', { name: '执行 Dry Run' }));
+    const dryRunResult = await screen.findByLabelText('Dry Run 作品结果');
+    expect(dryRunResult).toHaveTextContent('合成作品');
+    expect(dryRunResult).toHaveTextContent('9007199254740993123');
+    await userEvent.click(screen.getByRole('button', { name: '查看 Explain' }));
+    expect(await screen.findByLabelText('Explain 字段来源')).toHaveTextContent('primitiveId');
+    await userEvent.click(screen.getByRole('button', { name: '查看 Trace' }));
+    expect(await screen.findByLabelText('Trace 步骤')).toHaveTextContent('inputPointer');
+
+    for (const endpoint of ['dry-run', 'explain', 'trace']) {
+      const body = debugBodies.get(endpoint);
+      expect(body).toContain('9007199254740993123');
+      expect(body).toContain('1.2300000000000000001');
+      expect(requestsTo(`POST /api/v1/rules/${endpoint}`)[0]?.csrf).toBe(BOOTSTRAP.csrfToken);
+    }
+
+    fireEvent.change(screen.getByRole('textbox', { name: '合成 Sample JSON' }), {
+      target: { value: '{"path":"changed","files":[],"metadata":{}}' }
+    });
+    expect(
+      screen.getByText('规则包、参数或合成 Sample 已变化；旧调试结果已隐藏，请重新执行。')
+    ).toBeInTheDocument();
+    expect(screen.queryByLabelText('Trace 步骤')).not.toBeInTheDocument();
+  });
+
   it('Schema 表单复用草稿状态机，Schema 错误不阻止保存且未知数字无损', async () => {
     let saveBody: Promise<{ content: string; format: string }> | undefined;
     route('GET /api/v1/rule-packages/pkg_01', () =>

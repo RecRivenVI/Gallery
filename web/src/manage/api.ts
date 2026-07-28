@@ -25,6 +25,7 @@ import { useCallback } from 'react';
 import { api, expectData, expectNoContent } from '../api/client';
 import type { components } from '../api/schema.gen';
 import { useCsrfHeaders } from '../shared/session';
+import { isRecord, parseRuleValue } from './rules/lossless';
 
 type Schemas = components['schemas'];
 
@@ -56,6 +57,13 @@ export type RuleDraftValidationResult = Schemas['RuleDraftValidationResult'];
 export type RuleVersion = Schemas['RuleVersion'];
 export type RuleVersionDiff = Schemas['RuleVersionDiff'];
 export type RuleImpactResult = Schemas['RuleImpactResult'];
+export type RuleDebugRequest = Schemas['RuleDebugRequest'] & {
+  package: NonNullable<Schemas['RuleDebugRequest']['package']>;
+};
+export type RuleDryRunSample = Schemas['RuleDryRunSample'];
+export type RuleDryRunResult = Schemas['RuleDryRunResult'];
+export type RuleExplainResult = Schemas['RuleExplainResult'];
+export type RuleTraceResult = Record<string, unknown>;
 export type RuleParameterSet = Schemas['RuleParameterSet'];
 export type SourceRuleBinding = Schemas['SourceRuleBinding'];
 export type BindingIssue = Schemas['BindingIssue'];
@@ -1092,6 +1100,77 @@ export function useRuleImpact(): UseMutationResult<RuleImpactResult, unknown, Im
   });
 }
 
+export interface RuleDebugInput {
+  /** 与 exactBody 对应的类型化请求；实际发送字节由 exactBody 决定。 */
+  request: RuleDebugRequest;
+  /** 无损 JSON 拼装的完整请求体，避免 package/parameters/sample 中的数字经过 Number。 */
+  exactBody: string;
+}
+
+function exactRuleDebugBody(input: RuleDebugInput): string {
+  return input.exactBody;
+}
+
+function parseExactRuleDebugResponse(text: string): Record<string, unknown> {
+  const value = parseRuleValue(text);
+  if (!isRecord(value)) throw new TypeError('规则调试响应必须是 JSON 对象');
+  return value;
+}
+
+/** 对当前规则包与显式合成输入执行受限 Dry Run。 */
+export function useRuleDryRun(): UseMutationResult<RuleDryRunResult, unknown, RuleDebugInput> {
+  const header = useCsrfHeaders();
+  return useMutation({
+    mutationFn: async (input: RuleDebugInput) =>
+      parseExactRuleDebugResponse(
+        expectData(
+          await api.POST('/api/v1/rules/dry-run', {
+            params: { header },
+            body: input.request,
+            bodySerializer: () => exactRuleDebugBody(input),
+            parseAs: 'text'
+          })
+        )
+      ) as RuleDryRunResult
+  });
+}
+
+/** 解释字段来源与候选决策；只接受请求体中的合成输入。 */
+export function useRuleExplain(): UseMutationResult<RuleExplainResult, unknown, RuleDebugInput> {
+  const header = useCsrfHeaders();
+  return useMutation({
+    mutationFn: async (input: RuleDebugInput) =>
+      parseExactRuleDebugResponse(
+        expectData(
+          await api.POST('/api/v1/rules/explain', {
+            params: { header },
+            body: input.request,
+            bodySerializer: () => exactRuleDebugBody(input),
+            parseAs: 'text'
+          })
+        )
+      ) as RuleExplainResult
+  });
+}
+
+/** 返回受限、脱敏的规则求值 Trace。 */
+export function useRuleTrace(): UseMutationResult<RuleTraceResult, unknown, RuleDebugInput> {
+  const header = useCsrfHeaders();
+  return useMutation({
+    mutationFn: async (input: RuleDebugInput) =>
+      parseExactRuleDebugResponse(
+        expectData(
+          await api.POST('/api/v1/rules/trace', {
+            params: { header },
+            body: input.request,
+            bodySerializer: () => exactRuleDebugBody(input),
+            parseAs: 'text'
+          })
+        )
+      ) as RuleTraceResult
+  });
+}
+
 /** 导出某个 RuleVersion 的规范 JSON。影响评估的 `before` 从这里取。 */
 export function useExportRuleVersion(semanticHash: string | null) {
   return useQuery({
@@ -1111,8 +1190,8 @@ export function useExportRuleVersion(semanticHash: string | null) {
 /**
  * 规则包 Schema 的可达性探测。
  *
- * 返回 `application/schema+json`，是 Schema 驱动配置编辑器的输入。这里**只**核对它可达并读出
- * 标题/版本，不生成任何表单：配置编辑器属于另一条工作线。
+ * 返回 `application/schema+json`，既供规则页独立探测，也由规则包详情与构建期预编译版本比对后
+ * 生成 Schema 表单；这个 hook 只读取权威文档，不在客户端改写字段词表。
  */
 export function useRuleSchema(enabled: boolean) {
   return useQuery({

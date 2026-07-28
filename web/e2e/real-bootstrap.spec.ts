@@ -173,6 +173,12 @@ test('真实 galleryd 从空实例完成规则 UI 生命周期、绑定与 publi
   await page.getByRole('option', { name: '作者—作品—媒体层级' }).click();
   await page.getByRole('button', { name: '载入起始模板' }).click();
   await page.getByRole('textbox', { name: /规则版本/ }).fill('1.0.1');
+  await page.getByRole('button', { name: '执行 Dry Run' }).click();
+  await expect(page.getByLabel('Dry Run 作品结果')).toBeVisible();
+  await page.getByRole('button', { name: '查看 Explain' }).click();
+  await expect(page.getByLabel('Explain 字段来源')).toBeVisible();
+  await page.getByRole('button', { name: '查看 Trace' }).click();
+  await expect(page.getByLabel('Trace 步骤')).toBeVisible();
   const visualWorkGlob = page.getByRole('textbox', { name: /作品目录 glob/ }).first();
   await expect(visualWorkGlob).toBeVisible();
   await visualWorkGlob.fill('visual-proof/*');
