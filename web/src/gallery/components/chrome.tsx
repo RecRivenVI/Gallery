@@ -10,8 +10,8 @@
  */
 
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { Link, NavigationType, useLocation, useNavigate, useNavigationType } from 'react-router-dom';
-import { Button, Menu, Spinner, TextInput } from '../../design';
+import { Link, NavLink, NavigationType, useLocation, useNavigate, useNavigationType } from 'react-router-dom';
+import { Button, Dialog, Menu, Spinner, TextInput } from '../../design';
 import { describeError } from '../../shared/errors';
 import { useRealtime } from '../../shared/realtime';
 import { useAuthActions, useSession } from '../../shared/session';
@@ -20,6 +20,12 @@ import { DENSITY_LABELS, THEME_LABELS, useTheme, type ThemePreference } from '..
 /* ————————————————————————————— 顶栏 ————————————————————————————— */
 
 const HIDE_AFTER_PX = 240;
+
+const GALLERY_NAV_ITEMS = [
+  { to: '/browse', label: '全部作品' },
+  { to: '/creators', label: '创作者' },
+  { to: '/files', label: '文件' }
+] as const;
 
 export function TopBar() {
   const [hidden, setHidden] = useState(false);
@@ -46,21 +52,39 @@ export function TopBar() {
   return (
     // focus-within 让顶栏在键盘进入时立刻回到可见位置，收起只是视觉上的让位。
     <header className={hidden ? 'gal-topbar gal-topbar--hidden' : 'gal-topbar'}>
+      <Link className="gal-topbar__brand" to="/">
+        画廊
+      </Link>
       <nav className="gal-topbar__nav" aria-label="画廊导航">
-        <Link className="gal-topbar__brand" to="/">
-          画廊
-        </Link>
-        <Link className="gal-topbar__link" to="/browse">
-          全部作品
-        </Link>
-        <Link className="gal-topbar__link" to="/creators">
-          创作者
-        </Link>
-        <Link className="gal-topbar__link" to="/files">
-          文件
-        </Link>
+        {GALLERY_NAV_ITEMS.map((item) => (
+          <NavLink className="gal-topbar__link" to={item.to} key={item.to}>
+            {item.label}
+          </NavLink>
+        ))}
       </nav>
       <div className="gal-topbar__actions">
+        <Dialog
+          title="画廊导航"
+          size="sm"
+          trigger={
+            <Button className="gal-topbar__nav-trigger" variant="ghost">
+              导航
+            </Button>
+          }
+        >
+          {(close) => (
+            <nav className="gal-nav-dialog" aria-label="画廊页面">
+              <NavLink className="gal-nav-dialog__link" to="/" end onClick={close}>
+                首页
+              </NavLink>
+              {GALLERY_NAV_ITEMS.map((item) => (
+                <NavLink className="gal-nav-dialog__link" to={item.to} onClick={close} key={item.to}>
+                  {item.label}
+                </NavLink>
+              ))}
+            </nav>
+          )}
+        </Dialog>
         <Menu
           label="外观"
           buttonVariant="ghost"

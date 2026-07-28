@@ -10,7 +10,7 @@ import { useCallback, useEffect } from 'react';
 import type { ReactNode } from 'react';
 import { NavLink } from 'react-router-dom';
 import { useQueryClient } from '@tanstack/react-query';
-import { Badge, Button, Select } from '../design';
+import { Badge, Button, Dialog, Select } from '../design';
 import { SNAPSHOT_QUERY_PREFIXES } from '../shared/query';
 import { useRealtime, useRealtimeEvent, type RealtimeStatus } from '../shared/realtime';
 import { SignOutButton, useSession } from '../shared/session';
@@ -31,6 +31,25 @@ export const MANAGE_NAV: readonly NavItem[] = [
   { to: '/rules', label: '规则' },
   { to: '/governance', label: '治理' }
 ];
+
+function ManageNavList({ dialog, onNavigate }: { dialog?: boolean; onNavigate?: () => void }) {
+  return (
+    <ul className={dialog ? 'manage-nav-dialog__list' : 'manage-nav__list'}>
+      {MANAGE_NAV.map((item) => (
+        <li key={item.to}>
+          <NavLink
+            className={dialog ? 'manage-nav-dialog__link' : 'manage-nav__link'}
+            to={item.to}
+            end={item.to === '/'}
+            onClick={onNavigate}
+          >
+            {item.label}
+          </NavLink>
+        </li>
+      ))}
+    </ul>
+  );
+}
 
 const REALTIME_LABELS: Record<RealtimeStatus, string> = {
   idle: '未连接',
@@ -96,6 +115,21 @@ export function ManageLayout({ children }: { children: ReactNode }) {
         </div>
         <div className="manage-header__spacer" />
         <div className="manage-header__actions">
+          <Dialog
+            title="管理导航"
+            size="sm"
+            trigger={
+              <Button className="manage-nav__trigger" variant="secondary">
+                导航
+              </Button>
+            }
+          >
+            {(close) => (
+              <nav aria-label="管理页面">
+                <ManageNavList dialog onNavigate={close} />
+              </nav>
+            )}
+          </Dialog>
           <span className="manage-status-bar">
             <Badge tone={realtimeTone(status)}>实时通道：{REALTIME_LABELS[status]}</Badge>
             <span>序号 {lastSequence}</span>
@@ -131,15 +165,7 @@ export function ManageLayout({ children }: { children: ReactNode }) {
       </header>
 
       <nav className="manage-nav" aria-label="管理功能">
-        <ul className="manage-nav__list">
-          {MANAGE_NAV.map((item) => (
-            <li key={item.to}>
-              <NavLink className="manage-nav__link" to={item.to} end={item.to === '/'}>
-                {item.label}
-              </NavLink>
-            </li>
-          ))}
-        </ul>
+        <ManageNavList />
       </nav>
 
       <main className="manage-main" id="manage-main">

@@ -225,10 +225,14 @@ test('双入口各自加载自己的外壳 @smoke', async ({ page }) => {
   await expect(page).toHaveTitle(/画廊/);
   await expect(page.locator('meta[name="robots"]')).toHaveCount(0);
   await expect(page.locator('#root > *')).not.toHaveCount(0);
+  await expect(page.getByRole('navigation', { name: '画廊导航' })).toBeVisible();
+  await expect(page.getByRole('button', { name: '导航', exact: true })).toBeHidden();
 
   await page.goto('/manage');
   await expect(page).toHaveTitle(/管理/);
   await expect(page.locator('#root > *')).not.toHaveCount(0);
+  await expect(page.getByRole('navigation', { name: '管理功能' })).toBeVisible();
+  await expect(page.getByRole('button', { name: '导航', exact: true })).toBeHidden();
 });
 
 test('只有画廊进入 PWA scope @smoke', async ({ page }) => {
@@ -258,4 +262,60 @@ test('两个入口都没有严重可访问性违规 @smoke', async ({ page }) =>
     const results = await new AxeBuilder({ page }).withTags(['wcag2a', 'wcag2aa']).analyze();
     expect(results.violations, `${path} 存在可访问性违规`).toEqual([]);
   }
+});
+
+async function expectDialogFocusBoundary(page: Page, dialogName: string, triggerName: string) {
+  const trigger = page.getByRole('button', { name: triggerName, exact: true });
+  await trigger.focus();
+  await page.keyboard.press('Enter');
+
+  const dialog = page.getByRole('dialog', { name: dialogName, exact: true });
+  await expect(dialog).toBeVisible();
+  await expect.poll(() => dialog.evaluate((element) => element.contains(document.activeElement))).toBe(true);
+
+  for (let index = 0; index < 10; index += 1) {
+    await page.keyboard.press(index % 2 === 0 ? 'Tab' : 'Shift+Tab');
+    expect(await dialog.evaluate((element) => element.contains(document.activeElement))).toBe(true);
+  }
+
+  const results = await new AxeBuilder({ page }).withTags(['wcag2a', 'wcag2aa']).analyze();
+  expect(results.violations, `${dialogName} 存在可访问性违规`).toEqual([]);
+
+  await page.keyboard.press('Escape');
+  await expect(dialog).toBeHidden();
+  await expect(trigger).toBeFocused();
+}
+
+test('窄屏导航限制焦点并由 Escape 关闭后返还触发点 @smoke', async ({ page }) => {
+  await page.setViewportSize({ width: 390, height: 844 });
+
+  await page.goto('/');
+  await expect(page.getByRole('navigation', { name: '画廊导航' })).toBeHidden();
+  await expectDialogFocusBoundary(page, '画廊导航', '导航');
+  await page.getByRole('button', { name: '导航', exact: true }).click();
+  await page
+    .getByRole('dialog', { name: '画廊导航', exact: true })
+    .getByRole('link', { name: '全部作品' })
+    .click();
+  await expect(page).toHaveURL(/\/browse$/);
+  await expect(page.getByRole('dialog', { name: '画廊导航', exact: true })).toBeHidden();
+  await expect(page.getByRole('button', { name: '导航', exact: true })).toBeFocused();
+  expect(
+    await page.evaluate(() => document.documentElement.scrollWidth <= document.documentElement.clientWidth)
+  ).toBe(true);
+
+  await page.goto('/manage');
+  await expect(page.getByRole('navigation', { name: '管理功能' })).toBeHidden();
+  await expectDialogFocusBoundary(page, '管理导航', '导航');
+  await page.getByRole('button', { name: '导航', exact: true }).click();
+  await page
+    .getByRole('dialog', { name: '管理导航', exact: true })
+    .getByRole('link', { name: '扫描与任务' })
+    .click();
+  await expect(page).toHaveURL(/\/manage\/scans$/);
+  await expect(page.getByRole('dialog', { name: '管理导航', exact: true })).toBeHidden();
+  await expect(page.getByRole('button', { name: '导航', exact: true })).toBeFocused();
+  expect(
+    await page.evaluate(() => document.documentElement.scrollWidth <= document.documentElement.clientWidth)
+  ).toBe(true);
 });

@@ -97,6 +97,10 @@
   gap: var(--space-3);
 }
 
+.gal-topbar__nav-trigger {
+  display: none;
+}
+
 .gal-topbar__brand {
   font-size: var(--text-lg);
   font-weight: 700;
@@ -126,6 +130,45 @@
 
 .gal-topbar__link:hover {
   color: var(--color-text);
+}
+
+.gal-topbar__link[aria-current='page'] {
+  background: var(--color-accent-soft);
+  color: var(--color-text);
+}
+
+.gal-nav-dialog {
+  display: grid;
+  gap: var(--space-1);
+}
+
+.gal-nav-dialog__link {
+  display: flex;
+  align-items: center;
+  min-height: var(--control-height);
+  padding-inline: var(--space-3);
+  border-radius: var(--radius-sm);
+  color: var(--color-text);
+  font-weight: 600;
+}
+
+.gal-nav-dialog__link:hover,
+.gal-nav-dialog__link[aria-current='page'] {
+  background: var(--color-accent-soft);
+}
+
+@media (max-width: 42rem) {
+  .gal-topbar {
+    flex-wrap: nowrap;
+  }
+
+  .gal-topbar__nav {
+    display: none;
+  }
+
+  .gal-topbar__nav-trigger {
+    display: inline-flex;
+  }
 }
 
 /* ——————————————————————————— 连接状态 ——————————————————————————— */
