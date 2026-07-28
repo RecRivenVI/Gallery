@@ -26,8 +26,9 @@ const (
 // descriptor 镜像 internal/platform/descriptor.Descriptor 的 JSON 形状；本工具不
 // 导入 internal/* 包，因此在这里独立声明公开可见的字段子集。
 type descriptor struct {
-	Address string `json:"address"`
-	PID     int    `json:"pid"`
+	Address      string `json:"address"`
+	PID          int    `json:"pid"`
+	StartupNonce string `json:"startupNonce"`
 }
 
 // Process 是一次真实、独立编译的 galleryd 子进程句柄。
@@ -183,13 +184,11 @@ func startGallerydWithSourceRootsContext(
 			logFile.Close()
 			return nil, fmt.Errorf("galleryd 在建立 descriptor 前提前退出: %v", proc.waitErr)
 		case <-ticker.C:
-			content, readErr := os.ReadFile(descriptorPath)
-			if readErr == nil {
-				if err := json.Unmarshal(content, &desc); err == nil && desc.Address != "" {
-					proc.BaseURL = "http://" + desc.Address
-					proc.descriptor = desc
-					return proc, nil
-				}
+			if value, ok := readOwnedDescriptor(descriptorPath, cmd.Process.Pid); ok {
+				desc = value
+				proc.BaseURL = "http://" + desc.Address
+				proc.descriptor = desc
+				return proc, nil
 			}
 		case <-startupCtx.Done():
 			killErr := proc.forceKill()
@@ -203,6 +202,21 @@ func startGallerydWithSourceRootsContext(
 			return nil, errors.Join(fmt.Errorf("等待 galleryd runtime descriptor 超时（%s）", timeout), killErr)
 		}
 	}
+}
+
+// readOwnedDescriptor 只接受当前刚启动进程原子发布的 descriptor。强杀会留下上一进程的
+// galleryd.json；如果仅检查文件存在或 address 非空，立即重启可能错误返回旧端口并让后续
+// 浏览器连接到已经退出的进程。PID 与每次启动随机 nonce 一起把就绪信号绑定到本次进程。
+func readOwnedDescriptor(path string, pid int) (descriptor, bool) {
+	content, err := os.ReadFile(path)
+	if err != nil {
+		return descriptor{}, false
+	}
+	var value descriptor
+	if err := json.Unmarshal(content, &value); err != nil || value.Address == "" || value.PID != pid || value.StartupNonce == "" {
+		return descriptor{}, false
+	}
+	return value, true
 }
 
 // StopOutcome 描述一次 Stop() 调用实际采用的路径，供调用方在最终报告中如实记录
@@ -261,6 +275,40 @@ func (p *Process) Stop() StopOutcome {
 		}
 		return p.finishOutcome(outcome)
 	}
+}
+
+// Kill 供强杀恢复门禁显式终止真实 galleryd，不发送正常关闭信号，也不把操作系统为强杀
+// 返回的非零 Wait 结果当作测试失败。只有 Kill 系统调用或强杀后的退出等待失败才写入 Err。
+// 调用方必须把 ForcedKill=true 作为场景证据，不能用它替代普通 Stop 的优雅关闭验证。
+func (p *Process) Kill() StopOutcome {
+	if p == nil {
+		return StopOutcome{}
+	}
+	defer func() {
+		if p.logFile != nil {
+			_ = p.logFile.Close()
+		}
+	}()
+	if p.cmd == nil || p.cmd.Process == nil {
+		return StopOutcome{}
+	}
+	select {
+	case <-p.exited:
+		return p.finishOutcome(StopOutcome{})
+	default:
+	}
+	killErr := p.cmd.Process.Kill()
+	if errors.Is(killErr, os.ErrProcessDone) {
+		if !p.waitForExit(ForceKillTimeout) {
+			return StopOutcome{Err: fmt.Errorf("进程已退出但等待 Wait 收敛超时（%s）", ForceKillTimeout)}
+		}
+		return p.finishOutcome(StopOutcome{})
+	}
+	outcome := StopOutcome{ForcedKill: true, Err: killErr}
+	if !p.waitForExit(ForceKillTimeout) {
+		outcome.Err = errors.Join(outcome.Err, fmt.Errorf("强杀后等待退出超时（%s）", ForceKillTimeout))
+	}
+	return outcome
 }
 
 func (p *Process) finishOutcome(outcome StopOutcome) StopOutcome {

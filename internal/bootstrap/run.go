@@ -263,6 +263,12 @@ func run(ctx context.Context, cfg config.Config, logger *slog.Logger, ready chan
 		jobReconciler.Wait()
 	}()
 
+	// 此刻已经持有 AppDirs 独占锁，Scheduler 尚未收到任何提交；先按 Catalog 权威事实
+	// 恢复 publication-first Saga，再立即接管上一个进程遗留的运行 Attempt。周期恢复仍
+	// 使用租约超时，不会把当前进程内的健康执行者提前判死。
+	if err := jobReconciler.ReconcileStartup(ctx); err != nil {
+		return err
+	}
 	if err := scannerService.Reconcile(ctx); err != nil {
 		return err
 	}
@@ -400,9 +406,8 @@ func driveOverlayProjectionJobToCompletion(ctx context.Context, jobStore *jobs.S
 				return err
 			}
 		default:
-			// running/publishing/cancelling：此刻调度器与恢复循环均未启动，单线程 bootstrap
-			// 不应有并发执行者持有这个 Attempt；出现即说明是上一次进程崩溃遗留的租约，交由
-			// 既有 ReconcileAttempts 按租约超时收敛为可重试的 failed 后重新观察。
+			// 独立白盒调用可能绕过 bootstrap 的 ReconcileStartup；此处保留租约型兜底，
+			// 正式启动路径中的孤儿 Attempt 已在进入本函数前立即收敛。
 			if err := jobStore.ReconcileAttempts(ctx, jobLeaseTimeout); err != nil {
 				return err
 			}

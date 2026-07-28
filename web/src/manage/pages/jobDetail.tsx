@@ -17,7 +17,7 @@ const ATTEMPT_STATUS_LABELS: Record<string, string> = {
   completed: '已完成',
   failed: '已失败',
   cancelled: '已取消',
-  recovered: '已回收（租约过期后被恢复）'
+  recovered: '已回收（执行未正常收尾）'
 };
 
 export function JobDetailPage() {
@@ -118,7 +118,7 @@ export function JobDetailPage() {
 
       <Section
         title="Attempt 历史"
-        description="租约过期后被回收的 Attempt 状态是 recovered。它不代表任务失败，只代表那一次执行没有正常收尾。"
+        description="Attempt 在进程中断、租约过期或启动期 publication 对账后可能标记为 recovered，表示该次执行未按常规路径收尾；尚未完成的 Job 会保留稳定失败码，并按持久重试策略继续或等待人工处理。"
       >
         <AsyncPanel query={attempts}>
           {(data) => (

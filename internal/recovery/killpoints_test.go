@@ -80,20 +80,27 @@ func TestRealProcessKillpointMatrix(t *testing.T) {
 			if err := runtime.derived.Reconcile(context.Background()); err != nil {
 				t.Fatal(err)
 			}
+			submitter := newRuntimeSubmitter(runtime)
+			reconciler, err := recoveryservice.New(runtime.jobs, submitter, time.Hour, time.Minute)
+			if err != nil {
+				t.Fatal(err)
+			}
+			reconciler.SetPublicationReconciler(func(ctx context.Context) error {
+				if err := runtime.scanner.ReconcileActive(ctx); err != nil {
+					return err
+				}
+				return runtime.overlay.ReconcileActive(ctx)
+			})
+			// helper 被强杀后立刻重开同一数据库，可控时钟没有推进，Attempt 的两分钟
+			// lease 仍在未来。启动期已经取得独占所有权，必须先按 publication 对账，
+			// 再无视旧租约立即接管真正的孤儿；不得靠测试改表伪造租约过期。
+			if err := reconciler.ReconcileStartup(context.Background()); err != nil {
+				t.Fatal(err)
+			}
 			if err := runtime.scanner.Reconcile(context.Background()); err != nil {
 				t.Fatal(err)
 			}
 			if err := runtime.overlay.Reconcile(context.Background()); err != nil {
-				t.Fatal(err)
-			}
-			if _, err := runtime.store.Control.SQL().Exec(`UPDATE job_attempts
-SET heartbeat_at=?, lease_expires_at=? WHERE status='running'`,
-				clk.Now().Add(-10*time.Minute).Unix(), clk.Now().Add(-time.Minute).Unix()); err != nil {
-				t.Fatal(err)
-			}
-			submitter := newRuntimeSubmitter(runtime)
-			reconciler, err := recoveryservice.New(runtime.jobs, submitter, time.Hour, time.Minute)
-			if err != nil {
 				t.Fatal(err)
 			}
 			if err := reconciler.ReconcileOnce(context.Background()); err != nil {

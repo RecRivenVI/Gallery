@@ -59,6 +59,12 @@ func Publish(runtimeDir string, value Descriptor) (string, error) {
 	if err := temp.Close(); err != nil {
 		return "", err
 	}
+	// bootstrap 在调用 Publish 前已经取得 AppDirs 独占锁，因此既有 descriptor 只可能
+	// 属于上一个异常退出的进程。Windows 的 os.Rename 不保证覆盖既有目标；先删除陈旧
+	// 文件再发布，崩溃窗口最多留下“无就绪信号”，绝不能继续暴露旧 PID/端口。
+	if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
+		return "", err
+	}
 	if err := os.Rename(tempName, path); err != nil {
 		return "", err
 	}

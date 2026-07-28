@@ -109,8 +109,9 @@ func run() (exitCode int) {
 	sourceGuardRoot := filepath.Join(testRoot, "sources")
 	sourceRoot := filepath.Join(sourceGuardRoot, "baseline")
 	runningCancelSourceRoot := filepath.Join(sourceGuardRoot, "running-cancel")
+	processInterruptSourceRoot := filepath.Join(sourceGuardRoot, "process-interrupt")
 	logsRoot := filepath.Join(testRoot, "logs")
-	for _, dir := range []string{appRoot, lanAppRoot, sourceRoot, runningCancelSourceRoot, logsRoot} {
+	for _, dir := range []string{appRoot, lanAppRoot, sourceRoot, runningCancelSourceRoot, processInterruptSourceRoot, logsRoot} {
 		if err := os.MkdirAll(dir, 0o700); err != nil {
 			return fail("创建隔离目录", err)
 		}
@@ -134,6 +135,9 @@ func run() (exitCode int) {
 	}
 	if err := writeRunningCancelSource(runningCancelSourceRoot); err != nil {
 		return fail("写入运行中取消合成 Source", err)
+	}
+	if err := writeRunningCancelSource(processInterruptSourceRoot); err != nil {
+		return fail("写入进程中断合成 Source", err)
 	}
 	if err := normalizeSyntheticTimes(sourceGuardRoot); err != nil {
 		return fail("稳定合成 Source 时间戳", err)
@@ -178,6 +182,7 @@ func run() (exitCode int) {
 		testEnvironment,
 		sourceRoot,
 		runningCancelSourceRoot,
+		processInterruptSourceRoot,
 	)
 	if err != nil {
 		return fail("启动隔离 galleryd", errors.Join(err, retainDiagnostics(gallerydLog, diagnosticsRoot)))
@@ -194,6 +199,7 @@ func run() (exitCode int) {
 	}()
 
 	rulePackage := filepath.Join(testRoot, "web-e2e-rule-package.json")
+	processInterruptState := filepath.Join(testRoot, "process-interrupt-state.json")
 	if err := prepareRulePackage(
 		filepath.Join(root, "internal", "rules", "testdata", "minimal-rule-package.json"),
 		rulePackage,
@@ -204,6 +210,8 @@ func run() (exitCode int) {
 		"GALLERY_REAL_BASE_URL=" + server.BaseURL,
 		"GALLERY_REAL_SOURCE_ROOT=" + sourceRoot,
 		"GALLERY_REAL_RUNNING_CANCEL_SOURCE_ROOT=" + runningCancelSourceRoot,
+		"GALLERY_REAL_PROCESS_INTERRUPT_SOURCE_ROOT=" + processInterruptSourceRoot,
+		"GALLERY_REAL_PROCESS_INTERRUPT_STATE=" + processInterruptState,
 		"GALLERY_REAL_RULE_PACKAGE=" + rulePackage,
 		"GALLERY_REAL_CANCEL_JOB_ID=" + retryPendingJobs.CancelID,
 		"GALLERY_REAL_RETRY_JOB_ID=" + retryPendingJobs.RetryID,
@@ -245,6 +253,50 @@ func run() (exitCode int) {
 			"e2e/real-jobs-governance.spec.ts",
 			projectArgument, "--workers=1", "--retries=0")
 	}
+	// 规则包仍可用于新 Source 绑定时，由可见 UI 建立一个确实运行并阻塞在首批 Hash
+	// 字节之后的 Scan/Hash。随后显式强杀真实 galleryd，保留 descriptor、数据库和未来
+	// 租约，再立即重启；恢复用例从新进程的可见任务详情核对 Attempt 历史。成功重启后
+	// 更新后续用例的 base URL，继续完成规则弃用、安全、维护与 control restore。
+	interruptRestartedLog := filepath.Join(logsRoot, "galleryd-interrupt-restarted.log")
+	if testErr == nil {
+		testErr = command(runCtx, 2*time.Minute, webRoot, env, nodeBin, playwright, "test",
+			"e2e/real-process-interrupt-arm.spec.ts",
+			projectArgument, "--workers=1", "--retries=0")
+	}
+	if testErr == nil {
+		kill := server.Kill()
+		if !kill.ForcedKill || kill.RequestedGraceful || kill.ExitedGracefully || kill.Err != nil {
+			testErr = fmt.Errorf("强杀 galleryd 未采用预期路径: %+v", kill)
+		} else {
+			serverStopped = true
+		}
+	}
+	if testErr == nil {
+		interruptedServer, startErr := testprocess.StartGallerydWithSourceRootsEnvironmentContext(
+			runCtx,
+			galleryd,
+			appRoot,
+			interruptRestartedLog,
+			60*time.Second,
+			testEnvironment,
+			sourceRoot,
+			runningCancelSourceRoot,
+			processInterruptSourceRoot,
+		)
+		if startErr != nil {
+			testErr = fmt.Errorf("强杀后以同一 AppDirs 立即重启 galleryd: %w", startErr)
+		} else {
+			server = interruptedServer
+			serverStopped = false
+			env[0] = "GALLERY_REAL_BASE_URL=" + server.BaseURL
+			testErr = waitHealthy(runCtx, server.BaseURL, 30*time.Second)
+			if testErr == nil {
+				testErr = command(runCtx, 2*time.Minute, webRoot, env, nodeBin, playwright, "test",
+					"e2e/real-process-interrupt-recovery.spec.ts",
+					projectArgument, "--workers=1", "--retries=0")
+			}
+		}
+	}
 	if testErr == nil {
 		testErr = command(runCtx, 2*time.Minute, webRoot, env, nodeBin, playwright, "test",
 			"e2e/real-rule-lifecycle.spec.ts",
@@ -263,6 +315,7 @@ func run() (exitCode int) {
 	// 维护用例只登记 pending restore。先优雅停止当前进程，再以完全相同的 AppDirs 和
 	// 合成 Source 启动第二个 galleryd；启动期会在打开数据库前应用恢复并完成安全收尾。
 	restoredLog := filepath.Join(logsRoot, "galleryd-restored.log")
+	var restoredEnv []string
 	if testErr == nil {
 		stop := server.Stop()
 		serverStopped = true
@@ -278,13 +331,14 @@ func run() (exitCode int) {
 			testEnvironment,
 			sourceRoot,
 			runningCancelSourceRoot,
+			processInterruptSourceRoot,
 		)
 		if startErr != nil {
 			testErr = fmt.Errorf("以同一 AppDirs 重启 galleryd: %w", startErr)
 		} else {
 			server = restoredServer
 			serverStopped = false
-			restoredEnv := append([]string{"GALLERY_REAL_BASE_URL=" + server.BaseURL}, env[1:]...)
+			restoredEnv = append([]string{"GALLERY_REAL_BASE_URL=" + server.BaseURL}, env[1:]...)
 			testErr = waitHealthy(runCtx, server.BaseURL, 30*time.Second)
 			if testErr == nil {
 				testErr = command(runCtx, 2*time.Minute, webRoot, restoredEnv, nodeBin, playwright, "test",
@@ -306,6 +360,9 @@ func run() (exitCode int) {
 		diagnosticErr := retainDiagnostics(gallerydLog, diagnosticsRoot)
 		if _, statErr := os.Stat(restoredLog); statErr == nil {
 			diagnosticErr = errors.Join(diagnosticErr, retainDiagnostics(restoredLog, diagnosticsRoot))
+		}
+		if _, statErr := os.Stat(interruptRestartedLog); statErr == nil {
+			diagnosticErr = errors.Join(diagnosticErr, retainDiagnostics(interruptRestartedLog, diagnosticsRoot))
 		}
 		if diagnosticErr == nil {
 			fmt.Printf("失败诊断已保存到：%s\n", diagnosticsRoot)
@@ -354,7 +411,7 @@ func run() (exitCode int) {
 		return fail("真实 LAN 浏览器 E2E", errors.Join(lanErr, diagnosticErr))
 	}
 
-	fmt.Printf("真实 %s Personal/LAN galleryd 浏览器 E2E 通过；Personal 同 AppDirs 恢复重启通过；合成 Source 只读 guard 通过；galleryd 均已优雅停止\n", browserProject)
+	fmt.Printf("真实 %s Personal/LAN galleryd 浏览器 E2E 通过；Personal 同 AppDirs control 恢复及强杀恢复通过；合成 Source 只读 guard 通过；预期强杀场景外 galleryd 均已优雅停止\n", browserProject)
 	return 0
 }
 

@@ -1320,15 +1320,28 @@ progress_sequence, result_json, created_at, updated_at FROM job_attempts WHERE j
 	return result, nil
 }
 
-// ReconcileAttempts 收敛租约超时的运行尝试。进程强杀后 runner 不会再写终态，启动时由
-// 这个方法把 Job 交回可解释的失败/取消状态，随后上层按 retryable 决定是否重新入队。
+// ReconcileStartupAttempts 在新进程已经取得 AppDirs 独占锁、调度器尚未启动时，立即收敛
+// 上一个进程遗留的全部运行尝试。调用方必须先完成 publication 对账：真正已经发布的 Job
+// 应恢复为 completed，剩余 running/publishing 才能判定为 PROCESS_INTERRUPTED。这个入口
+// 刻意不检查租约；只有启动期的单写者所有权能够证明这些 Attempt 已经没有活跃执行者。
+func (s *Store) ReconcileStartupAttempts(ctx context.Context) error {
+	return s.reconcileAttemptIDs(ctx, `SELECT job_id FROM job_attempts WHERE status='running' ORDER BY created_at, attempt_id`)
+}
+
+// ReconcileAttempts 只收敛租约超时的运行尝试。它供服务运行期间的周期恢复使用，不能因为
+// 当前进程是单写者就跳过租约：调度器中的健康执行者仍可能正在持有这些 Attempt。
 func (s *Store) ReconcileAttempts(ctx context.Context, leaseTimeout time.Duration) error {
 	if leaseTimeout <= 0 {
 		leaseTimeout = 2 * time.Minute
 	}
 	cutoff := s.clock.Now().UTC().Add(-leaseTimeout).Unix()
-	rows, err := s.db.QueryContext(ctx, `SELECT job_id FROM job_attempts WHERE status='running' AND
-(heartbeat_at IS NULL OR heartbeat_at < ? OR (lease_expires_at IS NOT NULL AND lease_expires_at < ?))`, cutoff, s.clock.Now().UTC().Unix())
+	return s.reconcileAttemptIDs(ctx, `SELECT job_id FROM job_attempts WHERE status='running' AND
+(heartbeat_at IS NULL OR heartbeat_at < ? OR (lease_expires_at IS NOT NULL AND lease_expires_at < ?))
+ORDER BY created_at, attempt_id`, cutoff, s.clock.Now().UTC().Unix())
+}
+
+func (s *Store) reconcileAttemptIDs(ctx context.Context, query string, args ...any) error {
+	rows, err := s.db.QueryContext(ctx, query, args...)
 	if err != nil {
 		return fault.New(fault.CodeInternal, true, err)
 	}

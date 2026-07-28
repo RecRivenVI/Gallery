@@ -45,6 +45,19 @@ func (s *Service) SetPublicationReconciler(reconcile func(context.Context) error
 	s.publication = reconcile
 }
 
+// ReconcileStartup 只能在进程取得 AppDirs 独占锁之后、Scheduler 开始执行之前调用。
+// publication 必须先于孤儿 Attempt 收敛：已经完成 Catalog 提交的 Saga 恢复为 completed；
+// 其余上一个进程遗留的运行尝试立即记录 PROCESS_INTERRUPTED。这里不重排退避或提交 Job，
+// 后续正常 ReconcileOnce 仍是唯一的重试和调度入口。
+func (s *Service) ReconcileStartup(ctx context.Context) error {
+	if s.publication != nil {
+		if err := s.publication(ctx); err != nil {
+			return err
+		}
+	}
+	return s.store.ReconcileStartupAttempts(ctx)
+}
+
 func (s *Service) ReconcileOnce(ctx context.Context) error {
 	if s.publication != nil {
 		if err := s.publication(ctx); err != nil {

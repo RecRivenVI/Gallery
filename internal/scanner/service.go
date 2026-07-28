@@ -770,8 +770,8 @@ func (s *Service) reconcile(ctx context.Context, includeLegacy bool) error {
 		if publicationErr != nil && !isNotFound(publicationErr) {
 			return publicationErr
 		}
-		// 未发布的 running/publishing Job 由中央租约回收循环在 lease 真正过期后收敛；
-		// 启动时 lease 尚有效不能提前判死。
+		// 本方法只按 publication 权威事实对账，不自行判定执行者存活。正式启动路径在取得
+		// AppDirs 独占锁后紧接着立即接管遗留 Attempt；周期路径仍等待 lease 真正过期。
 	}
 	if !includeLegacy {
 		return nil

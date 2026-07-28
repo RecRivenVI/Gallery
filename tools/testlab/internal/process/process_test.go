@@ -141,6 +141,29 @@ func TestStartGallerydLANContextHonoursPreCancelledContext(t *testing.T) {
 	}
 }
 
+func TestReadOwnedDescriptorRejectsStaleRestartDescriptor(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "galleryd.json")
+	if err := os.WriteFile(path, []byte(`{"address":"127.0.0.1:49152","pid":41,"startupNonce":"old"}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if value, ok := readOwnedDescriptor(path, 42); ok {
+		t.Fatalf("上一进程遗留的 descriptor 被错误接受: %+v", value)
+	}
+	if err := os.WriteFile(path, []byte(`{"address":"127.0.0.1:49153","pid":42,"startupNonce":""}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if value, ok := readOwnedDescriptor(path, 42); ok {
+		t.Fatalf("缺少启动 nonce 的 descriptor 被错误接受: %+v", value)
+	}
+	if err := os.WriteFile(path, []byte(`{"address":"127.0.0.1:49154","pid":42,"startupNonce":"current"}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	value, ok := readOwnedDescriptor(path, 42)
+	if !ok || value.Address != "127.0.0.1:49154" || value.PID != 42 || value.StartupNonce != "current" {
+		t.Fatalf("当前进程 descriptor 未被接受: %+v ok=%t", value, ok)
+	}
+}
+
 func TestStopOnAlreadyExitedNonzeroProcessReportsFailure(t *testing.T) {
 	appRoot := t.TempDir()
 	logPath := filepath.Join(t.TempDir(), "helper.log")
@@ -164,6 +187,36 @@ func TestStopOnAlreadyExitedNonzeroProcessReportsFailure(t *testing.T) {
 	outcome := proc.Stop()
 	if outcome.ExitedGracefully || outcome.ForcedKill || outcome.Err == nil {
 		t.Fatalf("非零退出不能被报告为优雅停止: %+v", outcome)
+	}
+}
+
+func TestKillReportsIntentionalForcedTermination(t *testing.T) {
+	appRoot := t.TempDir()
+	logPath := filepath.Join(t.TempDir(), "helper.log")
+	cmd := helperCommand(t, "sleep-without-descriptor")
+	configureProcessGroup(cmd)
+	logFile, err := os.Create(logPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cmd.Stdout = logFile
+	cmd.Stderr = logFile
+	if err := cmd.Start(); err != nil {
+		t.Fatal(err)
+	}
+	proc := &Process{cmd: cmd, AppRoot: appRoot, logFile: logFile, exited: make(chan struct{})}
+	go func() {
+		proc.waitErr = cmd.Wait()
+		close(proc.exited)
+	}()
+	outcome := proc.Kill()
+	if !outcome.ForcedKill || outcome.RequestedGraceful || outcome.ExitedGracefully || outcome.Err != nil {
+		t.Fatalf("显式强杀结果错误: %+v", outcome)
+	}
+	select {
+	case <-proc.exited:
+	default:
+		t.Fatal("Kill 返回时子进程仍未退出")
 	}
 }
 

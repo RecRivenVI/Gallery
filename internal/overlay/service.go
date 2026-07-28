@@ -625,7 +625,8 @@ func (s *Service) reconcile(ctx context.Context, includeLegacy bool) error {
 		}
 		// 无 publication 的 queued Job 只由中央 Recovery Service 的 ListRunnable/Submit 领取，
 		// 与 scanner.Reconcile 对齐；这里不再自行 Start，避免与中央循环对同一 Job 形成竞争
-		// 领取窗口。running/publishing Job 必须等租约过期后再形成同一 Job 的新 Attempt。
+		// 领取窗口。启动期遗留的 running/publishing 由独占锁下的立即接管收敛，周期路径
+		// 仍必须等待租约过期后才能形成同一 Job 的新 Attempt。
 	}
 	if err := s.reconcileCompletedPublicationGaps(ctx); err != nil {
 		return err

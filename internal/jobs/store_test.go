@@ -329,6 +329,107 @@ func TestLeaseRecoveryWaitsForExpiryAndRetriesSameJob(t *testing.T) {
 	}
 }
 
+func TestStartupRecoveryImmediatelyClaimsFreshOrphanWithoutSubmitting(t *testing.T) {
+	ctx := context.Background()
+	dirs := appdirs.UnderRoot(filepath.Join(t.TempDir(), "app"))
+	if err := dirs.Ensure(filesystem.OS{}); err != nil {
+		t.Fatal(err)
+	}
+	store, err := storage.Open(ctx, dirs)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	now := &mutableClock{now: time.Date(2026, 7, 18, 3, 30, 0, 0, time.UTC)}
+	jobStore, err := jobs.NewStore(store.Control.SQL(), now, identity.NewGenerator(now))
+	if err != nil {
+		t.Fatal(err)
+	}
+	job, err := jobStore.CreateWithOptions(ctx, "hash", "", "owner", jobs.CreateOptions{
+		ResourceClass: jobs.ResourceHash, MaxRetries: 2,
+		RetryPolicyJSON: []byte(`{"kind":"fixed","baseMs":1000,"maxMs":1000}`),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := jobStore.StartStage(ctx, job.ID, "hashing"); err != nil {
+		t.Fatal(err)
+	}
+
+	submitter := &recordingSubmitter{accept: true}
+	reconciler, err := recovery.New(jobStore, submitter, time.Hour, 2*time.Minute)
+	if err != nil {
+		t.Fatal(err)
+	}
+	publicationRan := false
+	reconciler.SetPublicationReconciler(func(context.Context) error {
+		publicationRan = true
+		current, getErr := jobStore.Get(ctx, job.ID)
+		if getErr != nil || current.Status != jobs.StatusRunning {
+			t.Fatalf("publication 对账必须先观察到原始 running Job: %+v %v", current, getErr)
+		}
+		return nil
+	})
+	if err := reconciler.ReconcileStartup(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if !publicationRan {
+		t.Fatal("启动恢复没有先执行 publication 对账")
+	}
+	recovered, err := jobStore.Get(ctx, job.ID)
+	if err != nil || recovered.Status != jobs.StatusFailed || recovered.IssueCode != string(fault.CodeProcessInterrupted) ||
+		!recovered.FailureRetryable || recovered.NextAttemptAt == nil {
+		t.Fatalf("新鲜孤儿 Attempt 未立即进入可恢复终态: %+v %v", recovered, err)
+	}
+	attempts, err := jobStore.ListAttempts(ctx, job.ID)
+	if err != nil || len(attempts) != 1 || attempts[0].Status != "recovered" ||
+		attempts[0].ErrorCode != string(fault.CodeProcessInterrupted) || !attempts[0].ErrorRetryable {
+		t.Fatalf("启动恢复没有保留 recovered Attempt 历史: %+v %v", attempts, err)
+	}
+	if submitter.count() != 0 {
+		t.Fatalf("启动接管阶段不应提交退避中的 Job: submits=%d", submitter.count())
+	}
+}
+
+func TestStartupRecoveryFinalizesPreviouslyRequestedCancellation(t *testing.T) {
+	ctx := context.Background()
+	dirs := appdirs.UnderRoot(filepath.Join(t.TempDir(), "app"))
+	if err := dirs.Ensure(filesystem.OS{}); err != nil {
+		t.Fatal(err)
+	}
+	store, err := storage.Open(ctx, dirs)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	now := clock.Fixed{Time: time.Date(2026, 7, 18, 3, 45, 0, 0, time.UTC)}
+	jobStore, err := jobs.NewStore(store.Control.SQL(), now, identity.NewGenerator(now))
+	if err != nil {
+		t.Fatal(err)
+	}
+	job, err := jobStore.CreateWithOptions(ctx, "hash", "", "owner", jobs.CreateOptions{ResourceClass: jobs.ResourceHash})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := jobStore.StartStage(ctx, job.ID, "hashing"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := jobStore.RequestCancel(ctx, job.ID); err != nil {
+		t.Fatal(err)
+	}
+	if err := jobStore.ReconcileStartupAttempts(ctx); err != nil {
+		t.Fatal(err)
+	}
+	cancelled, err := jobStore.Get(ctx, job.ID)
+	if err != nil || cancelled.Status != jobs.StatusCancelled || cancelled.IssueCode != "" || cancelled.NextAttemptAt != nil {
+		t.Fatalf("启动恢复没有完成已持久化的取消请求: %+v %v", cancelled, err)
+	}
+	attempts, err := jobStore.ListAttempts(ctx, job.ID)
+	if err != nil || len(attempts) != 1 || attempts[0].Status != "cancelled" {
+		t.Fatalf("取消 Attempt 历史错误: %+v %v", attempts, err)
+	}
+}
+
 func TestReconcilerRetriesQueuedJobAfterSchedulerRejects(t *testing.T) {
 	ctx := context.Background()
 	dirs := appdirs.UnderRoot(filepath.Join(t.TempDir(), "app"))
