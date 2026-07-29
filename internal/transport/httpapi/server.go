@@ -1253,7 +1253,11 @@ func (s *Server) listLibraries(w http.ResponseWriter, r *http.Request) {
 		s.writeRequestError(w, err)
 		return
 	}
-	publicationID, covers := s.aggregateCoversForScope(r.Context(), catalog.AggregateScopeLibrary)
+	publicationID, covers, err := s.authorizedAggregateCoversForScope(r.Context(), session, catalog.AggregateScopeLibrary)
+	if err != nil {
+		s.writeRequestError(w, err)
+		return
+	}
 	result := make([]api.Library, 0, len(items))
 	for _, item := range items {
 		allowed, authorizeErr := s.auth.AuthorizeSession(r.Context(), session, "library.read", auth.ResourceScope{Kind: "library", ID: item.ID})
@@ -1269,7 +1273,8 @@ func (s *Server) listLibraries(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) getLibrary(w http.ResponseWriter, r *http.Request) {
-	if _, err := s.requireCapabilityForScope(r, "library.read", auth.ResourceScope{Kind: "library", ID: r.PathValue("libraryId")}); err != nil {
+	session, err := s.requireCapabilityForScope(r, "library.read", auth.ResourceScope{Kind: "library", ID: r.PathValue("libraryId")})
+	if err != nil {
 		s.writeRequestError(w, concealForbidden(err))
 		return
 	}
@@ -1278,7 +1283,11 @@ func (s *Server) getLibrary(w http.ResponseWriter, r *http.Request) {
 		s.writeRequestError(w, err)
 		return
 	}
-	publicationID, covers := s.aggregateCoversForScope(r.Context(), catalog.AggregateScopeLibrary)
+	publicationID, covers, err := s.authorizedAggregateCoversForScope(r.Context(), session, catalog.AggregateScopeLibrary)
+	if err != nil {
+		s.writeRequestError(w, err)
+		return
+	}
 	writeJSON(w, http.StatusOK, withLibraryCover(libraryDTO(result), publicationID, covers))
 }
 
@@ -1833,7 +1842,11 @@ func (s *Server) listCreators(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	// 一次取全部聚合封面，避免逐个作者查询产生 N+1。
-	publicationID, covers := s.aggregateCoversForScope(r.Context(), catalog.AggregateScopeCreator)
+	publicationID, covers, err := s.authorizedAggregateCoversForScope(r.Context(), session, catalog.AggregateScopeCreator)
+	if err != nil {
+		s.writeRequestError(w, err)
+		return
+	}
 	items := make([]api.Creator, 0, len(list))
 	for _, creator := range list {
 		_, bindings, getErr := s.creators.Get(r.Context(), creator.ID)
@@ -1878,7 +1891,11 @@ func (s *Server) getCreator(w http.ResponseWriter, r *http.Request) {
 		s.writeRequestError(w, fault.New(fault.CodeNotFound, false, nil))
 		return
 	}
-	publicationID, covers := s.aggregateCoversForScope(r.Context(), catalog.AggregateScopeCreator)
+	publicationID, covers, err := s.authorizedAggregateCoversForScope(r.Context(), session, catalog.AggregateScopeCreator)
+	if err != nil {
+		s.writeRequestError(w, err)
+		return
+	}
 	items := make([]api.CreatorSourceBinding, 0, len(allowed))
 	for _, binding := range allowed {
 		items = append(items, api.CreatorSourceBinding{
@@ -3800,6 +3817,45 @@ func (s *Server) aggregateCoversForScope(ctx context.Context, scopeKind string) 
 		return "", nil
 	}
 	return publication.ID, covers
+}
+
+// authorizedAggregateCoversForScope 为 Creator/Library DTO 按当前主体重新选择聚合封面。
+// 身份可见性只要求 library.read；非空 coverMediaId 还会暴露一个 publication 内的媒体资源，
+// 因而候选 Source 必须同时通过 library.read 与独立 media.read，并受 deny 和 Token scope 限制。
+//
+// 没有 active publication 是正常的首次启动状态；授权或 Catalog 查询的其它失败必须 fail-closed
+// 返回错误，不能退回未裁剪的全局封面。
+func (s *Server) authorizedAggregateCoversForScope(ctx context.Context, session auth.Session, scopeKind string) (string, map[string]catalog.AggregateCover, error) {
+	if s.catalog == nil {
+		return "", nil, nil
+	}
+	publication, sourceIDs, err := s.catalog.SourceIDsAt(ctx, "")
+	if err != nil {
+		if asFault(err).Code == fault.CodeNotFound {
+			return "", nil, nil
+		}
+		return "", nil, err
+	}
+	allowedSourceIDs, err := s.auth.AuthorizeSessionSources(ctx, session,
+		[]string{"library.read", "media.read"}, sourceIDs)
+	if err != nil {
+		return "", nil, fault.New(fault.CodeInternal, true, err)
+	}
+	// Personal/Owner 与其它全成员主体是常见路径。授权集合等于 publication 成员时直接
+	// 读取候选验证阶段已经物化的全局结果，避免在每次列表请求中重新扫描 Work 候选；
+	// 只有 deny/Grant/Token scope 真正裁掉 Source 时才执行下面的受限重选。
+	if len(allowedSourceIDs) == len(sourceIDs) {
+		covers, err := s.catalog.AggregateCoversAt(ctx, publication.ID, scopeKind)
+		if err != nil {
+			return "", nil, err
+		}
+		return publication.ID, covers, nil
+	}
+	covers, err := s.catalog.AggregateCoversForSourcesAt(ctx, publication.ID, scopeKind, allowedSourceIDs)
+	if err != nil {
+		return "", nil, err
+	}
+	return publication.ID, covers, nil
 }
 
 func creatorMergeDTO(value creators.MergeRecord, projectionJobID string) api.CreatorMerge {

@@ -3,6 +3,7 @@ package catalog
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 
 	"github.com/RecRivenVI/gallery/internal/contract/fault"
 )
@@ -180,6 +181,123 @@ WHERE catalog_revision_id=? AND overlay_revision_id=? AND scope_kind=?`,
 	}
 	defer rows.Close()
 	result := map[string]AggregateCover{}
+	for rows.Next() {
+		item := AggregateCover{ScopeKind: scopeKind}
+		if err := rows.Scan(&item.ScopeID, &item.CoverMediaID, &item.PublishedAtNanos); err != nil {
+			return nil, fault.New(fault.CodeInternal, true, err)
+		}
+		result[item.ScopeID] = item
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fault.New(fault.CodeInternal, true, err)
+	}
+	return result, nil
+}
+
+// SourceIDsAt 返回一个 publication 冻结的完整 Source 成员集合。授权层先对这组稳定成员做
+// 批量 effective capability 判定，再把允许集合交给 AggregateCoversForSourcesAt 重选封面；
+// 不得从 control.db 的当前 Source 列表猜测历史 publication 成员。
+func (s *Store) SourceIDsAt(ctx context.Context, publicationID string) (Publication, []string, error) {
+	publication, err := s.resolvePublication(ctx, publicationID)
+	if err != nil {
+		return Publication{}, nil, err
+	}
+	rows, err := s.db.QueryContext(ctx, `SELECT source_id
+FROM catalog_revision_sources
+WHERE catalog_revision_id=?
+ORDER BY source_id`, publication.CatalogRevisionID)
+	if err != nil {
+		return Publication{}, nil, fault.New(fault.CodeInternal, true, err)
+	}
+	defer rows.Close()
+	sourceIDs := make([]string, 0)
+	for rows.Next() {
+		var sourceID string
+		if err := rows.Scan(&sourceID); err != nil {
+			return Publication{}, nil, fault.New(fault.CodeInternal, true, err)
+		}
+		sourceIDs = append(sourceIDs, sourceID)
+	}
+	if err := rows.Err(); err != nil {
+		return Publication{}, nil, fault.New(fault.CodeInternal, true, err)
+	}
+	return publication, sourceIDs, nil
+}
+
+// AggregateCoversForSourcesAt 在一个不可变 publication 内，只使用调用方已经授权的 Source
+// 重新选择聚合封面。预计算的 Creator/Library 行只保存全局胜出项；直接把它们附到资源限定
+// 主体的 DTO 上，会在胜出媒体所在 Source 被 deny、落在 Token scope 外或缺少 media.read 时
+// 泄露 CanonicalMedia ID，也无法回退到下一条仍可见的候选。
+//
+// Creator 从允许 Source 中的 Work 候选按正式 tie-break 重选；Library 复用 Source-local 聚合行，
+// 再从允许 Source 中重选代表平台。这样既保留既有确定性语义，也不会把授权规则写进 Catalog。
+func (s *Store) AggregateCoversForSourcesAt(ctx context.Context, publicationID, scopeKind string, sourceIDs []string) (map[string]AggregateCover, error) {
+	publication, err := s.resolvePublication(ctx, publicationID)
+	if err != nil {
+		return nil, err
+	}
+	result := make(map[string]AggregateCover)
+	if len(sourceIDs) == 0 {
+		return result, nil
+	}
+	sourceIDsJSON, err := json.Marshal(sourceIDs)
+	if err != nil {
+		return nil, fault.New(fault.CodeInternal, true, err)
+	}
+
+	var statement string
+	switch scopeKind {
+	case AggregateScopeCreator:
+		statement = `WITH allowed_sources(source_id) AS (
+    SELECT CAST(value AS TEXT) FROM json_each(?)
+), ranked AS (
+    SELECT r.creator_id AS scope_id,
+           w.cover_media_id,
+           w.published_at_ns,
+           row_number() OVER (
+               PARTITION BY r.creator_id
+               ORDER BY w.published_at_ns DESC, w.work_id DESC
+           ) AS rank_in_scope
+    FROM work_creator_relations AS r
+    JOIN work_projections AS w
+      ON w.catalog_revision_id = r.catalog_revision_id
+     AND w.overlay_revision_id = r.overlay_revision_id
+     AND w.work_id = r.work_id
+    JOIN allowed_sources AS a ON a.source_id = w.source_id
+    WHERE r.catalog_revision_id=? AND r.overlay_revision_id=? AND w.cover_media_id<>''
+)
+SELECT scope_id, cover_media_id, published_at_ns
+FROM ranked WHERE rank_in_scope=1
+ORDER BY scope_id`
+	case AggregateScopeLibrary:
+		statement = `WITH allowed_sources(source_id) AS (
+    SELECT CAST(value AS TEXT) FROM json_each(?)
+), ranked AS (
+    SELECT m.library_id AS scope_id,
+           a.cover_media_id,
+           a.published_at_ns,
+           row_number() OVER (
+               PARTITION BY m.library_id
+               ORDER BY a.published_at_ns DESC, a.scope_id DESC
+           ) AS rank_in_scope
+    FROM aggregate_cover_projections AS a
+    JOIN catalog_revision_sources AS m
+      ON m.catalog_revision_id = a.catalog_revision_id
+     AND m.source_id = a.scope_id
+    JOIN allowed_sources AS allowed ON allowed.source_id = a.scope_id
+    WHERE a.catalog_revision_id=? AND a.overlay_revision_id=? AND a.scope_kind='source'
+)
+SELECT scope_id, cover_media_id, published_at_ns
+FROM ranked WHERE rank_in_scope=1
+ORDER BY scope_id`
+	default:
+		return nil, fault.WithField(fault.CodeValidation, "scopeKind", nil)
+	}
+	rows, err := s.db.QueryContext(ctx, statement, string(sourceIDsJSON), publication.CatalogRevisionID, publication.OverlayRevisionID)
+	if err != nil {
+		return nil, fault.New(fault.CodeInternal, true, err)
+	}
+	defer rows.Close()
 	for rows.Next() {
 		item := AggregateCover{ScopeKind: scopeKind}
 		if err := rows.Scan(&item.ScopeID, &item.CoverMediaID, &item.PublishedAtNanos); err != nil {

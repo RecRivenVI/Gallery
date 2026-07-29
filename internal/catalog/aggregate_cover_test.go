@@ -68,6 +68,42 @@ func TestAggregateCoversKeepSourceMediaWithinSource(t *testing.T) {
 	assertCover(catalog.AggregateScopeSource, "source-b", "work-b-m1")
 	// Library 复用 Source 代表时刻，仍取更新的 source-b。
 	assertCover(catalog.AggregateScopeLibrary, "library-a", "work-b-m1")
+
+	resolved, sourceIDs, err := catalogStore.SourceIDsAt(ctx, publication.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resolved.ID != publication.ID || strings.Join(sourceIDs, ",") != "source-a,source-b" {
+		t.Fatalf("publication Source 成员错误: publication=%q sources=%v", resolved.ID, sourceIDs)
+	}
+
+	// 逐主体授权把全局胜出的 source-b 排除后，Creator 与 Library 都必须回退到仍然
+	// 可见的 source-a 候选，而不是泄露 source-b 的 CanonicalMedia ID 或直接丢失封面。
+	for _, scopeKind := range []string{catalog.AggregateScopeCreator, catalog.AggregateScopeLibrary} {
+		covers, err := catalogStore.AggregateCoversForSourcesAt(ctx, publication.ID, scopeKind, []string{"source-a"})
+		if err != nil {
+			t.Fatal(err)
+		}
+		var scopeID string
+		if scopeKind == catalog.AggregateScopeCreator {
+			scopeID = "creator-shared"
+		} else {
+			scopeID = "library-a"
+		}
+		if got := covers[scopeID].CoverMediaID; got != "work-a-m1" {
+			t.Fatalf("%s 授权回退封面 = %q want work-a-m1", scopeKind, got)
+		}
+	}
+
+	for _, scopeKind := range []string{catalog.AggregateScopeCreator, catalog.AggregateScopeLibrary} {
+		covers, err := catalogStore.AggregateCoversForSourcesAt(ctx, publication.ID, scopeKind, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if covers == nil || len(covers) != 0 {
+			t.Fatalf("%s 空授权集合必须 fail-closed，得到 %#v", scopeKind, covers)
+		}
+	}
 }
 
 // TestAggregateCreatorSourcePlanMaterializesCandidatesOnce 对生产 SQL 建立结构性计划门禁：
