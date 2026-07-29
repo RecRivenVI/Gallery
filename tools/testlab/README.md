@@ -77,7 +77,8 @@ Cursor 与 20 项媒体/DerivedAsset finding；`creator.id` 使用另一个真�
 WorkProjection、每 Work 恰好两条带 role/ordinal 的 WorkCreator 关系、MediaProjection、SourceMedia、ContentBlob、FileLocation、FTS 和
 search candidate。基线固定为多 Source，主 Source 持有 50% 作品；因此单次真实 Source
 publication 可以精确改变全库 1%/10%/50% 的 WorkProjection，不会把「主 Source 内变化比例」
-写成「全库变化比例」。
+写成「全库变化比例」。10 Source 形状会按规范顺序把槽位绑定为 Pixiv、Pixiv FANBOX、
+Gank、Fantia、Patreon、Pawchive、X、微博、微博 Legacy 和 Venera 的非敏感代号，并写入报告。
 
 ```powershell
 # 语义/报告预检；数值不构成正式门禁结论
@@ -108,6 +109,7 @@ publication 可以精确改变全库 1%/10%/50% 的 WorkProjection，不会把�
 报告 checkpoint 前中断，已发布但没有完整计时的那次不会冒充有效样本，续跑会使用更高 revision 重测。
 首跑若通过 ProcessorAffinity 限定可见 CPU，续跑必须使用相同亲和性；否则环境指纹会以
 `cpuLogicalCores` 漂移拒绝，防止把不同资源上限的样本混入同一份性能报告。
+报告同时记录 `goMaxProcs`；只改 `GOMAXPROCS` 也会被续跑指纹拒绝。
 `reference` 强制 500,000 Work、10 Source、50% 主 Source、三个正式比例与每比例至少
 20 个完整样本；报告分开记录 Begin/Stage/Overlay/Validate/Publish/GC/checkpoint、峰值空间、
 旧快照在构建各边界仍可读及 nearest-rank P50/P95。它不清空 OS 文件缓存，必须按报告的

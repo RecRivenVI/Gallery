@@ -34,6 +34,15 @@ func TestReportSaveRejectsResidualSensitiveContent(t *testing.T) {
 	}
 }
 
+func TestReportSaveRejectsSensitiveCorpusSourceAlias(t *testing.T) {
+	report := &Report{SchemaVersion: 2, Scenario: "perf", Corpus: &CorpusFacts{
+		Scale: 10, SourceCount: 1, SourceAliases: []string{`C:\private\source`},
+	}}
+	if err := report.Save(filepath.Join(t.TempDir(), "report.json")); err == nil {
+		t.Fatal("expected Save to reject a source alias containing an absolute path")
+	}
+}
+
 // TestReportSaveRejectsSensitiveEnvironmentFacts 复核环境事实同样受敏感内容防线约束：
 // 存储介质判定天然接触卷路径与设备路径，一旦某个采集分支把它们带进 Facts，必须在写盘
 // 之前被拒绝，而不是随结果文件一起提交出去。

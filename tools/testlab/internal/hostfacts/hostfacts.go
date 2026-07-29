@@ -81,6 +81,7 @@ type Facts struct {
 	SQLiteVersion    string   `json:"sqliteVersion"`
 	SQLiteLibrary    string   `json:"sqliteLibrary"`
 	GoVersion        string   `json:"goVersion"`
+	GoMaxProcs       int      `json:"goMaxProcs"`
 	Storage          Storage  `json:"storage"`
 	Errors           []string `json:"errors,omitempty"`
 }
@@ -90,7 +91,7 @@ type Facts struct {
 // 通过。
 func (f Facts) Complete() bool {
 	return f.OSVersion != "" && f.CPUModel != "" && f.CPULogicalCores > 0 &&
-		f.MemoryTotalBytes > 0 && f.SQLiteVersion != "" && f.Storage.Medium != MediumUnknown
+		f.MemoryTotalBytes > 0 && f.SQLiteVersion != "" && f.GoMaxProcs > 0 && f.Storage.Medium != MediumUnknown
 }
 
 // MissingFields 列出缺失的门禁必需字段，供报告写出具体缺了什么。
@@ -110,6 +111,9 @@ func (f Facts) MissingFields() []string {
 	}
 	if f.SQLiteVersion == "" {
 		missing = append(missing, "sqliteVersion")
+	}
+	if f.GoMaxProcs <= 0 {
+		missing = append(missing, "goMaxProcs")
 	}
 	if f.Storage.Medium == MediumUnknown {
 		missing = append(missing, "storage.medium")
@@ -144,6 +148,7 @@ func Collect(dbPath string) Facts {
 		Arch:            runtime.GOARCH,
 		CPULogicalCores: runtime.NumCPU(),
 		GoVersion:       runtime.Version(),
+		GoMaxProcs:      runtime.GOMAXPROCS(0),
 		SQLiteLibrary:   "modernc.org/sqlite",
 	}
 	host, err := collectHost()

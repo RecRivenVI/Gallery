@@ -35,6 +35,19 @@ const (
 
 var ReferencePublicationRatios = []float64{0.01, 0.10, 0.50}
 
+var ReferencePublicationSourceAliases = []string{
+	"Source-pixiv",
+	"Source-pixivFANBOX",
+	"Source-Gank",
+	"Source-Fantia",
+	"Source-Patreon",
+	"Source-Pawchive",
+	"Source-X",
+	"Source-微博",
+	"Source-微博_Legacy",
+	"Source-Venera",
+}
+
 // PublicationMatrixConfig 描述一次完整 Catalog publication 变化矩阵。
 // Checkpoint 在 baseline 和每个样本完成后收到可原子持久化的当前报告，使数小时的
 // reference 运行即使被中断也不会只剩一份空结果。
@@ -141,6 +154,17 @@ func sameRatios(left, right []float64) bool {
 	return true
 }
 
+func publicationSourceAliases(sources int) []string {
+	if sources == len(ReferencePublicationSourceAliases) {
+		return append([]string(nil), ReferencePublicationSourceAliases...)
+	}
+	aliases := make([]string, sources)
+	for slot := range aliases {
+		aliases[slot] = fmt.Sprintf("synthetic-source-%02d", slot)
+	}
+	return aliases
+}
+
 func ensureEmptyPublicationRoot(root string) error {
 	items, err := os.ReadDir(root)
 	if os.IsNotExist(err) {
@@ -194,6 +218,7 @@ func newPublicationMatrixReport(cfg PublicationMatrixConfig, primaryWorks int, b
 		Transport: "production-catalog-store", Scale: cfg.Scale, Environment: &facts,
 		Corpus: &report.CorpusFacts{
 			Scale: cfg.Scale, SourceCount: cfg.Sources, ClonedSourceCountOnLastPublish: cfg.Sources - 1,
+			SourceAliases:               publicationSourceAliases(cfg.Sources),
 			SourceBeginDurationsMs:      baseline.SourceBeginDurationsMs,
 			SourceValidationDurationsMs: baseline.SourceValidationDurationsMs,
 			SourcePublishDurationsMs:    baseline.SourcePublishDurationsMs,
@@ -238,6 +263,7 @@ func validatePublicationResumeReport(cfg PublicationMatrixConfig, primaryWorks i
 	if result.SchemaVersion != 2 || result.Scenario != "stage4-publication-change-matrix" ||
 		result.Tier != cfg.Tier || result.Scale != cfg.Scale || result.Transport != "production-catalog-store" ||
 		result.Corpus == nil || result.Corpus.Scale != cfg.Scale || result.Corpus.SourceCount != cfg.Sources ||
+		!slices.Equal(result.Corpus.SourceAliases, publicationSourceAliases(cfg.Sources)) ||
 		result.PublicationMatrix == nil {
 		return fmt.Errorf("续跑报告与 publication 场景、规模或语料不匹配")
 	}
@@ -298,6 +324,7 @@ func publicationEnvironmentDifferences(left, right hostfacts.Facts) []string {
 		{"sqliteVersion", left.SQLiteVersion == right.SQLiteVersion},
 		{"sqliteLibrary", left.SQLiteLibrary == right.SQLiteLibrary},
 		{"goVersion", left.GoVersion == right.GoVersion},
+		{"goMaxProcs", left.GoMaxProcs == 0 || left.GoMaxProcs == right.GoMaxProcs},
 		{"storage.medium", left.Storage.Medium == right.Storage.Medium},
 		{"storage.model", left.Storage.Model == right.Storage.Model},
 		{"storage.busType", left.Storage.BusType == right.Storage.BusType},

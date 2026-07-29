@@ -221,6 +221,9 @@ type PublicationBuildSample struct {
 type CorpusFacts struct {
 	Scale       int `json:"scale"`
 	SourceCount int `json:"sourceCount"`
+	// SourceAliases 按语料槽位记录非敏感的目标来源代号，使“10 Source”
+	// 不能在报告中退化成十个没有平台身份的匿名槽位。
+	SourceAliases []string `json:"sourceAliases,omitempty"`
 	// ClonedSourceCountOnLastPublish 是最后一次 BeginCandidate 时被 cloneUnchangedSources
 	// 搬运的 Source 数量；为 0 表示这条路径在本次语料构建中一次都没有执行。
 	ClonedSourceCountOnLastPublish int `json:"clonedSourceCountOnLastPublish"`
@@ -282,6 +285,13 @@ func (r *Report) scanForSensitiveContent() error {
 	for _, finding := range r.Findings {
 		if containsSensitiveMarker(finding.Detail) || containsSensitiveMarker(finding.Name) {
 			return fmt.Errorf("finding %q 的内容疑似包含绝对路径或地址", finding.Name)
+		}
+	}
+	if r.Corpus != nil {
+		for _, alias := range r.Corpus.SourceAliases {
+			if containsSensitiveMarker(alias) {
+				return fmt.Errorf("corpus Source alias 疑似包含绝对路径或地址")
+			}
 		}
 	}
 	for _, limitation := range r.Limitations {

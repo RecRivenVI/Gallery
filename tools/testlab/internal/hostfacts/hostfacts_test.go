@@ -15,6 +15,9 @@ func TestCollectReturnsMeasuredFactsForCurrentRoot(t *testing.T) {
 	if facts.CPULogicalCores <= 0 {
 		t.Errorf("CPULogicalCores = %d, want > 0", facts.CPULogicalCores)
 	}
+	if facts.GoMaxProcs <= 0 {
+		t.Errorf("GoMaxProcs = %d, want > 0", facts.GoMaxProcs)
+	}
 	if facts.SQLiteVersion == "" {
 		t.Errorf("SQLiteVersion 为空；errors=%v", facts.Errors)
 	}
@@ -91,7 +94,7 @@ func TestCrossCheckStorageClassDoesNotConflictWhenMediumUnknown(t *testing.T) {
 func TestMissingFieldsListsEveryGateRequirement(t *testing.T) {
 	empty := Facts{Storage: Storage{Medium: MediumUnknown}}
 	missing := empty.MissingFields()
-	for _, want := range []string{"osVersion", "cpuModel", "cpuLogicalCores", "memoryTotalBytes", "sqliteVersion", "storage.medium"} {
+	for _, want := range []string{"osVersion", "cpuModel", "cpuLogicalCores", "memoryTotalBytes", "sqliteVersion", "goMaxProcs", "storage.medium"} {
 		found := false
 		for _, got := range missing {
 			if got == want {
@@ -108,7 +111,7 @@ func TestMissingFieldsListsEveryGateRequirement(t *testing.T) {
 
 	full := Facts{
 		OSVersion: "os", CPUModel: "cpu", CPULogicalCores: 8, MemoryTotalBytes: 1,
-		SQLiteVersion: "3.0.0", Storage: Storage{Medium: MediumSSD},
+		SQLiteVersion: "3.0.0", GoMaxProcs: 2, Storage: Storage{Medium: MediumSSD},
 	}
 	if !full.Complete() || len(full.MissingFields()) != 0 {
 		t.Errorf("完整 Facts 报告为不完整: missing=%v", full.MissingFields())

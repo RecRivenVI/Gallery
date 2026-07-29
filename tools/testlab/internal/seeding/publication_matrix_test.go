@@ -42,10 +42,24 @@ func TestNormalizePublicationMatrixConfigRequiresFormalReferenceShape(t *testing
 	}
 }
 
+func TestPublicationSourceAliasesBindAllReferenceTargetsInOrder(t *testing.T) {
+	want := []string{
+		"Source-pixiv", "Source-pixivFANBOX", "Source-Gank", "Source-Fantia", "Source-Patreon",
+		"Source-Pawchive", "Source-X", "Source-微博", "Source-微博_Legacy", "Source-Venera",
+	}
+	if got := publicationSourceAliases(ReferencePublicationSources); !slices.Equal(got, want) {
+		t.Fatalf("正式来源槽位=%v want=%v", got, want)
+	}
+	if got := publicationSourceAliases(4); !slices.Equal(got,
+		[]string{"synthetic-source-00", "synthetic-source-01", "synthetic-source-02", "synthetic-source-03"}) {
+		t.Fatalf("非正式来源槽位=%v", got)
+	}
+}
+
 func TestPublicationEnvironmentDifferencesNamesDriftWithoutValues(t *testing.T) {
 	left := hostfacts.Facts{
 		OSFamily: "windows", Arch: "amd64", OSVersion: "test-os", CPUModel: "test-cpu",
-		CPULogicalCores: 2, MemoryTotalBytes: 1024, SQLiteVersion: "test-sqlite",
+		CPULogicalCores: 2, MemoryTotalBytes: 1024, SQLiteVersion: "test-sqlite", GoMaxProcs: 2,
 		SQLiteLibrary: "modernc.org/sqlite", GoVersion: "test-go",
 		Storage: hostfacts.Storage{
 			Medium: "ssd", Model: "test-model", BusType: "NVMe", VolumeID: "test-volume",
@@ -54,9 +68,10 @@ func TestPublicationEnvironmentDifferencesNamesDriftWithoutValues(t *testing.T) 
 	}
 	right := left
 	right.CPULogicalCores = 28
+	right.GoMaxProcs = 4
 	right.Storage.PhysicalDiskNumbers = []int{5}
 	differences := publicationEnvironmentDifferences(left, right)
-	if !slices.Equal(differences, []string{"cpuLogicalCores", "storage.physicalDiskNumbers"}) {
+	if !slices.Equal(differences, []string{"cpuLogicalCores", "goMaxProcs", "storage.physicalDiskNumbers"}) {
 		t.Fatalf("环境漂移字段=%v", differences)
 	}
 }
