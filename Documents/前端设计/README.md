@@ -60,4 +60,6 @@
 
 EV-113 继续把四份材料要求的可访问降级转成路由级持续门禁：当前用户端 10 条、管理端 9 条路由在桌面与 390×844 窄屏分别进入稳定成功/空/错误状态，Chromium/Firefox 各对 38 个最终 DOM 执行 WCAG 2 A/AA axe；完整 mock smoke 22/22。该自动检查仍不替代真实触控、缩放/高对比、交互状态组合与人工屏幕阅读器。
 
+EV-116 继续把共享视觉/动效基座的降级原则落到 320×800、应用高对比、模拟系统 forced-colors/prefers-contrast 和 WCAG 文本间距的全路由门禁；系统色映射明确区分按钮面与链接前景，管理概览 Grid 也能在 20rem 以下收缩。Chromium/Firefox 完整 mock smoke 24/24。该结果只证明桌面浏览器模拟和 400% 等效重排，不替代实际缩放、物理 Windows High Contrast、真实触控或人工屏幕阅读器。
+
 本轮没有改变产品语义或 ADR-009 接受的 Web 技术栈，因此无需新增 ADR；权威行为仍以 `Documents/规范/`、OpenAPI 与现行 ADR 为准。
