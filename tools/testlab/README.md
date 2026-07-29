@@ -201,6 +201,12 @@ $common = @(
   -max-dirs 200 -max-files 2000 -max-wall-clock 10m -max-media-items-bounded 12 `
   -storage-class hdd -results-out <测试根>/reports/<代号>-bounded.json
 
+# 1b) 真实活动 Hash 取消：只在公共 Job API 观察到 hash/running 后取消父 Scan
+& $env:GALLERY_GO run ./tools/testlab/cmd/probe @common -scenario source-bounded `
+  -max-dirs 200 -max-files 2000 -max-wall-clock 10m -max-media-items-bounded 12 `
+  -cancel-on-active-hash -storage-class hdd `
+  -results-out <测试根>/reports/<代号>-active-hash-cancel.json
+
 # 2) 全量 index：完整枚举 + metadata 解析 + publication；SSD 全量内容哈希
 & $env:GALLERY_GO run ./tools/testlab/cmd/probe @common -scenario source-index `
   -storage-class ssd -results-out <测试根>/reports/<代号>-index.json
@@ -226,6 +232,10 @@ $common = @(
 - **`-max-wall-clock` 是硬边界**：扫描阶段超时会主动取消 Scan Job；`source-bounded` 随后的按需
   确认阶段另外以同一数值作为全部目标共享的总墙钟，而不是让每个媒体分别获得一份超时预算。确认阶段
   触顶时会取消当前 Job，并要求 30 秒内收敛终态；取消迟滞同样以失败报告，不会把被截断的运行说成跑完了。
+- **`-cancel-on-active-hash` 是显式取消门禁，默认关闭**：只允许与有墙钟上限的
+  `source-bounded` 组合。运行器必须先从公共 Job 列表观察到同 Source、本轮创建的
+  `hash/running`，才取消父 Scan，并要求父子 30 秒内都为 `cancelled`。若只在 discovery
+  阶段触顶，会安全清理父任务并以失败退出，不得冒充活动 Hash 证据。
 - **guard 内容哈希默认关闭**。`-guard-hash-content` 能发现「大小与 mtime 都不变的原地改写」，但必须
   同时给出 `-guard-max-hash-files` 或 `-guard-max-hash-bytes`，否则拒绝启动；触顶时报告写明
   `hashStoppedByBound`，不得当作已全量校验内容。

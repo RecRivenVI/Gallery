@@ -10,6 +10,8 @@ Gallery（画廊）是一个本地优先、只读来源、规则驱动的个人�
 > [EV-109](Documents/证据/验证记录.md) 已阻止恢复候选落位与旧库回滚双失败后继续创建空 control 库；[EV-110](Documents/证据/验证记录.md) 又以真实 Windows 便携 `galleryd` 证明候选落位 sharing violation 后可安全回滚并保留备份后事实。落位与回滚双失败的真实 OS 演练、磁盘满/中断、正式签名与 RC Gate 仍未完成。
 >
 > [EV-111](Documents/证据/验证记录.md) 已把同一 Source 的多个按需确认目标合并为一个兼容批量 Job，保留单媒体入口与每目标完整哈希。真实 Pawchive 12 目标最终以一个 Job 在 74.003 秒确认 12/12，全树 11,595 文件/2,353 目录前后零变化；这关闭逐目标重复完整 Source 处理，不代表活动 Hash 取消、全量扫描、HDD/SMB/NAS、正式性能或 RC Gate 已通过。
+
+> [EV-112](Documents/证据/验证记录.md) 已在全新 Pawchive 隔离运行中先从公共 Job API 观察到真实 `hash/running`，再取消父 Scan；父子任务在 4 ms 内被观察为 `cancelled`，完整 124,660,469,885-byte Source 前后增删改为 0。该结果关闭 Windows 本地 SSD/Pawchive 这一条活动 Hash 取消切片；HDD/SMB/NAS、publishing 临界点、崩溃恢复、全量与 RC Gate 仍未通过。
 >
 > [EV-67](Documents/证据/验证记录.md) 已把 15 类现有 primitive config 从整块 JSON 文本提升为同一权威 Schema 驱动的可视化字段；[EV-68](Documents/证据/验证记录.md) 又把当前草稿的 Dry Run、Explain 与 Trace 接入同一 Chromium/Firefox 真实后端链，并保持请求/响应精确数字无损；[EV-69](Documents/证据/验证记录.md) 再补齐以本地精确基线为准的按字段撤销；[EV-70](Documents/证据/验证记录.md) 继续以快捷区、递归 JSON 树和原始文本编辑参数 Schema、tests 与 extensions；[EV-71](Documents/证据/验证记录.md) 再证明真实单帧丢失形成 sequence gap 时会重取无关的 Library/Source HTTP snapshot；[EV-72](Documents/证据/验证记录.md) 证明从 UI 取消运行中的 Scan 会级联活动 Hash 且不发布半成品；[EV-73](Documents/证据/验证记录.md) 又证明真实强杀后的同 AppDirs 立即重启会保留 recovered Attempt、稳定错误和可见治理入口；[EV-74](Documents/证据/验证记录.md) 建立首批治理链，[EV-75](Documents/证据/验证记录.md) 再补齐 merge、完整 orphan decision/实体类型和已消费冲突，[EV-76](Documents/证据/验证记录.md) 则补齐普通 issue 三决定、真实生命周期、双标签页 sibling 冲突和 51 条游标分页，[EV-77](Documents/证据/验证记录.md) 再补齐三种剩余结构 action 的消费和孤儿重现。未知结构、legacy extension 和精确数字仍可往返，服务端校验/编译保持权威；Web Gate 与 pre-alpha 状态不变。
 >
@@ -84,7 +86,7 @@ Gallery（画廊）是一个本地优先、只读来源、规则驱动的个人�
 | Architecture Proof | ✅ | ✅（限定范围内） | 验证了强制中断后系统能自行恢复 | 数据库最终表结构仍未冻结（计划内安排） | 已完成 |
 | 阶段 1：领域和数据所有权 | ✅ | ✅（限定范围内） | 备份/恢复、目录库整体重建、作者合并等已通过验证 | 网络共享盘、底层文件身份识别留待以后阶段 | 已完成 |
 | 阶段 2：规则系统 | ✅（正确性层面） | ✅（限定范围内） | 规则生命周期、编译执行、参数/绑定和影响调度已形成闭环 | 正式性能/平台门禁留待后续 | 已完成 |
-| 阶段 3：扫描、任务与目录库 | ✅（代码与模拟数据层面） | 🟡（真实大盘抽样与 Pixiv 有界预检通过，全量未完成） | SSD/HDD 各完成几十万文件抽样；真实 Pixiv 370,712 文件完成 45 秒有界 `index`、取消后 201 ms 观察终态、同 AppDirs 恢复重跑与全树零写入 guard | Pixiv/真实盘全量扫描与哈希、活动 Hash/HDD/SMB/NAS 取消、正式性能门禁和网络共享盘尚未完成 | 完成全量运行准备，同时优先收口阶段 4 正式压力门禁 |
+| 阶段 3：扫描、任务与目录库 | ✅（代码与模拟数据层面） | 🟡（真实大盘抽样与三平台有界链通过，全量未完成） | 真实 Pixiv 370,712 文件完成 discovery 取消/恢复与零写入；Gank/Pawchive 确认成功；Pawchive 又完成公共 Job API 观察下的活动 Hash 取消 | Pixiv/真实盘全量扫描与哈希、HDD/SMB/NAS 取消、publishing/崩溃恢复、正式性能门禁和网络共享盘尚未完成 | 继续其它存储与异常切片，同时优先收口阶段 4 正式压力门禁 |
 | 阶段 4：查询与媒体 | 🟡（主线完成，部分参数未冻结） | 🟡（正确性收口完成，500,000 规模正式压力测试已执行） | 搜索、排序、分页、显式规则/有效封面、媒体读取、缩略图及用户/治理 Creator keyset 均有代码闭环；500,000 规模 Correctness/Cursor 通过，可断点续跑的精确全局变化 publication 执行器已具备，并以 100k 实测每 Work 两条 Creator 关系 3/3 | 正式 500,000 十来源 publication 多样本、并发/冷缓存与 Degradation 尚未执行；排序权重、Total、租约和兼容版本策略仍待 API Freeze | 分窗执行正式 500k 性能矩阵并冻结接口 |
 | 阶段 5：账户、安全与多客户端 | 🟠（代码与合成安全收尾已实现） | 🟡（Personal 与同机 LAN 安全管理补证，正式 Gate 未通过） | LAN 本地账户、Argon2id、Session、API Token、资源 Grant、匿名 Share 与 WS 防滥用已形成代码闭环并有真实浏览器管理链 | 真实 LAN 多设备、目标设备 Argon2id 与真实恶意输入资源门禁未完成 | 完成外部设备安全门禁 |
 | 阶段 6：Web/PWA 界面 | 🟠（页面代码基线与双入口设计重构已实现） | 🟡（隔离 Chromium/Firefox 真实后端 E2E 已建立；正式 Gate 未通过） | 同源 Web/PWA 覆盖浏览与管理页面；主要业务/治理链已有双浏览器真实后端持续 E2E；EV-78～EV-91 增加窄屏、弱网、双入口重构、媒体背压、Source 作者分页与授权 Job 历史连续加载 | 浏览器业务链仍使用合成 Source；真实存储浏览器链、其余完整弱网矩阵、真实移动/触控设备、人工屏幕阅读器与全页面可访问性未完成 | 扩大真实业务与可访问性门禁，不进入桌面壳 |
@@ -124,6 +126,8 @@ EV-107 在真实便携包中增加 Windows 首次轮换失败门禁：探针仅�
 EV-108 修复独立 Windows 规则转换器依赖外部 Go SDK 时区数据的问题，并把真实 Source 按需确认收紧为共享墙钟与取消后 30 秒终态要求。真实 schema v3 的十个平台配置成功转换；Gank 的 3 分钟有界 index 和 12/12 确认、Pawchive 的 2/2 确认均通过，全树 guard 前后零变化。Pawchive 扩到 12 个目标时，取消后父 Scan 仍未在 30 秒内进入终态，报告按失败退出；这暴露了每目标重复全 Source 处理和真实取消响应缺口，不构成完整规则语义、全量扫描、性能 Gate 或 RC。
 
 EV-111 保留上述历史失败并修复其重复执行根因：新增同源批量确认契约，把 1～200 个同 current publication 的唯一未确认媒体原子合并到一个目标化 Scan Job；跨 Source、重复、已确认或历史快照整批拒绝，单媒体 API/用户交互不变。真实 Pawchive 12 目标连续两轮 11 findings/0 failures，最终轮 index 91.083 秒、一个 Job 确认 12/12 用时 74.003 秒，全树 guard 增删改均 0。成功链未触发取消，因此真实活动 Hash 取消与其它存储门禁仍未关闭。
+
+EV-112 随后收口该单本地 SSD 取消切片：新模式默认关闭，且必须先从公共 Job API 观察到同 Source、本轮 `hash/running`，才能取消父 Scan；未观察到 Hash 则清理后失败。全新 Pawchive 隔离运行 13 findings/0 failures，index 91.798 秒，确认阶段 66.889 秒观察活动 Hash，取消后 4 ms 观察父子都为 cancelled，全树 124,660,469,885 bytes 零变化。HDD/SMB/NAS、publishing 临界点、真实存储崩溃恢复与全量 Gate 仍未完成。
 
 EV-109 修复恢复替换中的 fail-open：候选落位失败后若旧库也无法回滚，旧实现仍继续 bootstrap，可能在缺失路径创建空 `control.db`。现在 WAL/SHM 清理、候选落位与回滚错误都进入同一判定；旧库已安全回到原路径时记录失败、消费 pending 并继续使用旧库，连续性未知时则保留轮换副本和 pending、记录完整根因并返回 `RESTORE_FAILED` 阻止启动。确定性 Windows 单元测试、WSL2 race 与根级检查通过；真实 Windows 落位 sharing violation、磁盘满、ACL/断电、正式签名及 RC Gate 仍待验证。
 
