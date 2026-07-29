@@ -81,7 +81,7 @@ Gallery（画廊）是一个本地优先、只读来源、规则驱动的个人�
 | 阶段 1：领域和数据所有权 | ✅ | ✅（限定范围内） | 备份/恢复、目录库整体重建、作者合并等已通过验证 | 网络共享盘、底层文件身份识别留待以后阶段 | 已完成 |
 | 阶段 2：规则系统 | ✅（正确性层面） | ✅（限定范围内） | 规则生命周期、编译执行、参数/绑定和影响调度已形成闭环 | 正式性能/平台门禁留待后续 | 已完成 |
 | 阶段 3：扫描、任务与目录库 | ✅（代码与模拟数据层面） | 🟡（真实大盘抽样与 Pixiv 有界预检通过，全量未完成） | SSD/HDD 各完成几十万文件抽样；真实 Pixiv 370,712 文件完成 45 秒有界 `index`、取消后 201 ms 观察终态、同 AppDirs 恢复重跑与全树零写入 guard | Pixiv/真实盘全量扫描与哈希、活动 Hash/HDD/SMB/NAS 取消、正式性能门禁和网络共享盘尚未完成 | 完成全量运行准备，同时优先收口阶段 4 正式压力门禁 |
-| 阶段 4：查询与媒体 | 🟡（主线完成，部分参数未冻结） | 🟡（正确性收口完成，500,000 规模正式压力测试已执行） | 搜索、排序、分页、显式规则/有效封面、媒体读取、缩略图及用户/治理 Creator keyset 均有代码闭环；500,000 规模 Correctness/Cursor 通过，精确全局变化 publication 执行器已具备 | 正式 500,000 十来源 publication 多样本、并发/冷缓存与 Degradation 尚未执行；排序权重、Total、租约和兼容版本策略仍待 API Freeze | 执行性能矩阵并冻结接口 |
+| 阶段 4：查询与媒体 | 🟡（主线完成，部分参数未冻结） | 🟡（正确性收口完成，500,000 规模正式压力测试已执行） | 搜索、排序、分页、显式规则/有效封面、媒体读取、缩略图及用户/治理 Creator keyset 均有代码闭环；500,000 规模 Correctness/Cursor 通过，可断点续跑的精确全局变化 publication 执行器已具备并真正覆盖每 Work 两条 Creator 关系 | 纠正后 100k 容量预检及正式 500,000 十来源 publication 多样本、并发/冷缓存与 Degradation 尚未执行；排序权重、Total、租约和兼容版本策略仍待 API Freeze | 先执行纠正后 100k 容量预检，再执行性能矩阵并冻结接口 |
 | 阶段 5：账户、安全与多客户端 | 🟠（代码与合成安全收尾已实现） | 🟡（Personal 与同机 LAN 安全管理补证，正式 Gate 未通过） | LAN 本地账户、Argon2id、Session、API Token、资源 Grant、匿名 Share 与 WS 防滥用已形成代码闭环并有真实浏览器管理链 | 真实 LAN 多设备、目标设备 Argon2id 与真实恶意输入资源门禁未完成 | 完成外部设备安全门禁 |
 | 阶段 6：Web/PWA 界面 | 🟠（页面代码基线与双入口设计重构已实现） | 🟡（隔离 Chromium/Firefox 真实后端 E2E 已建立；正式 Gate 未通过） | 同源 Web/PWA 覆盖浏览与管理页面；主要业务/治理链已有双浏览器真实后端持续 E2E；EV-78～EV-91 增加窄屏、弱网、双入口重构、媒体背压、Source 作者分页与授权 Job 历史连续加载 | 浏览器业务链仍使用合成 Source；真实存储浏览器链、其余完整弱网矩阵、真实移动/触控设备、人工屏幕阅读器与全页面可访问性未完成 | 扩大真实业务与可访问性门禁，不进入桌面壳 |
 | 阶段 7：平台适配与正式发行 | ⏳ | ⛔ | 无 | 安装包、签名、跨平台支持均未开始 | 最后阶段 |
@@ -103,7 +103,7 @@ EV-93 已定位并修复上述取消延迟的确定性根因：Scheduler 虽已�
 
 EV-94 已完成真实补证：首轮 Scan/Attempt 在 45 秒边界同秒 cancelled、无 publication，取消 POST 后 201 ms 即观察终态；随后同 AppDirs 恢复重跑 531.695 秒完整通过，7 findings/0 failures，`bounded-index-scan=45,397 ms`，最终全树 guard 零变化。该结论仅覆盖 Windows 本地 SSD/Pixiv/index discovery，不代表活动 Hash、HDD/SMB/NAS、全量扫描/哈希/发布或 RC Gate。
 
-EV-96 已建立正式 publication 性能执行器：十 Source 加权语料可精确测量全局 1%/10%/50% 变化，覆盖生产 Store 的完整候选、验证、发布、GC/Checkpoint、历史快照与空间报告；1,000 Work 低资源预检 6/6 通过。正式 500,000 多样本、并发/冷缓存与 Degradation 仍未执行，因此 Reference Performance/API Freeze Gate 继续保持未通过。
+EV-96 已建立 publication 性能执行器：十 Source 加权语料可精确测量全局 1%/10%/50% 变化，覆盖生产 Store 的完整候选、验证、发布、GC/Checkpoint、历史快照与空间报告。但初版虽声明每 Work 两条 Creator 关系，实际只写入一条；旧 1,000/100,000 Work 数字因此只保留为容量与工具证据。EV-97 已真正实装并核对每 Work 两条关系，增加 fail-closed 原子断点续跑，纠正后 1,000 Work 低资源预检 6/6 通过。纠正后 100k 容量预检及正式 500,000 多样本、并发/冷缓存与 Degradation 仍未执行，因此 Reference Performance/API Freeze Gate 继续保持未通过。
 
 详细依据见 [PROJECT_STATUS.md](./PROJECT_STATUS.md)。
 
