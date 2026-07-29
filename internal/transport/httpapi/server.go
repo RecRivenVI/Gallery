@@ -1606,15 +1606,13 @@ func (s *Server) listJobs(w http.ResponseWriter, r *http.Request) {
 		s.writeRequestError(w, err)
 		return
 	}
-	statuses := []jobs.Status{jobs.StatusQueued, jobs.StatusRunning, jobs.StatusPublishing, jobs.StatusCancelling,
-		jobs.StatusCompleted, jobs.StatusFailed, jobs.StatusCancelled, jobs.StatusSuperseded, jobs.StatusNeedsRepair}
+	status := jobs.Status("")
 	if raw := strings.TrimSpace(r.URL.Query().Get("status")); raw != "" {
-		statuses = []jobs.Status{jobs.Status(raw)}
-	}
-	items, err := s.jobs.ListByStatuses(r.Context(), statuses...)
-	if err != nil {
-		s.writeRequestError(w, err)
-		return
+		status = jobs.Status(raw)
+		if !jobs.IsPublicStatus(status) {
+			s.writeRequestError(w, fault.WithField(fault.CodeValidation, "status", nil))
+			return
+		}
 	}
 	limit := 100
 	if raw := r.URL.Query().Get("limit"); raw != "" {
@@ -1625,20 +1623,63 @@ func (s *Server) listJobs(w http.ResponseWriter, r *http.Request) {
 		}
 		limit = parsed
 	}
-	result := api.JobListResponse{Jobs: make([]api.Job, 0, min(limit, len(items)))}
-	for _, item := range items {
-		if err := s.authorizeJob(r, session, item, false); err != nil {
-			var structured *fault.Error
-			if errors.As(err, &structured) && structured.Code == fault.CodeForbidden {
-				continue
-			}
+	fingerprint := jobListFingerprint(status, limit, session)
+	var anchor *jobs.PageAnchor
+	if raw := r.URL.Query().Get("cursor"); raw != "" {
+		decoded, err := decodeJobListCursor(raw)
+		if err != nil {
 			s.writeRequestError(w, err)
 			return
 		}
-		result.Jobs = append(result.Jobs, jobDTO(item))
-		if len(result.Jobs) == limit {
+		if decoded.QueryFingerprint != fingerprint {
+			s.writeRequestError(w, fault.New(fault.CodeCursorExpired, true, nil))
+			return
+		}
+		anchor = &jobs.PageAnchor{CreatedAt: time.Unix(decoded.CreatedAt, 0).UTC(), JobID: decoded.JobID}
+	}
+
+	// 授权必须发生在响应 LIMIT 之前。候选按固定小批量读取；无权行只推进本次内部
+	// 扫描锚点，不进入外部 cursor，也不会让后续有权行永久跳过。
+	const scanChunk = 200
+	visible := make([]jobs.Job, 0, limit+1)
+	scanAnchor := anchor
+	for len(visible) < limit+1 {
+		items, err := s.jobs.ListPage(r.Context(), jobs.ListPageRequest{Status: status, Before: scanAnchor, Limit: scanChunk})
+		if err != nil {
+			s.writeRequestError(w, err)
+			return
+		}
+		for _, item := range items {
+			scanAnchor = &jobs.PageAnchor{CreatedAt: item.CreatedAt, JobID: item.ID}
+			if err := s.authorizeJob(r, session, item, false); err != nil {
+				var structured *fault.Error
+				if errors.As(err, &structured) && structured.Code == fault.CodeForbidden {
+					continue
+				}
+				s.writeRequestError(w, err)
+				return
+			}
+			visible = append(visible, item)
+			if len(visible) == limit+1 {
+				break
+			}
+		}
+		if len(items) < scanChunk {
 			break
 		}
+	}
+	result := api.JobListResponse{Jobs: make([]api.Job, 0, min(limit, len(visible)))}
+	for _, item := range visible[:min(limit, len(visible))] {
+		result.Jobs = append(result.Jobs, jobDTO(item))
+	}
+	if len(visible) > limit {
+		last := visible[limit-1]
+		next, err := encodeJobListCursor(jobListCursor{Version: jobListCursorVersion, QueryFingerprint: fingerprint, CreatedAt: last.CreatedAt.Unix(), JobID: last.ID})
+		if err != nil {
+			s.writeRequestError(w, err)
+			return
+		}
+		result.NextCursor = &next
 	}
 	writeJSON(w, http.StatusOK, result)
 }

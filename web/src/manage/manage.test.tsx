@@ -540,6 +540,45 @@ describe('capability 不能当作授权判断', () => {
 /* ————————————————————————————— 2. 任务状态以 HTTP 快照为准 ————————————————————————————— */
 
 describe('任务状态的事实源', () => {
+  it('按新到旧连续载入任务，追加失败保留既有页并可原地重试', async () => {
+    let olderAttempts = 0;
+    const seen: Array<{ status: string | null; cursor: string | null }> = [];
+    route('GET /api/v1/sources', () => jsonResponse({ sources: [] }));
+    route('GET /api/v1/jobs', (_request, url) => {
+      const status = url.searchParams.get('status');
+      const cursor = url.searchParams.get('cursor');
+      seen.push({ status, cursor });
+      if (status === 'failed') {
+        return jsonResponse({ jobs: [job({ id: 'job_FAILED', status: 'failed' })] });
+      }
+      if (cursor === null) {
+        return jsonResponse({ jobs: [job({ id: 'job_NEWEST' })], nextCursor: 'cursor-older' });
+      }
+      olderAttempts += 1;
+      if (olderAttempts === 1) return faultResponse('VALIDATION_ERROR', 400, 'corr-older');
+      return jsonResponse({ jobs: [job({ id: 'job_OLDER', createdAt: '2026-07-26T01:00:00Z' })] });
+    });
+
+    renderManage('/scans');
+    await screen.findByRole('link', { name: 'job_NEWEST' });
+    expect(screen.getByText('已按新到旧载入 1 条（还有更早任务）。')).toBeInTheDocument();
+
+    await userEvent.click(screen.getByRole('button', { name: '加载更早任务' }));
+    await screen.findByText('更早的任务暂时未能载入');
+    expect(screen.getByRole('link', { name: 'job_NEWEST' })).toBeInTheDocument();
+    expect(screen.queryByRole('link', { name: 'job_OLDER' })).not.toBeInTheDocument();
+
+    await userEvent.click(screen.getByRole('button', { name: '重试加载更早任务' }));
+    await screen.findByRole('link', { name: 'job_OLDER' });
+    expect(screen.getByText('已按新到旧载入 2 条（已到末页）。')).toBeInTheDocument();
+    expect(seen.filter((entry) => entry.cursor === 'cursor-older')).toHaveLength(2);
+
+    await selectOption(/状态/, '已失败');
+    await screen.findByRole('link', { name: 'job_FAILED' });
+    expect(seen.some((entry) => entry.status === 'failed' && entry.cursor === null)).toBe(true);
+    expect(screen.queryByRole('link', { name: 'job_NEWEST' })).not.toBeInTheDocument();
+  });
+
   it('WebSocket 的 job.completed 只触发重新拉取快照，不直接改变本地状态', async () => {
     let jobsFetches = 0;
     route('GET /api/v1/sources', () => jsonResponse({ sources: [SOURCE] }));

@@ -1098,7 +1098,7 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        /** 按持久状态读取 Job snapshot */
+        /** 按公开状态和不可变创建时间分页读取 Job snapshot */
         get: operations["listJobs"];
         put?: never;
         post?: never;
@@ -1912,6 +1912,8 @@ export interface components {
         };
         JobListResponse: {
             jobs: components["schemas"]["Job"][];
+            /** @description 继续读取更早 Job 的 newest-first keyset cursor；live 列表不承诺跨写入可重复读 */
+            nextCursor?: string;
         };
         JobAttempt: {
             attemptId: string;
@@ -5347,8 +5349,9 @@ export interface operations {
     listJobs: {
         parameters: {
             query?: {
-                status?: string;
+                status?: "queued" | "running" | "publishing" | "cancelling" | "completed" | "failed" | "cancelled" | "superseded" | "needs_repair";
                 limit?: number;
+                cursor?: string;
             };
             header?: never;
             path?: never;
@@ -5365,8 +5368,10 @@ export interface operations {
                     "application/json": components["schemas"]["JobListResponse"];
                 };
             };
+            400: components["responses"]["ValidationError"];
             401: components["responses"]["UnauthenticatedError"];
             403: components["responses"]["ForbiddenError"];
+            409: components["responses"]["ConflictError"];
         };
     };
     cancelJob: {

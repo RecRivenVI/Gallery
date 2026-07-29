@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"path/filepath"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -127,6 +128,110 @@ func TestPersistentJobTransitionsAndActiveScanConflict(t *testing.T) {
 	structured = nil
 	if !errors.As(err, &structured) || structured.Code != fault.CodeJobStateConflict {
 		t.Fatalf("不同 publication 重复完成未拒绝: %v", err)
+	}
+}
+
+func TestListPageUsesNewestFirstKeysetAndExactDerivedStatuses(t *testing.T) {
+	ctx := context.Background()
+	dirs := appdirs.UnderRoot(filepath.Join(t.TempDir(), "app"))
+	if err := dirs.Ensure(filesystem.OS{}); err != nil {
+		t.Fatal(err)
+	}
+	store, err := storage.Open(ctx, dirs)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	clk := &mutableClock{now: time.Date(2026, 7, 29, 9, 0, 0, 0, time.UTC)}
+	jobStore, err := jobs.NewStore(store.Control.SQL(), clk, identity.NewGenerator(clk))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	create := func(jobType string) jobs.Job {
+		t.Helper()
+		item, err := jobStore.CreateWithOptions(ctx, jobType, "", "owner", jobs.CreateOptions{})
+		if err != nil {
+			t.Fatal(err)
+		}
+		clk.Advance(time.Second)
+		return item
+	}
+	cancelled := create("hash")
+	if _, err := jobStore.RequestCancel(ctx, cancelled.ID); err != nil {
+		t.Fatal(err)
+	}
+	superseded := create("overlay_projection")
+	if _, err := jobStore.CancelOverlayAsSuperseded(ctx, superseded.ID); err != nil {
+		t.Fatal(err)
+	}
+	cancelling := create("hash")
+	if _, err := jobStore.StartStage(ctx, cancelling.ID, "hashing"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := jobStore.RequestCancel(ctx, cancelling.ID); err != nil {
+		t.Fatal(err)
+	}
+	queued := create("hash")
+
+	first, err := jobStore.ListPage(ctx, jobs.ListPageRequest{Limit: 2})
+	if err != nil || len(first) != 2 || first[0].ID != queued.ID || first[1].ID != cancelling.ID {
+		t.Fatalf("第一页不是 newest-first 或派生状态错误: %+v err=%v", first, err)
+	}
+	second, err := jobStore.ListPage(ctx, jobs.ListPageRequest{
+		Limit:  2,
+		Before: &jobs.PageAnchor{CreatedAt: first[1].CreatedAt, JobID: first[1].ID},
+	})
+	if err != nil || len(second) != 2 || second[0].ID != superseded.ID || second[1].ID != cancelled.ID {
+		t.Fatalf("第二页跳项、重复或顺序错误: %+v err=%v", second, err)
+	}
+	for _, test := range []struct {
+		status jobs.Status
+		want   string
+	}{
+		{jobs.StatusCancelling, cancelling.ID},
+		{jobs.StatusSuperseded, superseded.ID},
+		{jobs.StatusCancelled, cancelled.ID},
+	} {
+		page, err := jobStore.ListPage(ctx, jobs.ListPageRequest{Status: test.status, Limit: 10})
+		if err != nil || len(page) != 1 || page[0].ID != test.want || page[0].Status != test.status {
+			t.Fatalf("状态 %s 未精确过滤: %+v err=%v", test.status, page, err)
+		}
+	}
+	if page, err := jobStore.ListPage(ctx, jobs.ListPageRequest{Status: jobs.StatusRunning, Limit: 10}); err != nil || len(page) != 0 {
+		t.Fatalf("cancelling 被错误计入 running: %+v err=%v", page, err)
+	}
+	if _, err := jobStore.ListPage(ctx, jobs.ListPageRequest{Status: "unknown", Limit: 10}); err == nil {
+		t.Fatal("未知公开状态未被拒绝")
+	}
+	for _, plan := range []struct {
+		query string
+		args  []any
+		index string
+	}{
+		{"SELECT job_id FROM jobs ORDER BY created_at DESC, job_id DESC LIMIT ?", []any{10}, "jobs_created_page_idx"},
+		{"SELECT job_id FROM jobs WHERE status=? ORDER BY created_at DESC, job_id DESC LIMIT ?", []any{"completed", 10}, "jobs_status_created_page_idx"},
+	} {
+		rows, err := store.Control.SQL().QueryContext(ctx, "EXPLAIN QUERY PLAN "+plan.query, plan.args...)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var details []string
+		for rows.Next() {
+			var id, parent, unused int
+			var detail string
+			if err := rows.Scan(&id, &parent, &unused, &detail); err != nil {
+				_ = rows.Close()
+				t.Fatal(err)
+			}
+			details = append(details, detail)
+		}
+		if err := errors.Join(rows.Err(), rows.Close()); err != nil {
+			t.Fatal(err)
+		}
+		if !strings.Contains(strings.Join(details, "\n"), plan.index) {
+			t.Fatalf("Job 分页查询未使用 %s: %v", plan.index, details)
+		}
 	}
 }
 

@@ -30,7 +30,7 @@ import {
   formatDateTime
 } from '../ui';
 
-/** 概览汇总所用的任务条数。契约没有游标，只能靠 limit 取一段近期历史。 */
+/** 概览只汇总 newest-first 第一页；完整历史由任务页按需续取。 */
 const OVERVIEW_JOB_LIMIT = 100;
 
 function countByStatus(jobs: readonly Job[]): Map<Job['status'], number> {
@@ -124,11 +124,11 @@ export function OverviewPage() {
 
         <Section
           title="最近任务"
-          description={`基于最近 ${OVERVIEW_JOB_LIMIT} 条任务快照的计数。契约没有游标，更早的历史无法在此统计。`}
+          description={`基于 newest-first 第一页最多 ${OVERVIEW_JOB_LIMIT} 条任务快照的计数；完整历史可在任务页继续载入。`}
         >
           <AsyncPanel query={jobs}>
             {(data) => {
-              const counts = countByStatus(data.jobs);
+              const counts = countByStatus(data.pages[0]?.jobs ?? []);
               const present = JOB_STATUS_ORDER.filter((status) => (counts.get(status) ?? 0) > 0);
               if (present.length === 0) {
                 return <p className="manage-section__description">这一段快照里没有任何任务。</p>;

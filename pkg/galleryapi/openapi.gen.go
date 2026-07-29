@@ -2019,25 +2019,25 @@ func (e ListBindingIssuesParamsEntityType) Valid() bool {
 
 // Defines values for ListBindingIssuesParamsStatus.
 const (
-	Dismissed  ListBindingIssuesParamsStatus = "dismissed"
-	Open       ListBindingIssuesParamsStatus = "open"
-	Resolved   ListBindingIssuesParamsStatus = "resolved"
-	Stale      ListBindingIssuesParamsStatus = "stale"
-	Superseded ListBindingIssuesParamsStatus = "superseded"
+	ListBindingIssuesParamsStatusDismissed  ListBindingIssuesParamsStatus = "dismissed"
+	ListBindingIssuesParamsStatusOpen       ListBindingIssuesParamsStatus = "open"
+	ListBindingIssuesParamsStatusResolved   ListBindingIssuesParamsStatus = "resolved"
+	ListBindingIssuesParamsStatusStale      ListBindingIssuesParamsStatus = "stale"
+	ListBindingIssuesParamsStatusSuperseded ListBindingIssuesParamsStatus = "superseded"
 )
 
 // Valid indicates whether the value is a known member of the ListBindingIssuesParamsStatus enum.
 func (e ListBindingIssuesParamsStatus) Valid() bool {
 	switch e {
-	case Dismissed:
+	case ListBindingIssuesParamsStatusDismissed:
 		return true
-	case Open:
+	case ListBindingIssuesParamsStatusOpen:
 		return true
-	case Resolved:
+	case ListBindingIssuesParamsStatusResolved:
 		return true
-	case Stale:
+	case ListBindingIssuesParamsStatusStale:
 		return true
-	case Superseded:
+	case ListBindingIssuesParamsStatusSuperseded:
 		return true
 	default:
 		return false
@@ -2056,6 +2056,45 @@ func (e ListCreatorsParamsSort) Valid() bool {
 	case ListCreatorsParamsSortNameAsc:
 		return true
 	case ListCreatorsParamsSortNameDesc:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for ListJobsParamsStatus.
+const (
+	ListJobsParamsStatusCancelled   ListJobsParamsStatus = "cancelled"
+	ListJobsParamsStatusCancelling  ListJobsParamsStatus = "cancelling"
+	ListJobsParamsStatusCompleted   ListJobsParamsStatus = "completed"
+	ListJobsParamsStatusFailed      ListJobsParamsStatus = "failed"
+	ListJobsParamsStatusNeedsRepair ListJobsParamsStatus = "needs_repair"
+	ListJobsParamsStatusPublishing  ListJobsParamsStatus = "publishing"
+	ListJobsParamsStatusQueued      ListJobsParamsStatus = "queued"
+	ListJobsParamsStatusRunning     ListJobsParamsStatus = "running"
+	ListJobsParamsStatusSuperseded  ListJobsParamsStatus = "superseded"
+)
+
+// Valid indicates whether the value is a known member of the ListJobsParamsStatus enum.
+func (e ListJobsParamsStatus) Valid() bool {
+	switch e {
+	case ListJobsParamsStatusCancelled:
+		return true
+	case ListJobsParamsStatusCancelling:
+		return true
+	case ListJobsParamsStatusCompleted:
+		return true
+	case ListJobsParamsStatusFailed:
+		return true
+	case ListJobsParamsStatusNeedsRepair:
+		return true
+	case ListJobsParamsStatusPublishing:
+		return true
+	case ListJobsParamsStatusQueued:
+		return true
+	case ListJobsParamsStatusRunning:
+		return true
+	case ListJobsParamsStatusSuperseded:
 		return true
 	default:
 		return false
@@ -2804,6 +2843,9 @@ type JobId = string
 // JobListResponse defines model for JobListResponse.
 type JobListResponse struct {
 	Jobs []Job `json:"jobs"`
+
+	// NextCursor 继续读取更早 Job 的 newest-first keyset cursor；live 列表不承诺跨写入可重复读
+	NextCursor *string `json:"nextCursor,omitempty"`
 }
 
 // LANOwnerInitializeRequest defines model for LANOwnerInitializeRequest.
@@ -4176,9 +4218,13 @@ type ListFileRootEntriesParams struct {
 
 // ListJobsParams defines parameters for ListJobs.
 type ListJobsParams struct {
-	Status *string `form:"status,omitempty" json:"status,omitempty"`
-	Limit  *int    `form:"limit,omitempty" json:"limit,omitempty"`
+	Status *ListJobsParamsStatus `form:"status,omitempty" json:"status,omitempty"`
+	Limit  *int                  `form:"limit,omitempty" json:"limit,omitempty"`
+	Cursor *string               `form:"cursor,omitempty" json:"cursor,omitempty"`
 }
+
+// ListJobsParamsStatus defines parameters for ListJobs.
+type ListJobsParamsStatus string
 
 // CancelJobParams defines parameters for CancelJob.
 type CancelJobParams struct {
@@ -9778,6 +9824,18 @@ func NewListJobsRequest(server string, params *ListJobsParams) (*http.Request, e
 		if params.Limit != nil {
 
 			if queryFrag, err := runtime.StyleParamWithOptions("form", true, "limit", *params.Limit, runtime.StyleParamOptions{ParamLocation: runtime.ParamLocationQuery, Type: "integer", Format: ""}); err != nil {
+				return nil, err
+			} else {
+				for _, qp := range strings.Split(queryFrag, "&") {
+					rawQueryFragments = append(rawQueryFragments, qp)
+				}
+			}
+
+		}
+
+		if params.Cursor != nil {
+
+			if queryFrag, err := runtime.StyleParamWithOptions("form", true, "cursor", *params.Cursor, runtime.StyleParamOptions{ParamLocation: runtime.ParamLocationQuery, Type: "string", Format: ""}); err != nil {
 				return nil, err
 			} else {
 				for _, qp := range strings.Split(queryFrag, "&") {
@@ -15993,8 +16051,10 @@ type ListJobsResponse struct {
 	Body         []byte
 	HTTPResponse *http.Response
 	JSON200      *JobListResponse
+	JSON400      *ValidationError
 	JSON401      *UnauthenticatedError
 	JSON403      *ForbiddenError
+	JSON409      *ConflictError
 }
 
 // Status returns HTTPResponse.Status
@@ -22007,6 +22067,13 @@ func ParseListJobsResponse(rsp *http.Response) (*ListJobsResponse, error) {
 		}
 		response.JSON200 = &dest
 
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 400:
+		var dest ValidationError
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON400 = &dest
+
 	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 401:
 		var dest UnauthenticatedError
 		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
@@ -22020,6 +22087,13 @@ func ParseListJobsResponse(rsp *http.Response) (*ListJobsResponse, error) {
 			return nil, err
 		}
 		response.JSON403 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 409:
+		var dest ConflictError
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON409 = &dest
 
 	}
 

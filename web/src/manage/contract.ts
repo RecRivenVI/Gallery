@@ -51,14 +51,6 @@ export const CONTRACT_NOTES: readonly ContractNote[] = [
     gap: false
   },
   {
-    id: 'jobs-no-cursor',
-    area: 'jobs',
-    title: '任务列表只有 limit，没有游标',
-    detail:
-      'GET /api/v1/jobs 只接受 status 与 limit，契约里没有 cursor，因此更早的任务历史无法在此翻页。这是契约限制，界面不会伪造分页控件。需要更长历史时只能提高 limit。',
-    gap: true
-  },
-  {
     id: 'jobs-derived-authorization',
     area: 'jobs',
     title: '任务的授权是派生的，没有 jobs.cancel / jobs.retry',

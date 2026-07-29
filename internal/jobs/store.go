@@ -118,6 +118,19 @@ type CreateOptions struct {
 	RetryPolicyJSON []byte
 }
 
+// ListPageRequest 描述面向 HTTP 历史浏览的不可变创建时间 keyset 页。
+// Status 为空表示全部公开状态；Before 为空表示第一页。
+type ListPageRequest struct {
+	Status Status
+	Before *PageAnchor
+	Limit  int
+}
+
+type PageAnchor struct {
+	CreatedAt time.Time
+	JobID     string
+}
+
 // RuleExecutionSnapshot 是扫描 Job 入队时冻结的规则执行输入。运行期间不得重新读取
 // SourceRuleBinding 作为事实来源，否则用户修改 Binding 会让同一个 Job 跨代执行。
 type RuleExecutionSnapshot struct {
@@ -527,16 +540,17 @@ func (s *Store) Get(ctx context.Context, id string) (Job, error) {
 	if _, err := domain.ParseID(domain.IDJob, id); err != nil {
 		return Job{}, fault.New(fault.CodeNotFound, false, nil)
 	}
-	var job Job
-	var sourceID, issueCode, publicationID, retryOf, targetCatalogID, basePublicationID sql.NullString
-	var ruleSemanticHash, ruleParameters, ruleParametersHash, ruleIRHash, compilerVersion, celProfileVersion, extensionRegistryVersion sql.NullString
-	var resourceClass, targetResource, requestJSON, idempotencyKey, retryPolicyJSON, leaseOwner, resultJSON, retryRequestedBy sql.NullString
-	var progressPhase, progressUnit, progressMessage sql.NullString
-	var startedAt, finishedAt, targetWatermark, cancelRequestedAt, heartbeatAt, leaseExpiresAt, lastErrorAt, nextAttemptAt sql.NullInt64
-	var maxRetries, cancelRequested, failureRetryable, progressEstimated sql.NullInt64
-	var progressBytes, progressEntities sql.NullInt64
-	var createdAt, updatedAt int64
-	err := s.db.QueryRowContext(ctx, `
+	job, err := scanJob(s.db.QueryRowContext(ctx, jobSelect+" WHERE job_id = ?", id))
+	if errors.Is(err, sql.ErrNoRows) {
+		return Job{}, fault.New(fault.CodeNotFound, false, nil)
+	}
+	if err != nil {
+		return Job{}, fault.New(fault.CodeInternal, true, err)
+	}
+	return job, nil
+}
+
+const jobSelect = `
 SELECT job_id, job_type, source_id, created_by, status, stage,
        progress_current, progress_total, progress_sequence, issue_code, publication_id,
        retry_of, attempt, created_at, started_at, finished_at, updated_at,
@@ -547,7 +561,23 @@ SELECT job_id, job_type, source_id, created_by, status, stage,
        cancel_requested, cancel_requested_at, heartbeat_at, lease_owner, lease_expires_at, result_json,
        failure_retryable, progress_phase, progress_unit, progress_message, progress_bytes, progress_entities,
        progress_estimated, last_error_at, next_attempt_at, retry_requested_by
-FROM jobs WHERE job_id = ?`, id).Scan(
+FROM jobs`
+
+type rowScanner interface {
+	Scan(dest ...any) error
+}
+
+func scanJob(row rowScanner) (Job, error) {
+	var job Job
+	var sourceID, issueCode, publicationID, retryOf, targetCatalogID, basePublicationID sql.NullString
+	var ruleSemanticHash, ruleParameters, ruleParametersHash, ruleIRHash, compilerVersion, celProfileVersion, extensionRegistryVersion sql.NullString
+	var resourceClass, targetResource, requestJSON, idempotencyKey, retryPolicyJSON, leaseOwner, resultJSON, retryRequestedBy sql.NullString
+	var progressPhase, progressUnit, progressMessage sql.NullString
+	var startedAt, finishedAt, targetWatermark, cancelRequestedAt, heartbeatAt, leaseExpiresAt, lastErrorAt, nextAttemptAt sql.NullInt64
+	var maxRetries, cancelRequested, failureRetryable, progressEstimated sql.NullInt64
+	var progressBytes, progressEntities sql.NullInt64
+	var createdAt, updatedAt int64
+	err := row.Scan(
 		&job.ID, &job.Type, &sourceID, &job.CreatedBy, &job.Status, &job.Stage,
 		&job.ProgressCurrent, &job.ProgressTotal, &job.ProgressSequence, &issueCode, &publicationID,
 		&retryOf, &job.Attempt, &createdAt, &startedAt, &finishedAt, &updatedAt,
@@ -558,11 +588,8 @@ FROM jobs WHERE job_id = ?`, id).Scan(
 		&failureRetryable, &progressPhase, &progressUnit, &progressMessage, &progressBytes, &progressEntities,
 		&progressEstimated, &lastErrorAt, &nextAttemptAt, &retryRequestedBy,
 	)
-	if errors.Is(err, sql.ErrNoRows) {
-		return Job{}, fault.New(fault.CodeNotFound, false, nil)
-	}
 	if err != nil {
-		return Job{}, fault.New(fault.CodeInternal, true, err)
+		return Job{}, err
 	}
 	rawStatus := job.Status
 	if (rawStatus == StatusRunning || rawStatus == StatusPublishing) && cancelRequested.Int64 != 0 {
@@ -1381,35 +1408,27 @@ func (s *Store) ListByStatuses(ctx context.Context, statuses ...Status) ([]Job, 
 	if len(statuses) == 0 {
 		return nil, nil
 	}
-	rows, err := s.db.QueryContext(ctx, "SELECT job_id FROM jobs ORDER BY created_at, job_id")
+	rows, err := s.db.QueryContext(ctx, jobSelect+" ORDER BY created_at, job_id")
 	if err != nil {
 		return nil, fault.New(fault.CodeInternal, true, err)
 	}
 	defer rows.Close()
-	var ids []string
-	for rows.Next() {
-		var id string
-		if err := rows.Scan(&id); err != nil {
-			return nil, fault.New(fault.CodeInternal, true, err)
-		}
-		ids = append(ids, id)
-	}
-	if err := rows.Err(); err != nil {
-		return nil, fault.New(fault.CodeInternal, true, err)
-	}
 	wanted := make(map[Status]struct{}, len(statuses))
 	for _, status := range statuses {
 		wanted[status] = struct{}{}
 	}
-	result := make([]Job, 0, len(ids))
-	for _, id := range ids {
-		job, err := s.Get(ctx, id)
+	result := make([]Job, 0)
+	for rows.Next() {
+		job, err := scanJob(rows)
 		if err != nil {
-			return nil, err
+			return nil, fault.New(fault.CodeInternal, true, err)
 		}
 		if _, ok := wanted[job.Status]; ok {
 			result = append(result, job)
 		}
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fault.New(fault.CodeInternal, true, err)
 	}
 	return result, nil
 }

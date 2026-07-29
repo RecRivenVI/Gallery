@@ -181,19 +181,27 @@ export function useCreateSource(): UseMutationResult<Source, unknown, CreateSour
 /**
  * 任务快照。
  *
- * `GET /api/v1/jobs` 只接受 status 与 limit——**契约里没有 cursor**，因此更早的历史无法翻页。
- * 这是任务状态的**权威**来源：WebSocket 的 job.* 事件只是「去重新问一次」的提示。
+ * newest-first keyset 页。cursor 绑定状态、页大小与当前认证主体；WebSocket 的 job.*
+ * 事件只是「去重新问一次」的提示，HTTP snapshot 仍是任务状态的权威来源。
  */
-export function useJobs(status: string | null, limit: number) {
-  return useQuery({
+export function useJobs(status: JobStatus | null, limit: number) {
+  return useInfiniteQuery({
     queryKey: ['jobs', 'list', status, limit],
-    queryFn: async ({ signal }) =>
+    initialPageParam: undefined as string | undefined,
+    queryFn: async ({ pageParam, signal }) =>
       expectData(
         await api.GET('/api/v1/jobs', {
-          params: { query: status === null ? { limit } : { status, limit } },
+          params: {
+            query: {
+              ...(status === null ? {} : { status }),
+              limit,
+              ...(pageParam === undefined ? {} : { cursor: pageParam })
+            }
+          },
           signal
         })
-      )
+      ),
+    getNextPageParam: (lastPage) => lastPage.nextCursor
   });
 }
 

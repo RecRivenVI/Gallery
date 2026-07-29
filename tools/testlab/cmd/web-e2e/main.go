@@ -52,6 +52,11 @@ type retryPendingJobFixtures struct {
 	RetryID  string
 }
 
+type jobHistoryFixtures struct {
+	OldestID string
+	Count    int
+}
+
 func main() {
 	os.Exit(run())
 }
@@ -61,11 +66,16 @@ func run() (exitCode int) {
 	var browserProject string
 	var keep bool
 	var governanceOnly bool
+	var jobHistoryOnly bool
 	flag.StringVar(&repoRoot, "repo-root", ".", "Gallery 仓库根目录")
 	flag.StringVar(&browserProject, "browser-project", "chromium", "Playwright 浏览器项目（chromium 或 firefox）")
 	flag.BoolVar(&keep, "keep", false, "保留临时验证目录")
 	flag.BoolVar(&governanceOnly, "governance-only", false, "只执行正式应用层治理浏览器 E2E")
+	flag.BoolVar(&jobHistoryOnly, "job-history-only", false, "只执行真实 Job 历史分页浏览器 E2E")
 	flag.Parse()
+	if governanceOnly && jobHistoryOnly {
+		return fail("验证运行模式", fmt.Errorf("governance-only 与 job-history-only 不能同时启用"))
+	}
 	if err := validateBrowserProject(browserProject); err != nil {
 		return fail("验证浏览器项目", err)
 	}
@@ -174,6 +184,10 @@ func run() (exitCode int) {
 	if err != nil {
 		return fail("记录 Source 只读基线", err)
 	}
+	jobHistory, err := seedJobHistory(runCtx, appRoot, 55)
+	if err != nil {
+		return fail("准备任务历史分页夹具", err)
+	}
 	retryPendingJobs, err := seedRetryPendingJobs(runCtx, appRoot)
 	if err != nil {
 		return fail("准备任务取消/重试夹具", err)
@@ -269,6 +283,8 @@ func run() (exitCode int) {
 		"GALLERY_REAL_RULE_PACKAGE=" + rulePackage,
 		"GALLERY_REAL_CANCEL_JOB_ID=" + retryPendingJobs.CancelID,
 		"GALLERY_REAL_RETRY_JOB_ID=" + retryPendingJobs.RetryID,
+		"GALLERY_REAL_OLDEST_JOB_ID=" + jobHistory.OldestID,
+		fmt.Sprintf("GALLERY_REAL_JOB_HISTORY_COUNT=%d", jobHistory.Count),
 		"GALLERY_REAL_SERVICE_OUTAGE_READY=" + serviceOutageReady,
 		"GALLERY_REAL_SERVICE_OUTAGE_BUDGET=" + serviceOutageBudget,
 		"GALLERY_REAL_SERVICE_OUTAGE_RESTARTED=" + serviceOutageRestarted,
@@ -277,10 +293,37 @@ func run() (exitCode int) {
 	}
 	playwright := filepath.Join(webRoot, "node_modules", "@playwright", "test", "cli.js")
 	projectArgument := "--project=" + browserProject
+	if jobHistoryOnly {
+		testErr := waitHealthy(runCtx, server.BaseURL, 30*time.Second)
+		if testErr == nil {
+			testErr = command(runCtx, time.Minute, webRoot, env, nodeBin, playwright, "test",
+				"e2e/real-job-history.spec.ts", projectArgument, "--workers=1", "--retries=0")
+		}
+		stop := server.Stop()
+		serverStopped = true
+		testErr = errors.Join(testErr, stopError(stop))
+		after, guardErr := snapshot(sourceGuardRoot)
+		if guardErr == nil && !reflect.DeepEqual(before, after) {
+			guardErr = describeGuardDifference(before, after)
+		}
+		if testErr != nil || guardErr != nil {
+			diagnosticErr := retainDiagnostics(gallerydLog, diagnosticsRoot)
+			if diagnosticErr == nil {
+				fmt.Printf("失败诊断已保存到：%s\n", diagnosticsRoot)
+			}
+			return fail("真实 Job 历史分页浏览器 E2E", errors.Join(testErr, guardErr, diagnosticErr))
+		}
+		fmt.Printf("真实 %s Job 历史分页与合成 Source 只读 guard 通过\n", browserProject)
+		return 0
+	}
 	testErr := waitHealthy(runCtx, server.BaseURL, 30*time.Second)
 	if testErr == nil {
 		testErr = command(runCtx, 2*time.Minute, webRoot, env, nodeBin, playwright, "test",
 			"e2e/real-bootstrap.spec.ts", projectArgument, "--workers=1", "--retries=0")
+	}
+	if testErr == nil {
+		testErr = command(runCtx, time.Minute, webRoot, env, nodeBin, playwright, "test",
+			"e2e/real-job-history.spec.ts", projectArgument, "--workers=1", "--retries=0")
 	}
 	if testErr == nil {
 		testErr = command(runCtx, time.Minute, webRoot, env, nodeBin, playwright, "test",
@@ -830,6 +873,48 @@ func seedRetryPendingJobs(ctx context.Context, appRoot string) (fixtures retryPe
 		return retryPendingJobFixtures{}, err
 	}
 	return retryPendingJobFixtures{CancelID: cancelID, RetryID: retryID}, nil
+}
+
+// seedJobHistory 在服务取得 AppDirs 单写锁之前只通过正式 Job Store 建立一段完成态历史。
+// 固定到较早时间，保证后续真实浏览器产生的业务 Job 位于第一页，而最旧夹具必须通过
+// newest-first cursor 才能到达；不直接写 jobs/job_attempts，也不触碰 Source。
+func seedJobHistory(ctx context.Context, appRoot string, count int) (fixtures jobHistoryFixtures, err error) {
+	if count < 51 {
+		return jobHistoryFixtures{}, fmt.Errorf("历史分页夹具至少需要 51 条")
+	}
+	dirs := appdirs.UnderRoot(appRoot)
+	store, err := storage.Open(ctx, dirs)
+	if err != nil {
+		return jobHistoryFixtures{}, err
+	}
+	defer func() {
+		err = errors.Join(err, store.Close())
+	}()
+	fixed := clock.Fixed{Time: time.Date(2025, 1, 1, 0, 0, 0, 0, time.UTC)}
+	jobStore, err := jobs.NewStore(store.Control.SQL(), fixed, identity.NewGenerator(fixed))
+	if err != nil {
+		return jobHistoryFixtures{}, err
+	}
+	for range count {
+		job, createErr := jobStore.CreateMaintenance(ctx, "catalog_gc", auth.PersonalOwnerID)
+		if createErr != nil {
+			return jobHistoryFixtures{}, createErr
+		}
+		if _, startErr := jobStore.StartStage(ctx, job.ID, "e2e_history"); startErr != nil {
+			return jobHistoryFixtures{}, startErr
+		}
+		if _, completeErr := jobStore.CompleteMaintenance(ctx, job.ID); completeErr != nil {
+			return jobHistoryFixtures{}, completeErr
+		}
+	}
+	page, err := jobStore.ListPage(ctx, jobs.ListPageRequest{Status: jobs.StatusCompleted, Limit: count})
+	if err != nil {
+		return jobHistoryFixtures{}, fmt.Errorf("复核任务历史分页夹具: %w", err)
+	}
+	if len(page) != count {
+		return jobHistoryFixtures{}, fmt.Errorf("任务历史分页夹具数量=%d，期望 %d", len(page), count)
+	}
+	return jobHistoryFixtures{OldestID: page[len(page)-1].ID, Count: count}, nil
 }
 
 func writeSyntheticPNG(path string, width, height int, seed uint8) error {

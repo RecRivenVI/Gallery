@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"net/http/cookiejar"
 	"net/http/httptest"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
@@ -540,10 +541,61 @@ func TestExistingEndpointsEnforceResourceScopes(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	visibleOlder, err := jobStore.CreateWithOptions(context.Background(), "hash", sourceOneID, "personal-owner", jobs.CreateOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	hiddenNewest, err := jobStore.CreateWithOptions(context.Background(), "hash", sourceTwoID, "personal-owner", jobs.CreateOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	// 固定时钟会让四个夹具同秒创建；这里仅在测试数据库中给不可变创建时间排出明确顺序，
+	// 形成「两个无权新候选挡在两个有权候选前」的授权-before-LIMIT 场景。
+	for id, createdAt := range map[string]int64{
+		visibleOlder.ID: fixed.Time.Unix() + 10,
+		visibleJob.ID:   fixed.Time.Unix() + 20,
+		hiddenJob.ID:    fixed.Time.Unix() + 30,
+		hiddenNewest.ID: fixed.Time.Unix() + 40,
+	} {
+		if _, err := store.Control.SQL().Exec("UPDATE jobs SET created_at=? WHERE job_id=?", createdAt, id); err != nil {
+			t.Fatal(err)
+		}
+	}
 	jobsResponse := requestJSON(t, viewerClient, http.MethodGet, server.URL+"/api/v1/jobs", "", "", nil)
 	jobsBody := readAndClose(t, jobsResponse)
 	if jobsResponse.StatusCode != http.StatusOK || !bytes.Contains(jobsBody, []byte(visibleJob.ID)) || bytes.Contains(jobsBody, []byte(hiddenJob.ID)) {
 		t.Fatalf("Job 列表未按 Source 授权过滤: status=%d body=%s", jobsResponse.StatusCode, jobsBody)
+	}
+	firstPageResponse := requestJSON(t, viewerClient, http.MethodGet, server.URL+"/api/v1/jobs?limit=1", "", "", nil)
+	firstPageBody := readAndClose(t, firstPageResponse)
+	var firstPage api.JobListResponse
+	if err := json.Unmarshal(firstPageBody, &firstPage); err != nil || firstPageResponse.StatusCode != http.StatusOK ||
+		len(firstPage.Jobs) != 1 || firstPage.Jobs[0].Id != visibleJob.ID || firstPage.NextCursor == nil {
+		t.Fatalf("Job 第一页未越过无权新候选或未签发续页: status=%d err=%v body=%s", firstPageResponse.StatusCode, err, firstPageBody)
+	}
+	secondPageResponse := requestJSON(t, viewerClient, http.MethodGet,
+		server.URL+"/api/v1/jobs?limit=1&cursor="+url.QueryEscape(*firstPage.NextCursor), "", "", nil)
+	secondPageBody := readAndClose(t, secondPageResponse)
+	var secondPage api.JobListResponse
+	if err := json.Unmarshal(secondPageBody, &secondPage); err != nil || secondPageResponse.StatusCode != http.StatusOK ||
+		len(secondPage.Jobs) != 1 || secondPage.Jobs[0].Id != visibleOlder.ID || secondPage.NextCursor != nil {
+		t.Fatalf("Job 续页重复、跳项或泄露无权行: status=%d err=%v body=%s", secondPageResponse.StatusCode, err, secondPageBody)
+	}
+	for _, invalid := range []struct {
+		path string
+		want int
+		code api.ErrorCode
+	}{
+		{"/api/v1/jobs?limit=1&cursor=" + url.QueryEscape("%%%"), http.StatusBadRequest, api.CURSORINVALID},
+		{"/api/v1/jobs?limit=2&cursor=" + url.QueryEscape(*firstPage.NextCursor), http.StatusConflict, api.CURSOREXPIRED},
+		{"/api/v1/jobs?status=unknown", http.StatusBadRequest, api.VALIDATIONERROR},
+	} {
+		response := requestJSON(t, viewerClient, http.MethodGet, server.URL+invalid.path, "", "", nil)
+		body := readAndClose(t, response)
+		var envelope api.ErrorEnvelope
+		if err := json.Unmarshal(body, &envelope); err != nil || response.StatusCode != invalid.want || envelope.Error.Code != invalid.code {
+			t.Fatalf("Job 游标/筛选错误契约不符 path=%s status=%d err=%v body=%s", invalid.path, response.StatusCode, err, body)
+		}
 	}
 	hiddenJobResponse := requestJSON(t, viewerClient, http.MethodGet, server.URL+"/api/v1/jobs/"+hiddenJob.ID, "", "", nil)
 	if hiddenJobResponse.StatusCode != http.StatusNotFound {

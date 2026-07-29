@@ -26,6 +26,7 @@ import {
   useSourceScanStatus,
   useSources,
   type Job,
+  type JobStatus,
   type ScanProfile
 } from '../api';
 import {
@@ -55,8 +56,7 @@ import {
 
 const SCAN_PROFILES: readonly ScanProfile[] = ['incremental', 'index', 'verify'];
 
-/** 任务列表可选的取数量。契约只有 limit，没有游标，因此这是唯一的「看更多」手段。 */
-const JOB_LIMITS = [25, 50, 100, 200] as const;
+const JOB_PAGE_SIZE = 50;
 
 const JOB_STATUS_FILTERS = [
   { id: 'all', label: '全部状态' },
@@ -511,8 +511,10 @@ function SourceTable() {
 function JobTable() {
   const { show } = useToast();
   const [status, setStatus] = useState<string>('all');
-  const [limit, setLimit] = useState<number>(50);
-  const jobs = useJobs(status === 'all' ? null : status, limit);
+  const jobs = useJobs(status === 'all' ? null : (status as JobStatus), JOB_PAGE_SIZE);
+  // 追加页失败时 TanStack 会同时把整个 InfiniteQuery 标为 isError；已有第一页仍是
+  // 可用的 HTTP snapshot，不能因此被通用 AsyncPanel 替换成整块错误页。
+  const jobSnapshotQuery = { ...jobs, isError: jobs.isError && !jobs.isFetchNextPageError };
   const cancel = useCancelJob();
   const retry = useRetryJob();
   // capability 只用于隐藏明显不可用的入口：任务的变更权限是按 Job 类别与 Source 派生的，
@@ -533,140 +535,155 @@ function JobTable() {
               if (key !== null) setStatus(key);
             }}
           />
-          <Select
-            label="取回条数"
-            options={JOB_LIMITS.map((value) => ({ id: String(value), label: `最近 ${value} 条` }))}
-            selectedKey={String(limit)}
-            onSelectionChange={(key) => {
-              if (key !== null) setLimit(Number(key));
-            }}
-          />
         </>
       }
     >
-      <ContractNoteList area="jobs" only={['jobs-no-cursor']} />
       <InlineError error={cancel.error} title="取消未能完成" />
       <InlineError error={retry.error} title="重试未能开始" />
-      <AsyncPanel query={jobs}>
-        {(data) => (
-          <DataTable
-            caption="任务快照"
-            rows={data.jobs}
-            rowKey={(row) => row.id}
-            emptyTitle="这一段快照里没有任务"
-            emptyDescription="调整状态筛选或提高取回条数。契约没有游标，无法翻到更早的历史。"
-            columns={[
-              {
-                id: 'status',
-                header: '状态',
-                render: (row) => (
-                  <Badge tone={JOB_STATUS_TONES[row.status]}>{JOB_STATUS_LABELS[row.status]}</Badge>
-                )
-              },
-              { id: 'type', header: '类型', render: (row) => JOB_TYPE_LABELS[row.type] },
-              {
-                id: 'id',
-                header: '任务 ID',
-                render: (row) => <Link to={`/scans/${row.id}`}>{row.id}</Link>
-              },
-              {
-                id: 'source',
-                header: 'Source',
-                render: (row) =>
-                  row.sourceId === undefined ? (
-                    <Absent>不绑定 Source</Absent>
-                  ) : (
-                    <MonoId value={row.sourceId} label="Source ID" />
-                  )
-              },
-              { id: 'attempt', header: 'Attempt', render: (row) => row.attempt },
-              {
-                id: 'progress',
-                header: '进度',
-                render: (row) =>
-                  row.progress.total > 0
-                    ? `${row.progress.current} / ${row.progress.total}${row.progress.estimated === true ? '（估算）' : ''}`
-                    : String(row.progress.current)
-              },
-              { id: 'stage', header: '阶段', render: (row) => row.stage, wrap: true },
-              {
-                id: 'nextAttemptAt',
-                header: '下次重试',
-                render: (row) =>
-                  row.nextAttemptAt === null || row.nextAttemptAt === undefined ? (
-                    <Absent />
-                  ) : (
-                    formatDateTime(row.nextAttemptAt)
-                  )
-              },
-              {
-                id: 'profile',
-                header: '扫描档案',
-                render: (row) => row.scanProfile ?? <Absent />
-              },
-              {
-                id: 'issue',
-                header: '失败码',
-                render: (row) =>
-                  row.issueCode === null || row.issueCode === undefined ? (
-                    <Absent />
-                  ) : (
-                    <Badge tone="danger">{row.issueCode}</Badge>
-                  )
-              },
-              { id: 'updatedAt', header: '更新时间', render: (row) => formatDateTime(row.updatedAt) },
-              {
-                id: 'actions',
-                header: '操作',
-                render: (row) => (
-                  <span className="manage-cell-actions">
-                    {mayMutate && canCancel(row) ? (
-                      <ConfirmAction
-                        label="取消"
-                        dialogTitle="取消任务"
-                        confirmLabel="确认取消"
-                        description={
-                          (row.status === 'failed' || row.status === 'needs_repair') &&
-                          row.failureRetryable === true &&
-                          row.nextAttemptAt !== null &&
-                          row.nextAttemptAt !== undefined
-                            ? `任务 ${row.id} 正在等待 ${formatDateTime(row.nextAttemptAt)} 自动重试。取消后不会再次入队，既有失败 Attempt 保持不变。变更所需 capability：${JOB_MUTATION_CAPABILITY[row.type]}。`
-                            : `任务 ${row.id} 会在下一个安全点停止。已经完成的部分不会回滚。变更所需 capability：${JOB_MUTATION_CAPABILITY[row.type]}（绑定 Source 的任务按 Source 作用域判定）。`
-                        }
-                        onConfirm={() => {
-                          cancel.mutate(row.id, {
-                            onSuccess: () => {
-                              show({ title: '取消已请求', description: `任务 ${row.id}`, tone: 'success' });
+      <InlineError error={jobs.isFetchNextPageError ? jobs.error : null} title="更早的任务暂时未能载入" />
+      <AsyncPanel query={jobSnapshotQuery}>
+        {(data) => {
+          const rows = data.pages.flatMap((page) => page.jobs);
+          return (
+            <>
+              <p className="manage-section__description">
+                已按新到旧载入 {rows.length} 条{jobs.hasNextPage ? '（还有更早任务）' : '（已到末页）'}。
+              </p>
+              <DataTable
+                caption="任务快照"
+                rows={rows}
+                rowKey={(row) => row.id}
+                emptyTitle="当前筛选下没有任务"
+                emptyDescription="调整状态筛选后再试。"
+                columns={[
+                  {
+                    id: 'status',
+                    header: '状态',
+                    render: (row) => (
+                      <Badge tone={JOB_STATUS_TONES[row.status]}>{JOB_STATUS_LABELS[row.status]}</Badge>
+                    )
+                  },
+                  { id: 'type', header: '类型', render: (row) => JOB_TYPE_LABELS[row.type] },
+                  {
+                    id: 'id',
+                    header: '任务 ID',
+                    render: (row) => <Link to={`/scans/${row.id}`}>{row.id}</Link>
+                  },
+                  {
+                    id: 'source',
+                    header: 'Source',
+                    render: (row) =>
+                      row.sourceId === undefined ? (
+                        <Absent>不绑定 Source</Absent>
+                      ) : (
+                        <MonoId value={row.sourceId} label="Source ID" />
+                      )
+                  },
+                  { id: 'attempt', header: 'Attempt', render: (row) => row.attempt },
+                  {
+                    id: 'progress',
+                    header: '进度',
+                    render: (row) =>
+                      row.progress.total > 0
+                        ? `${row.progress.current} / ${row.progress.total}${row.progress.estimated === true ? '（估算）' : ''}`
+                        : String(row.progress.current)
+                  },
+                  { id: 'stage', header: '阶段', render: (row) => row.stage, wrap: true },
+                  {
+                    id: 'nextAttemptAt',
+                    header: '下次重试',
+                    render: (row) =>
+                      row.nextAttemptAt === null || row.nextAttemptAt === undefined ? (
+                        <Absent />
+                      ) : (
+                        formatDateTime(row.nextAttemptAt)
+                      )
+                  },
+                  {
+                    id: 'profile',
+                    header: '扫描档案',
+                    render: (row) => row.scanProfile ?? <Absent />
+                  },
+                  {
+                    id: 'issue',
+                    header: '失败码',
+                    render: (row) =>
+                      row.issueCode === null || row.issueCode === undefined ? (
+                        <Absent />
+                      ) : (
+                        <Badge tone="danger">{row.issueCode}</Badge>
+                      )
+                  },
+                  { id: 'updatedAt', header: '更新时间', render: (row) => formatDateTime(row.updatedAt) },
+                  {
+                    id: 'actions',
+                    header: '操作',
+                    render: (row) => (
+                      <span className="manage-cell-actions">
+                        {mayMutate && canCancel(row) ? (
+                          <ConfirmAction
+                            label="取消"
+                            dialogTitle="取消任务"
+                            confirmLabel="确认取消"
+                            description={
+                              (row.status === 'failed' || row.status === 'needs_repair') &&
+                              row.failureRetryable === true &&
+                              row.nextAttemptAt !== null &&
+                              row.nextAttemptAt !== undefined
+                                ? `任务 ${row.id} 正在等待 ${formatDateTime(row.nextAttemptAt)} 自动重试。取消后不会再次入队，既有失败 Attempt 保持不变。变更所需 capability：${JOB_MUTATION_CAPABILITY[row.type]}。`
+                                : `任务 ${row.id} 会在下一个安全点停止。已经完成的部分不会回滚。变更所需 capability：${JOB_MUTATION_CAPABILITY[row.type]}（绑定 Source 的任务按 Source 作用域判定）。`
                             }
-                          });
-                        }}
-                      />
-                    ) : null}
-                    {mayMutate && canRetry(row) ? (
-                      <Button
-                        variant="secondary"
-                        onPress={() => {
-                          retry.mutate(row.id, {
-                            onSuccess: (job) => {
-                              show({
-                                title: '已开始新的 Attempt',
-                                description: `任务 ${job.id} 仍是同一个 ID，当前 Attempt ${job.attempt}`,
-                                tone: 'success'
+                            onConfirm={() => {
+                              cancel.mutate(row.id, {
+                                onSuccess: () => {
+                                  show({
+                                    title: '取消已请求',
+                                    description: `任务 ${row.id}`,
+                                    tone: 'success'
+                                  });
+                                }
                               });
-                            }
-                          });
-                        }}
-                      >
-                        重试
-                      </Button>
-                    ) : null}
-                    {mayMutate ? null : <Absent>无变更入口</Absent>}
-                  </span>
-                )
-              }
-            ]}
-          />
-        )}
+                            }}
+                          />
+                        ) : null}
+                        {mayMutate && canRetry(row) ? (
+                          <Button
+                            variant="secondary"
+                            onPress={() => {
+                              retry.mutate(row.id, {
+                                onSuccess: (job) => {
+                                  show({
+                                    title: '已开始新的 Attempt',
+                                    description: `任务 ${job.id} 仍是同一个 ID，当前 Attempt ${job.attempt}`,
+                                    tone: 'success'
+                                  });
+                                }
+                              });
+                            }}
+                          >
+                            重试
+                          </Button>
+                        ) : null}
+                        {mayMutate ? null : <Absent>无变更入口</Absent>}
+                      </span>
+                    )
+                  }
+                ]}
+              />
+              {jobs.hasNextPage ? (
+                <div className="manage-form__actions">
+                  <Button
+                    variant="secondary"
+                    isPending={jobs.isFetchingNextPage}
+                    onPress={() => void jobs.fetchNextPage()}
+                  >
+                    {jobs.isFetchNextPageError ? '重试加载更早任务' : '加载更早任务'}
+                  </Button>
+                </div>
+              ) : null}
+            </>
+          );
+        }}
       </AsyncPanel>
       <ContractNoteList area="jobs" only={['jobs-derived-authorization', 'jobs-retry-same-id']} />
     </Section>
