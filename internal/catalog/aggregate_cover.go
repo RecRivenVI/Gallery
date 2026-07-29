@@ -196,17 +196,35 @@ WHERE catalog_revision_id=? AND overlay_revision_id=? AND scope_kind=? AND scope
 	return publication, result, nil
 }
 
-// AggregateCoversAt 批量读取某个 publication 下某一类作用域的全部聚合封面，供列表端点使用，
-// 避免逐项查询产生 N+1。
-func (s *Store) AggregateCoversAt(ctx context.Context, publicationID, scopeKind string) (map[string]AggregateCover, error) {
+// AggregateCoversAt 批量读取某个 publication 下某一类作用域的聚合封面，供列表端点使用，
+// 避免逐项查询产生 N+1。省略 scopeIDs 时读取全部；传入 scopeIDs 时只读取这些目标，供详情
+// 和已经完成身份裁剪的列表避免物化无关作用域。
+func (s *Store) AggregateCoversAt(ctx context.Context, publicationID, scopeKind string, scopeIDs ...string) (map[string]AggregateCover, error) {
 	publication, err := s.resolvePublication(ctx, publicationID)
 	if err != nil {
 		return nil, err
 	}
-	rows, err := s.db.QueryContext(ctx, `SELECT scope_id, cover_media_id, published_at_ns
+	statement := `SELECT scope_id, cover_media_id, published_at_ns
 FROM aggregate_cover_projections
-WHERE catalog_revision_id=? AND overlay_revision_id=? AND scope_kind=?`,
-		publication.CatalogRevisionID, publication.OverlayRevisionID, scopeKind)
+WHERE catalog_revision_id=? AND overlay_revision_id=? AND scope_kind=?`
+	arguments := []any{publication.CatalogRevisionID, publication.OverlayRevisionID, scopeKind}
+	if len(scopeIDs) > 0 {
+		scopeIDsJSON, marshalErr := json.Marshal(scopeIDs)
+		if marshalErr != nil {
+			return nil, fault.New(fault.CodeInternal, true, marshalErr)
+		}
+		statement = `WITH requested_scopes(scope_id) AS MATERIALIZED (
+    SELECT DISTINCT CAST(value AS TEXT) FROM json_each(?)
+)
+SELECT a.scope_id, a.cover_media_id, a.published_at_ns
+FROM requested_scopes AS requested
+JOIN aggregate_cover_projections AS a
+  ON a.catalog_revision_id=? AND a.overlay_revision_id=?
+ AND a.scope_kind=? AND a.scope_id=requested.scope_id
+ORDER BY a.scope_id`
+		arguments = []any{string(scopeIDsJSON), publication.CatalogRevisionID, publication.OverlayRevisionID, scopeKind}
+	}
+	rows, err := s.db.QueryContext(ctx, statement, arguments...)
 	if err != nil {
 		return nil, fault.New(fault.CodeInternal, true, err)
 	}
@@ -262,7 +280,7 @@ ORDER BY source_id`, publication.CatalogRevisionID)
 //
 // Creator 从允许 Source 中的 Work 候选按正式 tie-break 重选；Library 复用 Source-local 聚合行，
 // 再从允许 Source 中重选代表平台。这样既保留既有确定性语义，也不会把授权规则写进 Catalog。
-func (s *Store) AggregateCoversForSourcesAt(ctx context.Context, publicationID, scopeKind string, sourceIDs []string) (map[string]AggregateCover, error) {
+func (s *Store) AggregateCoversForSourcesAt(ctx context.Context, publicationID, scopeKind string, sourceIDs []string, scopeIDs ...string) (map[string]AggregateCover, error) {
 	publication, err := s.resolvePublication(ctx, publicationID)
 	if err != nil {
 		return nil, err
@@ -272,7 +290,7 @@ func (s *Store) AggregateCoversForSourcesAt(ctx context.Context, publicationID, 
 		return result, nil
 	}
 	if scopeKind == AggregateScopeCreator {
-		return s.creatorAggregateCoversForSourcesAt(ctx, publication, sourceIDs)
+		return s.creatorAggregateCoversForSourcesAt(ctx, publication, sourceIDs, scopeIDs)
 	}
 	sourceIDsJSON, err := json.Marshal(sourceIDs)
 	if err != nil {
@@ -280,6 +298,7 @@ func (s *Store) AggregateCoversForSourcesAt(ctx context.Context, publicationID, 
 	}
 
 	var statement string
+	arguments := []any{string(sourceIDsJSON), publication.CatalogRevisionID, publication.OverlayRevisionID}
 	switch scopeKind {
 	case AggregateScopeLibrary:
 		statement = `WITH allowed_sources(source_id) AS (
@@ -302,10 +321,40 @@ func (s *Store) AggregateCoversForSourcesAt(ctx context.Context, publicationID, 
 SELECT scope_id, cover_media_id, published_at_ns
 FROM ranked WHERE rank_in_scope=1
 ORDER BY scope_id`
+		if len(scopeIDs) > 0 {
+			scopeIDsJSON, marshalErr := json.Marshal(scopeIDs)
+			if marshalErr != nil {
+				return nil, fault.New(fault.CodeInternal, true, marshalErr)
+			}
+			statement = `WITH allowed_sources(source_id) AS MATERIALIZED (
+    SELECT DISTINCT CAST(value AS TEXT) FROM json_each(?)
+), requested_scopes(scope_id) AS MATERIALIZED (
+    SELECT DISTINCT CAST(value AS TEXT) FROM json_each(?)
+), ranked AS (
+    SELECT m.library_id AS scope_id,
+           a.cover_media_id,
+           a.published_at_ns,
+           row_number() OVER (
+               PARTITION BY m.library_id
+               ORDER BY a.published_at_ns DESC, a.scope_id DESC
+           ) AS rank_in_scope
+    FROM allowed_sources AS allowed
+    JOIN aggregate_cover_projections AS a
+      ON a.catalog_revision_id=? AND a.overlay_revision_id=?
+     AND a.scope_kind='source' AND a.scope_id=allowed.source_id
+    JOIN catalog_revision_sources AS m
+      ON m.catalog_revision_id=a.catalog_revision_id AND m.source_id=a.scope_id
+    JOIN requested_scopes AS requested ON requested.scope_id=m.library_id
+)
+SELECT scope_id, cover_media_id, published_at_ns
+FROM ranked WHERE rank_in_scope=1
+ORDER BY scope_id`
+			arguments = []any{string(sourceIDsJSON), string(scopeIDsJSON), publication.CatalogRevisionID, publication.OverlayRevisionID}
+		}
 	default:
 		return nil, fault.WithField(fault.CodeValidation, "scopeKind", nil)
 	}
-	rows, err := s.db.QueryContext(ctx, statement, string(sourceIDsJSON), publication.CatalogRevisionID, publication.OverlayRevisionID)
+	rows, err := s.db.QueryContext(ctx, statement, arguments...)
 	if err != nil {
 		return nil, fault.New(fault.CodeInternal, true, err)
 	}
@@ -326,7 +375,7 @@ ORDER BY scope_id`
 // creatorAggregateCoversForSourcesAt 只读取 publication 持久化的 Creator/Source 窄候选。
 // 小 allowed 集合从 Source 索引驱动后做窄窗口；小 deny 集合直接复用仍获授权的
 // 全局胜出项，只为被拒绝的 Creator 沿正式 rank 索引寻找第一条允许候选。
-func (s *Store) creatorAggregateCoversForSourcesAt(ctx context.Context, publication Publication, sourceIDs []string) (map[string]AggregateCover, error) {
+func (s *Store) creatorAggregateCoversForSourcesAt(ctx context.Context, publication Publication, sourceIDs, scopeIDs []string) (map[string]AggregateCover, error) {
 	sourceIDsJSON, err := json.Marshal(sourceIDs)
 	if err != nil {
 		return nil, fault.New(fault.CodeInternal, true, err)
@@ -338,10 +387,22 @@ WHERE catalog_revision_id=?`, publication.CatalogRevisionID).Scan(&totalSources)
 	}
 	result := make(map[string]AggregateCover)
 	statement := creatorCoversSmallAllowedStatement
+	arguments := []any{string(sourceIDsJSON), publication.CatalogRevisionID, publication.OverlayRevisionID}
 	if len(sourceIDs)*2 > totalSources {
 		statement = creatorCoversSmallDeniedStatement
 	}
-	rows, err := s.db.QueryContext(ctx, statement, string(sourceIDsJSON), publication.CatalogRevisionID, publication.OverlayRevisionID)
+	if len(scopeIDs) > 0 {
+		scopeIDsJSON, marshalErr := json.Marshal(scopeIDs)
+		if marshalErr != nil {
+			return nil, fault.New(fault.CodeInternal, true, marshalErr)
+		}
+		statement = creatorCoversSmallAllowedForScopesStatement
+		if len(sourceIDs)*2 > totalSources {
+			statement = creatorCoversSmallDeniedForScopesStatement
+		}
+		arguments = []any{string(sourceIDsJSON), string(scopeIDsJSON), publication.CatalogRevisionID, publication.OverlayRevisionID}
+	}
+	rows, err := s.db.QueryContext(ctx, statement, arguments...)
 	if err != nil {
 		return nil, fault.New(fault.CodeInternal, true, err)
 	}
@@ -377,6 +438,27 @@ SELECT scope_id, cover_media_id, published_at_ns
 FROM ranked WHERE rank_in_scope=1
 ORDER BY scope_id`
 
+const creatorCoversSmallAllowedForScopesStatement = `WITH allowed_sources(source_id) AS MATERIALIZED (
+    SELECT DISTINCT CAST(value AS TEXT) FROM json_each(?)
+), requested_scopes(scope_id) AS MATERIALIZED (
+    SELECT DISTINCT CAST(value AS TEXT) FROM json_each(?)
+), ranked AS (
+    SELECT c.creator_id AS scope_id,
+           c.cover_media_id,
+           c.published_at_ns,
+           row_number() OVER (
+               PARTITION BY c.creator_id
+               ORDER BY c.published_at_ns DESC, c.work_id DESC
+           ) AS rank_in_scope
+    FROM allowed_sources AS a
+    CROSS JOIN creator_source_cover_projections AS c INDEXED BY creator_source_cover_source_idx
+    JOIN requested_scopes AS requested ON requested.scope_id=c.creator_id
+    WHERE c.catalog_revision_id=? AND c.overlay_revision_id=? AND c.source_id=a.source_id
+)
+SELECT scope_id, cover_media_id, published_at_ns
+FROM ranked WHERE rank_in_scope=1
+ORDER BY scope_id`
+
 const creatorCoversSmallDeniedStatement = `WITH allowed_sources(source_id) AS MATERIALIZED (
     SELECT DISTINCT CAST(value AS TEXT) FROM json_each(?)
 ), global_covers AS MATERIALIZED (
@@ -388,6 +470,44 @@ const creatorCoversSmallDeniedStatement = `WITH allowed_sources(source_id) AS MA
            source_id
     FROM aggregate_cover_projections
     WHERE catalog_revision_id=? AND overlay_revision_id=? AND scope_kind='creator'
+), affected_covers AS MATERIALIZED (
+    SELECT *
+    FROM global_covers
+    WHERE source_id NOT IN (SELECT source_id FROM allowed_sources)
+)
+SELECT scope_id, cover_media_id, published_at_ns
+FROM global_covers
+WHERE source_id IN (SELECT source_id FROM allowed_sources)
+UNION ALL
+SELECT a.scope_id, c.cover_media_id, c.published_at_ns
+FROM affected_covers AS a
+JOIN creator_source_cover_projections AS c ON c.rowid = (
+    SELECT candidate.rowid
+    FROM creator_source_cover_projections AS candidate INDEXED BY creator_source_cover_rank_idx
+    WHERE candidate.catalog_revision_id=a.catalog_revision_id
+      AND candidate.overlay_revision_id=a.overlay_revision_id
+      AND candidate.creator_id=a.scope_id
+      AND candidate.source_id IN (SELECT source_id FROM allowed_sources)
+    ORDER BY candidate.published_at_ns DESC, candidate.work_id DESC
+    LIMIT 1
+)
+ORDER BY scope_id`
+
+const creatorCoversSmallDeniedForScopesStatement = `WITH allowed_sources(source_id) AS MATERIALIZED (
+    SELECT DISTINCT CAST(value AS TEXT) FROM json_each(?)
+), requested_scopes(scope_id) AS MATERIALIZED (
+    SELECT DISTINCT CAST(value AS TEXT) FROM json_each(?)
+), global_covers AS MATERIALIZED (
+    SELECT a.catalog_revision_id,
+           a.overlay_revision_id,
+           a.scope_id,
+           a.cover_media_id,
+           a.published_at_ns,
+           a.source_id
+    FROM requested_scopes AS requested
+    JOIN aggregate_cover_projections AS a
+      ON a.catalog_revision_id=? AND a.overlay_revision_id=?
+     AND a.scope_kind='creator' AND a.scope_id=requested.scope_id
 ), affected_covers AS MATERIALIZED (
     SELECT *
     FROM global_covers

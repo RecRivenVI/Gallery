@@ -211,6 +211,10 @@ func TestAuthorizedAggregateCoverPlansStayOnNarrowProjection(t *testing.T) {
 			[]any{`["source-a"]`, "cat-plan", "ovr-plan"}},
 		{"small-denied", catalog.CreatorCoversSmallDeniedStatementForTest(), "creator_source_cover_rank_idx",
 			[]any{`["source-a"]`, "cat-plan", "ovr-plan"}},
+		{"small-allowed-for-scopes", catalog.CreatorCoversSmallAllowedForScopesStatementForTest(), "creator_source_cover_source_idx",
+			[]any{`["source-a"]`, `["creator-a"]`, "cat-plan", "ovr-plan"}},
+		{"small-denied-for-scopes", catalog.CreatorCoversSmallDeniedForScopesStatementForTest(), "creator_source_cover_rank_idx",
+			[]any{`["source-a"]`, `["creator-a"]`, "cat-plan", "ovr-plan"}},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			rows, err := store.Catalog.SQL().Query("EXPLAIN QUERY PLAN "+test.statement, test.args...)
@@ -237,10 +241,73 @@ func TestAuthorizedAggregateCoverPlansStayOnNarrowProjection(t *testing.T) {
 			if strings.Contains(test.statement, "work_projections") || strings.Contains(test.statement, "work_creator_relations") {
 				t.Fatalf("授权重选重新引入宽事实表:\n%s", test.statement)
 			}
-			if test.name != "small-allowed" && !strings.Contains(plan, "CORRELATED SCALAR SUBQUERY") {
+			if strings.Contains(test.name, "denied") && !strings.Contains(plan, "CORRELATED SCALAR SUBQUERY") {
 				t.Fatalf("小 deny 未按 Creator 执行相关 LIMIT 1:\n%s", plan)
 			}
 		})
+	}
+}
+
+// TestAggregateCoversOnlyMaterializeRequestedScopes 锁定列表身份裁剪和详情查询的批量边界：
+// Catalog 必须只返回调用方明确请求的 scope ID，同时在小 allowed 与小 deny 路径保持正式回退语义。
+func TestAggregateCoversOnlyMaterializeRequestedScopes(t *testing.T) {
+	ctx := context.Background()
+	catalogStore, _ := newCandidateTestStore(t)
+	stage := func(jobID, sourceID string, watermark int64, works []catalog.WorkFact, media []catalog.MediaFact) catalog.Publication {
+		t.Helper()
+		candidate, err := catalogStore.BeginCandidate(ctx, jobID, sourceID, watermark)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := catalogStore.Stage(ctx, candidate, works, media); err != nil {
+			t.Fatal(err)
+		}
+		if err := catalogStore.ValidateCandidate(ctx, candidate); err != nil {
+			t.Fatal(err)
+		}
+		return publishCandidate(t, catalogStore, candidate)
+	}
+
+	stage("job-scoped-a", "source-a", 1,
+		[]catalog.WorkFact{aggregateWork("source-a", "library-target", "work-target-a", "creator-target", "目标作者", 1_000)},
+		[]catalog.MediaFact{coverMediaFact("source-a", "work-target-a", "work-target-a/01.jpg", "work-target-a-m1", 0, candidateDigestA)})
+	stage("job-scoped-b", "source-b", 2,
+		[]catalog.WorkFact{aggregateWork("source-b", "library-target", "work-target-b", "creator-target", "目标作者", 3_000)},
+		[]catalog.MediaFact{coverMediaFact("source-b", "work-target-b", "work-target-b/01.jpg", "work-target-b-m1", 0,
+			candidateDigestB)})
+	publication := stage("job-scoped-c", "source-c", 3,
+		[]catalog.WorkFact{aggregateWork("source-c", "library-other", "work-other-c", "creator-other", "无关作者", 8_000)},
+		[]catalog.MediaFact{coverMediaFact("source-c", "work-other-c", "work-other-c/01.jpg", "work-other-c-m1", 0,
+			"cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc")})
+
+	assertOnly := func(label string, covers map[string]catalog.AggregateCover, scopeID, mediaID string, err error) {
+		t.Helper()
+		if err != nil {
+			t.Fatalf("%s: %v", label, err)
+		}
+		if len(covers) != 1 || covers[scopeID].CoverMediaID != mediaID {
+			t.Fatalf("%s = %+v want only %s/%s", label, covers, scopeID, mediaID)
+		}
+	}
+
+	covers, err := catalogStore.AggregateCoversAt(ctx, publication.ID, catalog.AggregateScopeCreator, "creator-target")
+	assertOnly("全成员定向 Creator", covers, "creator-target", "work-target-b-m1", err)
+	covers, err = catalogStore.AggregateCoversAt(ctx, publication.ID, catalog.AggregateScopeLibrary, "library-target")
+	assertOnly("全成员定向 Library", covers, "library-target", "work-target-b-m1", err)
+	covers, err = catalogStore.AggregateCoversForSourcesAt(ctx, publication.ID, catalog.AggregateScopeCreator,
+		[]string{"source-a"}, "creator-target")
+	assertOnly("小 allowed 定向 Creator", covers, "creator-target", "work-target-a-m1", err)
+	covers, err = catalogStore.AggregateCoversForSourcesAt(ctx, publication.ID, catalog.AggregateScopeCreator,
+		[]string{"source-a", "source-c"}, "creator-target")
+	assertOnly("小 deny 定向 Creator", covers, "creator-target", "work-target-a-m1", err)
+	covers, err = catalogStore.AggregateCoversForSourcesAt(ctx, publication.ID, catalog.AggregateScopeLibrary,
+		[]string{"source-a", "source-c"}, "library-target")
+	assertOnly("定向 Library", covers, "library-target", "work-target-a-m1", err)
+
+	covers, err = catalogStore.AggregateCoversForSourcesAt(ctx, publication.ID, catalog.AggregateScopeCreator,
+		[]string{"source-a", "source-c"}, "creator-missing")
+	if err != nil || covers == nil || len(covers) != 0 {
+		t.Fatalf("不存在的 scope 必须返回非 nil 空结果: covers=%#v err=%v", covers, err)
 	}
 }
 

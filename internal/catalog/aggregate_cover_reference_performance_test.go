@@ -50,30 +50,33 @@ func TestAuthorizedAggregateCoverReferencePerformance(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	measure := func(name string, allowed []string) (time.Duration, time.Duration) {
+	measure := func(name string, allowed, scopeIDs []string, wantCount int) (time.Duration, time.Duration) {
 		t.Helper()
-		if _, err := catalogStore.AggregateCoversForSourcesAt(ctx, publicationID, catalog.AggregateScopeCreator, allowed); err != nil {
+		if _, err := catalogStore.AggregateCoversForSourcesAt(ctx, publicationID, catalog.AggregateScopeCreator, allowed, scopeIDs...); err != nil {
 			t.Fatalf("%s warmup: %v", name, err)
 		}
 		durations := make([]time.Duration, 31)
 		for run := range durations {
 			started := time.Now()
-			covers, err := catalogStore.AggregateCoversForSourcesAt(ctx, publicationID, catalog.AggregateScopeCreator, allowed)
+			covers, err := catalogStore.AggregateCoversForSourcesAt(ctx, publicationID, catalog.AggregateScopeCreator, allowed, scopeIDs...)
 			durations[run] = time.Since(started)
-			if err != nil || len(covers) != creatorCount {
-				t.Fatalf("%s run=%d covers=%d want=%d err=%v", name, run, len(covers), creatorCount, err)
+			if err != nil || len(covers) != wantCount {
+				t.Fatalf("%s run=%d covers=%d want=%d err=%v", name, run, len(covers), wantCount, err)
 			}
 		}
 		sort.Slice(durations, func(i, j int) bool { return durations[i] < durations[j] })
 		return durations[len(durations)/2], durations[(len(durations)*95+99)/100-1]
 	}
 
-	allowOneP50, allowOneP95 := measure("allow-one", sourceIDs[:1])
-	denyNonwinnerP50, denyNonwinnerP95 := measure("deny-nonwinner", sourceIDs[1:])
-	denyWinnerP50, denyWinnerP95 := measure("deny-winner", sourceIDs[:len(sourceIDs)-1])
-	t.Logf("AUTHORIZED_AGGREGATE_COVER_PERFORMANCE works=%d creators=%d works_per_creator=%d sources=%d cache=warm concurrency=1 runs=31 build=%s allow_one_p50=%s allow_one_p95=%s deny_nonwinner_p50=%s deny_nonwinner_p95=%s deny_winner_p50=%s deny_winner_p95=%s",
+	allowOneP50, allowOneP95 := measure("allow-one", sourceIDs[:1], nil, creatorCount)
+	denyNonwinnerP50, denyNonwinnerP95 := measure("deny-nonwinner", sourceIDs[1:], nil, creatorCount)
+	denyWinnerP50, denyWinnerP95 := measure("deny-winner", sourceIDs[:len(sourceIDs)-1], nil, creatorCount)
+	targetCreatorID := fmt.Sprintf("ctr-authorized-reference-%08d", 0)
+	targetOneP50, targetOneP95 := measure("deny-winner-target-one", sourceIDs[:len(sourceIDs)-1], []string{targetCreatorID}, 1)
+	t.Logf("AUTHORIZED_AGGREGATE_COVER_PERFORMANCE works=%d creators=%d works_per_creator=%d sources=%d cache=warm concurrency=1 runs=31 build=%s allow_one_p50=%s allow_one_p95=%s deny_nonwinner_p50=%s deny_nonwinner_p95=%s deny_winner_p50=%s deny_winner_p95=%s deny_winner_target_one_p50=%s deny_winner_target_one_p95=%s",
 		works, creatorCount, worksPerCreator, sources, buildDuration,
-		allowOneP50, allowOneP95, denyNonwinnerP50, denyNonwinnerP95, denyWinnerP50, denyWinnerP95)
+		allowOneP50, allowOneP95, denyNonwinnerP50, denyNonwinnerP95, denyWinnerP50, denyWinnerP95,
+		targetOneP50, targetOneP95)
 }
 
 func aggregateCoverPerfInt(t *testing.T, name string, fallback, minimum, maximum int) int {
