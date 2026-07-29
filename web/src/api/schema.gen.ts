@@ -1504,7 +1504,7 @@ export interface paths {
         };
         /**
          * 列出 CanonicalCreator 及其有效合并状态
-         * @description 不带任何查询参数时保留兼容行为，返回全部 CanonicalCreator（包括已被合并身份）。 携带任一查询参数时进入面向用户的 live 身份浏览：默认折叠到有效合并根并按名称 keyset 分页；身份与 Binding 来自 control.db 当前事实，不是 publication 可重复读， 但每项封面仍严格绑定自身 queryPublicationId。Source 或授权变化会使旧 cursor 过期。
+         * @description 不带 sourceId/includeMerged/sort 时是治理分页，保留全部 CanonicalCreator（包括已被 合并身份），但默认只返回 50 项并通过 cursor 续页；只带 limit/cursor 仍属于治理 分页。携带 sourceId/includeMerged/sort 任一参数时进入面向用户的 live 身份浏览： 默认折叠到有效合并根并按名称 keyset 分页。身份与 Binding 来自 control.db 当前 事实，不是 publication 可重复读，但每项封面仍严格绑定自身 queryPublicationId。 Source 或授权变化会使旧 cursor 过期。
          */
         get: operations["listCreators"];
         put?: never;
@@ -6140,7 +6140,7 @@ export interface operations {
         };
         requestBody?: never;
         responses: {
-            /** @description 兼容全量清单或 Creator 浏览页 */
+            /** @description 有界治理页或 Creator 浏览页 */
             200: {
                 headers: {
                     [name: string]: unknown;

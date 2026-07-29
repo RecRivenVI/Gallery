@@ -133,3 +133,105 @@ func TestCreatorListPageKeysetScopeAndMergedRoots(t *testing.T) {
 		t.Fatalf("未授权 Source 未收敛为空页: page=%+v err=%v", denied, err)
 	}
 }
+
+func TestCreatorGovernancePageIsBoundedAndPreservesMergedIdentityEvidence(t *testing.T) {
+	f := setupTwoSources(t)
+	f.scan(t, f.source1.ID)
+	f.scan(t, f.source2.ID)
+	alpha := f.creatorByName(t, "作者甲")
+	beta := f.creatorByName(t, "作者乙")
+
+	allowedJSON, err := json.Marshal([]string{f.source1.ID, f.source2.ID})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, planCase := range []struct {
+		name      string
+		statement string
+		args      []any
+	}{
+		{"global", creators.GovernancePageStatementForTest(true, false), []any{2}},
+		{"restricted", creators.GovernancePageStatementForTest(false, false), []any{string(allowedJSON), 2}},
+	} {
+		rows, planErr := f.store.Control.SQL().QueryContext(f.ctx, "EXPLAIN QUERY PLAN "+planCase.statement, planCase.args...)
+		if planErr != nil {
+			t.Fatalf("%s 治理计划: %v", planCase.name, planErr)
+		}
+		var details []string
+		for rows.Next() {
+			var id, parent, unused int
+			var detail string
+			if scanErr := rows.Scan(&id, &parent, &unused, &detail); scanErr != nil {
+				rows.Close()
+				t.Fatal(scanErr)
+			}
+			details = append(details, detail)
+		}
+		if closeErr := rows.Close(); closeErr != nil {
+			t.Fatal(closeErr)
+		}
+		planText := strings.Join(details, "\n")
+		if !strings.Contains(planText, "canonical_creators_sort_idx") ||
+			!strings.Contains(planText, "creator_bindings_creator_idx") {
+			t.Fatalf("%s 治理页未沿排序/Binding 窄索引执行:\n%s", planCase.name, planText)
+		}
+	}
+
+	first, err := f.creators.ListGovernancePage(f.ctx, creators.GovernancePageRequest{
+		Global: true, Limit: 1,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(first.Items) != 1 || first.Items[0].ID != beta.ID || first.NextCursor == "" {
+		t.Fatalf("治理第一页未按有界 keyset 返回: %+v", first)
+	}
+	second, err := f.creators.ListGovernancePage(f.ctx, creators.GovernancePageRequest{
+		Global: true, Limit: 1, Cursor: first.NextCursor,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(second.Items) != 1 || second.Items[0].ID != alpha.ID || second.NextCursor != "" {
+		t.Fatalf("治理第二页错误: %+v", second)
+	}
+
+	// cursor 绑定权限形态和获授权 Source 集合；不能把 global 页锚点套到受限主体。
+	_, err = f.creators.ListGovernancePage(f.ctx, creators.GovernancePageRequest{
+		AllowedSourceIDs: []string{f.source1.ID}, Limit: 1, Cursor: first.NextCursor,
+	})
+	if !hasCode(err, fault.CodeCursorExpired) {
+		t.Fatalf("治理游标未绑定授权范围: %v", err)
+	}
+
+	f.mergeAndWait(t, alpha.ID, beta.ID)
+	global, err := f.creators.ListGovernancePage(f.ctx, creators.GovernancePageRequest{
+		Global: true, Limit: 50,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(global.Items) != 2 {
+		t.Fatalf("治理页必须保留根和已合并身份: %+v", global.Items)
+	}
+	byID := make(map[string]creators.Creator, len(global.Items))
+	for _, item := range global.Items {
+		byID[item.ID] = item
+	}
+	if byID[alpha.ID].EffectiveID != alpha.ID || byID[beta.ID].EffectiveID != alpha.ID {
+		t.Fatalf("治理页 effectiveId 未解析到当前合并根: %+v", byID)
+	}
+
+	// 资源受限主体仍按每个 base 身份自己的全部状态 Binding 判断可见性，不把用户浏览
+	// 页的等价组折叠语义误用于治理证据；sourceCount 只统计获授权 active Source。
+	restricted, err := f.creators.ListGovernancePage(f.ctx, creators.GovernancePageRequest{
+		AllowedSourceIDs: []string{f.source2.ID}, Limit: 50,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(restricted.Items) != 1 || restricted.Items[0].ID != beta.ID ||
+		restricted.Items[0].EffectiveID != alpha.ID || restricted.Items[0].SourceCount != 1 {
+		t.Fatalf("受限治理页泄露或丢失身份证据: %+v", restricted.Items)
+	}
+}

@@ -1209,6 +1209,42 @@ func TestCreatorMergeAPIContract(t *testing.T) {
 	if err != nil || list.JSON200 == nil || len(list.JSON200.Creators) != 2 {
 		t.Fatalf("创作者列表错误: %v status=%d", err, list.StatusCode())
 	}
+	// 治理入口不再允许无界物化。只携带 limit/cursor 仍必须留在治理模式（包括已
+	// 合并身份），并能把 51 个身份完整、不重复地走完 keyset 分页。
+	for index := 0; index < 49; index++ {
+		newSeededCreator(t, ctx, store, generator, fmt.Sprintf("批量创作者-%02d", index))
+	}
+	wantLimit := 20
+	var cursor *string
+	seenCreators := make(map[string]struct{})
+	for pageIndex := 0; pageIndex < 3; pageIndex++ {
+		page, pageErr := client.ListCreatorsWithResponse(ctx, &api.ListCreatorsParams{
+			Limit: &wantLimit, Cursor: cursor,
+		})
+		if pageErr != nil || page.JSON200 == nil {
+			t.Fatalf("治理分页第 %d 页失败: %v status=%d", pageIndex+1, pageErr, page.StatusCode())
+		}
+		wantItems := 20
+		if pageIndex == 2 {
+			wantItems = 11
+		}
+		if len(page.JSON200.Creators) != wantItems {
+			t.Fatalf("治理分页第 %d 页数量=%d want=%d", pageIndex+1, len(page.JSON200.Creators), wantItems)
+		}
+		for _, creator := range page.JSON200.Creators {
+			if _, duplicate := seenCreators[creator.Id]; duplicate {
+				t.Fatalf("治理分页重复 Creator: %s", creator.Id)
+			}
+			seenCreators[creator.Id] = struct{}{}
+		}
+		cursor = page.JSON200.NextCursor
+		if pageIndex < 2 && cursor == nil {
+			t.Fatalf("治理分页第 %d 页缺少 nextCursor", pageIndex+1)
+		}
+	}
+	if len(seenCreators) != 51 || cursor != nil {
+		t.Fatalf("治理分页未精确收敛: creators=%d finalCursor=%v", len(seenCreators), cursor)
+	}
 	detail, err := client.GetCreatorWithResponse(ctx, alphaID)
 	if err != nil || detail.JSON200 == nil || detail.JSON200.Creator.Id != alphaID || detail.JSON200.Creator.EffectiveId != alphaID {
 		t.Fatalf("创作者详情错误: %v status=%d", err, detail.StatusCode())

@@ -1890,25 +1890,38 @@ func (s *Server) listCreators(w http.ResponseWriter, r *http.Request) {
 		s.listCreatorBrowse(w, r, session)
 		return
 	}
+	s.listCreatorGovernance(w, r, session)
+}
 
-	// 无查询参数继续履行既有“全部 CanonicalCreator”兼容契约。Binding 改为一次批量
-	// 读取，授权也先按 Source 集合批量求值，避免旧实现逐 Creator Get/逐 Binding 授权。
-	list, err := s.creators.List(r.Context())
-	if err != nil {
-		s.writeRequestError(w, err)
-		return
+// creatorBrowseRequested 只用会改变用户浏览语义的参数选择浏览模式。limit/cursor
+// 同时也是治理分页参数，不能仅因它们存在就把治理续页误路由到“折叠合并根、仅 active
+// Binding”的用户浏览路径。
+func creatorBrowseRequested(r *http.Request) bool {
+	query := r.URL.Query()
+	for _, key := range []string{"sourceId", "includeMerged", "sort"} {
+		if query.Has(key) {
+			return true
+		}
 	}
-	bindingsByCreator, err := s.creators.AllSourceBindings(r.Context())
-	if err != nil {
-		s.writeRequestError(w, err)
-		return
+	return false
+}
+
+func (s *Server) listCreatorGovernance(w http.ResponseWriter, r *http.Request, session auth.Session) {
+	limit := 50
+	var err error
+	if raw := r.URL.Query().Get("limit"); raw != "" {
+		limit, err = strconv.Atoi(raw)
+		if err != nil {
+			s.writeRequestError(w, fault.WithField(fault.CodeValidation, "limit", err))
+			return
+		}
 	}
 	global, err := s.auth.AuthorizeSession(r.Context(), session, "library.read", auth.ResourceScope{Kind: "global"})
 	if err != nil {
 		s.writeRequestError(w, fault.New(fault.CodeInternal, true, err))
 		return
 	}
-	allowedSources := map[string]struct{}{}
+	var allowedSources []string
 	if !global {
 		candidateSources, sourceErr := s.creators.BindingSourceIDs(r.Context(), false)
 		if sourceErr != nil {
@@ -1920,46 +1933,38 @@ func (s *Server) listCreators(w http.ResponseWriter, r *http.Request) {
 			s.writeRequestError(w, fault.New(fault.CodeInternal, true, authorizeErr))
 			return
 		}
-		for _, sourceID := range allowed {
-			allowedSources[sourceID] = struct{}{}
-		}
+		allowedSources = allowed
 	}
-	visibleCreators := make([]creators.Creator, 0, len(list))
-	scopeIDs := make([]string, 0, len(list))
-	for _, creator := range list {
-		if !global {
-			allowedBindings := filterCreatorBindings(bindingsByCreator[creator.ID], allowedSources)
-			if len(allowedBindings) == 0 {
-				continue
-			}
-			creator.SourceCount = activeCreatorSourceCount(allowedBindings)
-		}
-		visibleCreators = append(visibleCreators, creator)
+	page, err := s.creators.ListGovernancePage(r.Context(), creators.GovernancePageRequest{
+		AllowedSourceIDs: allowedSources,
+		Global:           global,
+		Limit:            limit,
+		Cursor:           r.URL.Query().Get("cursor"),
+	})
+	if err != nil {
+		s.writeRequestError(w, err)
+		return
+	}
+	scopeIDs := make([]string, 0, len(page.Items))
+	for _, creator := range page.Items {
 		scopeIDs = append(scopeIDs, creator.ID)
 	}
-	if len(visibleCreators) > 0 && len(visibleCreators) == len(list) {
-		scopeIDs = nil
-	}
+	// 治理入口现在始终是有界页；即使当前主体拥有 global 权限，也只能为这一页求
+	// 聚合封面，不能用 nil scope 重新物化整个高基数 Creator 集合。
 	publicationID, covers, err := s.authorizedAggregateCoversForScope(r.Context(), session, catalog.AggregateScopeCreator, scopeIDs)
 	if err != nil {
 		s.writeRequestError(w, err)
 		return
 	}
-	items := make([]api.Creator, 0, len(visibleCreators))
-	for _, creator := range visibleCreators {
+	items := make([]api.Creator, 0, len(page.Items))
+	for _, creator := range page.Items {
 		items = append(items, creatorDTO(creator, publicationID, covers))
 	}
-	writeJSON(w, http.StatusOK, api.CreatorListResponse{Creators: items})
-}
-
-func creatorBrowseRequested(r *http.Request) bool {
-	query := r.URL.Query()
-	for _, key := range []string{"sourceId", "includeMerged", "sort", "limit", "cursor"} {
-		if query.Has(key) {
-			return true
-		}
+	response := api.CreatorListResponse{Creators: items}
+	if page.NextCursor != "" {
+		response.NextCursor = &page.NextCursor
 	}
-	return false
+	writeJSON(w, http.StatusOK, response)
 }
 
 func (s *Server) listCreatorBrowse(w http.ResponseWriter, r *http.Request, session auth.Session) {

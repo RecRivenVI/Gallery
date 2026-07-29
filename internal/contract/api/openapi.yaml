@@ -2334,10 +2334,12 @@ paths:
       operationId: listCreators
       summary: 列出 CanonicalCreator 及其有效合并状态
       description: >-
-        不带任何查询参数时保留兼容行为，返回全部 CanonicalCreator（包括已被合并身份）。
-        携带任一查询参数时进入面向用户的 live 身份浏览：默认折叠到有效合并根并按名称
-        keyset 分页；身份与 Binding 来自 control.db 当前事实，不是 publication 可重复读，
-        但每项封面仍严格绑定自身 queryPublicationId。Source 或授权变化会使旧 cursor 过期。
+        不带 sourceId/includeMerged/sort 时是治理分页，保留全部 CanonicalCreator（包括已被
+        合并身份），但默认只返回 50 项并通过 cursor 续页；只带 limit/cursor 仍属于治理
+        分页。携带 sourceId/includeMerged/sort 任一参数时进入面向用户的 live 身份浏览：
+        默认折叠到有效合并根并按名称 keyset 分页。身份与 Binding 来自 control.db 当前
+        事实，不是 publication 可重复读，但每项封面仍严格绑定自身 queryPublicationId。
+        Source 或授权变化会使旧 cursor 过期。
       parameters:
         - {name: sourceId, in: query, required: false, schema: {$ref: "#/components/schemas/SourceId"}, description: 只浏览当前 active Binding 属于该 Source 的有效 Creator}
         - {name: includeMerged, in: query, required: false, schema: {type: boolean, default: false}, description: 分页浏览时是否把已被合并身份作为独立行返回}
@@ -2346,7 +2348,7 @@ paths:
         - {name: cursor, in: query, required: false, schema: {type: string}}
       responses:
         "200":
-          description: 兼容全量清单或 Creator 浏览页
+          description: 有界治理页或 Creator 浏览页
           content:
             application/json:
               schema:

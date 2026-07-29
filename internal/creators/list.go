@@ -35,6 +35,16 @@ type ListPage struct {
 	NextCursor string
 }
 
+// GovernancePageRequest 描述治理客户端读取完整 CanonicalCreator 身份事实时使用的
+// 有界页。它与面向用户的 ListPage 分开：治理页保留已合并身份和非 active Binding
+// 可见性，但不再允许一次响应物化全部 Creator。
+type GovernancePageRequest struct {
+	AllowedSourceIDs []string
+	Global           bool
+	Limit            int
+	Cursor           string
+}
+
 type creatorListCursor struct {
 	Version          int    `json:"version"`
 	QueryFingerprint string `json:"queryFingerprint"`
@@ -63,31 +73,6 @@ func (s *Service) BindingSourceIDs(ctx context.Context, activeOnly bool) ([]stri
 			return nil, fault.New(fault.CodeInternal, true, err)
 		}
 		result = append(result, sourceID)
-	}
-	if err := rows.Err(); err != nil {
-		return nil, fault.New(fault.CodeInternal, true, err)
-	}
-	return result, nil
-}
-
-// AllSourceBindings 用一次有序读取取得全部 Creator 的 Binding 证据，供未携带任何分页参数
-// 的兼容列表保留原有“全部 CanonicalCreator”语义，同时消除逐 Creator Get 的数据库 N+1。
-func (s *Service) AllSourceBindings(ctx context.Context) (map[string][]SourceBinding, error) {
-	rows, err := s.control.QueryContext(ctx, `SELECT creator_id, binding_id, source_id, provider_id, external_id, source_key, status
-FROM creator_bindings ORDER BY creator_id, source_id, source_key, binding_id`)
-	if err != nil {
-		return nil, fault.New(fault.CodeInternal, true, err)
-	}
-	defer rows.Close()
-	result := make(map[string][]SourceBinding)
-	for rows.Next() {
-		var creatorID string
-		var binding SourceBinding
-		if err := rows.Scan(&creatorID, &binding.BindingID, &binding.SourceID, &binding.ProviderID,
-			&binding.ExternalID, &binding.SourceKey, &binding.Status); err != nil {
-			return nil, fault.New(fault.CodeInternal, true, err)
-		}
-		result[creatorID] = append(result[creatorID], binding)
 	}
 	if err := rows.Err(); err != nil {
 		return nil, fault.New(fault.CodeInternal, true, err)
@@ -203,6 +188,163 @@ func (s *Service) ListPage(ctx context.Context, request ListPageRequest) (ListPa
 		}
 	}
 	return page, nil
+}
+
+// ListGovernancePage 返回包含已合并身份的治理页。全局 library.read 可以看见没有
+// Binding 的 CanonicalCreator；资源受限主体只看见至少有一条 Binding（不限状态）落在
+// 获授权 Source 的身份，sourceCount 则仍只统计其中 active 的不同 Source。授权过滤在
+// keyset 与 LIMIT 之前完成，cursor 绑定本次重新计算的授权 Source 集合。
+func (s *Service) ListGovernancePage(ctx context.Context, request GovernancePageRequest) (ListPage, error) {
+	if request.Limit < 1 || request.Limit > 200 {
+		return ListPage{}, fault.WithField(fault.CodeValidation, "limit", nil)
+	}
+	allowed := normalizeSourceIDs(request.AllowedSourceIDs)
+	if !request.Global && len(allowed) == 0 {
+		return ListPage{Items: []Creator{}}, nil
+	}
+	fingerprint := governancePageFingerprint(request, allowed)
+	var anchor creatorListCursor
+	if request.Cursor != "" {
+		decoded, err := decodeCreatorListCursor(request.Cursor)
+		if err != nil {
+			return ListPage{}, err
+		}
+		if decoded.QueryFingerprint != fingerprint {
+			return ListPage{}, fault.New(fault.CodeCursorExpired, true, nil)
+		}
+		anchor = decoded
+	}
+
+	query, args := governancePageStatement(request.Global, anchor.LastCreatorID != "")
+	if !request.Global {
+		allowedJSON, err := json.Marshal(allowed)
+		if err != nil {
+			return ListPage{}, fault.New(fault.CodeInternal, true, err)
+		}
+		args = append([]any{string(allowedJSON)}, args...)
+	}
+	if anchor.LastCreatorID != "" {
+		args = append(args, anchor.LastSortKey, anchor.LastSortKey, anchor.LastCreatorID)
+	}
+	args = append(args, request.Limit+1)
+	rows, err := s.control.QueryContext(ctx, query, args...)
+	if err != nil {
+		return ListPage{}, fault.New(fault.CodeInternal, true, err)
+	}
+	defer rows.Close()
+	items := make([]Creator, 0, request.Limit+1)
+	for rows.Next() {
+		var item Creator
+		var mergedInto sql.NullString
+		var createdAt int64
+		if err := rows.Scan(&item.ID, &item.Name, &item.SortNameKey, &mergedInto, &createdAt, &item.SourceCount); err != nil {
+			return ListPage{}, fault.New(fault.CodeInternal, true, err)
+		}
+		item.MergedInto = mergedInto.String
+		item.CreatedAt = unixUTC(createdAt)
+		items = append(items, item)
+	}
+	if err := rows.Err(); err != nil {
+		return ListPage{}, fault.New(fault.CodeInternal, true, err)
+	}
+
+	page := ListPage{Items: items}
+	if len(items) > request.Limit {
+		last := items[request.Limit-1]
+		page.Items = items[:request.Limit]
+		page.NextCursor, err = encodeCreatorListCursor(creatorListCursor{
+			Version: creatorListCursorVersion, QueryFingerprint: fingerprint,
+			LastSortKey: last.SortNameKey, LastCreatorID: last.ID,
+		})
+		if err != nil {
+			return ListPage{}, err
+		}
+	}
+	if len(page.Items) == 0 {
+		return page, nil
+	}
+	effective, err := s.effectiveIDsForPage(ctx, creatorIDs(page.Items))
+	if err != nil {
+		return ListPage{}, err
+	}
+	for index := range page.Items {
+		page.Items[index].EffectiveID = effective[page.Items[index].ID]
+		if page.Items[index].EffectiveID == "" {
+			// 合并图由正式写路径保证无环；损坏或外键漂移时仍保持旧 List 的防御性
+			// 行为，不让一个坏身份把整个治理页变成无界递归或 500。
+			page.Items[index].EffectiveID = page.Items[index].ID
+		}
+	}
+	return page, nil
+}
+
+func governancePageStatement(global, hasAnchor bool) (string, []any) {
+	var query string
+	if global {
+		query = `SELECT c.creator_id, c.name, c.sort_name_key, c.merged_into, c.created_at,
+       (SELECT count(DISTINCT binding.source_id)
+        FROM creator_bindings AS binding
+        WHERE binding.creator_id=c.creator_id AND binding.status='active') AS source_count
+FROM canonical_creators AS c
+WHERE 1=1`
+	} else {
+		query = `WITH allowed_sources(source_id) AS MATERIALIZED (
+    SELECT DISTINCT CAST(value AS TEXT) FROM json_each(?)
+)
+SELECT c.creator_id, c.name, c.sort_name_key, c.merged_into, c.created_at,
+       (SELECT count(DISTINCT binding.source_id)
+        FROM creator_bindings AS binding
+        JOIN allowed_sources AS allowed ON allowed.source_id=binding.source_id
+        WHERE binding.creator_id=c.creator_id AND binding.status='active') AS source_count
+FROM canonical_creators AS c
+WHERE EXISTS (
+    SELECT 1 FROM creator_bindings AS binding
+    JOIN allowed_sources AS allowed ON allowed.source_id=binding.source_id
+    WHERE binding.creator_id=c.creator_id
+)`
+	}
+	if hasAnchor {
+		query += " AND (c.sort_name_key > ? OR (c.sort_name_key = ? AND c.creator_id > ?))"
+	}
+	query += " ORDER BY c.sort_name_key, c.creator_id LIMIT ?"
+	return query, nil
+}
+
+// effectiveIDsForPage 只沿本页（最多 200 个）身份的 merged_into 链求根，不读取整个
+// canonical_creators 表。这样治理响应已分页后，EffectiveID 的补充也不会重新引入全量
+// 内存物化。
+func (s *Service) effectiveIDsForPage(ctx context.Context, ids []string) (map[string]string, error) {
+	encoded, err := json.Marshal(ids)
+	if err != nil {
+		return nil, fault.New(fault.CodeInternal, true, err)
+	}
+	rows, err := s.control.QueryContext(ctx, `WITH RECURSIVE requested(creator_id) AS MATERIALIZED (
+    SELECT DISTINCT CAST(value AS TEXT) FROM json_each(?)
+), chain(start_id, current_id, merged_into, depth) AS (
+    SELECT requested.creator_id, creator.creator_id, creator.merged_into, 0
+    FROM requested JOIN canonical_creators AS creator ON creator.creator_id=requested.creator_id
+    UNION ALL
+    SELECT chain.start_id, parent.creator_id, parent.merged_into, chain.depth+1
+    FROM chain JOIN canonical_creators AS parent ON parent.creator_id=chain.merged_into
+    WHERE chain.merged_into IS NOT NULL AND chain.depth < 256
+)
+SELECT start_id, current_id FROM chain WHERE merged_into IS NULL ORDER BY start_id`, string(encoded))
+	if err != nil {
+		return nil, fault.New(fault.CodeInternal, true, err)
+	}
+	defer rows.Close()
+	result := make(map[string]string, len(ids))
+	for rows.Next() {
+		var startID, effectiveID string
+		if err := rows.Scan(&startID, &effectiveID); err != nil {
+			return nil, fault.New(fault.CodeInternal, true, err)
+		}
+		result[startID] = effectiveID
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fault.New(fault.CodeInternal, true, err)
+	}
+	return result, nil
 }
 
 func creatorPageStatement(includeMerged, hasMerges bool, order string, hasAnchor bool) (string, []any) {
@@ -340,6 +482,17 @@ func creatorPageFingerprint(request ListPageRequest, allowed []string) string {
 		Sort             string   `json:"sort"`
 		Limit            int      `json:"limit"`
 	}{allowed, request.SourceID, request.IncludeMerged, request.Sort, request.Limit})
+	sum := sha256.Sum256(payload)
+	return hex.EncodeToString(sum[:])
+}
+
+func governancePageFingerprint(request GovernancePageRequest, allowed []string) string {
+	payload, _ := json.Marshal(struct {
+		Mode             string   `json:"mode"`
+		Global           bool     `json:"global"`
+		AllowedSourceIDs []string `json:"allowedSourceIds"`
+		Limit            int      `json:"limit"`
+	}{"governance", request.Global, allowed, request.Limit})
 	sum := sha256.Sum256(payload)
 	return hex.EncodeToString(sum[:])
 }
