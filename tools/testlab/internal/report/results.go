@@ -126,14 +126,15 @@ type Report struct {
 	Environment *hostfacts.Facts `json:"environment,omitempty"`
 	// Corpus 描述本次被测语料的结构性事实（例如 Source 数量），使读者能判断哪些发布
 	// 路径确实被覆盖过。
-	Corpus         *CorpusFacts    `json:"corpus,omitempty"`
-	Transport      string          `json:"transport"`
-	Scale          int             `json:"scale,omitempty"`
-	Nonrecommended bool            `json:"nonrecommendedScale,omitempty"`
-	Findings       []Finding       `json:"findings"`
-	Latencies      []LatencySample `json:"latencies,omitempty"`
-	Limitations    []string        `json:"limitations,omitempty"`
-	FailureCount   int             `json:"failureCount"`
+	Corpus            *CorpusFacts       `json:"corpus,omitempty"`
+	Transport         string             `json:"transport"`
+	Scale             int                `json:"scale,omitempty"`
+	Nonrecommended    bool               `json:"nonrecommendedScale,omitempty"`
+	Findings          []Finding          `json:"findings"`
+	Latencies         []LatencySample    `json:"latencies,omitempty"`
+	PublicationMatrix *PublicationMatrix `json:"publicationMatrix,omitempty"`
+	Limitations       []string           `json:"limitations,omitempty"`
+	FailureCount      int                `json:"failureCount"`
 
 	// 以下字段只对有超时/分批语义的场景（目前是 perf）有意义；其它场景保持零值。
 	StartedAt             string `json:"startedAt,omitempty"`
@@ -142,6 +143,73 @@ type Report struct {
 	CompletedCombinations int    `json:"completedCombinations,omitempty"`
 	AbortedByTimeLimit    bool   `json:"abortedByTimeLimit,omitempty"`
 	AbortReason           string `json:"abortReason,omitempty"`
+}
+
+// PublicationMatrix 记录完整 Catalog 候选从构建到短事务发布的变化矩阵。
+// Latencies 中同名 publication/* 样本是 Publish 阶段的分位数；这里另外保留每次
+// Begin/Stage/Overlay/Validate/GC 的原始耗时和空间水位，避免把短指针切换冒充整个
+// 候选构建成本，也避免只留下汇总后无法复核的 P95。
+type PublicationMatrix struct {
+	ChangeRatioBasis   string                   `json:"changeRatioBasis"`
+	PrimarySourceShare float64                  `json:"primarySourceShare"`
+	PrimarySourceWorks int                      `json:"primarySourceWorks"`
+	SamplesPerRatio    int                      `json:"samplesPerRatio"`
+	Concurrency        int                      `json:"concurrency"`
+	CacheState         string                   `json:"cacheState"`
+	TargetPublishP95Ms float64                  `json:"targetPublishP95Ms"`
+	PercentileMethod   string                   `json:"percentileMethod"`
+	RelationsPerWork   int                      `json:"relationsPerWork"`
+	Baseline           PublicationBaseline      `json:"baseline"`
+	Ratios             []PublicationRatioResult `json:"ratios"`
+}
+
+type PublicationBaseline struct {
+	StageMs      float64 `json:"stageMs"`
+	OverlayMs    float64 `json:"overlayMs"`
+	ValidationMs float64 `json:"validationMs"`
+	PublishMs    float64 `json:"publishMs"`
+	TotalMs      float64 `json:"totalMs"`
+	Bytes        int64   `json:"bytes"`
+}
+
+type PublicationRatioResult struct {
+	ChangeRatio     float64                  `json:"changeRatio"`
+	ChangedWorks    int                      `json:"changedWorks"`
+	PlannedRuns     int                      `json:"plannedRuns"`
+	CompletedRuns   int                      `json:"completedRuns"`
+	PublishP50Ms    float64                  `json:"publishP50Ms"`
+	PublishP95Ms    float64                  `json:"publishP95Ms"`
+	PublishMinMs    float64                  `json:"publishMinMs"`
+	PublishMaxMs    float64                  `json:"publishMaxMs"`
+	PublishTargetOK bool                     `json:"publishTargetOk"`
+	Runs            []PublicationBuildSample `json:"runs"`
+}
+
+type PublicationBuildSample struct {
+	Run                            int     `json:"run"`
+	Revision                       int     `json:"revision"`
+	BeginMs                        float64 `json:"beginMs"`
+	StageMs                        float64 `json:"stageMs"`
+	OverlayMs                      float64 `json:"overlayMs"`
+	ValidationMs                   float64 `json:"validationMs"`
+	PublishMs                      float64 `json:"publishMs"`
+	GCMS                           float64 `json:"gcMs"`
+	CheckpointMs                   float64 `json:"checkpointMs"`
+	TotalMs                        float64 `json:"totalMs"`
+	BytesBefore                    int64   `json:"bytesBefore"`
+	BytesPeak                      int64   `json:"bytesPeak"`
+	BytesAfter                     int64   `json:"bytesAfter"`
+	OldSnapshotReadableAcrossBuild bool    `json:"oldSnapshotReadableAcrossBuild"`
+	ActiveWorkCount                int     `json:"activeWorkCount"`
+	WorkCreatorRelationCount       int     `json:"workCreatorRelationCount"`
+	MediaProjectionCount           int     `json:"mediaProjectionCount"`
+	SourceMediaCount               int     `json:"sourceMediaCount"`
+	ContentBlobCount               int     `json:"contentBlobCount"`
+	FileLocationCount              int     `json:"fileLocationCount"`
+	FTSDocumentCount               int     `json:"ftsDocumentCount"`
+	SearchCandidateCount           int     `json:"searchCandidateCount"`
+	SourceCount                    int     `json:"sourceCount"`
+	ChangedProjectionCount         int     `json:"changedProjectionCount"`
 }
 
 // CorpusFacts 记录本次被测语料的结构性事实。SourceCount 尤其重要：单 Source 语料

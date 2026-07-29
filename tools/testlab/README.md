@@ -10,6 +10,7 @@
 tools/testlab/
 ├── cmd/
 │   ├── seed/        构建并发布合成 Catalog（testlabseed，直接调用 internal/catalog.Store）
+│   ├── publication-perf/ 完整 Catalog publication 变化矩阵（生产 Store + 原子部分报告）
 │   ├── probe/       通过真实 galleryd + HTTP 驱动查询/媒体/真实 Source 场景（testlabprobe）
 │   ├── rulesimport/ 把真实旧配置转换成逐平台规则包与产物索引（testlabrulesimport）
 │   ├── guard/       独立零写入 guard 快照/校验（testlabguard）
@@ -68,6 +69,38 @@ Cursor 与 20 项媒体/DerivedAsset finding；`creator.id` 使用另一个真�
 # ≥1,000,000（非推荐诊断场景，必须显式确认）
 & $env:GALLERY_GO run ./tools/testlab/cmd/seed -approot <root>/appdirs/query-nonrec -scale 2000000 -allow-nonrecommended-scale -tier nonrecommended -manifest-out <root>/manifests/query-nonrec.json
 ```
+
+## Publication 变化矩阵
+
+`publication-perf` 不只计时指针切换：每个样本都通过生产
+`BeginCandidate → Stage → ApplyCatalogCandidateOverlays → ValidateCandidate → Publish`，并复核完整
+WorkProjection、WorkCreator 关系、MediaProjection、SourceMedia、ContentBlob、FileLocation、FTS 和
+search candidate。基线固定为多 Source，主 Source 持有 50% 作品；因此单次真实 Source
+publication 可以精确改变全库 1%/10%/50% 的 WorkProjection，不会把「主 Source 内变化比例」
+写成「全库变化比例」。
+
+```powershell
+# 语义/报告预检；数值不构成正式门禁结论
+& $env:GALLERY_GO run ./tools/testlab/cmd/publication-perf `
+  -approot <root>/appdirs/publication-preflight `
+  -report-out <root>/reports/publication-preflight.json `
+  -scale 1000 -sources 10 -primary-share 0.50 `
+  -ratios 0.01,0.10,0.50 -samples 2 -tier preflight
+
+# 正式 Reference 形状；任一参数降级都会在运行前被拒绝
+& $env:GALLERY_GO run ./tools/testlab/cmd/publication-perf `
+  -approot <root>/appdirs/publication-reference-500k `
+  -report-out <root>/reports/publication-reference-500k.json `
+  -scale 500000 -sources 10 -primary-share 0.50 `
+  -ratios 0.01,0.10,0.50 -samples 20 -tier reference
+```
+
+`-approot` 必须不存在或为空，`-report-out` 必须在其外部，避免报告自身污染空间水位。
+工具在 baseline 和每个完成样本后原子刷新报告，长时运行中断时保留已完成证据。
+`reference` 强制 500,000 Work、10 Source、50% 主 Source、三个正式比例与每比例至少
+20 个完整样本；报告分开记录 Begin/Stage/Overlay/Validate/Publish/GC/checkpoint、峰值空间、
+旧快照在构建各边界仍可读及 nearest-rank P50/P95。它不清空 OS 文件缓存，必须按报告的
+`cacheState=warm` 解读；HDD/SMB/NAS、完整哈希吞吐和 Degradation 仍是独立门禁。
 
 ## 真实 Source 验证（转换产物驱动）
 

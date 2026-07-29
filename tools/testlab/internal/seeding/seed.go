@@ -48,6 +48,31 @@ type Config struct {
 	Sources int
 }
 
+type sourceIndexProvider func(slot, scale, sources int) []int
+
+type stagedIdentity struct {
+	workID  string
+	mediaID string
+}
+
+type mutationProfile struct {
+	revision     int
+	changedWorks int
+}
+
+type baselineOptions struct {
+	sourceIndices sourceIndexProvider
+	captureSource int
+}
+
+type baselineState struct {
+	libraryID    string
+	sourceIDs    []string
+	creatorIDs   []string
+	overlayFacts map[string]catalog.OverlayFact
+	identities   map[int]stagedIdentity
+}
+
 // resolveSources 按 Config.Sources → 环境变量 → 默认 1 的顺序确定 Source 数量。
 func resolveSources(configured int) (int, error) {
 	if configured > 0 {
@@ -97,20 +122,25 @@ func mimeForKind(kind string) string {
 // 规模下该 map 只有数十 MB。若未来需要真正分批 Overlay 应用，必须先扩展生产
 // ApplyCatalogCandidateOverlays 的语义，不由测试工具伪装实现。
 func Run(ctx context.Context, cfg Config) (corpus.Manifest, error) {
+	manifest, _, err := runBaseline(ctx, cfg, baselineOptions{captureSource: -1})
+	return manifest, err
+}
+
+func runBaseline(ctx context.Context, cfg Config, options baselineOptions) (corpus.Manifest, baselineState, error) {
 	if cfg.AppRoot == "" {
-		return corpus.Manifest{}, fmt.Errorf("AppRoot 不能为空")
+		return corpus.Manifest{}, baselineState{}, fmt.Errorf("AppRoot 不能为空")
 	}
 	if cfg.Scale <= 0 {
-		return corpus.Manifest{}, fmt.Errorf("Scale 必须为正整数")
+		return corpus.Manifest{}, baselineState{}, fmt.Errorf("Scale 必须为正整数")
 	}
 	sources, err := resolveSources(cfg.Sources)
 	if err != nil {
-		return corpus.Manifest{}, err
+		return corpus.Manifest{}, baselineState{}, err
 	}
 	if sources > cfg.Scale {
 		// 空 Source 的候选会被 ValidateCandidate 以 workCount==0 拒绝；提前给出可读
 		// 原因，而不是让调用方拿到一个不透明的 CATALOG_CANDIDATE_INVALID。
-		return corpus.Manifest{}, fmt.Errorf("Source 数量 %d 超过语料规模 %d：会产生没有任何作品的 Source", sources, cfg.Scale)
+		return corpus.Manifest{}, baselineState{}, fmt.Errorf("Source 数量 %d 超过语料规模 %d：会产生没有任何作品的 Source", sources, cfg.Scale)
 	}
 	batchSize := cfg.BatchSize
 	if batchSize <= 0 {
@@ -120,11 +150,11 @@ func Run(ctx context.Context, cfg Config) (corpus.Manifest, error) {
 	dirs := appdirs.UnderRoot(cfg.AppRoot)
 	fileSystem := filesystem.OS{}
 	if err := dirs.Ensure(fileSystem); err != nil {
-		return corpus.Manifest{}, fmt.Errorf("ensure appdirs: %w", err)
+		return corpus.Manifest{}, baselineState{}, fmt.Errorf("ensure appdirs: %w", err)
 	}
 	store, err := storage.Open(ctx, dirs)
 	if err != nil {
-		return corpus.Manifest{}, fmt.Errorf("open storage: %w", err)
+		return corpus.Manifest{}, baselineState{}, fmt.Errorf("open storage: %w", err)
 	}
 	defer store.Close()
 
@@ -132,19 +162,19 @@ func Run(ctx context.Context, cfg Config) (corpus.Manifest, error) {
 	ids := identity.NewGenerator(systemClock)
 	libraryID, sourceIDs, err := createOwners(ctx, store, dirs, fileSystem, systemClock, ids, cfg.SourceRoot, sources)
 	if err != nil {
-		return corpus.Manifest{}, err
+		return corpus.Manifest{}, baselineState{}, err
 	}
 
 	catalogStore, err := catalog.NewStore(store.Catalog.SQL(), systemClock, ids)
 	if err != nil {
-		return corpus.Manifest{}, fmt.Errorf("new catalog store: %w", err)
+		return corpus.Manifest{}, baselineState{}, fmt.Errorf("new catalog store: %w", err)
 	}
 
 	creatorIDs := make([]string, corpus.CreatorCount)
 	for slot := range creatorIDs {
 		creatorIDs[slot], err = mustNewID(ids, domain.IDCanonicalCreator)
 		if err != nil {
-			return corpus.Manifest{}, err
+			return corpus.Manifest{}, baselineState{}, err
 		}
 	}
 
@@ -155,6 +185,7 @@ func Run(ctx context.Context, cfg Config) (corpus.Manifest, error) {
 	// 包含 cloneUnchangedSources 搬进来的前序 Source 作品，只传本 Source 的事实会把它们的
 	// Hidden/Favorite/Progress 全部抹回默认值。
 	overlayFacts := make(map[string]catalog.OverlayFact, n)
+	identities := make(map[int]stagedIdentity)
 	firstJobID := ""
 	var stageTotal, overlayTotal, validationTotal, publishTotal time.Duration
 	beginDurations := make([]int64, 0, sources)
@@ -166,7 +197,7 @@ func Run(ctx context.Context, cfg Config) (corpus.Manifest, error) {
 	for slot := 0; slot < sources; slot++ {
 		jobID, err := mustNewID(ids, domain.IDJob)
 		if err != nil {
-			return corpus.Manifest{}, err
+			return corpus.Manifest{}, baselineState{}, err
 		}
 		if slot == 0 {
 			firstJobID = jobID
@@ -178,7 +209,7 @@ func Run(ctx context.Context, cfg Config) (corpus.Manifest, error) {
 		beginStarted := time.Now()
 		candidate, err := catalogStore.BeginCandidate(ctx, jobID, sourceIDs[slot], 0)
 		if err != nil {
-			return corpus.Manifest{}, fmt.Errorf("begin candidate (source %d/%d): %w", slot+1, sources, err)
+			return corpus.Manifest{}, baselineState{}, fmt.Errorf("begin candidate (source %d/%d): %w", slot+1, sources, err)
 		}
 		beginDurations = append(beginDurations, time.Since(beginStarted).Milliseconds())
 
@@ -186,21 +217,22 @@ func Run(ctx context.Context, cfg Config) (corpus.Manifest, error) {
 		if err := stageSourceWorks(ctx, catalogStore, candidate, stageParams{
 			libraryID: libraryID, sourceID: sourceIDs[slot], slot: slot, sources: sources,
 			scale: n, batchSize: batchSize, ids: ids, creatorIDs: creatorIDs, overlayFacts: overlayFacts,
+			sourceIndices: options.sourceIndices, identities: identities, captureIdentities: slot == options.captureSource,
 		}); err != nil {
-			return corpus.Manifest{}, err
+			return corpus.Manifest{}, baselineState{}, err
 		}
 		stageTotal += time.Since(stageStarted)
-		visibleCounts = append(visibleCounts, corpus.VisibleCountForSource(n, sources, slot))
+		visibleCounts = append(visibleCounts, visibleCountForSource(n, sources, slot, options.sourceIndices))
 
 		overlayStarted := time.Now()
 		if err := catalogStore.ApplyCatalogCandidateOverlays(ctx, candidate, overlayFacts); err != nil {
-			return corpus.Manifest{}, fmt.Errorf("apply overlay facts (source %d/%d): %w", slot+1, sources, err)
+			return corpus.Manifest{}, baselineState{}, fmt.Errorf("apply overlay facts (source %d/%d): %w", slot+1, sources, err)
 		}
 		overlayTotal += time.Since(overlayStarted)
 
 		validationStarted := time.Now()
 		if err := catalogStore.ValidateCandidate(ctx, candidate); err != nil {
-			return corpus.Manifest{}, fmt.Errorf("validate candidate (source %d/%d): %w", slot+1, sources, err)
+			return corpus.Manifest{}, baselineState{}, fmt.Errorf("validate candidate (source %d/%d): %w", slot+1, sources, err)
 		}
 		validationElapsed := time.Since(validationStarted)
 		validationTotal += validationElapsed
@@ -208,7 +240,7 @@ func Run(ctx context.Context, cfg Config) (corpus.Manifest, error) {
 		publishStarted := time.Now()
 		publication, err = catalogStore.Publish(ctx, candidate)
 		if err != nil {
-			return corpus.Manifest{}, fmt.Errorf("publish candidate (source %d/%d): %w", slot+1, sources, err)
+			return corpus.Manifest{}, baselineState{}, fmt.Errorf("publish candidate (source %d/%d): %w", slot+1, sources, err)
 		}
 		publishElapsed := time.Since(publishStarted)
 		publishTotal += publishElapsed
@@ -216,7 +248,7 @@ func Run(ctx context.Context, cfg Config) (corpus.Manifest, error) {
 	}
 
 	if err := catalogStore.MarkQueryDependencyBackfillTriggered(ctx); err != nil {
-		return corpus.Manifest{}, fmt.Errorf("mark query dependency backfill: %w", err)
+		return corpus.Manifest{}, baselineState{}, fmt.Errorf("mark query dependency backfill: %w", err)
 	}
 
 	manifest := corpus.Manifest{
@@ -233,7 +265,31 @@ func Run(ctx context.Context, cfg Config) (corpus.Manifest, error) {
 		SourceValidationDurationsMs: validationDurations,
 		SourcePublishDurationsMs:    publishDurations,
 	}
-	return manifest, nil
+	return manifest, baselineState{
+		libraryID: libraryID, sourceIDs: sourceIDs, creatorIDs: creatorIDs,
+		overlayFacts: overlayFacts, identities: identities,
+	}, nil
+}
+
+func visibleCountForSource(scale, sources, slot int, provider sourceIndexProvider) int {
+	count := 0
+	for _, index := range indicesForSource(slot, scale, sources, provider) {
+		if !corpus.Hidden(index) {
+			count++
+		}
+	}
+	return count
+}
+
+func indicesForSource(slot, scale, sources int, provider sourceIndexProvider) []int {
+	if provider != nil {
+		return provider(slot, scale, sources)
+	}
+	indices := make([]int, 0, scale/sources+1)
+	for index := slot; index < scale; index += sources {
+		indices = append(indices, index)
+	}
+	return indices
 }
 
 // createOwners 建立本次语料的 Library 与全部 Source。SourceRoot 非空时走生产
@@ -290,28 +346,30 @@ func createOwners(ctx context.Context, store *storage.Store, dirs appdirs.Dirs, 
 
 // stageParams 是 stageSourceWorks 的输入。
 type stageParams struct {
-	libraryID    string
-	sourceID     string
-	slot         int
-	sources      int
-	scale        int
-	batchSize    int
-	ids          ports.IDGenerator
-	creatorIDs   []string
-	overlayFacts map[string]catalog.OverlayFact
+	libraryID         string
+	sourceID          string
+	slot              int
+	sources           int
+	scale             int
+	batchSize         int
+	ids               ports.IDGenerator
+	creatorIDs        []string
+	overlayFacts      map[string]catalog.OverlayFact
+	sourceIndices     sourceIndexProvider
+	identities        map[int]stagedIdentity
+	captureIdentities bool
+	requireIdentities bool
+	mutation          mutationProfile
 }
 
 // stageSourceWorks 分批写入属于第 slot 个 Source 的全部作品与媒体。
 //
 // 批处理边界（batchSize）故意与创作者槽位周期（corpus.CreatorCount）不对齐测试，用于
-// 验证跨批次 Creator 去重不依赖批大小与周期数的关系。作品到 Source 的分配由
-// corpus.SourceIndex 决定（取模交错），因此各 Source 的作品在排序键上完全交叉。
+// 验证跨批次 Creator 去重不依赖批大小与周期数的关系。普通 seed 使用
+// corpus.SourceIndex 取模交错；publication 变化矩阵显式传入加权分配，使单次
+// 生产 Source publication 能覆盖全库 1%/10%/50% 变化。
 func stageSourceWorks(ctx context.Context, catalogStore *catalog.Store, candidate catalog.Candidate, p stageParams) error {
-	// 交错分配下，本 Source 的下标是 slot, slot+sources, slot+2*sources, ...
-	indices := make([]int, 0, p.scale/p.sources+1)
-	for i := p.slot; i < p.scale; i += p.sources {
-		indices = append(indices, i)
-	}
+	indices := indicesForSource(p.slot, p.scale, p.sources, p.sourceIndices)
 	for start := 0; start < len(indices); start += p.batchSize {
 		end := start + p.batchSize
 		if end > len(indices) {
@@ -320,20 +378,35 @@ func stageSourceWorks(ctx context.Context, catalogStore *catalog.Store, candidat
 		works := make([]catalog.WorkFact, 0, end-start)
 		media := make([]catalog.MediaFact, 0, end-start)
 		for _, i := range indices[start:end] {
-			workID, err := mustNewID(p.ids, domain.IDCanonicalWork)
-			if err != nil {
-				return err
+			identity, exists := p.identities[i]
+			if !exists {
+				if p.requireIdentities {
+					return fmt.Errorf("Source %d 的稳定身份缺失: index=%d", p.slot, i)
+				}
+				workID, err := mustNewID(p.ids, domain.IDCanonicalWork)
+				if err != nil {
+					return err
+				}
+				mediaID, err := mustNewID(p.ids, domain.IDCanonicalMedia)
+				if err != nil {
+					return err
+				}
+				identity = stagedIdentity{workID: workID, mediaID: mediaID}
+				if p.captureIdentities {
+					p.identities[i] = identity
+				}
 			}
-			mediaID, err := mustNewID(p.ids, domain.IDCanonicalMedia)
-			if err != nil {
-				return err
+			changed := p.mutation.revision > 0 && i < p.mutation.changedWorks
+			title := corpus.Title(i)
+			if changed {
+				title = fmt.Sprintf("%s · publication-change-%04d", title, p.mutation.revision)
 			}
 			creatorSlot := corpus.CreatorIndex(i)
 			tagA, tagB := corpus.TagSlots(i)
 			works = append(works, catalog.WorkFact{
 				SourceID: p.sourceID, LibraryID: p.libraryID, SourceKey: corpus.SourceKey(i),
 				ProviderID: corpus.ProviderID(corpus.ProviderIndex(i)),
-				Title:      corpus.Title(i),
+				Title:      title,
 				Creator:    corpus.CreatorName(creatorSlot), CreatorID: p.creatorIDs[creatorSlot],
 				// source_creators 是逐条 Source-derived 事实，唯一键为
 				// (catalog_revision_id, source_id, source_key)；多个作品共享同一个
@@ -341,7 +414,7 @@ func stageSourceWorks(ctx context.Context, catalogStore *catalog.Store, candidat
 				CreatorSourceKey: fmt.Sprintf("creator-occurrence/%08d", i),
 				Tags:             []string{corpus.TagName(tagA), corpus.TagName(tagB)},
 				Filenames:        []string{corpus.Filename(i)},
-				WorkID:           workID,
+				WorkID:           identity.workID,
 			})
 
 			verified := corpus.ContentVerified(i)
@@ -350,7 +423,15 @@ func stageSourceWorks(ctx context.Context, catalogStore *catalog.Store, candidat
 			var size int64
 			if verified {
 				state = catalog.ContentVerificationStateContentVerified
-				sum := sha256.Sum256([]byte(fmt.Sprintf("testlab-synthetic-blob-%d", i)))
+				blobRevision := 0
+				if changed {
+					blobRevision = p.mutation.revision
+				}
+				blobSeed := fmt.Sprintf("testlab-synthetic-blob-%d", i)
+				if blobRevision > 0 {
+					blobSeed = fmt.Sprintf("%s-r%d", blobSeed, blobRevision)
+				}
+				sum := sha256.Sum256([]byte(blobSeed))
 				algorithm = "sha256-v1"
 				digest = hex.EncodeToString(sum[:])
 				locationKey = corpus.SourceKey(i)
@@ -362,18 +443,24 @@ func stageSourceWorks(ctx context.Context, catalogStore *catalog.Store, candidat
 				RelativePath:  fmt.Sprintf("testlab/work-%08d/%s", i, corpus.Filename(i)),
 				Kind:          corpus.MediaKind(i), MIME: mimeForKind(corpus.MediaKind(i)), Size: size,
 				Algorithm: algorithm, Digest: digest, LocationKey: locationKey,
-				MediaID: mediaID, WorkID: workID, Ordinal: 0,
+				MediaID: identity.mediaID, WorkID: identity.workID, Ordinal: 0,
 				ContentVerificationState: state,
 				MTimeNanos:               int64(1_700_000_000_000_000_000 + int64(i)*1000),
+			}
+			if changed {
+				mediaFact.MTimeNanos += int64(p.mutation.revision)
 			}
 			if verified {
 				mediaFact.LastConfirmedAlgorithm = algorithm
 				mediaFact.LastConfirmedDigest = digest
 				mediaFact.LastConfirmedAt = time.Unix(1_700_000_000, 0).UTC()
+				if changed {
+					mediaFact.LastConfirmedAt = mediaFact.LastConfirmedAt.Add(time.Duration(p.mutation.revision) * time.Second)
+				}
 			}
 			media = append(media, mediaFact)
 
-			p.overlayFacts[workID] = catalog.OverlayFact{
+			p.overlayFacts[identity.workID] = catalog.OverlayFact{
 				Hidden: corpus.Hidden(i), Favorite: corpus.Favorite(i), Progress: corpus.Progress(i),
 			}
 		}
