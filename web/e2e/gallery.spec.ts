@@ -219,9 +219,9 @@ test.beforeEach(async ({ page }) => mockGallery(page));
 // 本轮前端从零重写：旧的页面级用例（浏览/作品详情/CustomCover/错误态/分享 credential）针对的
 // 页面已随旧单入口一并删除，因此不能原样保留——让它们"通过"只会让门禁自证。
 //
-// 下面这组覆盖的是本切片**真正交付**的东西：双入口各自加载、Service Worker 只归画廊、主题跨入口
-// 共享、两个入口的可访问性基线。页面级端到端在画廊端与管理端实现后由 M6f 重建，届时连同真实后端
-// 一起进 CI，而不是继续用浏览器内合成 API。
+// 下面这组覆盖的是当前双入口真正交付的东西：双入口各自加载、Service Worker 只归画廊、主题跨入口
+// 共享、完整路由表的稳定成功/空/错误状态与可访问性基线。主要写链另由真实 galleryd E2E 覆盖；这里
+// 的合成 API 只负责让每条路由进入确定状态，不冒充后端业务证据。
 //
 // 刻意**不**在这里测 `/manage/jobs` 深链：那条回落由 Go 侧的嵌入处理器按路径前缀决定，
 // `vite preview` 用的是它自己的单入口回落，在这里测只会测到预览服务器的行为。该语义已由
@@ -608,6 +608,105 @@ test('两个入口都没有严重可访问性违规 @smoke', async ({ page }) =>
     // color-contrast 必须启用：旧基线把它 disableRules 掉了，等于放弃了对比度这一项。
     const results = await new AxeBuilder({ page }).withTags(['wcag2a', 'wcag2aa']).analyze();
     expect(results.violations, `${path} 存在可访问性违规`).toEqual([]);
+  }
+});
+
+type AccessibilityRoute = {
+  path: string;
+  ready: (page: Page) => ReturnType<Page['locator']>;
+};
+
+async function navigateWithinMountedEntry(page: Page, path: string): Promise<void> {
+  await page.evaluate((nextPath) => {
+    window.history.pushState({}, '', nextPath);
+    window.dispatchEvent(new PopStateEvent('popstate'));
+  }, path);
+  await expect(page).toHaveURL(new RegExp(`${path.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`));
+}
+
+async function expectRoutesAccessible(page: Page, routes: readonly AccessibilityRoute[]): Promise<void> {
+  for (const route of routes) {
+    await navigateWithinMountedEntry(page, route.path);
+    await expect(route.ready(page), `${route.path} 没有进入预期稳定状态`).toBeVisible();
+    // 页面标题往往先于并行查询出现；等局部加载指示全部收敛后再检查最终 DOM，避免只测到骨架。
+    await expect(page.locator('.ui-spinner')).toHaveCount(0);
+    const results = await new AxeBuilder({ page }).withTags(['wcag2a', 'wcag2aa']).analyze();
+    expect(results.violations, `${route.path} 存在可访问性违规`).toEqual([]);
+  }
+}
+
+test('当前用户端与管理端完整路由表在桌面与窄屏通过自动可访问性基线 @smoke', async ({ page }) => {
+  test.setTimeout(90_000);
+  const galleryRoutes: readonly AccessibilityRoute[] = [
+    { path: '/', ready: (current) => current.getByRole('heading', { name: '画廊', exact: true }) },
+    { path: '/browse', ready: (current) => current.getByRole('heading', { name: '全部作品' }) },
+    { path: '/sources/missing', ready: (current) => current.getByText('找不到这个平台', { exact: true }) },
+    { path: '/creators', ready: (current) => current.getByRole('heading', { name: '创作者', exact: true }) },
+    {
+      path: '/creators/missing',
+      ready: (current) => current.getByRole('heading', { name: '创作者', exact: true })
+    },
+    {
+      path: '/works/work_01SYNTHETIC',
+      ready: (current) => current.getByRole('heading', { name: '合成作品', exact: true })
+    },
+    {
+      path: `/works/work_01SYNTHETIC/view/media_01FIRST?queryPublicationId=${publication}`,
+      ready: (current) => current.getByRole('link', { name: '返回作品', exact: true })
+    },
+    { path: '/files', ready: (current) => current.getByRole('heading', { name: '文件', exact: true }) },
+    {
+      path: '/files/missing',
+      ready: (current) => current.getByRole('navigation', { name: '路径', exact: true })
+    },
+    { path: '/route-not-found', ready: (current) => current.getByText('这个页面不存在', { exact: true }) }
+  ];
+
+  const manageRoutes: readonly AccessibilityRoute[] = [
+    { path: '/manage', ready: (current) => current.getByRole('heading', { name: '概览', exact: true }) },
+    {
+      path: '/manage/scans',
+      ready: (current) => current.getByRole('heading', { name: '扫描与任务', exact: true })
+    },
+    {
+      path: '/manage/scans/missing',
+      ready: (current) => current.getByRole('heading', { name: '任务详情', exact: true })
+    },
+    {
+      path: '/manage/diagnostics',
+      ready: (current) => current.getByRole('heading', { name: '验证和诊断', exact: true })
+    },
+    {
+      path: '/manage/security',
+      ready: (current) => current.getByRole('heading', { name: '连接与安全', exact: true })
+    },
+    {
+      path: '/manage/rules',
+      ready: (current) => current.getByRole('heading', { name: '规则', exact: true })
+    },
+    {
+      path: '/manage/rules/missing',
+      ready: (current) => current.getByRole('heading', { name: '规则包', exact: true })
+    },
+    {
+      path: '/manage/governance',
+      ready: (current) => current.getByRole('heading', { name: '治理', exact: true })
+    },
+    {
+      path: '/manage/route-not-found',
+      ready: (current) => current.getByText('没有这个管理页面', { exact: true })
+    }
+  ];
+
+  for (const viewport of [
+    { width: 1280, height: 800 },
+    { width: 390, height: 844 }
+  ]) {
+    await page.setViewportSize(viewport);
+    await page.goto('/');
+    await expectRoutesAccessible(page, galleryRoutes);
+    await page.goto('/manage');
+    await expectRoutesAccessible(page, manageRoutes);
   }
 });
 
