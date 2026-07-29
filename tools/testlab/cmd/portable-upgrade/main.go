@@ -28,6 +28,7 @@ const (
 	afterBackupLibrary    = "Portable upgrade restore sentinel"
 	afterBadBackupLibrary = "Portable failed restore current fact"
 	afterLockedLibrary    = "Portable locked restore current fact"
+	afterLandingLibrary   = "Portable landing restore current fact"
 	startupTimeout        = 60 * time.Second
 	jobTimeout            = 30 * time.Second
 )
@@ -39,20 +40,28 @@ type pairedClient struct {
 }
 
 type result struct {
-	PreviousVersion          string `json:"previousVersion"`
-	CurrentVersion           string `json:"currentVersion"`
-	BackupAppVersion         string `json:"backupAppVersion"`
-	BackupSchemaVersion      int64  `json:"backupSchemaVersion"`
-	RestoreWillMigrate       bool   `json:"restoreWillMigrate"`
-	ProgramDataSeparated     bool   `json:"programDataSeparated"`
-	FactsSurvivedTransition  bool   `json:"factsSurvivedTransition"`
-	BackupVerified           bool   `json:"backupVerified"`
-	RestoreAppliedOnRestart  bool   `json:"restoreAppliedOnRestart"`
-	FailedRestoreKeptCurrent bool   `json:"failedRestoreKeptCurrent"`
-	FailedRestoreRecorded    bool   `json:"failedRestoreRecorded"`
-	LockedRestoreKeptCurrent bool   `json:"lockedRestoreKeptCurrent"`
-	LockedRestoreRecorded    bool   `json:"lockedRestoreRecorded"`
-	AllStopsExitedGracefully bool   `json:"allStopsExitedGracefully"`
+	PreviousVersion           string `json:"previousVersion"`
+	CurrentVersion            string `json:"currentVersion"`
+	BackupAppVersion          string `json:"backupAppVersion"`
+	BackupSchemaVersion       int64  `json:"backupSchemaVersion"`
+	RestoreWillMigrate        bool   `json:"restoreWillMigrate"`
+	ProgramDataSeparated      bool   `json:"programDataSeparated"`
+	FactsSurvivedTransition   bool   `json:"factsSurvivedTransition"`
+	BackupVerified            bool   `json:"backupVerified"`
+	RestoreAppliedOnRestart   bool   `json:"restoreAppliedOnRestart"`
+	FailedRestoreKeptCurrent  bool   `json:"failedRestoreKeptCurrent"`
+	FailedRestoreRecorded     bool   `json:"failedRestoreRecorded"`
+	LockedRestoreKeptCurrent  bool   `json:"lockedRestoreKeptCurrent"`
+	LockedRestoreRecorded     bool   `json:"lockedRestoreRecorded"`
+	LandingRestoreKeptCurrent bool   `json:"landingRestoreKeptCurrent"`
+	LandingRestoreRecorded    bool   `json:"landingRestoreRecorded"`
+	LandingRestoreBlockedByOS bool   `json:"landingRestoreBlockedByOS"`
+	AllStopsExitedGracefully  bool   `json:"allStopsExitedGracefully"`
+}
+
+type pendingFileHold struct {
+	release func() error
+	err     error
 }
 
 type restoreLastRecord struct {
@@ -285,27 +294,102 @@ func run(previousBin, currentBin, previousVersion, currentVersion string) error 
 	if err := assertFailedRestoreRecorded(appRoot, lockedBackup.BackupId, "轮换当前 control.db"); err != nil {
 		return err
 	}
+	landingBackup, err := createBackup(ctx, lockedRestoreClient)
+	if err != nil {
+		return fmt.Errorf("创建候选落位拒绝夹具备份: %w", err)
+	}
+	if err := createLibrary(ctx, lockedRestoreClient, afterLandingLibrary); err != nil {
+		return err
+	}
+	if err := requestRestore(ctx, lockedRestoreClient, landingBackup.BackupId); err != nil {
+		return err
+	}
 	if outcome := active.Stop(); !outcome.ExitedGracefully || outcome.ForcedKill || outcome.Err != nil {
 		stopsGraceful = false
-		return fmt.Errorf("轮换拒绝恢复后当前版本未优雅停止：forced=%t err=%v", outcome.ForcedKill, outcome.Err)
+		return fmt.Errorf("候选落位拒绝恢复前当前版本未优雅停止：forced=%t err=%v", outcome.ForcedKill, outcome.Err)
+	}
+	active = nil
+
+	watchCtx, cancelWatch := context.WithCancel(ctx)
+	holdResults, stopWatcher, err := watchNextFileWithoutDeleteSharing(
+		watchCtx,
+		filepath.Join(appRoot, "data", "control.db.incoming"),
+	)
+	if err != nil {
+		cancelWatch()
+		return err
+	}
+	active, err = testprocess.StartGallerydWithSourceRootsContext(
+		ctx, currentPath, appRoot, filepath.Join(logs, "current-after-landing-restore.log"), startupTimeout,
+	)
+	if err != nil {
+		cancelWatch()
+		_ = stopWatcher()
+		return fmt.Errorf("候选落位被拒绝后启动当前版本: %w", err)
+	}
+	var hold pendingFileHold
+	select {
+	case hold = <-holdResults:
+	case <-time.After(2 * time.Second):
+		cancelWatch()
+		_ = stopWatcher()
+		return fmt.Errorf("未观察到恢复候选的真实 Windows 阻断句柄")
+	}
+	cancelWatch()
+	watchStopErr := stopWatcher()
+	if hold.err != nil {
+		return fmt.Errorf("建立恢复候选落位阻断句柄: %w", hold.err)
+	}
+	if hold.release == nil {
+		return fmt.Errorf("恢复候选落位阻断未返回可释放句柄")
+	}
+	landingReleaseErr := hold.release()
+	if watchStopErr != nil {
+		return fmt.Errorf("停止恢复候选目录监视: %w", watchStopErr)
+	}
+	if landingReleaseErr != nil {
+		return fmt.Errorf("释放恢复候选落位阻断句柄: %w", landingReleaseErr)
+	}
+	landingRestoreClient, err := pair(ctx, active.BaseURL)
+	if err != nil {
+		return fmt.Errorf("候选落位被拒绝后重新配对: %w", err)
+	}
+	if err := assertLibraries(ctx, landingRestoreClient, map[string]bool{
+		beforeBackupLibrary:   true,
+		afterBackupLibrary:    false,
+		afterBadBackupLibrary: true,
+		afterLockedLibrary:    true,
+		afterLandingLibrary:   true,
+	}); err != nil {
+		return fmt.Errorf("候选落位被拒绝后的当前用户事实: %w", err)
+	}
+	if err := assertFailedRestoreRecorded(appRoot, landingBackup.BackupId, "落位恢复候选"); err != nil {
+		return err
+	}
+	if outcome := active.Stop(); !outcome.ExitedGracefully || outcome.ForcedKill || outcome.Err != nil {
+		stopsGraceful = false
+		return fmt.Errorf("候选落位拒绝恢复后当前版本未优雅停止：forced=%t err=%v", outcome.ForcedKill, outcome.Err)
 	}
 	active = nil
 
 	value := result{
-		PreviousVersion:          previousVersion,
-		CurrentVersion:           currentVersion,
-		BackupAppVersion:         backup.AppVersion,
-		BackupSchemaVersion:      backup.SchemaVersion,
-		RestoreWillMigrate:       verify.WillMigrate,
-		ProgramDataSeparated:     true,
-		FactsSurvivedTransition:  true,
-		BackupVerified:           true,
-		RestoreAppliedOnRestart:  true,
-		FailedRestoreKeptCurrent: true,
-		FailedRestoreRecorded:    true,
-		LockedRestoreKeptCurrent: true,
-		LockedRestoreRecorded:    true,
-		AllStopsExitedGracefully: stopsGraceful,
+		PreviousVersion:           previousVersion,
+		CurrentVersion:            currentVersion,
+		BackupAppVersion:          backup.AppVersion,
+		BackupSchemaVersion:       backup.SchemaVersion,
+		RestoreWillMigrate:        verify.WillMigrate,
+		ProgramDataSeparated:      true,
+		FactsSurvivedTransition:   true,
+		BackupVerified:            true,
+		RestoreAppliedOnRestart:   true,
+		FailedRestoreKeptCurrent:  true,
+		FailedRestoreRecorded:     true,
+		LockedRestoreKeptCurrent:  true,
+		LockedRestoreRecorded:     true,
+		LandingRestoreKeptCurrent: true,
+		LandingRestoreRecorded:    true,
+		LandingRestoreBlockedByOS: true,
+		AllStopsExitedGracefully:  stopsGraceful,
 	}
 	encoded, err := json.Marshal(value)
 	if err != nil {

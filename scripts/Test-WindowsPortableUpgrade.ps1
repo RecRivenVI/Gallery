@@ -114,6 +114,9 @@ try {
             'failedRestoreRecorded',
             'lockedRestoreKeptCurrent',
             'lockedRestoreRecorded',
+            'landingRestoreKeptCurrent',
+            'landingRestoreRecorded',
+            'landingRestoreBlockedByOS',
             'allStopsExitedGracefully'
         )) {
         if ($result.$field -ne $true) { throw "版本切换结果未通过：$field" }
@@ -137,6 +140,9 @@ try {
         FailedRestoreRecorded = 'passed'
         LockedRestoreKeptCurrent = 'passed'
         LockedRestoreRecorded = 'passed'
+        LandingRestoreKeptCurrent = 'passed'
+        LandingRestoreRecorded = 'passed'
+        LandingRestoreBlockedByOS = 'passed'
         AllStopsExitedGracefully = 'passed'
     }
 } finally {
