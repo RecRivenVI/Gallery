@@ -57,7 +57,7 @@ Gallery 是一个"本地优先"（数据主要放在自己电脑上，不依赖�
 | Architecture Proof（架构验证切片） | ✅ | ✅（限定范围内，含 8 个强制中断模拟测试） | 证明了断电、进程被强制终止后系统能自行恢复，不会数据错乱 | 数据库最终表结构、完整接口范围仍未冻结（计划内安排，不算缺口） | 已完成 |
 | 阶段 1：领域和数据所有权 | ✅ | ✅（限定范围内） | 备份/恢复、目录库整体重建、作者合并/撤销合并、文件"孤儿"处理等全部完成并通过验证 | 真实网络共享盘（SMB/NAS）、Windows/Linux 底层文件身份识别等留待以后阶段 | 已完成 |
 | 阶段 2：规则系统 | ✅（正确性层面） | ✅（限定范围内） | 规则生命周期、编译执行、参数/绑定和影响调度已形成闭环 | 正式性能/平台测试尚未完成 | 已完成 |
-| 阶段 3：扫描、任务与目录库 | ✅（代码与模拟数据层面） | 🟡（真实大盘抽样与 Pixiv 有界预检通过，全量未完成） | SSD/HDD 各完成几十万文件规模抽样；EV-92 又在真实 Pixiv 370,712 文件/105,202 目录上完成规则接入、45 秒有界 `index` 取消与全树零写入 guard | Pixiv/真实盘全量扫描与哈希、正式性能门禁、网络共享盘尚未完成；真实取消终态仍有约 71.6 秒延迟 | 完成全量运行准备并优先收口阶段 4 正式压力门禁 |
+| 阶段 3：扫描、任务与目录库 | ✅（代码与模拟数据层面） | 🟡（真实大盘抽样与 Pixiv 有界预检通过，全量未完成） | SSD/HDD 各完成几十万文件规模抽样；EV-92 又在真实 Pixiv 370,712 文件/105,202 目录上完成规则接入、45 秒有界 `index` 取消与全树零写入 guard；EV-93 修复 discovery 不响应取消 | Pixiv/真实盘全量扫描与哈希、正式性能门禁、网络共享盘尚未完成；取消修复后的真实延迟尚待复测 | 复测取消并完成全量运行准备，同时优先收口阶段 4 正式压力门禁 |
 | 阶段 4：查询与媒体 | 🟡（主线代码完成，部分参数未冻结） | 🟡（正确性收口完成，500,000 规模正式压力测试已执行） | 搜索、排序、分页、显式规则/有效封面、媒体读取/下载、缩略图生成全部有代码闭环；EV-51/52 降低搜索与 publication 开销，EV-87/88 用 catalog v20 窄候选收窄聚合封面，EV-89 再建立授权 Creator keyset 浏览 | 正式十来源变化 publication/并发/Degradation 矩阵仍未完成；兼容无参数 Creator 全量响应、超大合并图、排序权重、Total、租约和正式 API Freeze 尚未冻结 | 完成正式性能矩阵与接口冻结 |
 | 阶段 5：账户、安全与多客户端 | 🟠（代码与合成安全收尾已实现；恶意输入缺陷已收口） | 🟡（Personal 与同机 LAN 安全管理补证，正式 Gate 未通过） | EV-37/EV-38/EV-44/EV-48 的安全收口之外，EV-60 已把 Session、API Token、Share、allow/deny Grant、账户停用恢复和精确 Session 吊销接入隔离真实浏览器；EV-86 又让 Creator/Library 聚合封面遵守 deny、Token scope 与独立 `media.read` | 真实 LAN 多设备、目标低端设备 Argon2id、真实恶意资源和外部安全测试门禁仍未完成；同机 loopback 不能替代正式 Security Gate | 完成外部设备与恶意资源门禁 |
 | 阶段 6：Web/PWA 界面 | 🟠（前端双入口、设计重构与首批真实业务链路已实现） | 🟡（隔离 Chromium/Firefox 真实 `galleryd` E2E 已建立，正式 Gate 未通过） | 共享设计系统、媒体优先画廊端与紧凑管理端；EV-54～EV-77 覆盖主要业务/治理/恢复，EV-78～EV-85 建立窄屏、弱网、重构及媒体背压，EV-89 补齐 Source 作者分页浏览和范围继承，EV-91 补齐授权 Job 历史分页与连续加载 | 浏览器业务门禁仍使用合成 Source；EV-92 只补到独立 testlab 的真实 Pixiv 有界预检。真实存储浏览器链、其余弱网矩阵、触摸设备与屏幕阅读器未验证；画廊端无 DOM 虚拟化 | 扩大真实后端业务与可访问性 E2E，不进入桌面壳 |
@@ -90,6 +90,8 @@ EV-90 把 `creator.id` 从阶段 4 testlab 的 limitation 改为持续 finding�
 EV-91 把 Job 历史从最旧优先的全量读取/N+1 改为 control v24 索引支持的新到旧授权 keyset 分页；严格 cursor 绑定状态、limit 与授权指纹，但不作为权限凭据，每页仍在响应 limit 前逐 Job 重新授权。管理端以 50 项连续加载，续页失败保留已有页面，状态切换丢弃旧 cursor。Chromium/Firefox 新增真实后端定向链各 1/1 通过并进入完整运行器；本轮没有重跑既有 21 项完整链，因此不登记为 22/22 完整链结论。
 
 EV-92 首次把用户提供的 legacy schema v3 规则通过正式转换器接入真实 Pixiv Source：Pixiv 规则含 36 个 primitive，完整只读 guard 记录 370,712 文件、105,202 目录与 562,792,663,280 bytes；45 秒有界 `index` 最终 cancelled，Source 前后零变化。该轮修复长 guard 期间 Watcher 抢先创建系统扫描的 testlab 编排缺陷，并让续跑规则版本不同时 fail-closed。扫描从墙钟触发取消到终态仍约需 71.6 秒；全量扫描/哈希/发布、规则语义和正式性能均未由此完成。
+
+EV-93 随后定位并修复这 71.6 秒延迟的确定性代码根因：Scheduler 已取消 Scan context，但 discovery 的 `filepath.WalkDir` 不感知 context。现在每个遍历回调会在后续 Source 读取前检查 `ctx.Err()`，由既有持久状态机收敛 Job/Attempt；Windows scanner、WSL2 race 和根级检查均通过。尚未重跑真实 Pixiv，因此修复前的 116,584 ms 不能改写成新延迟，真实取消响应 Gate 仍待下一次有界复测。
 
 **2026-07-27 首次真实来源有界验证与安全审计的结论（[EV-47](Documents/证据/验证记录.md)）**：本轮再次证实
 「代码闭环」与「真实可用」之间的距离比此前记录的更大——发现的缺陷全部属于「代码存在、测试通过、
@@ -238,7 +240,7 @@ EV-92 首次把用户提供的 legacy schema v3 规则通过正式转换器接�
 | Watcher（文件变化监听）只作提示，真正以周期性重新核对为准 | 需要 | 未变 | `internal/watcher` | ✅ | 单元测试 | EV-24/27 | ✅ | 无 |
 | 目录库维护：GC（垃圾回收）、检查点、VACUUM（整理数据库文件）、磁盘空间预检查 | 需要 | 未变 | `internal/maintenance` | ✅ | 单元测试 | EV-23 | ✅ | 无 |
 | 真实 SSD/HDD 大规模抽样验收 | 需要真实规模性能门禁 | 拆分为"抽样验收"+"正式性能门禁"两步，仅完成第一步 | 通过真实 `galleryd` 对约 36.6 万文件（SSD）/63.2 万文件（HDD）做有界抽样 | ✅（抽样范围内） | 真实环境实测 | EV-25，明确写"全量扫描未完成，正式全量性能 Gate 仍未通过" | 🟡 | 不能把抽样结果当作真实全量场景的性能保证 |
-| Pixiv 真实 Source 只读有界预检 | 全量扫描前置 | 新增独立低优先级预检；只做规则转换、注册、45 秒 `index` 取消与全树 guard | `tools/testlab/cmd/{rulesimport,probe}`、`tools/testlab/stages/sourcelab` | ✅（有界预检范围） | 真实 SSD Source、独立 AppDirs、动态 loopback、低资源运行 | EV-92 | 🟡 | 370,712 文件/105,202 目录前后零变化；未完成全量扫描/哈希/发布，取消终态总耗时 116,584 ms |
+| Pixiv 真实 Source 只读有界预检 | 全量扫描前置 | 新增独立低优先级预检；只做规则转换、注册、45 秒 `index` 取消与全树 guard | `tools/testlab/cmd/{rulesimport,probe}`、`tools/testlab/stages/sourcelab`、`internal/scanner` | ✅（有界预检范围） | 真实 SSD Source、独立 AppDirs、动态 loopback、低资源运行 | EV-92/93 | 🟡 | 370,712 文件/105,202 目录前后零变化；116,584 ms 为修复前取消基线，EV-93 后尚待真实复测；未完成全量扫描/哈希/发布 |
 | 扫描档案（`index`/`incremental`/`verify`） | 计划外新增（真实测试中发现需要） | 已实现并设为默认使用 `incremental` | `internal/scanner` | ✅ | 单元+真实抽样测试 | EV-25/26 | ✅（抽样范围内） | 默认选择逻辑本身仍标注"有条件接受" |
 | 目录库发布与恢复模型收尾（含 6 项条件全部满足） | 需要 | 未变 | `internal/catalog` | ✅ | 单元+强制中断模拟测试 | EV-28："阶段 3 至此在...六项条件全部满足后正式收口" | ✅ | 无 |
 | 真实网络共享盘（SMB/NAS/UNC）扫描行为 | 计划中列为需要验证 | 未变 | 未发现相关正式代码或测试 | ⏳ | — | 明确列为"仍需重测的关键门禁" | ⏳ | 尚未验证 |
@@ -303,7 +305,7 @@ EV-92 首次把用户提供的 legacy schema v3 规则通过正式转换器接�
 
 | 测试项目 | 所属阶段/门禁 | 测试代码位置 | 正式记录 | 状态 | 环境与样本 | 不能扩大解释的局限 |
 |---|---|---|---|---|---|---|
-| 全部 Go 测试（719 个顶层 `Test*`/`Benchmark*`/`Example*` 函数，覆盖 62 个目录/包） | 贯穿各阶段 | `cmd`/`internal`/`pkg`/`tools` 共 170 个 `*_test.go` 文件 | `scripts/Check.ps1` 每次运行 | ✅（在 CI 上持续运行并要求全部通过） | Windows + Ubuntu（GitHub Actions） | 全部是模拟/合成数据，不是真实媒体库；Argon2id benchmark 需手动 `-bench`，CI 从不执行 |
+| 全部 Go 测试（720 个顶层 `Test*`/`Benchmark*`/`Example*` 函数，覆盖 62 个目录/包） | 贯穿各阶段 | `cmd`/`internal`/`pkg`/`tools` 共 170 个 `*_test.go` 文件 | `scripts/Check.ps1` 每次运行 | ✅（在 CI 上持续运行并要求全部通过） | Windows + Ubuntu（GitHub Actions） | 全部是模拟/合成数据，不是真实媒体库；Argon2id benchmark 需手动 `-bench`，CI 从不执行 |
 | 数据库迁移（control 24 个迁移文件，catalog 20 个迁移文件） | 阶段 0-6 | `internal/storage/migrations/{control,catalog}` | EV-12 及各阶段收尾记录、EV-37、EV-42、EV-44、EV-46、EV-51、EV-52、EV-59、EV-87、EV-89、EV-91 | ✅ | 空库/旧库升级单元测试；control v23 增加 Creator NaturalSortKey，v24 增加 Job 历史 keyset 索引；catalog v20 增加 Creator/Source 封面窄候选 | 最终物理 Schema 仍未冻结；旧规则封面只能近似回填，需重扫精确恢复；规则隐藏/角标需重扫；正式变化 publication 仍待完整 Reference Gate |
 | 契约/OpenAPI/WebSocket/游标/错误码 Schema 一致性 | 阶段 0、4、5 | `internal/contract/{api,fault,query,realtime}/*_test.go` | EV-12、EV-30、EV-37 | ✅（生成一致性） | 单元测试 | 当前 `0.6.0-pre-alpha`，尚未正式冻结 |
 | 集成/端到端（使用固定的小型合成文件夹样例） | Walking Skeleton、Architecture Proof | `internal/bootstrap/run_test.go`、`internal/scanner/{service_test.go,discovery_test.go}`，样例文件在 `tests/fixtures/` | EV-13、EV-14 | ✅（限定范围内） | 单个/几个文件规模，非大规模 | 不能代表大规模真实场景 |
@@ -313,7 +315,7 @@ EV-92 首次把用户提供的 legacy schema v3 规则通过正式转换器接�
 | 查询/搜索/游标/Overlay/封面/逐成员授权正确性 | 阶段 4 | `internal/query/*_test.go`、`internal/catalog/*_test.go`、`internal/querytext/*_test.go` | EV-30～34、EV-42、EV-44 | ✅（合成正确性收口） | 单元+黄金样例+合成 migration；授权在 total/keyset/limit 前生效 | 不代表真实 Source、正式规模性能或 API Freeze |
 | 媒体 Range 请求/DerivedAsset（缩略图）正确性 | 阶段 4 | `internal/media/*_test.go`、`internal/derived*/**_test.go` | EV-30/32/33 | ✅ | 单元+端到端 | 无 |
 | 性能测试（Reference Performance） | 阶段 3、4 | `internal/query/reference_performance_test.go` 微基准与 `tools/testlab` 生产 Store/HTTP 矩阵（均需显式运行） | EV-23/35/36/51/52 均明确区分方向性测量与正式 Gate | 🟡 | 当前补证含 500k/10 Source 窄候选和 100k/10 Source 完整候选预检 | 尚无完整 500k、1%/10%/50% 变化、多样本 P95、并发、空间、维护、哈希和 Degradation 矩阵，不能当作正式门禁结论 |
-| SSD/HDD/SMB/NAS 真实场景 | 阶段 3、7 | `tools/testlab/stages/sourcelab` 已用于本地盘有界预检；网络盘仍无正式结果 | EV-25、EV-92 均明确写"全量扫描未完成，正式全量性能 Gate 仍未通过" | 🟡（本地盘抽样/有界） / ⏳（全量与网络盘） | 真实 SSD/HDD 既有抽样；真实 Pixiv 370,712 文件 Source 的 45 秒有界 `index` | 有界结果不能当作全量吞吐保证；Pixiv 取消终态额外约 71.6 秒，SMB/NAS 尚未验证 |
+| SSD/HDD/SMB/NAS 真实场景 | 阶段 3、7 | `tools/testlab/stages/sourcelab` 已用于本地盘有界预检；网络盘仍无正式结果 | EV-25、EV-92/93 均明确写"全量扫描未完成，正式全量性能 Gate 仍未通过" | 🟡（本地盘抽样/有界） / ⏳（全量与网络盘） | 真实 SSD/HDD 既有抽样；真实 Pixiv 370,712 文件 Source 的 45 秒有界 `index` | 有界结果不能当作全量吞吐保证；EV-93 已修 discovery 取消但尚待真实延迟复测，SMB/NAS 尚未验证 |
 | Windows/Linux/macOS/Docker 平台支持 | 阶段 7 | CI 只有 Windows + Ubuntu 两个系统 | ADR-007 四级支持成熟度表 | 🟡（Windows/Linux 停在"CI 能运行"层级）/ ⏳（macOS/Docker） | GitHub Actions | 未达到"发行候选"或"正式支持"级别；CI 上的 Linux 也不是原生 Linux 全部行为的完整验证 |
 | 安全（认证、授权、Web 边界、路径穿越、恶意元数据/媒体、限流） | 阶段 5 | 正式生产包覆盖账户/Token/Grant/Session/WS/Web 与合成攻击；Work 查询逐成员授权；真实 Chrome/Edge 已覆盖 Personal/LAN 主路径和吊销 | EV-09、EV-37、EV-38、EV-44、EV-60 | 🟡 | Windows 合成与浏览器；WSL race；隔离 Personal/LAN Chromium 安全管理链 | 真实物理 LAN 多设备、目标低端设备与真实恶意资源门禁未完成，整体 Gate 未通过 |
 | Web/PWA 界面测试 | 阶段 6 | `web/src/**/*.test.ts(x)`、`web/scripts/check-audit.test.mjs`、`web/e2e`、`internal/webapp/*_test.go` 与 `tools/testlab/cmd/web-e2e` | EV-38～EV-40、EV-42、EV-44、EV-54～EV-91 | 🟡 | Vitest 14 个文件 204 项；Chromium/Firefox mock smoke 16/16；EV-89 的隔离 Chromium 与 Firefox/真实 `galleryd` 完整运行器各 21 项，EV-91 新 Job 历史定向链各 1/1 通过且已纳入运行器；同 AppDirs 多阶段重启与 11 个治理子根 Source guard 保持；EV-79 另有 WSL Linux Chromium 320/360/390/412px 产物探针 | 新增授权 Job 历史两页、续页和末页验证；本轮未重跑含该 spec 的完整链。其余覆盖 Source 作者分页、管理自举、画廊/媒体、规则、安全、维护、治理、取消、重启、网络退化和媒体背压；真实移动设备/屏幕阅读器和其余弱网矩阵仍未覆盖 |
@@ -393,7 +395,7 @@ EV-92 首次把用户提供的 legacy schema v3 规则通过正式转换器接�
 | 平台风险 | Linux 支持目前只验证过 WSL（Windows 内置的 Linux 兼容层）和 GitHub Actions 的 `ubuntu-latest`，尚未验证独立安装的原生 Linux 系统；macOS、Docker、真实网络共享盘（SMB/NAS）尚未验证 |
 | 安全风险 | 阶段 5 账户/凭据/授权、匿名 Share、全资源矩阵、恶意输入与 WS 防滥用代码及合成测试已落地；EV-44 已关闭 Work 聚合查询逐成员授权缺口，EV-46 已关闭 `SEC-3`（媒体呈现改由服务端内联白名单决定，三条正文路径统一加 sandbox CSP）；真实 LAN 多设备/浏览器和目标设备 Argon2id 门禁仍缺，不能描述为完整 Security Gate 通过 |
 | 产品/UI 缺口 | Web/PWA 代码基线已存在，EV-39 的实时通道与写入口阻断已由 EV-40 关闭；EV-54～EV-77 覆盖主要真实后端业务与治理持续链，EV-78～EV-91 又关闭窄屏导航焦点、Linux Chromium 320px Grid 溢出、弱网恢复、双入口重构、媒体背压、Source 作者分页和 Job 历史分页缺口。EV-92 的真实 Pixiv 证据属于独立 testlab，不是浏览器业务链；真实移动设备/触控、人工屏幕阅读器、全页面可访问性与正式可用性 Gate 均未完成 |
-| 测试体系缺口 | EV-54～EV-91 已让主要业务/治理、作者与 Job 分页、断线/gap/连续网络切换、一次查询中断、同 origin 服务长停机、媒体背压、取消、强杀接管、恢复重启及双入口重构的 Chromium/Firefox 真实后端 E2E 进入运行器，并保持 mock smoke 与真实证据分层；其中 EV-91 只完成新增用例定向验证，尚未重跑完整链。EV-92 已建立真实 Pixiv 有界预检和零写入 guard，但全量扫描/哈希、约 71.6 秒取消终态延迟与正式性能仍未关闭。EV-45 已让阶段 4 testlab Correctness 进入普通 `go test`，但 500k 性能/十来源矩阵仍是人工门禁；全仓库仍无正式 Fuzz，部分平台包仍缺直接测试。带宽、随机延迟/丢包分布、代理/移动网络等其余弱网矩阵与真实存储崩溃恢复仍未进入持续门禁 |
+| 测试体系缺口 | EV-54～EV-91 已让主要业务/治理、作者与 Job 分页、断线/gap/连续网络切换、一次查询中断、同 origin 服务长停机、媒体背压、取消、强杀接管、恢复重启及双入口重构的 Chromium/Firefox 真实后端 E2E 进入运行器，并保持 mock smoke 与真实证据分层；其中 EV-91 只完成新增用例定向验证，尚未重跑完整链。EV-92 已建立真实 Pixiv 有界预检和零写入 guard，EV-93 修复 discovery 不响应取消，但取消延迟尚待真实复测，全量扫描/哈希与正式性能仍未关闭。EV-45 已让阶段 4 testlab Correctness 进入普通 `go test`，但 500k 性能/十来源矩阵仍是人工门禁；全仓库仍无正式 Fuzz，部分平台包仍缺直接测试。带宽、随机延迟/丢包分布、代理/移动网络等其余弱网矩阵与真实存储崩溃恢复仍未进入持续门禁 |
 | 发行缺口 | 没有安装包、没有代码签名、没有软件物料清单（SBOM）、没有升级机制的正式实现 |
 | 明确不进入 v1 的事项 | 原始文件写入/回收站、远程/公网访问、插件系统、原生手机客户端、压缩包/PDF/漫画容器格式解析、无限制单字中文搜索与拼音搜索、外部独立搜索引擎、自动导入其他同类产品数据 |
 
@@ -408,7 +410,7 @@ EV-92 首次把用户提供的 legacy schema v3 规则通过正式转换器接�
 | 0 | 缺陷收口（EV-39 登记项已全部关闭，见 EV-40、EV-44、EV-45、EV-46） | EV-40 关闭 6 项 P1 及 `SEC-4`/`TEST-1`/`BLD-1`/`A11Y-1` 键盘部分；EV-44 关闭 `AUTHZ-1`/`QRY-1`；EV-45 关闭 `TEST-2`；EV-46 关闭 `MED-1`、`SEC-3`，并新发现修复 `LINK-1`（Windows 目录联接被识别为普通文件）、`TX-1`（WAL 读后写事务过期读快照）与迁移预算门禁不可复现 | 阻断性缺陷优先；`MED-1` 由 ADR-010 裁决完整性证据分层，`SEC-3` 由规范 08 新增呈现策略裁决 |
 | 1 | 阶段 4 收尾 | 正式性能门禁（Reference/Degradation Performance Gate）与 API 接口冻结 | 1k testlab Correctness 已持续化；正式性能、十来源与接口数值仍未冻结 |
 | 2 | 阶段 5 | 完成真实 LAN 多设备与目标低端设备 Argon2id 延迟/并发验证 | 同机 Chrome/Edge 和高性能工作站证据已取得，剩余缺口需要外部设备环境 |
-| 3 | 阶段 6 | EV-92 已完成真实 Pixiv Source 只读预检和有界扫描；下一步处理真实取消响应、全量运行根/续跑/空间/失败恢复准备，并继续覆盖其余弱网矩阵、全页面可访问性与真实设备 | 继续扩大真实后端 E2E；Pixiv 全量扫描保持低优先级，不能替代业务闭环和发布可用性门禁 |
+| 3 | 阶段 6 | EV-92 已完成真实 Pixiv Source 只读预检，EV-93 已修 discovery 取消缺口；下一步复测真实取消延迟，完成全量运行根/续跑/空间/失败恢复准备，并继续覆盖其余弱网矩阵、全页面可访问性与真实设备 | 继续扩大真实后端 E2E；Pixiv 全量扫描保持低优先级，不能替代业务闭环和发布可用性门禁 |
 | 4 | 阶段 7 | 跨平台正式支持（Linux 原生、macOS、Docker）、网络共享盘（SMB/NAS）支持、安装包/签名/正式发行 | 需要前面阶段稳定后，大规模的平台适配和发行准备才有意义 |
 
 ---
