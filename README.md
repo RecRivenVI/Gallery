@@ -103,7 +103,7 @@ EV-93 已定位并修复上述取消延迟的确定性根因：Scheduler 虽已�
 
 EV-94 已完成真实补证：首轮 Scan/Attempt 在 45 秒边界同秒 cancelled、无 publication，取消 POST 后 201 ms 即观察终态；随后同 AppDirs 恢复重跑 531.695 秒完整通过，7 findings/0 failures，`bounded-index-scan=45,397 ms`，最终全树 guard 零变化。该结论仅覆盖 Windows 本地 SSD/Pixiv/index discovery，不代表活动 Hash、HDD/SMB/NAS、全量扫描/哈希/发布或 RC Gate。
 
-EV-96 已建立 publication 性能执行器：十 Source 加权语料可精确测量全局 1%/10%/50% 变化，覆盖生产 Store 的完整候选、验证、发布、GC/Checkpoint、历史快照与空间报告。但初版虽声明每 Work 两条 Creator 关系，实际只写入一条；旧 1,000/100,000 Work 数字因此只保留为容量与工具证据。EV-97 已真正实装并核对每 Work 两条关系，增加 fail-closed 原子断点续跑；EV-98 随后以 2 核亲和性完成纠正后 100,000 Work/10 Source 预检，全局三档 3/3、0 failure，每轮实测 200,000 条 WorkCreator 关系，同环境完成报告 `-resume` 退出码 0；EV-99 又将十个权威目标来源代号和实测 `goMaxProcs` 纳入报告/续跑指纹。正式 500,000 多样本、并发/冷缓存与 Degradation 仍未执行，因此 Reference Performance/API Freeze Gate 继续保持未通过。
+EV-96 已建立 publication 性能执行器：十 Source 加权语料可精确测量全局 1%/10%/50% 变化，覆盖生产 Store 的完整候选、验证、发布、GC/Checkpoint、历史快照与空间报告。但初版虽声明每 Work 两条 Creator 关系，实际只写入一条；旧 1,000/100,000 Work 数字因此只保留为容量与工具证据。EV-97 已真正实装并核对每 Work 两条关系，增加 fail-closed 原子断点续跑；EV-98 随后以 2 核亲和性完成纠正后 100,000 Work/10 Source 预检，全局三档 3/3、0 failure，每轮实测 200,000 条 WorkCreator 关系，同环境完成报告 `-resume` 退出码 0；EV-99 又将十个权威目标来源代号和实测 `goMaxProcs` 纳入报告/续跑指纹；EV-100 再让通用 Query Reference seed/probe 强制同一 500k/十目标来源/双关系形状，并在计时前验证实际 active publication 与 manifest 一致。正式 500,000 多样本、并发/冷缓存与 Degradation 仍未执行，因此 Reference Performance/API Freeze Gate 继续保持未通过。
 
 详细依据见 [PROJECT_STATUS.md](./PROJECT_STATUS.md)。
 
