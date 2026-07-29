@@ -161,3 +161,6 @@ jobs:
             -PreviousVersion $previousVersion `
             -CurrentVersion $version `
             -UpgradeProbeExecutable $probe
+      - name: 验证真实历史 Schema 升级与降级拒绝
+        shell: pwsh
+        run: ./scripts/Test-WindowsHistoricalUpgrade.ps1

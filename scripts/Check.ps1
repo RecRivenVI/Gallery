@@ -44,7 +44,8 @@ if ($badEol) { throw "以下 tracked 文件的换行不是 LF，请检查 .gitat
 $releaseScripts = @(
     (Join-Path $PSScriptRoot 'Build-WindowsPortable.ps1'),
     (Join-Path $PSScriptRoot 'Test-WindowsPortable.ps1'),
-    (Join-Path $PSScriptRoot 'Test-WindowsPortableUpgrade.ps1')
+    (Join-Path $PSScriptRoot 'Test-WindowsPortableUpgrade.ps1'),
+    (Join-Path $PSScriptRoot 'Test-WindowsHistoricalUpgrade.ps1')
 )
 foreach ($releaseScript in $releaseScripts) {
     $parseTokens = $null
