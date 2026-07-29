@@ -193,7 +193,7 @@ func TestRunPerfMatrixAbortsOnScenarioTimeoutAndSavesPartial(t *testing.T) {
 	}
 	timeouts := PerfTimeouts{PerRequest: time.Second, PerCombination: time.Second, Scenario: 60 * time.Millisecond}
 	saveCount := 0
-	RunPerfMatrix(rep, sess, combos, timeouts, PerfOptions{ProcessColdAtStart: true}, func() { saveCount++ })
+	RunPerfMatrix(rep, sess, combos, timeouts, PerfOptions{ProcessColdAtStart: true}, func() error { saveCount++; return nil })
 
 	if !rep.AbortedByTimeLimit {
 		t.Fatal("expected AbortedByTimeLimit=true when the scenario budget is far smaller than the planned work")
@@ -456,12 +456,13 @@ func TestRunPerfMatrixPartialReportIsParseable(t *testing.T) {
 	combos := buildFullMatrix([]int{20}, []int{1}, 2, 2)[:2]
 	timeouts := PerfTimeouts{PerRequest: time.Second, PerCombination: time.Second, Scenario: time.Minute}
 	var lastSnapshot []byte
-	RunPerfMatrix(rep, sess, combos, timeouts, PerfOptions{ProcessColdAtStart: true}, func() {
+	RunPerfMatrix(rep, sess, combos, timeouts, PerfOptions{ProcessColdAtStart: true}, func() error {
 		encoded, err := json.Marshal(rep)
 		if err != nil {
 			t.Fatalf("partial report not marshalable: %v", err)
 		}
 		lastSnapshot = encoded
+		return nil
 	})
 	if lastSnapshot == nil {
 		t.Fatal("expected at least one partial snapshot")
@@ -469,5 +470,233 @@ func TestRunPerfMatrixPartialReportIsParseable(t *testing.T) {
 	var decoded map[string]any
 	if err := json.Unmarshal(lastSnapshot, &decoded); err != nil {
 		t.Fatalf("partial report JSON not parseable: %v", err)
+	}
+}
+
+func queryPerfResumeCheckpoint(combos []combination, timeouts PerfTimeouts, opts PerfOptions, completed int) *report.Report {
+	definition := queryPerfMatrixDefinition(combos, timeouts, opts)
+	rep := &report.Report{
+		StartedAt:             "2026-07-29T00:00:00Z",
+		PlannedCombinations:   len(combos),
+		CompletedCombinations: completed,
+		QueryPerfMatrix:       &definition,
+		Limitations:           perfLimitations(opts),
+	}
+	for i := 0; i < completed; i++ {
+		combo := combos[i]
+		durations := make([]time.Duration, combo.runs)
+		for j := range durations {
+			durations[j] = time.Duration(j+1) * time.Millisecond
+		}
+		cacheState := report.CacheStateWarm
+		if opts.ColdRestart != nil {
+			cacheState = report.CacheStateColdProcess
+		}
+		rep.Latencies = append(rep.Latencies, report.Summarize(report.Measurement{
+			Category: combo.shape.name, Limit: combo.limit, Concurrency: combo.concurrency,
+			PlannedRuns: combo.runs, AttemptedRuns: combo.runs, Durations: durations,
+			WarmupRuns: opts.WarmupRuns, CacheState: cacheState,
+			CarriesP99: combo.carriesP99,
+		}))
+	}
+	if completed < len(combos) {
+		rep.AbortedByTimeLimit = true
+		rep.AbortReason = "测试分窗到期"
+		rep.Findings = append(rep.Findings,
+			report.Finding{Name: queryPerfTerminalFinding, Pass: false, Detail: rep.AbortReason},
+			report.Finding{Name: environmentGateFinding, Pass: true})
+		rep.FailureCount = 1
+	}
+	return rep
+}
+
+func TestRunPerfMatrixResumesSuccessfulPrefixWithoutRepeating(t *testing.T) {
+	var hits int64
+	sess := newFakeSession(t, fakeWorksHandler(0, &hits))
+	combos := []combination{
+		{shape: perfShapes()["browse"], limit: 20, concurrency: 1, runs: 2},
+		{shape: perfShapes()["browse"], limit: 100, concurrency: 1, runs: 2},
+		{shape: perfShapes()["selective-cjk"], limit: 20, concurrency: 1, runs: 2},
+	}
+	timeouts := PerfTimeouts{PerRequest: time.Second, PerCombination: time.Second, Scenario: time.Minute}
+	opts := PerfOptions{WarmupRuns: 1, PublicationFingerprint: "publication-fingerprint"}
+	rep := queryPerfResumeCheckpoint(combos, timeouts, opts, 1)
+	first := rep.Latencies[0]
+	opts.Resume = true
+	saves := 0
+	if err := RunPerfMatrix(rep, sess, combos, timeouts, opts, func() error { saves++; return nil }); err != nil {
+		t.Fatalf("resume 被拒绝: %v", err)
+	}
+
+	if got := atomic.LoadInt64(&hits); got != 6 {
+		t.Fatalf("续跑发出了 %d 个请求，want 6（只执行剩余 2 组合，各 1 warmup + 2 measured）", got)
+	}
+	if len(rep.Latencies) != 3 || rep.CompletedCombinations != 3 || rep.Latencies[0] != first {
+		t.Fatalf("续跑没有保留精确前缀或完成剩余组合: completed=%d latencies=%+v", rep.CompletedCombinations, rep.Latencies)
+	}
+	if rep.QueryPerfMatrix.ResumeCount != 1 || rep.QueryPerfMatrix.LastResumedAt == "" {
+		t.Fatalf("resume metadata=%+v", rep.QueryPerfMatrix)
+	}
+	if rep.AbortedByTimeLimit || rep.FailureCount != 0 {
+		t.Fatalf("成功续跑仍标记失败: aborted=%v failures=%d", rep.AbortedByTimeLimit, rep.FailureCount)
+	}
+	foundTerminal := 0
+	for _, finding := range rep.Findings {
+		if finding.Name == queryPerfTerminalFinding {
+			foundTerminal++
+			if !finding.Pass {
+				t.Fatalf("最终 terminal finding 未通过: %+v", finding)
+			}
+		}
+		if finding.Name == environmentGateFinding {
+			t.Fatal("旧窗口的 environment terminal finding 必须在续跑准备时移除")
+		}
+	}
+	if foundTerminal != 1 || saves != 4 {
+		t.Fatalf("terminal findings=%d checkpoints=%d, want 1/4", foundTerminal, saves)
+	}
+}
+
+func TestRunPerfMatrixResumeRejectsDefinitionDriftWithoutMutation(t *testing.T) {
+	sess := newFakeSession(t, fakeWorksHandler(0, nil))
+	combos := []combination{{shape: perfShapes()["browse"], limit: 20, concurrency: 1, runs: 2}}
+	timeouts := PerfTimeouts{PerRequest: time.Second, PerCombination: time.Second, Scenario: time.Minute}
+	opts := PerfOptions{WarmupRuns: 1, PublicationFingerprint: "publication-a"}
+	rep := queryPerfResumeCheckpoint(combos, timeouts, opts, 0)
+	wantFingerprint := rep.QueryPerfMatrix.Fingerprint
+	wantFailures := rep.FailureCount
+
+	drifted := PerfOptions{Resume: true, WarmupRuns: 2, PublicationFingerprint: "publication-a"}
+	if err := RunPerfMatrix(rep, sess, combos, timeouts, drifted, nil); err == nil {
+		t.Fatal("warmup 漂移必须拒绝续跑")
+	}
+	if rep.QueryPerfMatrix.Fingerprint != wantFingerprint || rep.QueryPerfMatrix.ResumeCount != 0 || rep.FailureCount != wantFailures {
+		t.Fatalf("被拒绝的续跑修改了断点: %+v", rep)
+	}
+
+	publicationDrift := PerfOptions{Resume: true, WarmupRuns: 1, PublicationFingerprint: "publication-b"}
+	if err := RunPerfMatrix(rep, sess, combos, timeouts, publicationDrift, nil); err == nil {
+		t.Fatal("publication 漂移必须拒绝续跑")
+	}
+}
+
+func TestQueryPerfFingerprintAllowsNewScenarioWindowOnly(t *testing.T) {
+	combos := []combination{{shape: perfShapes()["browse"], limit: 20, concurrency: 1, runs: 2}}
+	opts := PerfOptions{WarmupRuns: 1, PublicationFingerprint: "publication-fingerprint"}
+	base := PerfTimeouts{PerRequest: time.Second, PerCombination: time.Minute, Scenario: 10 * time.Minute}
+	longerWindow := base
+	longerWindow.Scenario = time.Hour
+	if queryPerfMatrixDefinition(combos, base, opts).Fingerprint != queryPerfMatrixDefinition(combos, longerWindow, opts).Fingerprint {
+		t.Fatal("scenario timeout 只定义续跑窗口，不应改变矩阵指纹")
+	}
+	driftedCombination := base
+	driftedCombination.PerCombination = 2 * time.Minute
+	if queryPerfMatrixDefinition(combos, base, opts).Fingerprint == queryPerfMatrixDefinition(combos, driftedCombination, opts).Fingerprint {
+		t.Fatal("单组合超时会改变样本含义，必须改变矩阵指纹")
+	}
+}
+
+func TestRunPerfMatrixResumesColdProcessPrefixWithRestartPerRemainingCombination(t *testing.T) {
+	sess := newFakeSession(t, fakeWorksHandler(0, nil))
+	combos := []combination{
+		{shape: perfShapes()["browse"], limit: 20, concurrency: 1, runs: 2},
+		{shape: perfShapes()["browse"], limit: 100, concurrency: 1, runs: 2},
+		{shape: perfShapes()["browse"], limit: 200, concurrency: 1, runs: 2},
+	}
+	timeouts := PerfTimeouts{PerRequest: time.Second, PerCombination: time.Second, Scenario: time.Minute}
+	restarts := 0
+	opts := PerfOptions{PublicationFingerprint: "publication-fingerprint", ColdRestart: func() (*environment.Session, error) {
+		restarts++
+		return sess, nil
+	}}
+	rep := queryPerfResumeCheckpoint(combos, timeouts, opts, 1)
+	opts.Resume = true
+	if err := RunPerfMatrix(rep, sess, combos, timeouts, opts, nil); err != nil {
+		t.Fatalf("cold-process resume 被拒绝: %v", err)
+	}
+	if restarts != 2 {
+		t.Fatalf("cold-process resume 重启次数=%d, want 2（只覆盖剩余组合）", restarts)
+	}
+	for _, sample := range rep.Latencies {
+		if sample.CacheState != report.CacheStateColdProcess {
+			t.Fatalf("cold-process 续跑混入其它缓存状态: %+v", sample)
+		}
+	}
+}
+
+func TestRunPerfMatrixResumeRejectsFailedCompletedCombination(t *testing.T) {
+	sess := newFakeSession(t, fakeWorksHandler(0, nil))
+	combos := []combination{
+		{shape: perfShapes()["browse"], limit: 20, concurrency: 1, runs: 2},
+		{shape: perfShapes()["browse"], limit: 100, concurrency: 1, runs: 2},
+	}
+	timeouts := PerfTimeouts{PerRequest: time.Second, PerCombination: time.Second, Scenario: time.Minute}
+	opts := PerfOptions{WarmupRuns: 1, PublicationFingerprint: "publication-fingerprint"}
+	rep := queryPerfResumeCheckpoint(combos, timeouts, opts, 1)
+	rep.Latencies[0].FailedRuns = 1
+	rep.Latencies[0].SuccessfulRuns = 1
+
+	opts.Resume = true
+	if err := RunPerfMatrix(rep, sess, combos, timeouts, opts, nil); err == nil {
+		t.Fatal("包含失败请求的已完成组合不能通过续跑被洗成成功")
+	}
+	if rep.QueryPerfMatrix.ResumeCount != 0 {
+		t.Fatal("拒绝前缀后不应增加 resumeCount")
+	}
+}
+
+func TestRunPerfMatrixResumeRejectsCorruptTerminalAccounting(t *testing.T) {
+	sess := newFakeSession(t, fakeWorksHandler(0, nil))
+	combos := []combination{
+		{shape: perfShapes()["browse"], limit: 20, concurrency: 1, runs: 2},
+		{shape: perfShapes()["browse"], limit: 100, concurrency: 1, runs: 2},
+	}
+	timeouts := PerfTimeouts{PerRequest: time.Second, PerCombination: time.Second, Scenario: time.Minute}
+	opts := PerfOptions{WarmupRuns: 1, PublicationFingerprint: "publication-fingerprint"}
+	rep := queryPerfResumeCheckpoint(combos, timeouts, opts, 1)
+	rep.FailureCount = 0
+	opts.Resume = true
+	if err := RunPerfMatrix(rep, sess, combos, timeouts, opts, nil); err == nil || !strings.Contains(err.Error(), "failureCount") {
+		t.Fatalf("损坏的 failureCount 未被拒绝: %v", err)
+	}
+}
+
+func TestRunPerfMatrixResumeFinalizesCompleteCheckpointAndNoOpsFinishedReport(t *testing.T) {
+	var hits int64
+	sess := newFakeSession(t, fakeWorksHandler(0, &hits))
+	combos := []combination{{shape: perfShapes()["browse"], limit: 20, concurrency: 1, runs: 2}}
+	timeouts := PerfTimeouts{PerRequest: time.Second, PerCombination: time.Second, Scenario: time.Minute}
+	opts := PerfOptions{WarmupRuns: 1, PublicationFingerprint: "publication-fingerprint"}
+	rep := queryPerfResumeCheckpoint(combos, timeouts, opts, 1)
+	// 模拟最后一个组合断点已经落盘、进程却在写 terminal finding 前被终止。
+	rep.AbortedByTimeLimit = false
+	rep.AbortReason = ""
+	rep.Findings = nil
+	rep.FailureCount = 0
+	opts.Resume = true
+	if err := RunPerfMatrix(rep, sess, combos, timeouts, opts, nil); err != nil {
+		t.Fatalf("完整前缀终态补写失败: %v", err)
+	}
+	if atomic.LoadInt64(&hits) != 0 || rep.QueryPerfMatrix.ResumeCount != 1 || rep.FailureCount != 0 {
+		t.Fatalf("补写终态不应重跑请求: hits=%d metadata=%+v failures=%d", hits, rep.QueryPerfMatrix, rep.FailureCount)
+	}
+	resumes := rep.QueryPerfMatrix.ResumeCount
+	started := rep.StartedAt
+	if err := RunPerfMatrix(rep, sess, combos, timeouts, opts, func() error { t.Fatal("完整报告 no-op 不应保存断点"); return nil }); err != nil {
+		t.Fatalf("完整报告重复 resume 应 no-op: %v", err)
+	}
+	if rep.QueryPerfMatrix.ResumeCount != resumes || rep.StartedAt != started || atomic.LoadInt64(&hits) != 0 {
+		t.Fatal("完整报告重复 resume 修改了执行事实")
+	}
+}
+
+func TestRunPerfMatrixPropagatesInitialCheckpointFailure(t *testing.T) {
+	sess := newFakeSession(t, fakeWorksHandler(0, nil))
+	combos := []combination{{shape: perfShapes()["browse"], limit: 20, concurrency: 1, runs: 1}}
+	timeouts := PerfTimeouts{PerRequest: time.Second, PerCombination: time.Second, Scenario: time.Minute}
+	want := errors.New("模拟磁盘已满")
+	err := RunPerfMatrix(&report.Report{}, sess, combos, timeouts, PerfOptions{WarmupRuns: 1}, func() error { return want })
+	if err == nil || !strings.Contains(err.Error(), "原子保存查询性能断点") {
+		t.Fatalf("checkpoint error=%v", err)
 	}
 }

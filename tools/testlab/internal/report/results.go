@@ -133,6 +133,7 @@ type Report struct {
 	Findings          []Finding          `json:"findings"`
 	Latencies         []LatencySample    `json:"latencies,omitempty"`
 	PublicationMatrix *PublicationMatrix `json:"publicationMatrix,omitempty"`
+	QueryPerfMatrix   *QueryPerfMatrix   `json:"queryPerfMatrix,omitempty"`
 	Limitations       []string           `json:"limitations,omitempty"`
 	FailureCount      int                `json:"failureCount"`
 
@@ -143,6 +144,20 @@ type Report struct {
 	CompletedCombinations int    `json:"completedCombinations,omitempty"`
 	AbortedByTimeLimit    bool   `json:"abortedByTimeLimit,omitempty"`
 	AbortReason           string `json:"abortReason,omitempty"`
+}
+
+// QueryPerfMatrix 记录查询性能矩阵的稳定执行身份。ScenarioTimeout 故意不进入
+// Fingerprint：它只决定一次分窗最多执行多久；单请求、单组合、组合顺序、重复次数与
+// 缓存模式必须跨 resume 保持一致，才能把多个窗口的样本合并进同一报告。
+type QueryPerfMatrix struct {
+	Fingerprint             string `json:"fingerprint"`
+	PublicationFingerprint  string `json:"publicationFingerprint,omitempty"`
+	CacheMode               string `json:"cacheMode"`
+	WarmupRuns              int    `json:"warmupRuns"`
+	PerRequestTimeoutMs     int64  `json:"perRequestTimeoutMs"`
+	PerCombinationTimeoutMs int64  `json:"perCombinationTimeoutMs"`
+	ResumeCount             int    `json:"resumeCount,omitempty"`
+	LastResumedAt           string `json:"lastResumedAt,omitempty"`
 }
 
 // PublicationMatrix 记录完整 Catalog 候选从构建到短事务发布的变化矩阵。

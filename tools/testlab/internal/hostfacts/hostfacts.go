@@ -22,6 +22,7 @@ import (
 	"database/sql"
 	"fmt"
 	"runtime"
+	"slices"
 	"strings"
 	"time"
 
@@ -31,6 +32,38 @@ import (
 	// 真正链接的版本，不是人工填写的字符串。
 	_ "modernc.org/sqlite"
 )
+
+// ResumeDifferences 返回会使两次性能窗口不可合并的环境字段名，不返回字段值。
+// recorded.GoMaxProcs==0 仅兼容 EV-99 之前的旧报告；新报告从生成起严格匹配。
+func ResumeDifferences(recorded, current Facts) []string {
+	comparisons := []struct {
+		name  string
+		equal bool
+	}{
+		{"osFamily", recorded.OSFamily == current.OSFamily},
+		{"arch", recorded.Arch == current.Arch},
+		{"osVersion", recorded.OSVersion == current.OSVersion},
+		{"cpuModel", recorded.CPUModel == current.CPUModel},
+		{"cpuLogicalCores", recorded.CPULogicalCores == current.CPULogicalCores},
+		{"memoryTotalBytes", recorded.MemoryTotalBytes == current.MemoryTotalBytes},
+		{"sqliteVersion", recorded.SQLiteVersion == current.SQLiteVersion},
+		{"sqliteLibrary", recorded.SQLiteLibrary == current.SQLiteLibrary},
+		{"goVersion", recorded.GoVersion == current.GoVersion},
+		{"goMaxProcs", recorded.GoMaxProcs == 0 || recorded.GoMaxProcs == current.GoMaxProcs},
+		{"storage.medium", recorded.Storage.Medium == current.Storage.Medium},
+		{"storage.model", recorded.Storage.Model == current.Storage.Model},
+		{"storage.busType", recorded.Storage.BusType == current.Storage.BusType},
+		{"storage.volumeId", recorded.Storage.VolumeID == current.Storage.VolumeID},
+		{"storage.physicalDiskNumbers", slices.Equal(recorded.Storage.PhysicalDiskNumbers, current.Storage.PhysicalDiskNumbers)},
+	}
+	differences := make([]string, 0, len(comparisons))
+	for _, comparison := range comparisons {
+		if !comparison.equal {
+			differences = append(differences, comparison.name)
+		}
+	}
+	return differences
+}
 
 // 存储介质分类取值。unknown 是合法结论，表示本次运行没有取到可信证据；它必须被
 // 如实写进报告，不得由调用方替换成一个「看起来合理」的猜测值。

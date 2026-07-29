@@ -89,7 +89,9 @@ func TestReportSaveAcceptsCleanReport(t *testing.T) {
 
 func TestReportLoadReadsAtomicCheckpoint(t *testing.T) {
 	want := &Report{SchemaVersion: 2, Scenario: "stage4-publication-change-matrix", Scale: 100,
-		PlannedCombinations: 2, CompletedCombinations: 1}
+		PlannedCombinations: 2, CompletedCombinations: 1,
+		QueryPerfMatrix: &QueryPerfMatrix{Fingerprint: "matrix", PublicationFingerprint: "publication", CacheMode: "warm",
+			WarmupRuns: 3, PerRequestTimeoutMs: 30_000, PerCombinationTimeoutMs: 300_000, ResumeCount: 1, LastResumedAt: "2026-07-29T00:00:00Z"}}
 	path := filepath.Join(t.TempDir(), "report.json")
 	if err := want.Save(path); err != nil {
 		t.Fatal(err)
@@ -98,7 +100,8 @@ func TestReportLoadReadsAtomicCheckpoint(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got.Scenario != want.Scenario || got.Scale != want.Scale || got.CompletedCombinations != 1 {
+	if got.Scenario != want.Scenario || got.Scale != want.Scale || got.CompletedCombinations != 1 ||
+		got.QueryPerfMatrix == nil || *got.QueryPerfMatrix != *want.QueryPerfMatrix {
 		t.Fatalf("Load()=%+v", got)
 	}
 }

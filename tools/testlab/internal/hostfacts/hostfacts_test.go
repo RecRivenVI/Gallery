@@ -117,3 +117,35 @@ func TestMissingFieldsListsEveryGateRequirement(t *testing.T) {
 		t.Errorf("完整 Facts 报告为不完整: missing=%v", full.MissingFields())
 	}
 }
+
+func TestResumeDifferencesReportsOnlyDriftedFieldNames(t *testing.T) {
+	base := Facts{
+		OSFamily: "windows", Arch: "amd64", OSVersion: "Windows", CPUModel: "CPU",
+		CPULogicalCores: 28, MemoryTotalBytes: 64 << 30, SQLiteVersion: "3.50.0",
+		SQLiteLibrary: "modernc.org/sqlite", GoVersion: "go1.26.5", GoMaxProcs: 2,
+		Storage: Storage{Medium: MediumSSD, Model: "SSD", BusType: "NVMe", VolumeID: "volume-hash", PhysicalDiskNumbers: []int{3}},
+	}
+	if differences := ResumeDifferences(base, base); len(differences) != 0 {
+		t.Fatalf("相同环境被判为漂移: %v", differences)
+	}
+
+	drifted := base
+	drifted.GoMaxProcs = 4
+	drifted.Storage = base.Storage
+	drifted.Storage.PhysicalDiskNumbers = []int{4}
+	differences := ResumeDifferences(base, drifted)
+	if strings.Join(differences, ",") != "goMaxProcs,storage.physicalDiskNumbers" {
+		t.Fatalf("ResumeDifferences=%v", differences)
+	}
+	for _, difference := range differences {
+		if strings.Contains(difference, "4") || strings.Contains(difference, "SSD") {
+			t.Fatalf("漂移结果泄露了字段值: %q", difference)
+		}
+	}
+
+	legacy := base
+	legacy.GoMaxProcs = 0
+	if differences := ResumeDifferences(legacy, base); len(differences) != 0 {
+		t.Fatalf("EV-99 前缺失 goMaxProcs 的旧报告应保持兼容: %v", differences)
+	}
+}

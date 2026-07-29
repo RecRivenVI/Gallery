@@ -2,8 +2,10 @@ package query
 
 import (
 	"context"
+	"crypto/sha256"
 	"fmt"
 	"os"
+	"strings"
 	"sync"
 	"time"
 
@@ -174,6 +176,15 @@ func PerfCombosFor(kind string, runs, p99Runs int) []combination {
 // `"warm"` 字面量——那个字面量既没有 warmup 支撑，也没有任何冷路径能力，实际含义是
 // "不知道，先当成热的"。
 type PerfOptions struct {
+	// Resume 表示从 results-out 中已经原子落盘的完整组合前缀继续。只允许显式 warm
+	// 或逐组合 cold-process 两种受控缓存模式；未预热的同进程状态无法跨进程窗口重建，
+	// 因此不能续跑。
+	Resume bool
+	// PublicationFingerprint 由 probe 对已经通过真实 HTTP 绑定预检的
+	// queryPublicationId + catalogRevision 做 SHA-256 后提供。它不回显 ID，但阻止
+	// 相同规模、不同 AppRoot/publication 的样本被拼进同一报告。
+	PublicationFingerprint string
+
 	// WarmupRuns 是每个组合在测量前执行的预热请求次数（串行执行，不进入 durations）。
 	// 大于 0 且至少一次成功时，该组合的缓存状态才是实测的 warm。
 	WarmupRuns int
@@ -196,6 +207,228 @@ type PerfOptions struct {
 	// bootstrap/pairing，不触碰 Catalog 查询路径），因此第一个组合可以如实标为
 	// cold-process；调用方无法保证时应留 false，那时首个组合记为 unknown。
 	ProcessColdAtStart bool
+}
+
+const (
+	queryPerfCacheModeWarm         = "warm"
+	queryPerfCacheModeColdProcess  = "cold-process"
+	queryPerfCacheModeUncontrolled = "uncontrolled"
+
+	queryPerfTerminalFinding    = "perf/matrix-completed-without-time-abort"
+	environmentGateFinding      = "environment/gate-required-facts-complete"
+	queryPerfFingerprintVersion = "query-perf-matrix-v1"
+)
+
+func queryPerfCacheMode(opts PerfOptions) string {
+	switch {
+	case opts.ColdRestart != nil:
+		return queryPerfCacheModeColdProcess
+	case opts.WarmupRuns > 0:
+		return queryPerfCacheModeWarm
+	default:
+		return queryPerfCacheModeUncontrolled
+	}
+}
+
+// queryPerfMatrixDefinition 把会改变任一组合样本含义的参数固化为稳定指纹。
+// Scenario 整体超时故意不在其中：它只控制一次续跑窗口最多工作多久，不改变单个组合。
+func queryPerfMatrixDefinition(combos []combination, timeouts PerfTimeouts, opts PerfOptions) report.QueryPerfMatrix {
+	var definition strings.Builder
+	fmt.Fprintf(&definition, "%s\npublication=%s\ncache=%s\nwarmup=%d\nprocessColdAtStart=%t\nrequestNs=%d\ncombinationNs=%d\n",
+		queryPerfFingerprintVersion, opts.PublicationFingerprint, queryPerfCacheMode(opts), opts.WarmupRuns, opts.ProcessColdAtStart,
+		timeouts.PerRequest.Nanoseconds(), timeouts.PerCombination.Nanoseconds())
+	for i, combo := range combos {
+		fmt.Fprintf(&definition, "%d|%s|%d|%d|%d|%t\n",
+			i, combo.shape.name, combo.limit, combo.concurrency, combo.runs, combo.carriesP99)
+	}
+	sum := sha256.Sum256([]byte(definition.String()))
+	return report.QueryPerfMatrix{
+		Fingerprint:             fmt.Sprintf("%x", sum),
+		PublicationFingerprint:  opts.PublicationFingerprint,
+		CacheMode:               queryPerfCacheMode(opts),
+		WarmupRuns:              opts.WarmupRuns,
+		PerRequestTimeoutMs:     timeouts.PerRequest.Milliseconds(),
+		PerCombinationTimeoutMs: timeouts.PerCombination.Milliseconds(),
+	}
+}
+
+func validatePerfMatrixConfiguration(combos []combination, timeouts PerfTimeouts, opts PerfOptions) error {
+	if len(combos) == 0 {
+		return fmt.Errorf("查询性能矩阵没有任何组合")
+	}
+	if timeouts.PerRequest <= 0 || timeouts.PerCombination <= 0 || timeouts.Scenario <= 0 {
+		return fmt.Errorf("查询性能矩阵的三层超时都必须大于 0")
+	}
+	for i, combo := range combos {
+		if combo.shape.name == "" || combo.shape.params == nil || combo.limit <= 0 || combo.concurrency <= 0 || combo.runs <= 0 {
+			return fmt.Errorf("查询性能矩阵第 %d 个组合定义不完整", i+1)
+		}
+	}
+	if opts.Resume && queryPerfCacheMode(opts) == queryPerfCacheModeUncontrolled {
+		return fmt.Errorf("查询性能续跑只支持受控 warm 或 cold-process 缓存模式")
+	}
+	if opts.Resume && opts.PublicationFingerprint == "" {
+		return fmt.Errorf("查询性能续跑缺少 publication 指纹")
+	}
+	return nil
+}
+
+func sameQueryPerfDefinition(recorded *report.QueryPerfMatrix, expected report.QueryPerfMatrix) bool {
+	return recorded != nil &&
+		recorded.Fingerprint == expected.Fingerprint &&
+		recorded.PublicationFingerprint == expected.PublicationFingerprint &&
+		recorded.CacheMode == expected.CacheMode &&
+		recorded.WarmupRuns == expected.WarmupRuns &&
+		recorded.PerRequestTimeoutMs == expected.PerRequestTimeoutMs &&
+		recorded.PerCombinationTimeoutMs == expected.PerCombinationTimeoutMs
+}
+
+func validateCompletedQuerySample(sample report.LatencySample, combo combination, opts PerfOptions) error {
+	if sample.Category != combo.shape.name || sample.Limit != combo.limit || sample.Concurrency != combo.concurrency ||
+		sample.PlannedRuns != combo.runs || sample.CarriesP99 != combo.carriesP99 ||
+		sample.PercentileMethod != report.PercentileMethodNearestRank {
+		return fmt.Errorf("组合身份或分位数口径不匹配")
+	}
+	if !sample.IdentityOK() || sample.AttemptedRuns != combo.runs || sample.SuccessfulRuns != combo.runs ||
+		sample.FailedRuns != 0 || sample.TimedOutRuns != 0 || sample.NotAttemptedRuns != 0 {
+		return fmt.Errorf("组合不是完整成功样本")
+	}
+	if sample.P99Estimable != (sample.SuccessfulRuns >= report.MinSamplesForP99) {
+		return fmt.Errorf("组合 P99 可估状态与成功样本数不一致")
+	}
+	switch queryPerfCacheMode(opts) {
+	case queryPerfCacheModeWarm:
+		if sample.CacheState != report.CacheStateWarm || sample.WarmupRuns != opts.WarmupRuns || sample.WarmupFailedRuns != 0 {
+			return fmt.Errorf("组合没有完整的受控 warm 预热")
+		}
+	case queryPerfCacheModeColdProcess:
+		if sample.CacheState != report.CacheStateColdProcess || sample.WarmupRuns != 0 || sample.WarmupFailedRuns != 0 {
+			return fmt.Errorf("组合不是受控 cold-process 样本")
+		}
+	}
+	return nil
+}
+
+func terminalFindingState(rep *report.Report) (count int, pass bool) {
+	for _, finding := range rep.Findings {
+		if finding.Name == queryPerfTerminalFinding {
+			count++
+			pass = finding.Pass
+		}
+	}
+	return count, pass
+}
+
+func removeQueryPerfTerminalFindings(rep *report.Report) {
+	kept := rep.Findings[:0]
+	failures := 0
+	for _, finding := range rep.Findings {
+		if finding.Name == queryPerfTerminalFinding || finding.Name == environmentGateFinding {
+			continue
+		}
+		kept = append(kept, finding)
+		if !finding.Pass {
+			failures++
+		}
+	}
+	rep.Findings = kept
+	rep.FailureCount = failures
+}
+
+// prepareQueryPerfMatrix 在修改报告前完整验证断点。返回 noOp=true 表示报告已经完整
+// 成功，重复 -resume 不应增加 resumeCount 或重复写入终态 finding。
+func prepareQueryPerfMatrix(rep *report.Report, combos []combination, timeouts PerfTimeouts, opts PerfOptions) (start int, noOp bool, err error) {
+	expected := queryPerfMatrixDefinition(combos, timeouts, opts)
+	if !opts.Resume {
+		if rep.QueryPerfMatrix != nil || rep.PlannedCombinations != 0 || rep.CompletedCombinations != 0 || len(rep.Latencies) != 0 || rep.StartedAt != "" {
+			return 0, false, fmt.Errorf("新查询性能矩阵收到非空执行状态；如需续跑必须显式指定 resume")
+		}
+		rep.QueryPerfMatrix = &expected
+		rep.StartedAt = time.Now().UTC().Format(time.RFC3339)
+		rep.PlannedCombinations = len(combos)
+		rep.Limitations = append(rep.Limitations, perfLimitations(opts)...)
+		return 0, false, nil
+	}
+
+	if !sameQueryPerfDefinition(rep.QueryPerfMatrix, expected) {
+		return 0, false, fmt.Errorf("查询性能矩阵指纹、缓存条件或单项超时与断点不一致")
+	}
+	if rep.QueryPerfMatrix.ResumeCount < 0 {
+		return 0, false, fmt.Errorf("查询性能断点的 resumeCount 无效")
+	}
+	if _, parseErr := time.Parse(time.RFC3339, rep.StartedAt); parseErr != nil || rep.PlannedCombinations != len(combos) || rep.CompletedCombinations < 0 || rep.CompletedCombinations > len(combos) {
+		return 0, false, fmt.Errorf("查询性能断点的计划/进度字段无效")
+	}
+	for _, required := range perfLimitations(opts) {
+		found := false
+		for _, actual := range rep.Limitations {
+			if actual == required {
+				found = true
+				break
+			}
+		}
+		if !found {
+			return 0, false, fmt.Errorf("查询性能断点缺少必需的结果解释边界")
+		}
+	}
+	if len(rep.Latencies) != rep.CompletedCombinations {
+		return 0, false, fmt.Errorf("查询性能断点的样本数与完成组合数不一致")
+	}
+	for i, sample := range rep.Latencies {
+		if sampleErr := validateCompletedQuerySample(sample, combos[i], opts); sampleErr != nil {
+			return 0, false, fmt.Errorf("查询性能断点第 %d 个组合不可续跑: %w", i+1, sampleErr)
+		}
+	}
+	terminalCount, terminalPass := terminalFindingState(rep)
+	if terminalCount > 1 {
+		return 0, false, fmt.Errorf("查询性能断点包含重复 terminal finding")
+	}
+	foundTerminal := terminalCount == 1
+	failureCount := 0
+	for _, finding := range rep.Findings {
+		if !finding.Pass {
+			failureCount++
+		}
+		if !finding.Pass && finding.Name != queryPerfTerminalFinding {
+			return 0, false, fmt.Errorf("查询性能断点包含既有失败 finding %q", finding.Name)
+		}
+	}
+	if failureCount != rep.FailureCount {
+		return 0, false, fmt.Errorf("查询性能断点的 failureCount 与 findings 不一致")
+	}
+	if !foundTerminal && rep.FinishedAt != "" {
+		return 0, false, fmt.Errorf("查询性能断点已有 finishedAt 却缺少 terminal finding")
+	}
+	if terminalPass && (rep.CompletedCombinations != len(combos) || rep.AbortedByTimeLimit) {
+		return 0, false, fmt.Errorf("查询性能断点的成功终态与完成进度不一致")
+	}
+	if foundTerminal && !terminalPass && !rep.AbortedByTimeLimit {
+		return 0, false, fmt.Errorf("查询性能断点的失败终态缺少中止状态")
+	}
+	if rep.CompletedCombinations == len(combos) && (rep.AbortedByTimeLimit || (foundTerminal && !terminalPass)) {
+		return 0, false, fmt.Errorf("查询性能断点已完成全部组合却仍标记为中止")
+	}
+	if rep.CompletedCombinations == len(combos) && terminalPass && !rep.AbortedByTimeLimit {
+		return len(combos), true, nil
+	}
+
+	removeQueryPerfTerminalFindings(rep)
+	rep.AbortedByTimeLimit = false
+	rep.AbortReason = ""
+	rep.FinishedAt = ""
+	rep.QueryPerfMatrix.ResumeCount++
+	rep.QueryPerfMatrix.LastResumedAt = time.Now().UTC().Format(time.RFC3339)
+	return rep.CompletedCombinations, false, nil
+}
+
+func saveQueryPerfCheckpoint(savePartial func() error) error {
+	if savePartial == nil {
+		return nil
+	}
+	if err := savePartial(); err != nil {
+		return fmt.Errorf("原子保存查询性能断点: %w", err)
+	}
+	return nil
 }
 
 // baseCacheState 是**没有任何预热时**本组合的进程侧缓存状态：
@@ -259,18 +492,33 @@ func perfLimitations(opts PerfOptions) []string {
 // report.LatencySample 的统计恒等式成立。一旦整个场景的时间预算耗尽，停止派发新
 // 组合并将 report.AbortedByTimeLimit 置为 true——调用方在报告和最终判定里必须把
 // 这种情况视为"未完整执行"，不得因为已完成部分的请求全部成功就宣称整体矩阵通过。
-func RunPerfMatrix(rep *report.Report, sess *environment.Session, combos []combination, timeouts PerfTimeouts, opts PerfOptions, savePartial func()) {
-	rep.StartedAt = time.Now().UTC().Format(time.RFC3339)
-	rep.PlannedCombinations = len(combos)
-	rep.Limitations = append(rep.Limitations, perfLimitations(opts)...)
-	scenarioDeadline := time.Now().Add(timeouts.Scenario)
-
+func RunPerfMatrix(rep *report.Report, sess *environment.Session, combos []combination, timeouts PerfTimeouts, opts PerfOptions, savePartial func() error) error {
 	// 冷路径与预热在语义上互斥：预热的目的正是消除冷启动效应。同时要求两者说明调用
 	// 方的配置本身是错的，必须以失败 finding 暴露，而不是任选一个悄悄执行。
 	if opts.ColdRestart != nil && opts.WarmupRuns > 0 {
+		if opts.Resume {
+			return fmt.Errorf("查询性能续跑不能同时要求 cold-process 与 warmup")
+		}
 		rep.Add("perf/cache-state-configuration-consistent", false,
 			fmt.Sprintf("同时要求冷路径与 %d 次预热；预热会抵消冷路径，本次已强制关闭预热", opts.WarmupRuns))
 		opts.WarmupRuns = 0
+	}
+	if err := validatePerfMatrixConfiguration(combos, timeouts, opts); err != nil {
+		return err
+	}
+	// 整体窗口从进入矩阵执行器就开始计时，初始断点的编码/fsync 也属于维护窗口。
+	// 若把 deadline 放在初始 Save 之后，极短窗口会反而进入第一个组合并留下不完整
+	// 样本，失去“在组合边界安全停止”的机会。
+	scenarioDeadline := time.Now().Add(timeouts.Scenario)
+	start, noOp, err := prepareQueryPerfMatrix(rep, combos, timeouts, opts)
+	if err != nil {
+		return err
+	}
+	if noOp {
+		return nil
+	}
+	if err := saveQueryPerfCheckpoint(savePartial); err != nil {
+		return err
 	}
 
 	// processNeverServed 记录"当前这个 galleryd 进程自启动以来没有服务过任何查询请求"
@@ -280,7 +528,7 @@ func RunPerfMatrix(rep *report.Report, sess *environment.Session, combos []combi
 	servedEarlier := false
 	aborted := false
 	abortReason := ""
-	for _, combo := range combos {
+	for _, combo := range combos[start:] {
 		if time.Now().After(scenarioDeadline) {
 			aborted = true
 			abortReason = fmt.Sprintf("整体场景超时预算 %s 耗尽，已完成 %d/%d 个组合后停止派发新组合", timeouts.Scenario, rep.CompletedCombinations, len(combos))
@@ -312,8 +560,8 @@ func RunPerfMatrix(rep *report.Report, sess *environment.Session, combos []combi
 		rep.CompletedCombinations++
 		fmt.Fprintf(os.Stderr, "perf progress: %d/%d combinations done (%s limit=%d concurrency=%d)\n",
 			rep.CompletedCombinations, len(combos), combo.shape.name, combo.limit, combo.concurrency)
-		if savePartial != nil {
-			savePartial()
+		if err := saveQueryPerfCheckpoint(savePartial); err != nil {
+			return err
 		}
 	}
 	rep.AbortedByTimeLimit = aborted
@@ -321,7 +569,11 @@ func RunPerfMatrix(rep *report.Report, sess *environment.Session, combos []combi
 	rep.FinishedAt = time.Now().UTC().Format(time.RFC3339)
 	// 部分矩阵不得被下游读者误当作"全部通过"：即使已完成的组合全部成功，只要被
 	// 时间预算中止就必须有一条失败 finding 明确反映这一点。
-	rep.Add("perf/matrix-completed-without-time-abort", !aborted, abortReason)
+	rep.Add(queryPerfTerminalFinding, !aborted, abortReason)
+	if err := saveQueryPerfCheckpoint(savePartial); err != nil {
+		return err
+	}
+	return nil
 }
 
 // runWarmup 在测量之前串行发出 warmupRuns 次同形请求，返回成功次数。预热请求不进入

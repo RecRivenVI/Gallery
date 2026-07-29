@@ -92,6 +92,17 @@ Cursor 与 20 项媒体/DerivedAsset finding；`creator.id` 使用另一个真�
   -manifest <root>/manifests/query-reference-500k.json `
   -results-out <root>/reports/query-reference-500k-cold-process.json -tier reference
 
+# 任一窗口因 -perf-scenario-timeout 在组合边界中止后，以新的日志文件继续同一报告；
+# warm/cold-process 分别重复自己的原命令，只增加 -resume，scenario timeout 可按维护窗口调整。
+& $env:GALLERY_GO run ./tools/testlab/cmd/probe `
+  -go $env:GALLERY_GO -repo . `
+  -approot <root>/appdirs/query-reference-500k `
+  -log <root>/logs/query-reference-500k-warm-window02.log `
+  -scenario perf -resume -perf-matrix full -perf-cache warm -perf-warmup-runs 3 `
+  -runs 30 -perf-p99-runs 100 -perf-scenario-timeout 45m `
+  -manifest <root>/manifests/query-reference-500k.json `
+  -results-out <root>/reports/query-reference-500k-warm.json -tier reference
+
 # ≥1,000,000（非推荐诊断场景，必须显式确认）
 & $env:GALLERY_GO run ./tools/testlab/cmd/seed -approot <root>/appdirs/query-nonrec -scale 2000000 -allow-nonrecommended-scale -tier nonrecommended -manifest-out <root>/manifests/query-nonrec.json
 ```
@@ -101,6 +112,13 @@ Cursor 与 20 项媒体/DerivedAsset finding；`creator.id` 使用另一个真�
 计时请求前先经真实 HTTP 核对当前 active publication/Catalog revision 与 manifest 一致，错配 AppRoot
 会直接失败而不会开始矩阵。这个预检不进入分位数；warm 模式随后逐组合显式预热，cold-process 模式逐
 组合重启 `galleryd`，但两者都不清空操作系统文件缓存。
+
+查询矩阵从启动时的 `0/N`、每个完整组合到终态都原子写入同一个 `results-out`。分窗到期会以非零
+退出码和失败 terminal finding 明示“尚未完成”；后续 `-resume` 只保留完整成功的组合前缀并继续下一项。
+组合顺序/次数、单请求与单组合超时、缓存模式、warmup、实测主机/存储、语料、当前 query publication
+或 Catalog revision 任一漂移都会 fail-closed，既有失败组合也不能靠续跑洗成成功。只有
+`-perf-scenario-timeout` 可以跨窗口调整，因为它只定义本次维护窗口；每个窗口应使用新的 `-log` 文件，
+避免下一次进程启动截断上一窗口日志。已完整成功的报告再次 `-resume` 是 no-op。
 
 ## Publication 变化矩阵
 

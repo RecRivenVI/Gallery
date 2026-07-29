@@ -288,33 +288,7 @@ func validatePublicationResumeReport(cfg PublicationMatrixConfig, primaryWorks i
 }
 
 func publicationEnvironmentDifferences(left, right hostfacts.Facts) []string {
-	comparisons := []struct {
-		name  string
-		equal bool
-	}{
-		{"osFamily", left.OSFamily == right.OSFamily},
-		{"arch", left.Arch == right.Arch},
-		{"osVersion", left.OSVersion == right.OSVersion},
-		{"cpuModel", left.CPUModel == right.CPUModel},
-		{"cpuLogicalCores", left.CPULogicalCores == right.CPULogicalCores},
-		{"memoryTotalBytes", left.MemoryTotalBytes == right.MemoryTotalBytes},
-		{"sqliteVersion", left.SQLiteVersion == right.SQLiteVersion},
-		{"sqliteLibrary", left.SQLiteLibrary == right.SQLiteLibrary},
-		{"goVersion", left.GoVersion == right.GoVersion},
-		{"goMaxProcs", left.GoMaxProcs == 0 || left.GoMaxProcs == right.GoMaxProcs},
-		{"storage.medium", left.Storage.Medium == right.Storage.Medium},
-		{"storage.model", left.Storage.Model == right.Storage.Model},
-		{"storage.busType", left.Storage.BusType == right.Storage.BusType},
-		{"storage.volumeId", left.Storage.VolumeID == right.Storage.VolumeID},
-		{"storage.physicalDiskNumbers", slices.Equal(left.Storage.PhysicalDiskNumbers, right.Storage.PhysicalDiskNumbers)},
-	}
-	differences := make([]string, 0, len(comparisons))
-	for _, comparison := range comparisons {
-		if !comparison.equal {
-			differences = append(differences, comparison.name)
-		}
-	}
-	return differences
+	return hostfacts.ResumeDifferences(left, right)
 }
 
 func preparePublicationRatio(result *report.Report, position int, ratio float64, changedWorks, plannedRuns int) (int, int, []time.Duration, error) {

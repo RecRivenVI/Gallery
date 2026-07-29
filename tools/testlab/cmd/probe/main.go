@@ -13,10 +13,12 @@
 package main
 
 import (
+	"crypto/sha256"
 	"flag"
 	"fmt"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"time"
 
@@ -71,6 +73,7 @@ func run() int {
 	perfP99Runs := flag.Int("perf-p99-runs", 100, "perf full 矩阵中承载 P99 的查询类别（browse/selective-cjk/filename-infix）的重复次数；低于 100 时 P99 无法估计，报告会以失败 finding 说明")
 	perfWarmupRuns := flag.Int("perf-warmup-runs", 3, "perf 每个组合在测量前串行执行的预热请求次数；预热请求不进入分位数样本。0 表示不预热（此时缓存状态如实记为 warm-incidental 或 unknown）")
 	perfCacheMode := flag.String("perf-cache", "warm", "perf 缓存条件：warm（每个组合先预热再测量）| cold-process（每个组合前重启 galleryd，使首次请求由从未服务过查询的新进程处理；不清空操作系统文件缓存，因此不代表冷存储读）")
+	resume := flag.Bool("resume", false, "仅用于 -scenario=perf：从 results-out 的原子断点继续未完成组合；环境、语料、publication、矩阵和缓存条件必须完全一致")
 	rulesIndex := flag.String("rules-index", "", "source-* 场景：testlabrulesimport 产出的转换产物索引路径（rule-index.json 或其所在目录）")
 	platformCode := flag.String("platform-code", "", "source-* 场景：要验证的平台脱敏代号（testlabrulesimport 输出中的 p-xxxxxxxx）")
 	maxDirs := flag.Int("max-dirs", 0, "source-* 场景的目录数上限；0 表示不限制")
@@ -83,6 +86,10 @@ func run() int {
 	guardMaxHashBytes := flag.Int64("guard-max-hash-bytes", 0, "guard 内容哈希的累计字节硬边界；0 表示不限制")
 	statePath := flag.String("state", "", "source-* 场景的续跑状态文件路径（本地制品，只含 ID/计数/折叠哈希）")
 	flag.Parse()
+	if *resume && *scenario != "perf" {
+		fmt.Fprintln(os.Stderr, "-resume 只允许与 -scenario=perf 一起使用")
+		return 2
+	}
 
 	if *goBin == "" || *repoRoot == "" || *appRoot == "" || *resultsOut == "" || *logPath == "" {
 		fmt.Fprintln(os.Stderr, "必须指定 -go -repo -approot -log -results-out")
@@ -148,8 +155,12 @@ func run() int {
 		if rep.Tier == "reference" {
 			if shapeErr := manifest.ValidateReferenceShape(); shapeErr != nil {
 				rep.Add("corpus/reference-shape", false, shapeErr.Error())
-				if saveErr := rep.Save(*resultsOut); saveErr != nil {
-					fmt.Fprintf(os.Stderr, "save rejected reference report: %v\n", saveErr)
+				// resume 的 results-out 是最后一份可恢复断点，当前输入预检失败时绝不能
+				// 用失败的临时报告覆盖它。
+				if !*resume {
+					if saveErr := rep.Save(*resultsOut); saveErr != nil {
+						fmt.Fprintf(os.Stderr, "save rejected reference report: %v\n", saveErr)
+					}
 				}
 				fmt.Fprintf(os.Stderr, "reference corpus shape: %v\n", shapeErr)
 				return 1
@@ -172,8 +183,10 @@ func run() int {
 			rep.Nonrecommended = true
 		}
 		if !query.ValidatePerfCorpusBinding(rep, sess, manifest) {
-			if saveErr := rep.Save(*resultsOut); saveErr != nil {
-				fmt.Fprintf(os.Stderr, "save rejected perf report: %v\n", saveErr)
+			if !*resume {
+				if saveErr := rep.Save(*resultsOut); saveErr != nil {
+					fmt.Fprintf(os.Stderr, "save rejected perf report: %v\n", saveErr)
+				}
 			}
 			return 1
 		}
@@ -186,7 +199,32 @@ func run() int {
 			fmt.Fprintf(os.Stderr, "%v\n", optsErr)
 			return 2
 		}
-		query.RunPerfMatrix(rep, sess, combos, timeouts, opts, func() { _ = rep.Save(*resultsOut) })
+		opts.PublicationFingerprint = queryPerfPublicationFingerprint(manifest)
+		if *resume {
+			if rep.FailureCount > 0 {
+				fmt.Fprintln(os.Stderr, "当前环境或语料预检失败，保留既有查询性能断点")
+				return 1
+			}
+			current := *rep
+			recorded, loadErr := report.Load(*resultsOut)
+			if loadErr != nil {
+				fmt.Fprintf(os.Stderr, "load query perf checkpoint: %v\n", loadErr)
+				return 1
+			}
+			if resumeErr := validateQueryPerfResumeEnvelope(recorded, current); resumeErr != nil {
+				fmt.Fprintf(os.Stderr, "query perf resume rejected: %v\n", resumeErr)
+				return 1
+			}
+			rep = &recorded
+			opts.Resume = true
+		}
+		if runErr := query.RunPerfMatrix(rep, sess, combos, timeouts, opts, func() error { return rep.Save(*resultsOut) }); runErr != nil {
+			fmt.Fprintf(os.Stderr, "run query perf matrix: %v\n", runErr)
+			return 1
+		}
+		if *resume {
+			replaceFinding(rep, "perf/resume-state-validated", true, "")
+		}
 	case "media":
 		var libraryID, sourceID string
 		var workCount int
@@ -282,7 +320,11 @@ func run() int {
 			fmt.Fprintf(os.Stderr, "%v\n", optsErr)
 			return 2
 		}
-		query.RunPerfMatrix(rep, sess, combos, timeouts, opts, func() { _ = rep.Save(*resultsOut) })
+		opts.PublicationFingerprint = queryPerfPublicationFingerprint(manifest)
+		if runErr := query.RunPerfMatrix(rep, sess, combos, timeouts, opts, func() error { return rep.Save(*resultsOut) }); runErr != nil {
+			fmt.Fprintf(os.Stderr, "run query perf matrix: %v\n", runErr)
+			return 1
+		}
 	default:
 		fmt.Fprintf(os.Stderr, "未知 scenario: %s\n", *scenario)
 		return 2
@@ -353,6 +395,68 @@ func recordCorpusFacts(rep *report.Report, manifest corpus.Manifest) {
 	}
 }
 
+func queryPerfPublicationFingerprint(manifest corpus.Manifest) string {
+	sum := sha256.Sum256([]byte(manifest.QueryPublicationID + "\x00" + manifest.CatalogRevisionID))
+	return fmt.Sprintf("%x", sum)
+}
+
+// validateQueryPerfResumeEnvelope 只比较一次运行窗口之外仍必须恒定的报告事实；矩阵
+// 指纹和已完成样本前缀由 query.RunPerfMatrix 继续核对。返回值只列字段名，不回显
+// 环境值、AppRoot、publication ID 或其它可能敏感的实际内容。
+func validateQueryPerfResumeEnvelope(recorded, current report.Report) error {
+	differences := make([]string, 0, 16)
+	checks := []struct {
+		name  string
+		equal bool
+	}{
+		{"schemaVersion", recorded.SchemaVersion == 2 && recorded.SchemaVersion == current.SchemaVersion},
+		{"scenario", recorded.Scenario == "perf" && recorded.Scenario == current.Scenario},
+		{"scenarioAlias", recorded.ScenarioAlias == current.ScenarioAlias},
+		{"sourceAlias", recorded.SourceAlias == current.SourceAlias},
+		{"storageClass", recorded.StorageClass == current.StorageClass},
+		{"tier", recorded.Tier == current.Tier},
+		{"scale", recorded.Scale == current.Scale},
+		{"nonrecommendedScale", recorded.Nonrecommended == current.Nonrecommended},
+		{"transport", recorded.Transport == "" || recorded.Transport == "loopback-http"},
+		{"corpus", reflect.DeepEqual(recorded.Corpus, current.Corpus)},
+	}
+	for _, check := range checks {
+		if !check.equal {
+			differences = append(differences, check.name)
+		}
+	}
+	if recorded.Environment == nil || current.Environment == nil {
+		differences = append(differences, "environment")
+	} else {
+		for _, name := range hostfacts.ResumeDifferences(*recorded.Environment, *current.Environment) {
+			differences = append(differences, "environment."+name)
+		}
+	}
+	if len(differences) > 0 {
+		return fmt.Errorf("断点与当前运行事实不一致: %s", strings.Join(differences, ", "))
+	}
+	return nil
+}
+
+// replaceFinding 让跨多个 resume 窗口的终态门禁保持一条权威 finding，并同步重算
+// FailureCount，避免每次窗口都追加一条同名 pass 造成报告含义含混。
+func replaceFinding(rep *report.Report, name string, pass bool, detail string) {
+	kept := rep.Findings[:0]
+	failures := 0
+	for _, finding := range rep.Findings {
+		if finding.Name == name {
+			continue
+		}
+		kept = append(kept, finding)
+		if !finding.Pass {
+			failures++
+		}
+	}
+	rep.Findings = kept
+	rep.FailureCount = failures
+	rep.Add(name, pass, detail)
+}
+
 // finalizeEnvironmentGate 在结果落盘之前判定环境完整性。放在最后是因为它要看本次运行
 // 是否真的产出了性能样本。
 func finalizeEnvironmentGate(rep *report.Report) {
@@ -361,10 +465,10 @@ func finalizeEnvironmentGate(rep *report.Report) {
 	}
 	missing := rep.Environment.MissingFields()
 	if len(missing) == 0 {
-		rep.Add("environment/gate-required-facts-complete", true, "")
+		replaceFinding(rep, "environment/gate-required-facts-complete", true, "")
 		return
 	}
-	rep.Add("environment/gate-required-facts-complete", false,
+	replaceFinding(rep, "environment/gate-required-facts-complete", false,
 		fmt.Sprintf("缺少门禁要求的环境事实 %v；按 Reference Performance Gate 自身规则，本次性能数字只能作为方向性证据，不能宣称通过", missing))
 }
 
