@@ -284,14 +284,33 @@ func validatePublicationResumeReport(cfg PublicationMatrixConfig, primaryWorks i
 	return nil
 }
 
-func samePublicationEnvironment(left, right hostfacts.Facts) bool {
-	return left.OSFamily == right.OSFamily && left.Arch == right.Arch && left.OSVersion == right.OSVersion &&
-		left.CPUModel == right.CPUModel && left.CPULogicalCores == right.CPULogicalCores &&
-		left.MemoryTotalBytes == right.MemoryTotalBytes && left.SQLiteVersion == right.SQLiteVersion &&
-		left.SQLiteLibrary == right.SQLiteLibrary && left.GoVersion == right.GoVersion &&
-		left.Storage.Medium == right.Storage.Medium && left.Storage.Model == right.Storage.Model &&
-		left.Storage.BusType == right.Storage.BusType && left.Storage.VolumeID == right.Storage.VolumeID &&
-		slices.Equal(left.Storage.PhysicalDiskNumbers, right.Storage.PhysicalDiskNumbers)
+func publicationEnvironmentDifferences(left, right hostfacts.Facts) []string {
+	comparisons := []struct {
+		name  string
+		equal bool
+	}{
+		{"osFamily", left.OSFamily == right.OSFamily},
+		{"arch", left.Arch == right.Arch},
+		{"osVersion", left.OSVersion == right.OSVersion},
+		{"cpuModel", left.CPUModel == right.CPUModel},
+		{"cpuLogicalCores", left.CPULogicalCores == right.CPULogicalCores},
+		{"memoryTotalBytes", left.MemoryTotalBytes == right.MemoryTotalBytes},
+		{"sqliteVersion", left.SQLiteVersion == right.SQLiteVersion},
+		{"sqliteLibrary", left.SQLiteLibrary == right.SQLiteLibrary},
+		{"goVersion", left.GoVersion == right.GoVersion},
+		{"storage.medium", left.Storage.Medium == right.Storage.Medium},
+		{"storage.model", left.Storage.Model == right.Storage.Model},
+		{"storage.busType", left.Storage.BusType == right.Storage.BusType},
+		{"storage.volumeId", left.Storage.VolumeID == right.Storage.VolumeID},
+		{"storage.physicalDiskNumbers", slices.Equal(left.Storage.PhysicalDiskNumbers, right.Storage.PhysicalDiskNumbers)},
+	}
+	differences := make([]string, 0, len(comparisons))
+	for _, comparison := range comparisons {
+		if !comparison.equal {
+			differences = append(differences, comparison.name)
+		}
+	}
+	return differences
 }
 
 func preparePublicationRatio(result *report.Report, position int, ratio float64, changedWorks, plannedRuns int) (int, int, []time.Duration, error) {
@@ -541,8 +560,11 @@ func RunPublicationMatrix(ctx context.Context, raw PublicationMatrixConfig) (rep
 	revision := 0
 	if cfg.Resume != nil {
 		facts := hostfacts.Collect(dirs.Data)
-		if result.Environment == nil || !samePublicationEnvironment(*result.Environment, facts) {
-			return result, fmt.Errorf("续跑环境与原报告不一致")
+		if result.Environment == nil {
+			return result, fmt.Errorf("续跑报告缺少环境事实")
+		}
+		if differences := publicationEnvironmentDifferences(*result.Environment, facts); len(differences) > 0 {
+			return result, fmt.Errorf("续跑环境与原报告不一致: %s", strings.Join(differences, ", "))
 		}
 		if result.CompletedCombinations == result.PlannedCombinations {
 			if _, _, err := reconstructPublicationState(ctx, store, catalogStore, cfg, primaryWorks); err != nil {

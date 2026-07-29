@@ -106,6 +106,8 @@ publication 可以精确改变全库 1%/10%/50% 的 WorkProjection，不会把�
 工具在 baseline 和每个完成样本后原子刷新报告；`-resume` 会核对原报告、当前 AppRoot、主机/存储、
 完整两关系候选形状和已完成样本，收敛遗留 staging candidate 后只执行剩余样本。若进程在 Publish 后、
 报告 checkpoint 前中断，已发布但没有完整计时的那次不会冒充有效样本，续跑会使用更高 revision 重测。
+首跑若通过 ProcessorAffinity 限定可见 CPU，续跑必须使用相同亲和性；否则环境指纹会以
+`cpuLogicalCores` 漂移拒绝，防止把不同资源上限的样本混入同一份性能报告。
 `reference` 强制 500,000 Work、10 Source、50% 主 Source、三个正式比例与每比例至少
 20 个完整样本；报告分开记录 Begin/Stage/Overlay/Validate/Publish/GC/checkpoint、峰值空间、
 旧快照在构建各边界仍可读及 nearest-rank P50/P95。它不清空 OS 文件缓存，必须按报告的

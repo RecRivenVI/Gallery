@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"path/filepath"
+	"slices"
 	"testing"
 
 	"github.com/RecRivenVI/gallery/internal/catalog"
@@ -11,6 +12,7 @@ import (
 	"github.com/RecRivenVI/gallery/internal/platform/clock"
 	"github.com/RecRivenVI/gallery/internal/platform/identity"
 	"github.com/RecRivenVI/gallery/internal/storage"
+	"github.com/RecRivenVI/gallery/tools/testlab/internal/hostfacts"
 	"github.com/RecRivenVI/gallery/tools/testlab/internal/report"
 )
 
@@ -37,6 +39,25 @@ func TestNormalizePublicationMatrixConfigRequiresFormalReferenceShape(t *testing
 	invalid.PrimarySourceShare = 0.49
 	if _, _, err := normalizePublicationMatrixConfig(invalid); err == nil {
 		t.Fatal("主 Source 份额不合法的 reference 应被拒绝")
+	}
+}
+
+func TestPublicationEnvironmentDifferencesNamesDriftWithoutValues(t *testing.T) {
+	left := hostfacts.Facts{
+		OSFamily: "windows", Arch: "amd64", OSVersion: "test-os", CPUModel: "test-cpu",
+		CPULogicalCores: 2, MemoryTotalBytes: 1024, SQLiteVersion: "test-sqlite",
+		SQLiteLibrary: "modernc.org/sqlite", GoVersion: "test-go",
+		Storage: hostfacts.Storage{
+			Medium: "ssd", Model: "test-model", BusType: "NVMe", VolumeID: "test-volume",
+			PhysicalDiskNumbers: []int{4},
+		},
+	}
+	right := left
+	right.CPULogicalCores = 28
+	right.Storage.PhysicalDiskNumbers = []int{5}
+	differences := publicationEnvironmentDifferences(left, right)
+	if !slices.Equal(differences, []string{"cpuLogicalCores", "storage.physicalDiskNumbers"}) {
+		t.Fatalf("环境漂移字段=%v", differences)
 	}
 }
 
