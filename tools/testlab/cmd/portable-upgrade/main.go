@@ -27,6 +27,7 @@ const (
 	beforeBackupLibrary   = "Portable upgrade persistent fact"
 	afterBackupLibrary    = "Portable upgrade restore sentinel"
 	afterBadBackupLibrary = "Portable failed restore current fact"
+	afterLockedLibrary    = "Portable locked restore current fact"
 	startupTimeout        = 60 * time.Second
 	jobTimeout            = 30 * time.Second
 )
@@ -49,6 +50,8 @@ type result struct {
 	RestoreAppliedOnRestart  bool   `json:"restoreAppliedOnRestart"`
 	FailedRestoreKeptCurrent bool   `json:"failedRestoreKeptCurrent"`
 	FailedRestoreRecorded    bool   `json:"failedRestoreRecorded"`
+	LockedRestoreKeptCurrent bool   `json:"lockedRestoreKeptCurrent"`
+	LockedRestoreRecorded    bool   `json:"lockedRestoreRecorded"`
 	AllStopsExitedGracefully bool   `json:"allStopsExitedGracefully"`
 }
 
@@ -234,12 +237,57 @@ func run(previousBin, currentBin, previousVersion, currentVersion string) error 
 	}); err != nil {
 		return fmt.Errorf("损坏备份后的当前用户事实: %w", err)
 	}
-	if err := assertFailedRestoreRecorded(appRoot, badBackup.BackupId); err != nil {
+	if err := assertFailedRestoreRecorded(appRoot, badBackup.BackupId, ""); err != nil {
+		return err
+	}
+
+	lockedBackup, err := createBackup(ctx, failedRestoreClient)
+	if err != nil {
+		return fmt.Errorf("创建轮换拒绝夹具备份: %w", err)
+	}
+	if err := createLibrary(ctx, failedRestoreClient, afterLockedLibrary); err != nil {
+		return err
+	}
+	if err := requestRestore(ctx, failedRestoreClient, lockedBackup.BackupId); err != nil {
 		return err
 	}
 	if outcome := active.Stop(); !outcome.ExitedGracefully || outcome.ForcedKill || outcome.Err != nil {
 		stopsGraceful = false
-		return fmt.Errorf("损坏备份回滚后当前版本未优雅停止：forced=%t err=%v", outcome.ForcedKill, outcome.Err)
+		return fmt.Errorf("轮换拒绝恢复前当前版本未优雅停止：forced=%t err=%v", outcome.ForcedKill, outcome.Err)
+	}
+	active = nil
+	releaseLock, err := holdControlWithoutDeleteSharing(filepath.Join(appRoot, "data", "control.db"))
+	if err != nil {
+		return err
+	}
+	active, err = testprocess.StartGallerydWithSourceRootsContext(
+		ctx, currentPath, appRoot, filepath.Join(logs, "current-after-locked-restore.log"), startupTimeout,
+	)
+	releaseErr := releaseLock()
+	if err != nil {
+		return fmt.Errorf("轮换被拒绝后启动当前版本: %w", err)
+	}
+	if releaseErr != nil {
+		return fmt.Errorf("释放 control 轮换阻断句柄: %w", releaseErr)
+	}
+	lockedRestoreClient, err := pair(ctx, active.BaseURL)
+	if err != nil {
+		return fmt.Errorf("轮换被拒绝后重新配对: %w", err)
+	}
+	if err := assertLibraries(ctx, lockedRestoreClient, map[string]bool{
+		beforeBackupLibrary:   true,
+		afterBackupLibrary:    false,
+		afterBadBackupLibrary: true,
+		afterLockedLibrary:    true,
+	}); err != nil {
+		return fmt.Errorf("轮换被拒绝后的当前用户事实: %w", err)
+	}
+	if err := assertFailedRestoreRecorded(appRoot, lockedBackup.BackupId, "轮换当前 control.db"); err != nil {
+		return err
+	}
+	if outcome := active.Stop(); !outcome.ExitedGracefully || outcome.ForcedKill || outcome.Err != nil {
+		stopsGraceful = false
+		return fmt.Errorf("轮换拒绝恢复后当前版本未优雅停止：forced=%t err=%v", outcome.ForcedKill, outcome.Err)
 	}
 	active = nil
 
@@ -255,6 +303,8 @@ func run(previousBin, currentBin, previousVersion, currentVersion string) error 
 		RestoreAppliedOnRestart:  true,
 		FailedRestoreKeptCurrent: true,
 		FailedRestoreRecorded:    true,
+		LockedRestoreKeptCurrent: true,
+		LockedRestoreRecorded:    true,
 		AllStopsExitedGracefully: stopsGraceful,
 	}
 	encoded, err := json.Marshal(value)
@@ -414,7 +464,7 @@ func corruptBackup(appRoot, backupID string) error {
 	return nil
 }
 
-func assertFailedRestoreRecorded(appRoot, backupID string) error {
+func assertFailedRestoreRecorded(appRoot, backupID, requiredDetail string) error {
 	pendingPath := filepath.Join(appRoot, "state", "restore-pending.json")
 	if _, err := os.Stat(pendingPath); !errors.Is(err, os.ErrNotExist) {
 		return fmt.Errorf("损坏备份恢复标记未被消费")
@@ -427,7 +477,8 @@ func assertFailedRestoreRecorded(appRoot, backupID string) error {
 	if err := json.Unmarshal(data, &record); err != nil {
 		return fmt.Errorf("解析损坏备份恢复结果: %w", err)
 	}
-	if record.BackupID != backupID || record.Applied || strings.TrimSpace(record.Detail) == "" {
+	if record.BackupID != backupID || record.Applied || strings.TrimSpace(record.Detail) == "" ||
+		(requiredDetail != "" && !strings.Contains(record.Detail, requiredDetail)) {
 		return fmt.Errorf("损坏备份恢复结果未精确记录")
 	}
 	return nil

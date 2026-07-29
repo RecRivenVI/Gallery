@@ -77,13 +77,16 @@ func TestAssertFailedRestoreRecorded(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(state, "restore-last.json"), content, 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if err := assertFailedRestoreRecorded(root, backupID); err != nil {
+	if err := assertFailedRestoreRecorded(root, backupID, "checksum"); err != nil {
 		t.Fatal(err)
+	}
+	if err := assertFailedRestoreRecorded(root, backupID, "轮换当前 control.db"); err == nil {
+		t.Fatal("不匹配的失败阶段未被拒绝")
 	}
 	if err := os.WriteFile(filepath.Join(state, "restore-pending.json"), []byte(`{}`), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if err := assertFailedRestoreRecorded(root, backupID); err == nil {
+	if err := assertFailedRestoreRecorded(root, backupID, ""); err == nil {
 		t.Fatal("未消费的恢复标记未被拒绝")
 	}
 }

@@ -112,6 +112,8 @@ try {
             'restoreAppliedOnRestart',
             'failedRestoreKeptCurrent',
             'failedRestoreRecorded',
+            'lockedRestoreKeptCurrent',
+            'lockedRestoreRecorded',
             'allStopsExitedGracefully'
         )) {
         if ($result.$field -ne $true) { throw "版本切换结果未通过：$field" }
@@ -133,6 +135,8 @@ try {
         RestoreAppliedOnRestart = 'passed'
         FailedRestoreKeptCurrent = 'passed'
         FailedRestoreRecorded = 'passed'
+        LockedRestoreKeptCurrent = 'passed'
+        LockedRestoreRecorded = 'passed'
         AllStopsExitedGracefully = 'passed'
     }
 } finally {
