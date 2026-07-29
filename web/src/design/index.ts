@@ -12,3 +12,4 @@ import './tokens.css';
 import './reset.css';
 
 export * from './primitives';
+export * from './icons';

@@ -22,6 +22,7 @@ import { createQueryClient } from '../shared/query';
 import { SessionProvider } from '../shared/session';
 import { ThemeProvider } from '../shared/theme';
 import { WorkBrowser } from './components/browser';
+import { TopBar } from './components/chrome';
 import { MediaImage, MediaLoaderProvider } from './components/media';
 import { MediaLoader } from './media';
 import { WorkPage } from './pages/work';
@@ -156,6 +157,30 @@ let recorded: Recorded[] = [];
 
 beforeEach(() => {
   recorded = [];
+});
+
+describe('双栏导航契约', () => {
+  it('收藏查询只标记收藏入口，不同时标记全部作品', async () => {
+    setFetchHandler((request) => {
+      const url = new URL(request.url);
+      if (url.pathname === '/api/v1/bootstrap') {
+        return jsonResponse({
+          ...BOOTSTRAP,
+          availableCapabilities: [...BOOTSTRAP.availableCapabilities, 'files.browse'],
+          effectiveCapabilities: [...BOOTSTRAP.effectiveCapabilities, 'files.browse']
+        });
+      }
+      if (url.pathname === '/api/v1/sources') return jsonResponse({ sources: [] });
+      if (url.pathname === '/api/v1/file-roots') return jsonResponse({ fileRoots: [] });
+      return faultResponse('NOT_FOUND', 404);
+    });
+
+    renderGallery(<TopBar />, '/browse?fav=1');
+
+    const navigation = await screen.findByRole('navigation', { name: '画廊导航' });
+    expect(within(navigation).getByRole('link', { name: '收藏' })).toHaveAttribute('aria-current', 'page');
+    expect(within(navigation).getByRole('link', { name: '全部作品' })).not.toHaveAttribute('aria-current');
+  });
 });
 
 describe('数量协议的渲染', () => {

@@ -1,111 +1,276 @@
 /*
  * 画廊外壳：顶栏、连接状态条、滚动位置恢复、未认证时的入口。
  *
- * 设计语言要求画廊"低 chrome"：导航与状态条合计不超过视口高度的 15%，滚动时非必要 chrome
- * 收起。因此顶栏在向下滚动时隐藏、向上滚动或有焦点进入时立刻回来——键盘用户永远不会被
- * 一个"藏起来的导航"困住。
+ * 桌面端使用常驻侧栏承载全局搜索、平台与文件根；窄屏收敛为模态抽屉。两种形态共享同一份
+ * 动态导航数据与可访问名称，不允许出现桌面能进入、移动端却缺失的页面。
  *
  * 连接状态条只表达"多快知道变化"，**不**把整页切成错误态：WebSocket 断开不会让已经加载
  * 的快照失效，把它渲染成页面级错误是在说谎。
  */
 
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useState, type FormEvent, type ReactNode } from 'react';
 import { Link, NavLink, NavigationType, useLocation, useNavigate, useNavigationType } from 'react-router-dom';
-import { Button, Dialog, Menu, Spinner, TextInput } from '../../design';
+import { Button, Dialog, Icon, Menu, Spinner, TextInput, type IconName } from '../../design';
 import { describeError } from '../../shared/errors';
 import { useRealtime } from '../../shared/realtime';
-import { useAuthActions, useSession } from '../../shared/session';
+import { SignOutButton, useAuthActions, useCapability, useSession } from '../../shared/session';
 import { DENSITY_LABELS, THEME_LABELS, useTheme, type ThemePreference } from '../../shared/theme';
+import type { Source } from '../contracts';
+import { useFileRoots, useSources } from '../queries';
 
-/* ————————————————————————————— 顶栏 ————————————————————————————— */
-
-const HIDE_AFTER_PX = 240;
+/* ————————————————————————————— 应用导航 ————————————————————————————— */
 
 const GALLERY_NAV_ITEMS = [
-  { to: '/browse', label: '全部作品' },
-  { to: '/creators', label: '创作者' },
-  { to: '/files', label: '文件' }
+  { to: '/', label: '首页', icon: 'home', end: true },
+  { to: '/browse', label: '全部作品', icon: 'works' },
+  { to: '/browse?fav=1', label: '收藏', icon: 'favorite' },
+  { to: '/creators', label: '创作者', icon: 'creators' },
+  { to: '/files', label: '文件', icon: 'files' }
 ] as const;
 
-export function TopBar() {
-  const [hidden, setHidden] = useState(false);
-  const lastY = useRef(0);
-  const { theme, setTheme, density, setDensity } = useTheme();
+function sourceName(source: Source): string {
+  const name = source.presentation?.name;
+  return name === undefined || name === '' ? source.displayName : name;
+}
+
+function NavIcon({ name }: { name: IconName }) {
+  return <Icon className="gal-nav-icon" name={name} />;
+}
+
+function GallerySearch({ compact, onNavigate }: { compact?: boolean; onNavigate?: () => void }) {
+  const location = useLocation();
+  const navigate = useNavigate();
+  const current =
+    location.pathname === '/browse' ? (new URLSearchParams(location.search).get('q') ?? '') : '';
+  const [query, setQuery] = useState(current);
 
   useEffect(() => {
-    const onScroll = () => {
-      const y = window.scrollY;
-      setHidden(y > HIDE_AFTER_PX && y > lastY.current);
-      lastY.current = y;
-    };
-    window.addEventListener('scroll', onScroll, { passive: true });
-    return () => {
-      window.removeEventListener('scroll', onScroll);
-    };
-  }, []);
+    setQuery(current);
+  }, [current]);
 
+  const submit = (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    const value = query.trim();
+    void navigate(value === '' ? '/browse' : `/browse?q=${encodeURIComponent(value)}`);
+    onNavigate?.();
+  };
+
+  return (
+    <form
+      className={compact ? 'gal-shell-search gal-shell-search--compact' : 'gal-shell-search'}
+      role="search"
+      onSubmit={submit}
+    >
+      <label className="ui-visually-hidden" htmlFor={compact ? 'mobile-gallery-search' : 'gallery-search'}>
+        全局作品搜索
+      </label>
+      <Icon className="gal-shell-search__icon" name="search" />
+      <input
+        className="gal-shell-search__input"
+        id={compact ? 'mobile-gallery-search' : 'gallery-search'}
+        type="search"
+        value={query}
+        onChange={(event) => setQuery(event.target.value)}
+        placeholder="搜索作品"
+      />
+    </form>
+  );
+}
+
+function ShellNavLink({
+  to,
+  label,
+  icon,
+  end,
+  onNavigate
+}: {
+  to: string;
+  label: string;
+  icon?: IconName;
+  end?: boolean;
+  onNavigate?: () => void;
+}) {
+  const location = useLocation();
+  const [path, search = ''] = to.split('?');
+  const currentSearch = new URLSearchParams(location.search);
+  const requestedSearch = new URLSearchParams(search);
+  const favoriteLink = requestedSearch.get('fav') === '1';
+  const active =
+    path === '/'
+      ? location.pathname === '/'
+      : path === '/browse'
+        ? location.pathname === '/browse' &&
+          (favoriteLink ? currentSearch.get('fav') === '1' : currentSearch.get('fav') !== '1')
+        : location.pathname === path || (!end && location.pathname.startsWith(`${path}/`));
+  return (
+    <Link
+      className={active ? 'gal-sidebar__link is-current' : 'gal-sidebar__link'}
+      to={to}
+      aria-current={active ? 'page' : undefined}
+      onClick={onNavigate}
+    >
+      {icon === undefined ? null : <NavIcon name={icon} />}
+      <span>{label}</span>
+    </Link>
+  );
+}
+
+function DynamicNavigation({ onNavigate }: { onNavigate?: () => void }) {
+  const sources = useSources();
+  const canBrowseFiles = useCapability('files.browse');
+  const fileRoots = useFileRoots(canBrowseFiles);
+  const visibleSources = (sources.data ?? []).filter(
+    (source) =>
+      source.presentation === null || source.presentation === undefined || source.presentation.showInSidebar
+  );
+
+  return (
+    <>
+      <div className="gal-sidebar__group">
+        <p className="gal-sidebar__label">浏览</p>
+        {GALLERY_NAV_ITEMS.map((item) => (
+          <ShellNavLink {...item} onNavigate={onNavigate} key={item.to} />
+        ))}
+      </div>
+      {visibleSources.length === 0 ? null : (
+        <div className="gal-sidebar__group">
+          <p className="gal-sidebar__label">平台与来源</p>
+          {visibleSources.map((source) => (
+            <NavLink
+              className="gal-sidebar__link"
+              to={`/sources/${encodeURIComponent(source.id)}`}
+              onClick={onNavigate}
+              key={source.id}
+            >
+              {source.presentation?.icon === undefined ? (
+                <span className="gal-sidebar__source-dot" aria-hidden="true" />
+              ) : (
+                <span
+                  className="gal-sidebar__source-glyph"
+                  style={{
+                    color: source.presentation.icon.color,
+                    background: source.presentation.icon.background,
+                    borderColor: source.presentation.icon.border
+                  }}
+                  aria-hidden="true"
+                >
+                  {source.presentation.icon.glyph}
+                </span>
+              )}
+              <span>{sourceName(source)}</span>
+              {source.available ? null : <span className="gal-sidebar__state" aria-label="离线" />}
+            </NavLink>
+          ))}
+        </div>
+      )}
+      {!canBrowseFiles || (fileRoots.data ?? []).length === 0 ? null : (
+        <div className="gal-sidebar__group">
+          <p className="gal-sidebar__label">文件根</p>
+          {(fileRoots.data ?? []).map((root) => (
+            <ShellNavLink
+              to={`/files/${encodeURIComponent(root.id)}`}
+              label={root.name}
+              icon="files"
+              onNavigate={onNavigate}
+              key={root.id}
+            />
+          ))}
+        </div>
+      )}
+    </>
+  );
+}
+
+function AppearanceMenu() {
+  const { theme, setTheme, density, setDensity } = useTheme();
   const themeItems = (Object.keys(THEME_LABELS) as ThemePreference[]).map((key) => ({
     id: `theme:${key}`,
     label: `${THEME_LABELS[key]}${theme === key ? ' ✓' : ''}`
   }));
 
   return (
-    // focus-within 让顶栏在键盘进入时立刻回到可见位置，收起只是视觉上的让位。
-    <header className={hidden ? 'gal-topbar gal-topbar--hidden' : 'gal-topbar'}>
-      <Link className="gal-topbar__brand" to="/">
-        画廊
-      </Link>
-      <nav className="gal-topbar__nav" aria-label="画廊导航">
-        {GALLERY_NAV_ITEMS.map((item) => (
-          <NavLink className="gal-topbar__link" to={item.to} key={item.to}>
-            {item.label}
-          </NavLink>
-        ))}
-      </nav>
-      <div className="gal-topbar__actions">
-        <Dialog
-          title="画廊导航"
-          size="sm"
-          trigger={
-            <Button className="gal-topbar__nav-trigger" variant="ghost">
-              导航
-            </Button>
-          }
-        >
-          {(close) => (
-            <nav className="gal-nav-dialog" aria-label="画廊页面">
-              <NavLink className="gal-nav-dialog__link" to="/" end onClick={close}>
-                首页
-              </NavLink>
-              {GALLERY_NAV_ITEMS.map((item) => (
-                <NavLink className="gal-nav-dialog__link" to={item.to} onClick={close} key={item.to}>
-                  {item.label}
-                </NavLink>
-              ))}
-            </nav>
-          )}
-        </Dialog>
-        <Menu
-          label="外观"
-          buttonVariant="ghost"
-          items={[
-            ...themeItems,
-            {
-              id: 'density',
-              label: `密度：${DENSITY_LABELS[density]}`
+    <Menu
+      label="外观"
+      buttonVariant="ghost"
+      items={[
+        ...themeItems,
+        {
+          id: 'density',
+          label: `密度：${DENSITY_LABELS[density]}`
+        }
+      ]}
+      onAction={(id) => {
+        if (id === 'density') {
+          setDensity(density === 'comfortable' ? 'compact' : 'comfortable');
+          return;
+        }
+        const value = id.slice('theme:'.length);
+        if (value in THEME_LABELS) setTheme(value as ThemePreference);
+      }}
+    />
+  );
+}
+
+function MobileNavigation({ trigger }: { trigger: ReactNode }) {
+  return (
+    <Dialog title="画廊导航" size="sm" trigger={trigger}>
+      {(close) => (
+        <div className="gal-nav-dialog">
+          <GallerySearch compact onNavigate={close} />
+          <nav className="gal-nav-dialog__nav" aria-label="画廊页面">
+            <DynamicNavigation onNavigate={close} />
+          </nav>
+        </div>
+      )}
+    </Dialog>
+  );
+}
+
+export function TopBar() {
+  return (
+    <>
+      <aside className="gal-sidebar">
+        <div className="gal-sidebar__header">
+          <Link className="gal-sidebar__brand" to="/">
+            <span className="gal-sidebar__brand-mark" aria-hidden="true">
+              G
+            </span>
+            <span>
+              <strong>画廊</strong>
+              <small>Gallery</small>
+            </span>
+          </Link>
+          <GallerySearch />
+        </div>
+        <nav className="gal-sidebar__nav" aria-label="画廊导航">
+          <DynamicNavigation />
+        </nav>
+        <div className="gal-sidebar__footer">
+          <AppearanceMenu />
+          <SignOutButton />
+          <a className="gal-sidebar__manage" href="/manage">
+            管理端
+            <Icon name="external" />
+          </a>
+        </div>
+      </aside>
+      <header className="gal-mobile-header">
+        <Link className="gal-mobile-header__brand" to="/">
+          画廊
+        </Link>
+        <div className="gal-mobile-header__actions">
+          <AppearanceMenu />
+          <MobileNavigation
+            trigger={
+              <Button className="gal-topbar__nav-trigger" variant="secondary">
+                <Icon name="menu" />
+                导航
+              </Button>
             }
-          ]}
-          onAction={(id) => {
-            if (id === 'density') {
-              setDensity(density === 'comfortable' ? 'compact' : 'comfortable');
-              return;
-            }
-            const value = id.slice('theme:'.length);
-            if (value in THEME_LABELS) setTheme(value as ThemePreference);
-          }}
-        />
-      </div>
-    </header>
+          />
+        </div>
+      </header>
+    </>
   );
 }
 

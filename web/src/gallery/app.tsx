@@ -44,23 +44,27 @@ export function GalleryApp() {
         </main>
       }
     >
-      <TopBar />
-      <ConnectionStatus />
-      <ScrollRestoration />
-      <main id="gallery-main" className="gal-main">
-        <Routes>
-          <Route path="/" element={<HomePage />} />
-          <Route path="/browse" element={<BrowsePage />} />
-          <Route path="/sources/:sourceId" element={<SourcePage />} />
-          <Route path="/creators" element={<CreatorsPage />} />
-          <Route path="/creators/:creatorId" element={<CreatorPage />} />
-          <Route path="/works/:workId" element={<WorkPage />} />
-          <Route path="/works/:workId/view/:mediaId" element={<ViewerPage />} />
-          <Route path="/files" element={<FileRootsPage />} />
-          <Route path="/files/:rootId" element={<FileBrowserPage />} />
-          <Route path="*" element={<NotFoundPage />} />
-        </Routes>
-      </main>
+      <div className="gal-shell">
+        <TopBar />
+        <div className="gal-workspace">
+          <ConnectionStatus />
+          <ScrollRestoration />
+          <main id="gallery-main" className="gal-main">
+            <Routes>
+              <Route path="/" element={<HomePage />} />
+              <Route path="/browse" element={<BrowsePage />} />
+              <Route path="/sources/:sourceId" element={<SourcePage />} />
+              <Route path="/creators" element={<CreatorsPage />} />
+              <Route path="/creators/:creatorId" element={<CreatorPage />} />
+              <Route path="/works/:workId" element={<WorkPage />} />
+              <Route path="/works/:workId/view/:mediaId" element={<ViewerPage />} />
+              <Route path="/files" element={<FileRootsPage />} />
+              <Route path="/files/:rootId" element={<FileBrowserPage />} />
+              <Route path="*" element={<NotFoundPage />} />
+            </Routes>
+          </main>
+        </div>
+      </div>
     </AuthGate>
   );
 }

@@ -10,26 +10,27 @@ import { useCallback, useEffect } from 'react';
 import type { ReactNode } from 'react';
 import { NavLink } from 'react-router-dom';
 import { useQueryClient } from '@tanstack/react-query';
-import { Badge, Button, Dialog, Select } from '../design';
+import { Badge, Button, Dialog, Icon, Menu, type IconName } from '../design';
 import { SNAPSHOT_QUERY_PREFIXES } from '../shared/query';
 import { useRealtime, useRealtimeEvent, type RealtimeStatus } from '../shared/realtime';
 import { SignOutButton, useSession } from '../shared/session';
-import { DENSITY_LABELS, THEME_LABELS, useTheme, type Density, type ThemePreference } from '../shared/theme';
+import { DENSITY_LABELS, THEME_LABELS, useTheme, type ThemePreference } from '../shared/theme';
 import './manage.css';
 
 export interface NavItem {
   to: string;
   label: string;
+  icon: IconName;
 }
 
 /** 导航顺序即产品路径：先看现状，再动手，再验证，再管连接，再改规则，最后收拾治理欠账。 */
 export const MANAGE_NAV: readonly NavItem[] = [
-  { to: '/', label: '概览' },
-  { to: '/scans', label: '扫描与任务' },
-  { to: '/diagnostics', label: '验证和诊断' },
-  { to: '/security', label: '连接与安全' },
-  { to: '/rules', label: '规则' },
-  { to: '/governance', label: '治理' }
+  { to: '/', label: '概览', icon: 'home' },
+  { to: '/scans', label: '扫描与任务', icon: 'scan' },
+  { to: '/diagnostics', label: '验证和诊断', icon: 'diagnostics' },
+  { to: '/security', label: '连接与安全', icon: 'security' },
+  { to: '/rules', label: '规则', icon: 'rules' },
+  { to: '/governance', label: '治理', icon: 'governance' }
 ];
 
 function ManageNavList({ dialog, onNavigate }: { dialog?: boolean; onNavigate?: () => void }) {
@@ -43,6 +44,7 @@ function ManageNavList({ dialog, onNavigate }: { dialog?: boolean; onNavigate?: 
             end={item.to === '/'}
             onClick={onNavigate}
           >
+            <Icon className="manage-nav__icon" name={item.icon} />
             {item.label}
           </NavLink>
         </li>
@@ -92,6 +94,11 @@ export function ManageLayout({ children }: { children: ReactNode }) {
   const queryClient = useQueryClient();
   useSecuritySnapshotSync();
 
+  const themeItems = (Object.keys(THEME_LABELS) as ThemePreference[]).map((value) => ({
+    id: `theme:${value}`,
+    label: `${THEME_LABELS[value]}${theme === value ? ' ✓' : ''}`
+  }));
+
   const refreshSnapshots = useCallback(() => {
     for (const prefix of SNAPSHOT_QUERY_PREFIXES) {
       void queryClient.invalidateQueries({ queryKey: [prefix] });
@@ -101,20 +108,30 @@ export function ManageLayout({ children }: { children: ReactNode }) {
 
   return (
     <div className="manage-shell">
-      <header className="manage-header">
-        <div>
+      <aside className="manage-sidebar">
+        <div className="manage-sidebar__brand">
           <h1 className="manage-header__title">Gallery 管理</h1>
-          <p className="manage-header__meta">
-            <span>部署模式：{mode === 'personal' ? 'Personal（仅本机）' : 'LAN'}</span>
-            <span>主体：{bootstrap.principalId ?? '未认证'}</span>
-            <span>API {bootstrap.apiVersion}</span>
-            <span>WS 协议 v{bootstrap.websocketProtocolVersion}</span>
-            <span>排序协议 v{bootstrap.sortProtocolVersion}</span>
-            <span>规则 Schema v{bootstrap.ruleSchemaVersion}</span>
-          </p>
+          <p>控制与治理工作区</p>
         </div>
-        <div className="manage-header__spacer" />
-        <div className="manage-header__actions">
+        <nav className="manage-nav" aria-label="管理功能">
+          <ManageNavList />
+        </nav>
+        <div className="manage-sidebar__footer">
+          <span className="manage-status-bar">
+            <Badge tone={realtimeTone(status)}>实时通道：{REALTIME_LABELS[status]}</Badge>
+            <span>序号 {lastSequence}</span>
+            {closedReason === undefined ? null : <span>停止原因：{closedReasonLabel(closedReason)}</span>}
+          </span>
+          <a className="manage-sidebar__gallery-link" href="/">
+            打开用户前端
+            <Icon name="external" />
+          </a>
+        </div>
+      </aside>
+
+      <div className="manage-workspace">
+        <header className="manage-header">
+          <div className="manage-header__mobile-brand">Gallery 管理</div>
           <Dialog
             title="管理导航"
             size="sm"
@@ -130,47 +147,44 @@ export function ManageLayout({ children }: { children: ReactNode }) {
               </nav>
             )}
           </Dialog>
-          <span className="manage-status-bar">
-            <Badge tone={realtimeTone(status)}>实时通道：{REALTIME_LABELS[status]}</Badge>
-            <span>序号 {lastSequence}</span>
-            {closedReason === undefined ? null : <span>停止原因：{closedReasonLabel(closedReason)}</span>}
-          </span>
-          <Button variant="secondary" onPress={refreshSnapshots}>
-            重新拉取快照
-          </Button>
-          <Select
-            label="主题"
-            options={(Object.keys(THEME_LABELS) as ThemePreference[]).map((value) => ({
-              id: value,
-              label: THEME_LABELS[value]
-            }))}
-            selectedKey={theme}
-            onSelectionChange={(key) => {
-              if (key !== null) setTheme(key as ThemePreference);
-            }}
-          />
-          <Select
-            label="密度"
-            options={(Object.keys(DENSITY_LABELS) as Density[]).map((value) => ({
-              id: value,
-              label: DENSITY_LABELS[value]
-            }))}
-            selectedKey={density}
-            onSelectionChange={(key) => {
-              if (key !== null) setDensity(key as Density);
-            }}
-          />
-          <SignOutButton />
-        </div>
-      </header>
+          <div className="manage-header__context">
+            <strong>{mode === 'personal' ? 'Personal · 本机' : 'LAN'}</strong>
+            <span>{bootstrap.principalId ?? '未认证'}</span>
+          </div>
+          <details className="manage-header__protocols">
+            <summary>接口协议</summary>
+            <p className="manage-header__meta">
+              <span>API {bootstrap.apiVersion}</span>
+              <span>WS v{bootstrap.websocketProtocolVersion}</span>
+              <span>排序 v{bootstrap.sortProtocolVersion}</span>
+              <span>规则 Schema v{bootstrap.ruleSchemaVersion}</span>
+            </p>
+          </details>
+          <div className="manage-header__spacer" />
+          <div className="manage-header__actions">
+            <Button variant="secondary" onPress={refreshSnapshots}>
+              重新拉取快照
+            </Button>
+            <Menu
+              label="外观"
+              items={[...themeItems, { id: 'density', label: `密度：${DENSITY_LABELS[density]}` }]}
+              onAction={(id) => {
+                if (id === 'density') {
+                  setDensity(density === 'comfortable' ? 'compact' : 'comfortable');
+                  return;
+                }
+                const value = id.slice('theme:'.length);
+                if (value in THEME_LABELS) setTheme(value as ThemePreference);
+              }}
+            />
+            <SignOutButton />
+          </div>
+        </header>
 
-      <nav className="manage-nav" aria-label="管理功能">
-        <ManageNavList />
-      </nav>
-
-      <main className="manage-main" id="manage-main">
-        {children}
-      </main>
+        <main className="manage-main" id="manage-main">
+          {children}
+        </main>
+      </div>
     </div>
   );
 }

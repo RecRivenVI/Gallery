@@ -9,12 +9,23 @@
  * --space-5/--space-6，一屏最多一个主操作。
  */
 
+.gal-shell {
+  display: grid;
+  grid-template-columns: minmax(15.5rem, 17rem) minmax(0, 1fr);
+  min-height: 100vh;
+  min-height: 100dvh;
+  background: var(--color-bg);
+}
+
+.gal-workspace {
+  min-width: 0;
+}
+
 .gal-main {
-  display: block;
   width: 100%;
-  max-width: 96rem;
+  max-width: 92rem;
   margin-inline: auto;
-  padding: var(--space-5) var(--space-4) var(--space-8);
+  padding: var(--space-6) var(--space-5) var(--space-8);
 }
 
 .gal-page {
@@ -67,58 +78,67 @@
   border-radius: var(--radius-sm);
 }
 
-/* ——————————————————————————— 顶栏 ——————————————————————————— */
+/* ——————————————————————————— 应用外壳与导航 ——————————————————————————— */
 
-.gal-topbar {
+.gal-sidebar {
   position: sticky;
   top: 0;
-  z-index: 50;
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  justify-content: space-between;
-  gap: var(--space-3);
-  padding: var(--space-2) var(--space-4);
-  background: color-mix(in srgb, var(--color-surface) 88%, transparent);
-  border-bottom: 1px solid var(--color-border);
-  backdrop-filter: blur(8px);
-  transition: transform var(--motion-base) ease-out;
+  z-index: 40;
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr) auto;
+  height: 100vh;
+  height: 100dvh;
+  min-width: 0;
+  background: var(--color-surface-sunken);
+  border-inline-end: 1px solid var(--color-border);
 }
 
-/* 向下滚动时让位给内容；键盘焦点进入立即回到可见位置，不把导航藏在 Tab 序背后。 */
-.gal-topbar--hidden:not(:focus-within) {
-  transform: translateY(-100%);
+.gal-sidebar__header {
+  display: grid;
+  gap: var(--space-4);
+  padding: var(--space-5) var(--space-4) var(--space-3);
 }
 
-.gal-topbar__nav,
-.gal-topbar__actions {
+.gal-sidebar__brand {
   display: flex;
   align-items: center;
   gap: var(--space-3);
-}
-
-.gal-topbar__nav-trigger {
-  display: none;
-}
-
-.gal-topbar__brand {
-  font-size: var(--text-lg);
-  font-weight: 700;
   color: var(--color-text);
+  text-decoration: none;
 }
 
-.gal-topbar__link {
-  min-height: var(--control-height);
-  display: inline-flex;
-  align-items: center;
-  padding-inline: var(--space-2);
-  color: var(--color-text-muted);
+.gal-sidebar__brand-mark {
+  display: grid;
+  place-items: center;
+  width: 2.25rem;
+  height: 2.25rem;
+  border: 1px solid var(--color-text);
+  background: var(--color-text);
+  color: var(--color-bg);
   font-size: var(--text-sm);
-  font-weight: 600;
+  font-weight: 750;
 }
 
-.gal-topbar__brand:focus-visible,
-.gal-topbar__link:focus-visible,
+.gal-sidebar__brand strong,
+.gal-sidebar__brand small {
+  display: block;
+}
+
+.gal-sidebar__brand strong {
+  line-height: var(--leading-tight);
+}
+
+.gal-sidebar__brand small {
+  color: var(--color-text-muted);
+  font-size: var(--text-xs);
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.gal-sidebar__brand:focus-visible,
+.gal-sidebar__link:focus-visible,
+.gal-sidebar__manage:focus-visible,
+.gal-mobile-header__brand:focus-visible,
 .gal-quicklink:focus-visible,
 .gal-card__link:focus-visible,
 .gal-tile__link:focus-visible,
@@ -128,46 +148,206 @@
   border-radius: var(--radius-sm);
 }
 
-.gal-topbar__link:hover {
-  color: var(--color-text);
+.gal-shell-search {
+  position: relative;
+  display: flex;
+  align-items: center;
+  min-width: 0;
 }
 
-.gal-topbar__link[aria-current='page'] {
-  background: var(--color-accent-soft);
-  color: var(--color-text);
+.gal-shell-search__icon {
+  position: absolute;
+  inset-inline-start: var(--space-3);
+  width: 1rem;
+  height: 1rem;
+  pointer-events: none;
+  color: var(--color-text-muted);
 }
 
-.gal-nav-dialog {
+.gal-shell-search__input {
+  width: 100%;
+  min-height: var(--control-height);
+  padding: var(--space-2) var(--space-3) var(--space-2) var(--space-6);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-sm);
+  background: var(--color-surface);
+  color: var(--color-text);
+  font-size: var(--text-sm);
+}
+
+.gal-shell-search__input:focus-visible {
+  outline: 2px solid transparent;
+  box-shadow: var(--focus-ring);
+}
+
+.gal-sidebar__nav {
+  min-height: 0;
+  overflow-y: auto;
+  padding: var(--space-2) var(--space-3) var(--space-4);
+}
+
+.gal-sidebar__group {
   display: grid;
   gap: var(--space-1);
 }
 
-.gal-nav-dialog__link {
+.gal-sidebar__group + .gal-sidebar__group {
+  margin-top: var(--space-5);
+}
+
+.gal-sidebar__label {
+  padding-inline: var(--space-2);
+  color: var(--color-text-muted);
+  font-size: var(--text-xs);
+  font-weight: 650;
+  letter-spacing: 0.06em;
+}
+
+.gal-sidebar__link {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: center;
+  gap: var(--space-3);
+  min-height: var(--control-height);
+  padding: var(--space-2) var(--space-3);
+  border-inline-start: 2px solid transparent;
+  color: var(--color-text-muted);
+  font-size: var(--text-sm);
+  font-weight: 560;
+  text-decoration: none;
+}
+
+.gal-sidebar__link:hover {
+  background: color-mix(in srgb, var(--color-surface) 72%, transparent);
+  color: var(--color-text);
+}
+
+.gal-sidebar__link[aria-current='page'],
+.gal-sidebar__link.is-current {
+  border-inline-start-color: var(--color-warning);
+  background: var(--color-surface);
+  color: var(--color-text);
+  font-weight: 650;
+}
+
+.gal-nav-icon,
+.gal-sidebar__manage svg {
+  width: 1.1rem;
+  height: 1.1rem;
+  flex: 0 0 auto;
+}
+
+.gal-sidebar__source-dot,
+.gal-sidebar__state {
+  border-radius: var(--radius-full);
+}
+
+.gal-sidebar__source-dot {
+  width: var(--space-2);
+  height: var(--space-2);
+  margin-inline: var(--space-1);
+  background: var(--color-border);
+}
+
+.gal-sidebar__source-glyph {
+  display: grid;
+  place-items: center;
+  width: 1.5rem;
+  height: 1.5rem;
+  border: 1px solid var(--color-border);
+  font-size: var(--text-xs);
+}
+
+.gal-sidebar__state {
+  width: var(--space-2);
+  height: var(--space-2);
+  background: var(--color-warning);
+}
+
+.gal-sidebar__footer {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  gap: var(--space-2);
+  padding: var(--space-3);
+  border-top: 1px solid var(--color-border);
+}
+
+.gal-sidebar__manage {
+  grid-column: 1 / -1;
   display: flex;
   align-items: center;
+  justify-content: space-between;
   min-height: var(--control-height);
   padding-inline: var(--space-3);
-  border-radius: var(--radius-sm);
+  border: 1px solid var(--color-border);
   color: var(--color-text);
-  font-weight: 600;
+  font-size: var(--text-sm);
+  text-decoration: none;
 }
 
-.gal-nav-dialog__link:hover,
-.gal-nav-dialog__link[aria-current='page'] {
-  background: var(--color-accent-soft);
+.gal-mobile-header {
+  display: none;
+  position: sticky;
+  top: 0;
+  z-index: 40;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
+  padding: var(--space-2) var(--space-3);
+  border-bottom: 1px solid var(--color-border);
+  background: var(--color-surface);
 }
 
-@media (max-width: 42rem) {
-  .gal-topbar {
-    flex-wrap: nowrap;
+.gal-mobile-header__brand {
+  color: var(--color-text);
+  font-weight: 700;
+  text-decoration: none;
+}
+
+.gal-mobile-header__actions {
+  display: flex;
+  align-items: center;
+  gap: var(--space-1);
+}
+
+.gal-topbar__nav-trigger {
+  display: none;
+}
+
+.gal-nav-dialog {
+  display: grid;
+  gap: var(--space-4);
+}
+
+.gal-nav-dialog__nav {
+  display: grid;
+  max-height: 65vh;
+  overflow-y: auto;
+}
+
+@media (max-width: 52rem) {
+  .gal-shell {
+    display: block;
   }
 
-  .gal-topbar__nav {
+  .gal-sidebar {
     display: none;
+  }
+
+  .gal-mobile-header {
+    display: flex;
   }
 
   .gal-topbar__nav-trigger {
     display: inline-flex;
+  }
+
+  .gal-main {
+    padding: var(--space-5) var(--space-3) var(--space-7);
+  }
+
+  .gal-nav-dialog .gal-sidebar__label {
+    padding-inline: 0;
   }
 }
 
@@ -204,29 +384,34 @@
   background: var(--color-surface);
   color: var(--color-text);
   border: 1px solid var(--color-border);
-  border-radius: var(--radius-full);
+  border-radius: var(--radius-sm);
   font-size: var(--text-sm);
   font-weight: 600;
+  text-decoration: none;
 }
 
 /* ——————————————————————————— 网格与卡片 ——————————————————————————— */
 
-.gal-grid,
+.gal-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(10.5rem, 1fr));
+  gap: var(--space-4);
+}
+
 .gal-tiles {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(15rem, 1fr));
-  gap: var(--space-5);
+  grid-template-columns: repeat(auto-fit, minmax(16rem, 1fr));
+  gap: var(--space-4);
 }
 
 .gal-card,
 .gal-tile {
   display: grid;
-  gap: var(--space-3);
+  gap: var(--space-2);
   align-content: start;
-  padding: var(--space-4);
+  overflow: hidden;
   background: var(--color-surface);
   border: 1px solid var(--color-border);
-  border-radius: var(--radius-md);
 }
 
 .gal-card__link,
@@ -234,6 +419,7 @@
   display: grid;
   gap: var(--space-2);
   color: var(--color-text);
+  text-decoration: none;
 }
 
 .gal-card__cover,
@@ -241,7 +427,6 @@
   position: relative;
   display: block;
   aspect-ratio: 3 / 4;
-  border-radius: var(--radius-sm);
   overflow: hidden;
 }
 
@@ -257,10 +442,12 @@
   font-size: var(--text-base);
   font-weight: 650;
   line-height: var(--leading-tight);
+  padding-inline: var(--space-3);
 }
 
 .gal-card__meta,
 .gal-tile__meta {
+  padding-inline: var(--space-3);
   font-size: var(--text-sm);
   color: var(--color-text-muted);
 }
@@ -270,6 +457,7 @@
   flex-wrap: wrap;
   align-items: center;
   gap: var(--space-2);
+  padding: 0 var(--space-3) var(--space-3);
 }
 
 .gal-card__actions {
@@ -354,7 +542,7 @@
   min-height: 1.5rem;
   padding: 0 var(--space-2);
   border: 1px solid transparent;
-  border-radius: var(--radius-full);
+  border-radius: var(--radius-sm);
   background: var(--color-surface-raised);
   color: var(--color-text);
   font-size: var(--text-xs);
@@ -384,7 +572,6 @@
   padding: var(--space-4);
   background: var(--color-surface);
   border: 1px solid var(--color-border);
-  border-radius: var(--radius-md);
 }
 
 .gal-toolbar__search {
@@ -424,7 +611,7 @@
   padding: var(--space-3) var(--space-4);
   background: var(--color-warning-soft);
   color: var(--color-text);
-  border-radius: var(--radius-md);
+  border: 1px solid var(--color-warning);
   font-size: var(--text-sm);
 }
 
@@ -470,7 +657,7 @@
   min-height: 1.75rem;
   padding-inline: var(--space-3);
   border: 1px solid var(--color-border);
-  border-radius: var(--radius-full);
+  border-radius: var(--radius-sm);
   color: var(--color-text);
   font-size: var(--text-xs);
 }
@@ -495,6 +682,7 @@
   display: grid;
   gap: var(--space-2);
   color: var(--color-text);
+  text-decoration: none;
 }
 
 .gal-thumb__link .gal-media {
@@ -533,7 +721,6 @@
   padding: var(--space-5);
   background: var(--color-surface);
   border: 1px solid var(--color-border);
-  border-radius: var(--radius-md);
 }
 
 .gal-panel__title {
@@ -619,9 +806,8 @@
   min-height: 60vh;
   max-height: 80vh;
   overflow: hidden;
-  background: var(--color-bg);
+  background: var(--color-surface-immersive);
   border: 1px solid var(--color-border);
-  border-radius: var(--radius-md);
   /* 触摸手势由我们自己解释，交给浏览器会和这里的缩放/平移打架。 */
   touch-action: none;
   cursor: grab;
@@ -653,7 +839,7 @@
   padding: var(--space-1);
   background: var(--color-surface-raised);
   border: 1px solid var(--color-border);
-  border-radius: var(--radius-full);
+  border-radius: var(--radius-md);
 }
 
 .gal-viewer__scale {
@@ -666,8 +852,7 @@
 .gal-viewer__player {
   width: 100%;
   max-height: 80vh;
-  background: var(--color-bg);
-  border-radius: var(--radius-md);
+  background: var(--color-surface-immersive);
 }
 
 .gal-viewer__fallback {
@@ -677,7 +862,6 @@
   padding: var(--space-7);
   background: var(--color-surface);
   border: 1px solid var(--color-border);
-  border-radius: var(--radius-md);
 }
 
 .gal-viewer__hint {
@@ -695,7 +879,7 @@
   padding: var(--space-6);
   background: var(--color-surface);
   border: 1px solid var(--color-border);
-  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-sm);
   text-align: center;
 }
 
@@ -713,4 +897,33 @@
 .gal-signin__error {
   color: var(--color-danger);
   font-size: var(--text-sm);
+}
+
+@media (max-width: 30rem) {
+  .gal-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: var(--space-3);
+  }
+
+  .gal-card__title,
+  .gal-card__meta {
+    padding-inline: var(--space-2);
+  }
+
+  .gal-card__foot {
+    padding: 0 var(--space-2) var(--space-2);
+  }
+
+  .gal-toolbar {
+    align-items: stretch;
+  }
+
+  .gal-toolbar__search,
+  .gal-toolbar__control {
+    flex-basis: 100%;
+  }
+
+  .gal-viewer__bar {
+    align-items: stretch;
+  }
 }

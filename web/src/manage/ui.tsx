@@ -120,7 +120,11 @@ export function DataTable<T>({
           {rows.map((row) => (
             <tr key={rowKey(row)}>
               {columns.map((column) => (
-                <td key={column.id} className={column.wrap === true ? 'is-wrap' : undefined}>
+                <td
+                  key={column.id}
+                  className={column.wrap === true ? 'is-wrap' : undefined}
+                  data-label={typeof column.header === 'string' ? column.header : undefined}
+                >
                   {column.render(row)}
                 </td>
               ))}
@@ -256,7 +260,17 @@ export function AsyncPanel<T>({ query, children, idle, loadingLabel = '正在读
   if (query.data === undefined) {
     return <Spinner label={loadingLabel} />;
   }
-  return <>{children(query.data)}</>;
+  return (
+    <div className="manage-async-panel">
+      {query.fetchStatus === 'fetching' ? (
+        <span className="manage-async-panel__refresh" role="status">
+          <Spinner decorative />
+          正在刷新快照
+        </span>
+      ) : null}
+      {children(query.data)}
+    </div>
+  );
 }
 
 /**

@@ -15,8 +15,10 @@ import tokens from './tokens.css?raw';
 /** 并行工作线依赖的 token 名。改动这个列表等于改动跨线契约。 */
 const REQUIRED_TOKENS = [
   '--color-bg',
+  '--color-surface-sunken',
   '--color-surface',
   '--color-surface-raised',
+  '--color-surface-immersive',
   '--color-border',
   '--color-text',
   '--color-text-muted',

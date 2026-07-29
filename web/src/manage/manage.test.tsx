@@ -24,7 +24,7 @@ import { ToastProvider } from '../design';
 import { faultResponse, jsonResponse, setFetchHandler } from '../../tests/http';
 import { ManageApp } from './app';
 import RULE_SCHEMA from '../../../internal/rules/rule-package.schema.json';
-import { formatDateTime } from './ui';
+import { DataTable, formatDateTime } from './ui';
 
 /* ————————————————————————————— HTTP 桩 ————————————————————————————— */
 
@@ -81,6 +81,26 @@ beforeEach(() => {
     const handler = routes.get(`${request.method} ${url.pathname}`);
     if (handler === undefined) return faultResponse('NOT_FOUND', 404, 'corr-unrouted');
     return handler(request, url);
+  });
+});
+
+describe('响应式数据表契约', () => {
+  it('每个单元格携带窄屏堆叠所需的列标签', () => {
+    render(
+      <DataTable
+        caption="任务表"
+        columns={[
+          { id: 'status', header: '状态', render: (row: { status: string }) => row.status },
+          { id: 'stage', header: '阶段', render: (row: { status: string; stage: string }) => row.stage }
+        ]}
+        rows={[{ status: '运行中', stage: '哈希' }]}
+        rowKey={(row) => row.status}
+        emptyTitle="没有任务"
+      />
+    );
+
+    expect(screen.getByRole('cell', { name: '运行中' })).toHaveAttribute('data-label', '状态');
+    expect(screen.getByRole('cell', { name: '哈希' })).toHaveAttribute('data-label', '阶段');
   });
 });
 
