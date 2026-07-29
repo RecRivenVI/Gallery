@@ -20,6 +20,8 @@
 
 EV-67 延续上述真实后端持续门禁：当前 primitive config 的 15 个 kind 已由同一 `/api/v1/rules/schema` 文档生成字段，Chromium/Firefox 均证明可视化修改进入精确草稿文本；EV-68 又以当前未保存规范 JSON 草稿、无损参数与显式合成 Sample 打通 Dry Run、Explain、Trace，输入变化时旧结果失效隐藏；EV-69 再以本地 `baseRevision` 精确快照建立普通字段、数组和 opaque JSON 的按字段撤销；EV-70 继续用快捷区、递归 JSON 树和原始文本三层编辑 `parameter_schema`、tests、extensions，并保持未知内容与精确数字无损；EV-71 以同一真实连接的可控单帧丢失证明后续 sequence gap 会重取无关的 Library/Source HTTP snapshot；EV-72 再以独立单媒体合成 Source 和仅限 E2E 构建的首字节后阻塞点，锁定同一活动 Hash Job 后从 UI 取消 Scan，证明父子任务与 Attempt 收敛且不发布半成品；EV-73 沿用该确定性运行窗口强杀真实进程，立即重启同一 AppDirs 后同时核对 recovered Attempt、稳定错误、无半成品 publication 与 UI 治理；EV-74 建立首批治理 fixture，EV-75 再以同一可见 UI 覆盖 SourceWork merge、全部 orphan decision/实体类型和已消费决策冲突；EV-76 又补齐普通 Binding issue 三决定、真实 `stale`/`superseded` 生命周期、同身份 sibling 409 与 51 条 keyset 分页，并修复历史 issue 重开可破坏活动唯一性的缺陷；EV-77 最后补齐三种剩余结构 action 的应用层消费和三类孤儿重现身份语义。测试断言协议仍未冻结，Schema 表单只作辅助，服务端保存、校验和编译继续拥有最终权威。
 
+[EV-109](证据/验证记录.md) 关闭 control 恢复的代码级 fail-open：候选落位后旧库无法回滚时不再继续 bootstrap 创建空库，而是保留 pending/轮换副本并返回 `RESTORE_FAILED`。真实 Windows 落位 sharing violation、磁盘满、ACL 与断电/中断仍是阶段 7 平台门禁，不得把确定性 seam 测试描述为 RC 证据。
+
 2026-07-26 的 [EV-42](证据/验证记录.md#ev-42规则封面customcover-与-work-快照封面闭环e1) 又补齐规则 `CoverPath` → SourceMedia/CanonicalMedia → publication 有效封面的显式链路：同 Work 有效 CustomCover 优先，失效事实保留并回退规则封面，媒体顺序不再借用 `ordinal=-1`；`PublishedWork.coverMediaId` 为 required nullable，作品详情支持 `queryPublicationId`，Web 浏览、详情、封面与媒体沿用同一快照并提供 CustomCover 编辑。该轮通过根级 `Check.ps1`、WSL2 Debian 定向 race、合成 migration 与 Web Vitest/Chromium mock，未使用真实 Source/媒体，也没有真实后端浏览器证据；阶段 4 Reference Performance/API Freeze、阶段 5 Security Gate 与阶段 6 Web Gate 状态不变。
 
 ## 如何使用
