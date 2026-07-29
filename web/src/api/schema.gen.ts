@@ -1455,6 +1455,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/media/verification-jobs": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * 为同一 Source 的多个 located_unverified 媒体建立一个内容确认 Job
+         * @description 是单媒体按需确认的兼容批量入口，仍只建立一个 incremental Scan Job；Source discovery 与规则解析只执行一次，mediaIds 中的每个目标都强制完整哈希。所有媒体 必须来自同一 queryPublicationId、同一 Source 且均为 located_unverified；任一 目标无效、重复、已确认、跨 Source 或 observation 漂移时整批拒绝，不创建部分 Job。幂等身份按实际使用的 queryPublicationId、Source 与规范化后的完整目标集合 派生，mediaIds 顺序不影响复用结果。
+         */
+        post: operations["createMediaVerificationBatchJob"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/media/{mediaId}/derived-assets": {
         parameters: {
             query?: never;
@@ -2079,6 +2099,9 @@ export interface components {
             projectionJobId?: components["schemas"]["JobId"];
             publishedQueryPublicationId?: components["schemas"]["QueryPublicationId"];
             issueCode?: string;
+        };
+        MediaVerificationBatchRequest: {
+            mediaIds: components["schemas"]["CanonicalMediaId"][];
         };
         DerivedAssetCreateRequest: {
             transformId: string;
@@ -6036,6 +6059,40 @@ export interface operations {
         requestBody?: never;
         responses: {
             /** @description 内容确认 Job 已排队或复用既有同 observation Job */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Job"];
+                };
+            };
+            400: components["responses"]["ValidationError"];
+            401: components["responses"]["UnauthenticatedError"];
+            403: components["responses"]["ForbiddenError"];
+            404: components["responses"]["NotFoundError"];
+            409: components["responses"]["ConflictError"];
+        };
+    };
+    createMediaVerificationBatchJob: {
+        parameters: {
+            query?: {
+                /** @description 省略为 current 模式；显式提供时必须精确等于当前 active publication，批量 确认不支持针对历史快照重新确认。 */
+                queryPublicationId?: components["schemas"]["QueryPublicationId"];
+            };
+            header: {
+                "X-Gallery-CSRF": components["parameters"]["CSRFHeader"];
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["MediaVerificationBatchRequest"];
+            };
+        };
+        responses: {
+            /** @description 内容确认 Job 已排队或复用既有同目标集合 Job */
             202: {
                 headers: {
                     [name: string]: unknown;

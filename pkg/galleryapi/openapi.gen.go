@@ -2946,6 +2946,11 @@ type MediaListResponse struct {
 	QueryPublicationId QueryPublicationId `json:"queryPublicationId"`
 }
 
+// MediaVerificationBatchRequest defines model for MediaVerificationBatchRequest.
+type MediaVerificationBatchRequest struct {
+	MediaIds []CanonicalMediaId `json:"mediaIds"`
+}
+
 // OrphanCandidate defines model for OrphanCandidate.
 type OrphanCandidate struct {
 	BindingId          string                    `json:"bindingId"`
@@ -4246,6 +4251,13 @@ type CreateLibraryParams struct {
 	XGalleryCSRF CSRFHeader `json:"X-Gallery-CSRF"`
 }
 
+// CreateMediaVerificationBatchJobParams defines parameters for CreateMediaVerificationBatchJob.
+type CreateMediaVerificationBatchJobParams struct {
+	// QueryPublicationId 省略为 current 模式；显式提供时必须精确等于当前 active publication，批量 确认不支持针对历史快照重新确认。
+	QueryPublicationId *QueryPublicationId `form:"queryPublicationId,omitempty" json:"queryPublicationId,omitempty"`
+	XGalleryCSRF       CSRFHeader          `json:"X-Gallery-CSRF"`
+}
+
 // GetMediaParams defines parameters for GetMedia.
 type GetMediaParams struct {
 	QueryPublicationId *QueryPublicationId `form:"queryPublicationId,omitempty" json:"queryPublicationId,omitempty"`
@@ -4675,6 +4687,9 @@ type InitializeLANOwnerJSONRequestBody = LANOwnerInitializeRequest
 
 // CreateLibraryJSONRequestBody defines body for CreateLibrary for application/json ContentType.
 type CreateLibraryJSONRequestBody = LibraryCreateRequest
+
+// CreateMediaVerificationBatchJobJSONRequestBody defines body for CreateMediaVerificationBatchJob for application/json ContentType.
+type CreateMediaVerificationBatchJobJSONRequestBody = MediaVerificationBatchRequest
 
 // CreateDerivedAssetJSONRequestBody defines body for CreateDerivedAsset for application/json ContentType.
 type CreateDerivedAssetJSONRequestBody = DerivedAssetCreateRequest
@@ -5516,6 +5531,11 @@ type ClientInterface interface {
 
 	// GetLibrary request
 	GetLibrary(ctx context.Context, libraryId LibraryId, reqEditors ...RequestEditorFn) (*http.Response, error)
+
+	// CreateMediaVerificationBatchJobWithBody request with any body
+	CreateMediaVerificationBatchJobWithBody(ctx context.Context, params *CreateMediaVerificationBatchJobParams, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*http.Response, error)
+
+	CreateMediaVerificationBatchJob(ctx context.Context, params *CreateMediaVerificationBatchJobParams, body CreateMediaVerificationBatchJobJSONRequestBody, reqEditors ...RequestEditorFn) (*http.Response, error)
 
 	// GetMedia request
 	GetMedia(ctx context.Context, mediaId CanonicalMediaId, params *GetMediaParams, reqEditors ...RequestEditorFn) (*http.Response, error)
@@ -6601,6 +6621,30 @@ func (c *Client) CreateLibrary(ctx context.Context, params *CreateLibraryParams,
 
 func (c *Client) GetLibrary(ctx context.Context, libraryId LibraryId, reqEditors ...RequestEditorFn) (*http.Response, error) {
 	req, err := NewGetLibraryRequest(c.Server, libraryId)
+	if err != nil {
+		return nil, err
+	}
+	req = req.WithContext(ctx)
+	if err := c.applyEditors(ctx, req, reqEditors); err != nil {
+		return nil, err
+	}
+	return c.Client.Do(req)
+}
+
+func (c *Client) CreateMediaVerificationBatchJobWithBody(ctx context.Context, params *CreateMediaVerificationBatchJobParams, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewCreateMediaVerificationBatchJobRequestWithBody(c.Server, params, contentType, body)
+	if err != nil {
+		return nil, err
+	}
+	req = req.WithContext(ctx)
+	if err := c.applyEditors(ctx, req, reqEditors); err != nil {
+		return nil, err
+	}
+	return c.Client.Do(req)
+}
+
+func (c *Client) CreateMediaVerificationBatchJob(ctx context.Context, params *CreateMediaVerificationBatchJobParams, body CreateMediaVerificationBatchJobJSONRequestBody, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewCreateMediaVerificationBatchJobRequest(c.Server, params, body)
 	if err != nil {
 		return nil, err
 	}
@@ -10183,6 +10227,86 @@ func NewGetLibraryRequest(server string, libraryId LibraryId) (*http.Request, er
 	req, err := http.NewRequest(http.MethodGet, queryURL.String(), nil)
 	if err != nil {
 		return nil, err
+	}
+
+	return req, nil
+}
+
+// NewCreateMediaVerificationBatchJobRequest calls the generic CreateMediaVerificationBatchJob builder with application/json body
+func NewCreateMediaVerificationBatchJobRequest(server string, params *CreateMediaVerificationBatchJobParams, body CreateMediaVerificationBatchJobJSONRequestBody) (*http.Request, error) {
+	var bodyReader io.Reader
+	buf, err := json.Marshal(body)
+	if err != nil {
+		return nil, err
+	}
+	bodyReader = bytes.NewReader(buf)
+	return NewCreateMediaVerificationBatchJobRequestWithBody(server, params, "application/json", bodyReader)
+}
+
+// NewCreateMediaVerificationBatchJobRequestWithBody generates requests for CreateMediaVerificationBatchJob with any type of body
+func NewCreateMediaVerificationBatchJobRequestWithBody(server string, params *CreateMediaVerificationBatchJobParams, contentType string, body io.Reader) (*http.Request, error) {
+	var err error
+
+	serverURL, err := url.Parse(server)
+	if err != nil {
+		return nil, err
+	}
+
+	operationPath := fmt.Sprintf("/api/v1/media/verification-jobs")
+	if operationPath[0] == '/' {
+		operationPath = "." + operationPath
+	}
+
+	queryURL, err := serverURL.Parse(operationPath)
+	if err != nil {
+		return nil, err
+	}
+
+	if params != nil {
+		// queryValues collects non-styled parameters (passthrough, JSON)
+		// that are safe to round-trip through url.Values.Encode().
+		queryValues := queryURL.Query()
+		// rawQueryFragments collects pre-encoded query fragments from
+		// styled parameters, preserving literal commas as delimiters
+		// per the OpenAPI spec (e.g. "color=blue,black,brown").
+		var rawQueryFragments []string
+
+		if params.QueryPublicationId != nil {
+
+			if queryFrag, err := runtime.StyleParamWithOptions("form", true, "queryPublicationId", *params.QueryPublicationId, runtime.StyleParamOptions{ParamLocation: runtime.ParamLocationQuery, Type: "string", Format: ""}); err != nil {
+				return nil, err
+			} else {
+				for _, qp := range strings.Split(queryFrag, "&") {
+					rawQueryFragments = append(rawQueryFragments, qp)
+				}
+			}
+
+		}
+
+		if encoded := queryValues.Encode(); encoded != "" {
+			rawQueryFragments = append(rawQueryFragments, encoded)
+		}
+		queryURL.RawQuery = strings.Join(rawQueryFragments, "&")
+	}
+
+	req, err := http.NewRequest(http.MethodPost, queryURL.String(), body)
+	if err != nil {
+		return nil, err
+	}
+
+	req.Header.Add("Content-Type", contentType)
+
+	if params != nil {
+
+		var headerParam0 string
+
+		headerParam0, err = runtime.StyleParamWithOptions("simple", false, "X-Gallery-CSRF", params.XGalleryCSRF, runtime.StyleParamOptions{ParamLocation: runtime.ParamLocationHeader, Type: "string", Format: ""})
+		if err != nil {
+			return nil, err
+		}
+
+		req.Header.Set("X-Gallery-CSRF", headerParam0)
+
 	}
 
 	return req, nil
@@ -14457,6 +14581,11 @@ type ClientWithResponsesInterface interface {
 	// GetLibraryWithResponse request
 	GetLibraryWithResponse(ctx context.Context, libraryId LibraryId, reqEditors ...RequestEditorFn) (*GetLibraryResponse, error)
 
+	// CreateMediaVerificationBatchJobWithBodyWithResponse request with any body
+	CreateMediaVerificationBatchJobWithBodyWithResponse(ctx context.Context, params *CreateMediaVerificationBatchJobParams, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*CreateMediaVerificationBatchJobResponse, error)
+
+	CreateMediaVerificationBatchJobWithResponse(ctx context.Context, params *CreateMediaVerificationBatchJobParams, body CreateMediaVerificationBatchJobJSONRequestBody, reqEditors ...RequestEditorFn) (*CreateMediaVerificationBatchJobResponse, error)
+
 	// GetMediaWithResponse request
 	GetMediaWithResponse(ctx context.Context, mediaId CanonicalMediaId, params *GetMediaParams, reqEditors ...RequestEditorFn) (*GetMediaResponse, error)
 
@@ -16339,6 +16468,41 @@ func (r GetLibraryResponse) StatusCode() int {
 
 // ContentType is a convenience method to retrieve the Content-Type value from the HTTP response headers
 func (r GetLibraryResponse) ContentType() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Header.Get("Content-Type")
+	}
+	return ""
+}
+
+type CreateMediaVerificationBatchJobResponse struct {
+	Body         []byte
+	HTTPResponse *http.Response
+	JSON202      *Job
+	JSON400      *ValidationError
+	JSON401      *UnauthenticatedError
+	JSON403      *ForbiddenError
+	JSON404      *NotFoundError
+	JSON409      *ConflictError
+}
+
+// Status returns HTTPResponse.Status
+func (r CreateMediaVerificationBatchJobResponse) Status() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Status
+	}
+	return http.StatusText(0)
+}
+
+// StatusCode returns HTTPResponse.StatusCode
+func (r CreateMediaVerificationBatchJobResponse) StatusCode() int {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.StatusCode
+	}
+	return 0
+}
+
+// ContentType is a convenience method to retrieve the Content-Type value from the HTTP response headers
+func (r CreateMediaVerificationBatchJobResponse) ContentType() string {
 	if r.HTTPResponse != nil {
 		return r.HTTPResponse.Header.Get("Content-Type")
 	}
@@ -19325,6 +19489,23 @@ func (c *ClientWithResponses) GetLibraryWithResponse(ctx context.Context, librar
 		return nil, err
 	}
 	return ParseGetLibraryResponse(rsp)
+}
+
+// CreateMediaVerificationBatchJobWithBodyWithResponse request with arbitrary body returning *CreateMediaVerificationBatchJobResponse
+func (c *ClientWithResponses) CreateMediaVerificationBatchJobWithBodyWithResponse(ctx context.Context, params *CreateMediaVerificationBatchJobParams, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*CreateMediaVerificationBatchJobResponse, error) {
+	rsp, err := c.CreateMediaVerificationBatchJobWithBody(ctx, params, contentType, body, reqEditors...)
+	if err != nil {
+		return nil, err
+	}
+	return ParseCreateMediaVerificationBatchJobResponse(rsp)
+}
+
+func (c *ClientWithResponses) CreateMediaVerificationBatchJobWithResponse(ctx context.Context, params *CreateMediaVerificationBatchJobParams, body CreateMediaVerificationBatchJobJSONRequestBody, reqEditors ...RequestEditorFn) (*CreateMediaVerificationBatchJobResponse, error) {
+	rsp, err := c.CreateMediaVerificationBatchJob(ctx, params, body, reqEditors...)
+	if err != nil {
+		return nil, err
+	}
+	return ParseCreateMediaVerificationBatchJobResponse(rsp)
 }
 
 // GetMediaWithResponse request returning *GetMediaResponse
@@ -22470,6 +22651,67 @@ func ParseGetLibraryResponse(rsp *http.Response) (*GetLibraryResponse, error) {
 			return nil, err
 		}
 		response.JSON404 = &dest
+
+	}
+
+	return response, nil
+}
+
+// ParseCreateMediaVerificationBatchJobResponse parses an HTTP response from a CreateMediaVerificationBatchJobWithResponse call
+func ParseCreateMediaVerificationBatchJobResponse(rsp *http.Response) (*CreateMediaVerificationBatchJobResponse, error) {
+	bodyBytes, err := io.ReadAll(rsp.Body)
+	defer func() { _ = rsp.Body.Close() }()
+	if err != nil {
+		return nil, err
+	}
+
+	response := &CreateMediaVerificationBatchJobResponse{
+		Body:         bodyBytes,
+		HTTPResponse: rsp,
+	}
+
+	switch {
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 202:
+		var dest Job
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON202 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 400:
+		var dest ValidationError
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON400 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 401:
+		var dest UnauthenticatedError
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON401 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 403:
+		var dest ForbiddenError
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON403 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 404:
+		var dest NotFoundError
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON404 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 409:
+		var dest ConflictError
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON409 = &dest
 
 	}
 

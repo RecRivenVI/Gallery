@@ -35,11 +35,10 @@ import (
 	api "github.com/RecRivenVI/gallery/pkg/galleryapi"
 )
 
-// TestMediaVerificationJobScopedToTargetMediaViaAPI 是阶段 4 Correctness 收尾的核心
-// 回归：通过公共 HTTP API 对多媒体 Source 中的一个媒体请求按需确认，必须只强制该媒体
-// 重新完整哈希，同 Source 的其余媒体保持 located_unverified，不再触发整个 Source 的
-// verify 档案。
-func TestMediaVerificationJobScopedToTargetMediaViaAPI(t *testing.T) {
+// TestMediaVerificationBatchJobScopedToTargetsViaAPI 通过公共 HTTP API 对同一 Source 的
+// 两个媒体建立一个批量确认 Job：两个目标必须完成完整哈希，其余媒体保持
+// located_unverified；目标顺序变化必须复用同一 Job，不得重复 discovery/publication。
+func TestMediaVerificationBatchJobScopedToTargetsViaAPI(t *testing.T) {
 	ctx := context.Background()
 	_, client, mutation, csrf, cleanup := newPublicationBindingServer(t)
 	defer cleanup()
@@ -103,13 +102,34 @@ func TestMediaVerificationJobScopedToTargetMediaViaAPI(t *testing.T) {
 	}
 	publicationBefore := mediaResponse.JSON200.QueryPublicationId
 	target := mediaResponse.JSON200.Media[1]
+	targetIDs := []api.CanonicalMediaId{mediaResponse.JSON200.Media[1].Id, mediaResponse.JSON200.Media[0].Id}
 
-	verifyJob, err := client.CreateMediaVerificationJobWithResponse(ctx, target.Id, &api.CreateMediaVerificationJobParams{XGalleryCSRF: csrf}, mutation)
+	empty, err := client.CreateMediaVerificationBatchJobWithResponse(ctx,
+		&api.CreateMediaVerificationBatchJobParams{XGalleryCSRF: csrf}, api.MediaVerificationBatchRequest{}, mutation)
+	if err != nil || empty.JSON400 == nil || empty.JSON400.Error.Code != api.VALIDATIONERROR {
+		t.Fatalf("空批量确认请求应返回 VALIDATION_ERROR: %v status=%d body=%s", err, empty.StatusCode(), empty.Body)
+	}
+	duplicate, err := client.CreateMediaVerificationBatchJobWithResponse(ctx,
+		&api.CreateMediaVerificationBatchJobParams{XGalleryCSRF: csrf},
+		api.MediaVerificationBatchRequest{MediaIds: []api.CanonicalMediaId{target.Id, target.Id}}, mutation)
+	if err != nil || duplicate.JSON400 == nil || duplicate.JSON400.Error.Code != api.VALIDATIONERROR {
+		t.Fatalf("重复目标应返回 VALIDATION_ERROR: %v status=%d body=%s", err, duplicate.StatusCode(), duplicate.Body)
+	}
+
+	verifyJob, err := client.CreateMediaVerificationBatchJobWithResponse(ctx,
+		&api.CreateMediaVerificationBatchJobParams{XGalleryCSRF: csrf},
+		api.MediaVerificationBatchRequest{MediaIds: targetIDs}, mutation)
 	if err != nil || verifyJob.JSON202 == nil {
-		t.Fatalf("创建按需确认 Job 失败: %v status=%d body=%s", err, verifyJob.StatusCode(), verifyJob.Body)
+		t.Fatalf("创建批量确认 Job 失败: %v status=%d body=%s", err, verifyJob.StatusCode(), verifyJob.Body)
+	}
+	reordered, err := client.CreateMediaVerificationBatchJobWithResponse(ctx,
+		&api.CreateMediaVerificationBatchJobParams{XGalleryCSRF: csrf},
+		api.MediaVerificationBatchRequest{MediaIds: []api.CanonicalMediaId{targetIDs[1], targetIDs[0]}}, mutation)
+	if err != nil || reordered.JSON202 == nil || reordered.JSON202.Id != verifyJob.JSON202.Id {
+		t.Fatalf("同一目标集合改变顺序应复用 Job: %v first=%+v reordered=%+v", err, verifyJob.JSON202, reordered.JSON202)
 	}
 	if completed := waitForJob(t, client, verifyJob.JSON202.Id); string(completed.Status) != "completed" {
-		t.Fatalf("按需确认 Job 未完成: %+v", completed)
+		t.Fatalf("批量确认 Job 未完成: %+v", completed)
 	}
 
 	afterResponse, err := client.ListWorkMediaWithResponse(ctx, worksResponse.JSON200.Works[0].Id, &api.ListWorkMediaParams{})
@@ -121,8 +141,9 @@ func TestMediaVerificationJobScopedToTargetMediaViaAPI(t *testing.T) {
 		t.Fatal("按需确认后应发布新 queryPublicationId")
 	}
 	verifiedCount := 0
+	targetSet := map[api.CanonicalMediaId]struct{}{targetIDs[0]: {}, targetIDs[1]: {}}
 	for _, item := range afterResponse.JSON200.Media {
-		if item.Id == target.Id {
+		if _, isTarget := targetSet[item.Id]; isTarget {
 			if item.ContentVerificationState != api.ContentVerified || item.Blob == nil {
 				t.Fatalf("目标媒体应完成确认: %+v", item)
 			}
@@ -133,8 +154,8 @@ func TestMediaVerificationJobScopedToTargetMediaViaAPI(t *testing.T) {
 			t.Fatalf("非目标媒体不应被确认: %+v", item)
 		}
 	}
-	if verifiedCount != 1 {
-		t.Fatalf("应恰好一个媒体被确认，实际=%d", verifiedCount)
+	if verifiedCount != 2 {
+		t.Fatalf("应恰好两个媒体被确认，实际=%d", verifiedCount)
 	}
 
 	// queryPublicationId=publicationBefore 仍应读取确认前的快照事实：目标媒体仍是

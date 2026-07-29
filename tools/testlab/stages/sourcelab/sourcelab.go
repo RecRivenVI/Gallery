@@ -695,9 +695,10 @@ func runIndex(rep *report.Report, sess *environment.Session, cfg Config, guard *
 	return nil
 }
 
-// confirmBoundedSubset 对前若干个未确认媒体做目标化按需确认。bounded 模式下，
-// MaxWallClock 同时约束整个确认阶段，而不是让每个媒体分别获得 30 分钟：真实 Source
-// 可能把一个超大附件排在很前面，逐媒体独立超时会让名义上的有界运行膨胀到数小时。
+// confirmBoundedSubset 对前若干个未确认媒体建立一个同 Source 多目标确认 Job。bounded
+// 模式下 MaxWallClock 约束整个确认阶段；多个目标共享一次完整 Source discovery/规则处理，
+// 不再让逐媒体公共请求把这部分固定成本重复 N 次。Scanner 仍对每个目标完整哈希，并在
+// 任一冻结 observation 失配时让整个 Job fail-closed。
 func confirmBoundedSubset(rep *report.Report, sess *environment.Session, cfg Config, guard *sourceguard.Guard, state *State) (int, string, error) {
 	ctx := context.Background()
 	limit := cfg.MaxMediaItems
@@ -713,49 +714,57 @@ func confirmBoundedSubset(rep *report.Report, sess *environment.Session, cfg Con
 
 	confirmed := 0
 	stoppedBy := ""
+	verificationJobs := 0
+	verificationStarted := time.Now()
 	verificationDeadline := time.Time{}
 	if cfg.Mode == ModeBounded && cfg.Limits.MaxWallClock > 0 {
 		verificationDeadline = time.Now().Add(cfg.Limits.MaxWallClock)
 	}
 	err = guard.Around("on-demand-verification", func() error {
-		for _, mediaID := range targets {
-			waitTimeout := 30 * time.Minute
-			cancelAtTimeout := false
-			if !verificationDeadline.IsZero() {
-				waitTimeout = time.Until(verificationDeadline)
-				cancelAtTimeout = true
-				if waitTimeout <= 0 {
-					stoppedBy = bounds.ReasonWallClock
-					break
-				}
-			}
-			if err := setBindingStatus(sess, state.BindingID, api.UpdateSourceRuleBindingJSONBodyStatusActive); err != nil {
-				return err
-			}
-			created, err := sess.Client.CreateMediaVerificationJobWithResponse(ctx, mediaID,
-				&api.CreateMediaVerificationJobParams{XGalleryCSRF: sess.CSRF}, sess.SameOrigin)
-			pauseErr := setBindingStatus(sess, state.BindingID, api.UpdateSourceRuleBindingJSONBodyStatusPaused)
-			if err != nil {
-				return fmt.Errorf("创建按需确认 Job 失败: %w", err)
-			}
-			if pauseErr != nil {
-				return pauseErr
-			}
-			if created.JSON202 == nil {
-				// 已确认或不适用：稳定拒绝，不是缺陷。
-				continue
-			}
-			job, stopped, err := waitForJob(sess, created.JSON202.Id, waitTimeout, cancelAtTimeout)
-			if err != nil {
-				return err
-			}
-			if stopped {
+		if len(targets) == 0 {
+			return nil
+		}
+		waitTimeout := 30 * time.Minute
+		cancelAtTimeout := false
+		if !verificationDeadline.IsZero() {
+			waitTimeout = time.Until(verificationDeadline)
+			cancelAtTimeout = true
+			if waitTimeout <= 0 {
 				stoppedBy = bounds.ReasonWallClock
-				break
+				return nil
 			}
-			if job.Status == "completed" {
-				confirmed++
-			}
+		}
+		if err := setBindingStatus(sess, state.BindingID, api.UpdateSourceRuleBindingJSONBodyStatusActive); err != nil {
+			return err
+		}
+		mediaIDs := make([]api.CanonicalMediaId, len(targets))
+		for index, mediaID := range targets {
+			mediaIDs[index] = api.CanonicalMediaId(mediaID)
+		}
+		created, err := sess.Client.CreateMediaVerificationBatchJobWithResponse(ctx,
+			&api.CreateMediaVerificationBatchJobParams{XGalleryCSRF: sess.CSRF},
+			api.MediaVerificationBatchRequest{MediaIds: mediaIDs}, sess.SameOrigin)
+		pauseErr := setBindingStatus(sess, state.BindingID, api.UpdateSourceRuleBindingJSONBodyStatusPaused)
+		if err != nil {
+			return fmt.Errorf("创建批量按需确认 Job 失败: %w", err)
+		}
+		if pauseErr != nil {
+			return pauseErr
+		}
+		if created.JSON202 == nil {
+			return fmt.Errorf("创建批量按需确认 Job 失败: status=%d", environment.StatusOf(created))
+		}
+		verificationJobs = 1
+		job, stopped, err := waitForJob(sess, created.JSON202.Id, waitTimeout, cancelAtTimeout)
+		if err != nil {
+			return err
+		}
+		if stopped {
+			stoppedBy = bounds.ReasonWallClock
+			return nil
+		}
+		if job.Status == "completed" {
+			confirmed = len(targets)
 		}
 		return nil
 	})
@@ -765,12 +774,12 @@ func confirmBoundedSubset(rep *report.Report, sess *environment.Session, cfg Con
 	}
 	if stoppedBy != "" {
 		rep.Add("sourcelab/on-demand-verification-stopped-by-bound", true,
-			fmt.Sprintf("confirmed=%d targets=%d stoppedByBound=%q", confirmed, len(targets), stoppedBy))
+			fmt.Sprintf("confirmed=%d targets=%d jobs=%d stoppedByBound=%q elapsedMs=%d", confirmed, len(targets), verificationJobs, stoppedBy, time.Since(verificationStarted).Milliseconds()))
 		rep.Limitations = append(rep.Limitations,
 			fmt.Sprintf("按需内容确认因墙钟边界（%s）停止，本次只确认已完成的有界子集", cfg.Limits.MaxWallClock))
 	}
 	rep.Add("sourcelab/on-demand-verification-completed", stoppedBy != "" || confirmed == len(targets),
-		fmt.Sprintf("confirmed=%d targets=%d stoppedByBound=%q", confirmed, len(targets), stoppedBy))
+		fmt.Sprintf("confirmed=%d targets=%d jobs=%d stoppedByBound=%q elapsedMs=%d", confirmed, len(targets), verificationJobs, stoppedBy, time.Since(verificationStarted).Milliseconds()))
 	return confirmed, stoppedBy, nil
 }
 

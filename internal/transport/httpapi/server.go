@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"crypto/rand"
+	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -14,6 +15,7 @@ import (
 	"net"
 	"net/http"
 	"net/url"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -245,6 +247,7 @@ func New(mode config.Mode, store *storage.Store, clock ports.Clock, personal *au
 	mux.HandleFunc("GET /api/v1/media/{mediaId}/content", server.mediaContent)
 	mux.HandleFunc("HEAD /api/v1/media/{mediaId}/content", server.mediaContent)
 	mux.HandleFunc("POST /api/v1/media/{mediaId}/verification-jobs", server.createMediaVerificationJob)
+	mux.HandleFunc("POST /api/v1/media/verification-jobs", server.createMediaVerificationBatchJob)
 	mux.HandleFunc("POST /api/v1/media/{mediaId}/derived-assets", server.createDerivedAsset)
 	mux.HandleFunc("GET /api/v1/derived-assets/{assetKey}/content", server.derivedAssetContent)
 	mux.Handle("/ws/v1", hub.Handler(func(r *http.Request) (realtime.Principal, error) {
@@ -3290,6 +3293,8 @@ func (s *Server) writeMediaContent(w http.ResponseWriter, r *http.Request, handl
 // 相对路径与 observation 指纹（size、mtime、内容确认状态）派生：文件未变化且请求针对
 // 同一快照时重复请求复用同一 Job；publication 切换后即使媒体 ID 和相对路径相同，也
 // 不会误复用旧 publication 的 Job。
+const maxMediaVerificationTargets = 200
+
 func (s *Server) createMediaVerificationJob(w http.ResponseWriter, r *http.Request) {
 	session, err := s.authenticate(r)
 	if err != nil {
@@ -3305,51 +3310,147 @@ func (s *Server) createMediaVerificationJob(w http.ResponseWriter, r *http.Reque
 		s.writeRequestError(w, err)
 		return
 	}
+	s.createMediaVerificationJobForTargets(w, r, session, requestedPub, []string{r.PathValue("mediaId")})
+}
+
+// createMediaVerificationBatchJob 暴露 Scanner 已有的多 VerificationTarget 原语，供同一
+// Source 的有界目标集合共享一次 discovery、规则解析与 publication。它不改变单媒体
+// 入口，也不把不同 Source 或不同 publication 拼成一个任务；所有输入在创建 Job 之前
+// 完整验证，避免出现部分目标已经排队、后续目标才失败的半成功状态。
+func (s *Server) createMediaVerificationBatchJob(w http.ResponseWriter, r *http.Request) {
+	session, err := s.authenticate(r)
+	if err != nil {
+		s.writeRequestError(w, err)
+		return
+	}
+	if err := s.validateMutation(r, session); err != nil {
+		s.writeRequestError(w, err)
+		return
+	}
+	var request api.MediaVerificationBatchRequest
+	if err := decodeJSON(r, &request); err != nil || len(request.MediaIds) == 0 || len(request.MediaIds) > maxMediaVerificationTargets {
+		s.writeRequestError(w, fault.WithField(fault.CodeValidation, "mediaIds", err))
+		return
+	}
+	mediaIDs := make([]string, len(request.MediaIds))
+	seen := make(map[string]struct{}, len(request.MediaIds))
+	for index, mediaID := range request.MediaIds {
+		value := string(mediaID)
+		if _, err := domain.ParseID(domain.IDCanonicalMedia, value); err != nil {
+			s.writeRequestError(w, fault.WithField(fault.CodeValidation, "mediaIds", err))
+			return
+		}
+		if _, duplicate := seen[value]; duplicate {
+			s.writeRequestError(w, fault.WithField(fault.CodeValidation, "mediaIds", nil))
+			return
+		}
+		seen[value] = struct{}{}
+		mediaIDs[index] = value
+	}
+	requestedPub, err := optionalQueryPublicationID(r)
+	if err != nil {
+		s.writeRequestError(w, err)
+		return
+	}
+	s.createMediaVerificationJobForTargets(w, r, session, requestedPub, mediaIDs)
+}
+
+func (s *Server) createMediaVerificationJobForTargets(w http.ResponseWriter, r *http.Request, session auth.Session, requestedPub string, mediaIDs []string) {
 	release, err := s.acquirePublicationLeaseIfExplicit(r, session, requestedPub)
 	if err != nil {
 		s.writeRequestError(w, err)
 		return
 	}
 	defer release()
-	resolvedPub, item, err := s.catalog.GetMediaAt(r.Context(), requestedPub, r.PathValue("mediaId"))
+	if len(mediaIDs) == 0 {
+		s.writeRequestError(w, fault.WithField(fault.CodeValidation, "mediaIds", nil))
+		return
+	}
+
+	resolvedPub, first, err := s.catalog.GetMediaAt(r.Context(), requestedPub, mediaIDs[0])
 	if err != nil {
 		s.writeRequestError(w, err)
 		return
 	}
-	if err := s.authorizeSession(r, session, "scan.run", auth.ResourceScope{Kind: "source", ID: item.SourceID}); err != nil {
+	if err := s.authorizeSession(r, session, "scan.run", auth.ResourceScope{Kind: "source", ID: first.SourceID}); err != nil {
 		s.writeRequestError(w, concealForbidden(err))
 		return
 	}
-	if requestedPub != "" {
-		current, currentErr := s.catalog.Current(r.Context())
-		if currentErr != nil {
-			s.writeRequestError(w, currentErr)
+	// current 模式解析出实际 publication 后，也为批量读取建立短租约。单媒体请求不会
+	// 从这里获益，但批量解析期间 active 可能切换，租约可防止刚冻结的旧 publication
+	// 被并发 GC 回收；Scanner 仍会因其不再 active 而在创建前 fail-closed。
+	if requestedPub == "" && len(mediaIDs) > 1 {
+		authHash := queryservice.AuthorizationScope(session.PrincipalID, session.Capabilities)
+		lease, leaseErr := s.catalog.AcquirePublicationLease(r.Context(), resolvedPub.ID, authHash)
+		if leaseErr != nil {
+			s.writeRequestError(w, leaseErr)
 			return
 		}
-		if resolvedPub.ID != current.ID {
-			// 显式指定的 publication 仍然存在，但已经不是当前 active publication：
-			// 按需确认只承诺确认当前可见 Catalog 中的媒体，不重新确认历史快照描述的
-			// 旧 observation。
+		defer func() { _ = lease.Close() }()
+	}
+
+	items := make([]catalog.Media, 0, len(mediaIDs))
+	items = append(items, first)
+	for _, mediaID := range mediaIDs[1:] {
+		publication, item, itemErr := s.catalog.GetMediaAt(r.Context(), resolvedPub.ID, mediaID)
+		if itemErr != nil {
+			s.writeRequestError(w, itemErr)
+			return
+		}
+		if err := s.authorizeSession(r, session, "scan.run", auth.ResourceScope{Kind: "source", ID: item.SourceID}); err != nil {
+			s.writeRequestError(w, concealForbidden(err))
+			return
+		}
+		if publication.ID != resolvedPub.ID {
+			s.writeRequestError(w, fault.New(fault.CodeConflict, false, nil))
+			return
+		}
+		items = append(items, item)
+	}
+
+	sourceID := first.SourceID
+	for _, item := range items {
+		if item.SourceID != sourceID {
+			s.writeRequestError(w, fault.WithField(fault.CodeValidation, "mediaIds", nil))
+			return
+		}
+		if item.ContentVerificationState == catalog.ContentVerificationStateContentVerified {
 			s.writeRequestError(w, fault.New(fault.CodeConflict, false, nil))
 			return
 		}
 	}
-	if item.ContentVerificationState == catalog.ContentVerificationStateContentVerified {
+	current, currentErr := s.catalog.Current(r.Context())
+	if currentErr != nil {
+		s.writeRequestError(w, currentErr)
+		return
+	}
+	if resolvedPub.ID != current.ID {
+		// 显式历史 publication 与 current 模式解析期间发生的 active 漂移都必须整批拒绝。
 		s.writeRequestError(w, fault.New(fault.CodeConflict, false, nil))
 		return
 	}
-	observation, err := s.catalog.LookupObservationAt(r.Context(), resolvedPub.ID, item.SourceID, item.RelativePath)
-	if err != nil {
-		s.writeRequestError(w, err)
-		return
+
+	targets := make([]scanner.VerificationTarget, 0, len(items))
+	for _, item := range items {
+		observation, observationErr := s.catalog.LookupObservationAt(r.Context(), resolvedPub.ID, item.SourceID, item.RelativePath)
+		if observationErr != nil {
+			s.writeRequestError(w, observationErr)
+			return
+		}
+		fingerprint := scanner.ObservationFingerprint(observation.Size, observation.MTimeNanos, observation.ContentVerificationState)
+		targets = append(targets, scanner.VerificationTarget{
+			MediaID: item.ID, SourceID: item.SourceID, RelativePath: item.RelativePath,
+			QueryPublicationID: resolvedPub.ID, ObservationFingerprint: fingerprint,
+		})
 	}
-	observationFingerprint := scanner.ObservationFingerprint(observation.Size, observation.MTimeNanos, observation.ContentVerificationState)
-	idempotencyKey := fmt.Sprintf("verify-media:v3:%s:%s:%s:%s:%s", resolvedPub.ID, item.ID, item.SourceID, item.RelativePath, observationFingerprint)
-	target := scanner.VerificationTarget{
-		MediaID: item.ID, SourceID: item.SourceID, RelativePath: item.RelativePath,
-		QueryPublicationID: resolvedPub.ID, ObservationFingerprint: observationFingerprint,
-	}
-	job, err := s.scanner.CreateVerificationScan(r.Context(), item.SourceID, session.PrincipalID, idempotencyKey, []scanner.VerificationTarget{target})
+	sort.Slice(targets, func(i, j int) bool {
+		if targets[i].MediaID == targets[j].MediaID {
+			return targets[i].RelativePath < targets[j].RelativePath
+		}
+		return targets[i].MediaID < targets[j].MediaID
+	})
+	idempotencyKey := mediaVerificationIdempotencyKey(resolvedPub.ID, sourceID, targets)
+	job, err := s.scanner.CreateVerificationScan(r.Context(), sourceID, session.PrincipalID, idempotencyKey, targets)
 	if err != nil {
 		s.writeRequestError(w, err)
 		return
@@ -3357,6 +3458,18 @@ func (s *Server) createMediaVerificationJob(w http.ResponseWriter, r *http.Reque
 	s.trackScan(r.Context(), job)
 	writeJSON(w, http.StatusAccepted, jobDTO(job))
 	s.scanner.Start(job.ID)
+}
+
+func mediaVerificationIdempotencyKey(publicationID, sourceID string, targets []scanner.VerificationTarget) string {
+	if len(targets) == 1 {
+		target := targets[0]
+		return fmt.Sprintf("verify-media:v3:%s:%s:%s:%s:%s", publicationID, target.MediaID, sourceID, target.RelativePath, target.ObservationFingerprint)
+	}
+	hash := sha256.New()
+	for _, target := range targets {
+		_, _ = fmt.Fprintf(hash, "%s\x00%s\x00%s\x00", target.MediaID, target.RelativePath, target.ObservationFingerprint)
+	}
+	return fmt.Sprintf("verify-media-batch:v1:%s:%s:%s", publicationID, sourceID, hex.EncodeToString(hash.Sum(nil)))
 }
 
 func (s *Server) trackScan(ctx context.Context, job jobs.Job) {

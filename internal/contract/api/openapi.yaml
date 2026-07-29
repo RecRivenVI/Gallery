@@ -2248,6 +2248,50 @@ paths:
           $ref: "#/components/responses/NotFoundError"
         "409":
           $ref: "#/components/responses/ConflictError"
+  /api/v1/media/verification-jobs:
+    post:
+      operationId: createMediaVerificationBatchJob
+      summary: 为同一 Source 的多个 located_unverified 媒体建立一个内容确认 Job
+      description: >-
+        是单媒体按需确认的兼容批量入口，仍只建立一个 incremental Scan Job；Source
+        discovery 与规则解析只执行一次，mediaIds 中的每个目标都强制完整哈希。所有媒体
+        必须来自同一 queryPublicationId、同一 Source 且均为 located_unverified；任一
+        目标无效、重复、已确认、跨 Source 或 observation 漂移时整批拒绝，不创建部分
+        Job。幂等身份按实际使用的 queryPublicationId、Source 与规范化后的完整目标集合
+        派生，mediaIds 顺序不影响复用结果。
+      parameters:
+        - name: queryPublicationId
+          in: query
+          required: false
+          description: >-
+            省略为 current 模式；显式提供时必须精确等于当前 active publication，批量
+            确认不支持针对历史快照重新确认。
+          schema:
+            $ref: "#/components/schemas/QueryPublicationId"
+        - $ref: "#/components/parameters/CSRFHeader"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/MediaVerificationBatchRequest"
+      responses:
+        "202":
+          description: 内容确认 Job 已排队或复用既有同目标集合 Job
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Job"
+        "400":
+          $ref: "#/components/responses/ValidationError"
+        "401":
+          $ref: "#/components/responses/UnauthenticatedError"
+        "403":
+          $ref: "#/components/responses/ForbiddenError"
+        "404":
+          $ref: "#/components/responses/NotFoundError"
+        "409":
+          $ref: "#/components/responses/ConflictError"
   /api/v1/media/{mediaId}/derived-assets:
     post:
       operationId: createDerivedAsset
@@ -3531,6 +3575,18 @@ components:
         publishedQueryPublicationId:
           $ref: "#/components/schemas/QueryPublicationId"
         issueCode: {type: string}
+    MediaVerificationBatchRequest:
+      type: object
+      additionalProperties: false
+      required: [mediaIds]
+      properties:
+        mediaIds:
+          type: array
+          minItems: 1
+          maxItems: 200
+          uniqueItems: true
+          items:
+            $ref: "#/components/schemas/CanonicalMediaId"
     DerivedAssetCreateRequest:
       type: object
       additionalProperties: false

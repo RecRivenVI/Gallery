@@ -143,8 +143,9 @@ func TestPublicationBoundResponsesExposeValidationErrors(t *testing.T) {
 		api.HeadMediaContentResponse{JSON400: validation},
 		api.GetMediaContentResponse{JSON400: validation},
 		api.CreateMediaVerificationJobResponse{JSON400: validation},
+		api.CreateMediaVerificationBatchJobResponse{JSON400: validation},
 	}
-	if len(responses) != 6 {
-		t.Fatalf("publication-bound validation response count = %d, want 6", len(responses))
+	if len(responses) != 7 {
+		t.Fatalf("publication-bound validation response count = %d, want 7", len(responses))
 	}
 }
