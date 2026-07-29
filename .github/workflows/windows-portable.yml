@@ -1,0 +1,65 @@
+name: Windows 便携预发行制品
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "写入二进制与发行清单的 SemVer（当前仅生成未签名测试制品）"
+        required: true
+        default: "0.2.0-walking-skeleton"
+        type: string
+
+permissions:
+  contents: read
+  id-token: write
+  attestations: write
+
+env:
+  GOTOOLCHAIN: local
+
+jobs:
+  package:
+    name: Windows x64 portable
+    runs-on: windows-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-go@v6
+        with:
+          go-version: 1.26.5
+          cache-dependency-path: go.sum
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 22.23.1
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+      - name: 完整根级门禁
+        shell: pwsh
+        run: ./scripts/Check.ps1
+      - name: 安装固定版本 CycloneDX Go 工具
+        shell: pwsh
+        run: go install github.com/CycloneDX/cyclonedx-gomod/cmd/cyclonedx-gomod@v1.10.0
+      - name: 构建并验证未签名便携测试制品
+        id: package
+        shell: pwsh
+        run: |
+          $tool = Join-Path (& go env GOPATH) 'bin\cyclonedx-gomod.exe'
+          ./scripts/Build-WindowsPortable.ps1 -Version '${{ inputs.version }}' -OutputDirectory dist/release -CycloneDXGoModExecutable $tool -SkipWebBuild
+          $archives = @(Get-ChildItem -LiteralPath dist/release -Filter '*.zip' -File)
+          if ($archives.Count -ne 1) { throw "预期恰好一个 ZIP，实际为 $($archives.Count)" }
+          $archive = $archives[0]
+          ./scripts/Test-WindowsPortable.ps1 -ArchivePath $archive.FullName -ExpectedVersion '${{ inputs.version }}'
+          "archive=$($archive.FullName)" >> $env:GITHUB_OUTPUT
+      - name: 建立 GitHub 构建来源证明
+        uses: actions/attest@v4
+        with:
+          subject-path: dist/release/*
+      - name: 保存便携测试制品
+        uses: actions/upload-artifact@v6
+        with:
+          name: Gallery-${{ inputs.version }}-windows-x64-unsigned
+          path: dist/release/*
+          if-no-files-found: error
+          retention-days: 14

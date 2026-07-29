@@ -39,6 +39,25 @@ if ($LASTEXITCODE -ne 0) { throw 'git ls-files --eol 失败' }
 $badEol = $eolEntries | Where-Object { $_ -match '(^|\s)(i|w)/(crlf|mixed)(\s|$)' }
 if ($badEol) { throw "以下 tracked 文件的换行不是 LF，请检查 .gitattributes 与本地检出：`n$($badEol -join "`n")" }
 
+# 发行脚本只在 Windows 制品 Job 中真实执行，但 PowerShell 语法必须进入所有平台的普通门禁，
+# 否则脚本改坏后要等人工 workflow_dispatch 才能发现。这里不运行任何打包/签名动作。
+$releaseScripts = @(
+    (Join-Path $PSScriptRoot 'Build-WindowsPortable.ps1'),
+    (Join-Path $PSScriptRoot 'Test-WindowsPortable.ps1')
+)
+foreach ($releaseScript in $releaseScripts) {
+    $parseTokens = $null
+    $parseErrors = $null
+    [void][System.Management.Automation.Language.Parser]::ParseFile(
+        $releaseScript,
+        [ref]$parseTokens,
+        [ref]$parseErrors
+    )
+    if ($parseErrors.Count -ne 0) {
+        throw "发行脚本语法错误：$releaseScript`n$($parseErrors.Message -join "`n")"
+    }
+}
+
 & $go mod tidy -diff
 if ($LASTEXITCODE -ne 0) { throw 'go.mod/go.sum 不是 tidy 状态' }
 
