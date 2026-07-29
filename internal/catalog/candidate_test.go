@@ -99,6 +99,65 @@ func countRows(t *testing.T, store *storage.Store, query string, args ...any) in
 	return count
 }
 
+func TestStagePersistsMultipleWorkCreatorRelations(t *testing.T) {
+	catalogStore, store := newCandidateTestStore(t)
+	ctx := context.Background()
+	candidate, err := catalogStore.BeginCandidate(ctx, "job-multi-creator", "source-a", 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	works, mediaFacts := minimalCandidateFacts("source-a", "work-1", "media-1", candidateDigestA)
+	works[0].Creator = "主作者"
+	works[0].CreatorID = "creator-primary"
+	works[0].CreatorSourceKey = "work-one/creator:primary:0"
+	works[0].CreatorRelations = []catalog.WorkCreatorFact{{
+		CreatorID: "creator-assistant", CreatorName: "协作者",
+		CreatorSourceKey: "work-one/creator:assistant:0", Role: "assistant", Ordinal: 0,
+	}}
+	if err := catalogStore.Stage(ctx, candidate, works, mediaFacts); err != nil {
+		t.Fatal(err)
+	}
+	if err := catalogStore.ValidateCandidate(ctx, candidate); err != nil {
+		t.Fatal(err)
+	}
+	if got := countRows(t, store, `SELECT count(*) FROM work_creator_relations
+WHERE catalog_revision_id=? AND overlay_revision_id=? AND work_id=?`,
+		candidate.CatalogRevisionID, candidate.OverlayRevisionID, "work-1"); got != 2 {
+		t.Fatalf("WorkCreator 关系数=%d, want 2", got)
+	}
+	if got := countRows(t, store, `SELECT count(*) FROM work_creator_relations
+WHERE catalog_revision_id=? AND overlay_revision_id=? AND work_id=? AND role='assistant' AND ordinal=0 AND creator_id='creator-assistant'`,
+		candidate.CatalogRevisionID, candidate.OverlayRevisionID, "work-1"); got != 1 {
+		t.Fatalf("assistant 关系数=%d, want 1", got)
+	}
+	if got := countRows(t, store, `SELECT count(*) FROM source_creators
+WHERE catalog_revision_id=? AND source_id='source-a'`, candidate.CatalogRevisionID); got != 2 {
+		t.Fatalf("SourceCreator 数=%d, want 2", got)
+	}
+}
+
+func TestStageRejectsDuplicateWorkCreatorRoleOrdinal(t *testing.T) {
+	catalogStore, _ := newCandidateTestStore(t)
+	ctx := context.Background()
+	candidate, err := catalogStore.BeginCandidate(ctx, "job-duplicate-creator", "source-a", 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	works, mediaFacts := minimalCandidateFacts("source-a", "work-1", "media-1", candidateDigestA)
+	works[0].Creator = "主作者"
+	works[0].CreatorID = "creator-primary"
+	works[0].CreatorSourceKey = "work-one/creator:primary:0"
+	works[0].CreatorRelations = []catalog.WorkCreatorFact{{
+		CreatorID: "creator-other", CreatorName: "另一主作者",
+		CreatorSourceKey: "work-one/creator:primary:other", Role: "primary", Ordinal: 0,
+	}}
+	err = catalogStore.Stage(ctx, candidate, works, mediaFacts)
+	var structured *fault.Error
+	if !errors.As(err, &structured) || structured.Code != fault.CodeCatalogCandidateInvalid {
+		t.Fatalf("重复 role/ordinal error=%v", err)
+	}
+}
+
 // 1. BeginCandidate 首次创建成功。
 func TestBeginCandidateFirstCallCreatesStagingRevision(t *testing.T) {
 	catalogStore, store := newCandidateTestStore(t)

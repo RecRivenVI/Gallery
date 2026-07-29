@@ -159,6 +159,8 @@ type PublicationMatrix struct {
 	TargetPublishP95Ms float64                  `json:"targetPublishP95Ms"`
 	PercentileMethod   string                   `json:"percentileMethod"`
 	RelationsPerWork   int                      `json:"relationsPerWork"`
+	ResumeCount        int                      `json:"resumeCount,omitempty"`
+	RecoveredStaging   int                      `json:"recoveredStagingCandidates,omitempty"`
 	Baseline           PublicationBaseline      `json:"baseline"`
 	Ratios             []PublicationRatioResult `json:"ratios"`
 }
@@ -339,6 +341,21 @@ func (r *Report) Save(path string) error {
 		return err
 	}
 	return os.Rename(tempPath, path)
+}
+
+// Load 读取由 Save 原子写出的报告。断点续跑必须从这份已落盘事实恢复，而不是根据
+// stdout 或调用方记忆猜测已完成样本；未知字段保持向前兼容，结构与当前 AppRoot 的
+// 一致性由具体场景恢复器继续核对。
+func Load(path string) (Report, error) {
+	encoded, err := os.ReadFile(path)
+	if err != nil {
+		return Report{}, err
+	}
+	var result Report
+	if err := json.Unmarshal(encoded, &result); err != nil {
+		return Report{}, fmt.Errorf("解析结果文件: %w", err)
+	}
+	return result, nil
 }
 
 // PercentileMethodNearestRank 是本工具自 2026-07-27 起使用的分位数定义标识，写入每条

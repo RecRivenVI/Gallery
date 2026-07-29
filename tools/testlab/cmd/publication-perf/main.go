@@ -30,6 +30,7 @@ func main() {
 	samples := flag.Int("samples", 1, "每个变化比例的完整候选/发布样本数")
 	batch := flag.Int("batch", 20_000, "单次 Stage 输入批大小")
 	tier := flag.String("tier", "preflight", "规模等级：preflight/reference")
+	resume := flag.Bool("resume", false, "从 -report-out 与既有 AppRoot 继续未完成样本")
 	timeout := flag.Duration("timeout", 0, "整体运行超时；0 表示不设墙钟上限")
 	flag.Parse()
 
@@ -48,6 +49,14 @@ func main() {
 	if err := os.MkdirAll(filepath.Dir(*reportOut), 0o700); err != nil {
 		log.Fatalf("建立报告目录: %v", err)
 	}
+	var resumeReport *report.Report
+	if *resume {
+		loaded, err := report.Load(*reportOut)
+		if err != nil {
+			log.Fatalf("读取续跑报告: %v", err)
+		}
+		resumeReport = &loaded
+	}
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
@@ -60,6 +69,7 @@ func main() {
 	result, err := seeding.RunPublicationMatrix(ctx, seeding.PublicationMatrixConfig{
 		AppRoot: *appRoot, Scale: *scale, Sources: *sources, BatchSize: *batch,
 		PrimarySourceShare: *primaryShare, ChangeRatios: ratios, SamplesPerRatio: *samples, Tier: *tier,
+		Resume: resumeReport,
 		Checkpoint: func(current *report.Report) error {
 			if err := current.Save(*reportOut); err != nil {
 				return err

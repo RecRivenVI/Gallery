@@ -74,7 +74,7 @@ Cursor 与 20 项媒体/DerivedAsset finding；`creator.id` 使用另一个真�
 
 `publication-perf` 不只计时指针切换：每个样本都通过生产
 `BeginCandidate → Stage → ApplyCatalogCandidateOverlays → ValidateCandidate → Publish`，并复核完整
-WorkProjection、WorkCreator 关系、MediaProjection、SourceMedia、ContentBlob、FileLocation、FTS 和
+WorkProjection、每 Work 恰好两条带 role/ordinal 的 WorkCreator 关系、MediaProjection、SourceMedia、ContentBlob、FileLocation、FTS 和
 search candidate。基线固定为多 Source，主 Source 持有 50% 作品；因此单次真实 Source
 publication 可以精确改变全库 1%/10%/50% 的 WorkProjection，不会把「主 Source 内变化比例」
 写成「全库变化比例」。
@@ -93,10 +93,19 @@ publication 可以精确改变全库 1%/10%/50% 的 WorkProjection，不会把�
   -report-out <root>/reports/publication-reference-500k.json `
   -scale 500000 -sources 10 -primary-share 0.50 `
   -ratios 0.01,0.10,0.50 -samples 20 -tier reference
+
+# 中断后使用同一 AppRoot 与原子报告继续剩余样本；环境或矩阵漂移会 fail-closed
+& $env:GALLERY_GO run ./tools/testlab/cmd/publication-perf `
+  -approot <root>/appdirs/publication-reference-500k `
+  -report-out <root>/reports/publication-reference-500k.json `
+  -scale 500000 -sources 10 -primary-share 0.50 `
+  -ratios 0.01,0.10,0.50 -samples 20 -tier reference -resume
 ```
 
-`-approot` 必须不存在或为空，`-report-out` 必须在其外部，避免报告自身污染空间水位。
-工具在 baseline 和每个完成样本后原子刷新报告，长时运行中断时保留已完成证据。
+首次运行的 `-approot` 必须不存在或为空，`-report-out` 必须在其外部，避免报告自身污染空间水位。
+工具在 baseline 和每个完成样本后原子刷新报告；`-resume` 会核对原报告、当前 AppRoot、主机/存储、
+完整两关系候选形状和已完成样本，收敛遗留 staging candidate 后只执行剩余样本。若进程在 Publish 后、
+报告 checkpoint 前中断，已发布但没有完整计时的那次不会冒充有效样本，续跑会使用更高 revision 重测。
 `reference` 强制 500,000 Work、10 Source、50% 主 Source、三个正式比例与每比例至少
 20 个完整样本；报告分开记录 Begin/Stage/Overlay/Validate/Publish/GC/checkpoint、峰值空间、
 旧快照在构建各边界仍可读及 nearest-rank P50/P95。它不清空 OS 文件缓存，必须按报告的

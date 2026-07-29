@@ -2,12 +2,15 @@ package seeding
 
 import (
 	"context"
+	"database/sql"
 	"fmt"
 	"io/fs"
 	"math"
 	"os"
 	"path/filepath"
+	"slices"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -44,6 +47,7 @@ type PublicationMatrixConfig struct {
 	ChangeRatios       []float64
 	SamplesPerRatio    int
 	Tier               string
+	Resume             *report.Report
 	Checkpoint         func(*report.Report) error
 }
 
@@ -151,6 +155,17 @@ func ensureEmptyPublicationRoot(root string) error {
 	return nil
 }
 
+func ensureExistingPublicationRoot(root string) error {
+	items, err := os.ReadDir(root)
+	if err != nil {
+		return fmt.Errorf("读取续跑 publication AppRoot: %w", err)
+	}
+	if len(items) == 0 {
+		return fmt.Errorf("续跑 publication AppRoot 不能为空")
+	}
+	return nil
+}
+
 func durationMS(value time.Duration) float64 { return float64(value.Nanoseconds()) / 1_000_000 }
 
 func treeBytes(root string) (int64, error) {
@@ -172,31 +187,8 @@ func treeBytes(root string) (int64, error) {
 	return total, err
 }
 
-// RunPublicationMatrix 构建一个十 Source 可扩展的完整基线，并只重扫持有足够作品的
-// 主 Source。变化比例以整个 active publication 的 WorkProjection 数为分母；这保证
-// 1%/10%/50% 都是全局比例，而不是把「主 Source 内 50%」误写成「全库 50%」。
-func RunPublicationMatrix(ctx context.Context, raw PublicationMatrixConfig) (report.Report, error) {
-	runStarted := time.Now()
-	cfg, primaryWorks, err := normalizePublicationMatrixConfig(raw)
-	if err != nil {
-		return report.Report{}, err
-	}
-	if err := ensureEmptyPublicationRoot(cfg.AppRoot); err != nil {
-		return report.Report{}, err
-	}
-	sourceIndices := weightedSourceIndices(primaryWorks)
-	baseline, state, err := runBaseline(ctx, Config{
-		AppRoot: cfg.AppRoot, Scale: cfg.Scale, BatchSize: cfg.BatchSize, Sources: cfg.Sources,
-	}, baselineOptions{sourceIndices: sourceIndices, captureSource: 0})
-	if err != nil {
-		return report.Report{}, fmt.Errorf("构建 publication baseline: %w", err)
-	}
-	baselineBytes, err := treeBytes(cfg.AppRoot)
-	if err != nil {
-		return report.Report{}, fmt.Errorf("统计 baseline 空间: %w", err)
-	}
-	dirs := appdirs.UnderRoot(cfg.AppRoot)
-	facts := hostfacts.Collect(dirs.Data)
+func newPublicationMatrixReport(cfg PublicationMatrixConfig, primaryWorks int, baseline corpus.Manifest,
+	baselineBytes int64, facts hostfacts.Facts, started time.Time) report.Report {
 	result := report.Report{
 		SchemaVersion: 2, Scenario: "stage4-publication-change-matrix", Tier: cfg.Tier,
 		Transport: "production-catalog-store", Scale: cfg.Scale, Environment: &facts,
@@ -217,7 +209,7 @@ func RunPublicationMatrix(ctx context.Context, raw PublicationMatrixConfig) (rep
 				TotalMs: float64(baseline.TotalDurationMs), Bytes: baselineBytes,
 			},
 		},
-		StartedAt:           runStarted.UTC().Format(time.RFC3339),
+		StartedAt:           started.UTC().Format(time.RFC3339),
 		PlannedCombinations: len(cfg.ChangeRatios) * cfg.SamplesPerRatio,
 		Limitations: []string{
 			"未主动清空操作系统文件缓存；cacheState=warm 只表示 baseline 和完整验证已预热进程与 SQLite 页缓存。",
@@ -228,13 +220,310 @@ func RunPublicationMatrix(ctx context.Context, raw PublicationMatrixConfig) (rep
 		result.Limitations = append(result.Limitations,
 			"preflight 规模只验证矩阵语义与报告管道，墙钟结果不构成 Reference Performance Gate 结论。")
 	}
-	if len(state.identities) != primaryWorks || len(state.overlayFacts) != cfg.Scale {
-		return result, fmt.Errorf("baseline 身份/覆盖事实不完整: identities=%d/%d overlays=%d/%d",
-			len(state.identities), primaryWorks, len(state.overlayFacts), cfg.Scale)
+	return result
+}
+
+func completedPublicationRuns(result *report.Report) int {
+	if result.PublicationMatrix == nil {
+		return 0
 	}
-	if cfg.Checkpoint != nil {
-		if err := cfg.Checkpoint(&result); err != nil {
-			return result, fmt.Errorf("保存 baseline 报告: %w", err)
+	completed := 0
+	for _, ratio := range result.PublicationMatrix.Ratios {
+		completed += len(ratio.Runs)
+	}
+	return completed
+}
+
+func validatePublicationResumeReport(cfg PublicationMatrixConfig, primaryWorks int, result *report.Report) error {
+	if result.SchemaVersion != 2 || result.Scenario != "stage4-publication-change-matrix" ||
+		result.Tier != cfg.Tier || result.Scale != cfg.Scale || result.Transport != "production-catalog-store" ||
+		result.Corpus == nil || result.Corpus.Scale != cfg.Scale || result.Corpus.SourceCount != cfg.Sources ||
+		result.PublicationMatrix == nil {
+		return fmt.Errorf("续跑报告与 publication 场景、规模或语料不匹配")
+	}
+	matrix := result.PublicationMatrix
+	if matrix.ChangeRatioBasis != "active-publication-work-projections" ||
+		!almostEqual(matrix.PrimarySourceShare, cfg.PrimarySourceShare) || matrix.PrimarySourceWorks != primaryWorks ||
+		matrix.SamplesPerRatio != cfg.SamplesPerRatio || matrix.Concurrency != 1 || matrix.RelationsPerWork != 2 ||
+		matrix.PercentileMethod != report.PercentileMethodNearestRank ||
+		result.PlannedCombinations != len(cfg.ChangeRatios)*cfg.SamplesPerRatio ||
+		len(matrix.Ratios) > len(cfg.ChangeRatios) || len(result.Latencies) != len(matrix.Ratios) {
+		return fmt.Errorf("续跑报告的矩阵参数不匹配")
+	}
+	expectedVerified := 0
+	for index := 0; index < cfg.Scale; index++ {
+		if corpus.ContentVerified(index) {
+			expectedVerified++
+		}
+	}
+	lastRevision := 0
+	for index, ratio := range matrix.Ratios {
+		if !almostEqual(ratio.ChangeRatio, cfg.ChangeRatios[index]) ||
+			ratio.ChangedWorks != int(math.Round(float64(cfg.Scale)*cfg.ChangeRatios[index])) ||
+			ratio.PlannedRuns != cfg.SamplesPerRatio || ratio.CompletedRuns != len(ratio.Runs) ||
+			len(ratio.Runs) > cfg.SamplesPerRatio {
+			return fmt.Errorf("续跑报告的比例 %d 进度不匹配", index)
+		}
+		for runIndex, sample := range ratio.Runs {
+			if sample.Run != runIndex+1 || sample.Revision <= lastRevision || sample.ActiveWorkCount != cfg.Scale ||
+				sample.WorkCreatorRelationCount != cfg.Scale*2 || sample.MediaProjectionCount != cfg.Scale ||
+				sample.SourceMediaCount != cfg.Scale || sample.ContentBlobCount != expectedVerified ||
+				sample.FileLocationCount != expectedVerified || sample.FTSDocumentCount != cfg.Scale ||
+				sample.SearchCandidateCount != cfg.Scale || sample.SourceCount != cfg.Sources ||
+				sample.ChangedProjectionCount != ratio.ChangedWorks || !sample.OldSnapshotReadableAcrossBuild {
+				return fmt.Errorf("续跑报告的比例 %d 样本 %d 不完整", index, runIndex)
+			}
+			lastRevision = sample.Revision
+		}
+	}
+	completed := completedPublicationRuns(result)
+	if result.CompletedCombinations != completed || completed > result.PlannedCombinations ||
+		(completed < result.PlannedCombinations && (result.FinishedAt != "" || len(result.Findings) != 0)) {
+		return fmt.Errorf("续跑报告的完成计数或终态不一致")
+	}
+	return nil
+}
+
+func samePublicationEnvironment(left, right hostfacts.Facts) bool {
+	return left.OSFamily == right.OSFamily && left.Arch == right.Arch && left.OSVersion == right.OSVersion &&
+		left.CPUModel == right.CPUModel && left.CPULogicalCores == right.CPULogicalCores &&
+		left.MemoryTotalBytes == right.MemoryTotalBytes && left.SQLiteVersion == right.SQLiteVersion &&
+		left.SQLiteLibrary == right.SQLiteLibrary && left.GoVersion == right.GoVersion &&
+		left.Storage.Medium == right.Storage.Medium && left.Storage.Model == right.Storage.Model &&
+		left.Storage.BusType == right.Storage.BusType && left.Storage.VolumeID == right.Storage.VolumeID &&
+		slices.Equal(left.Storage.PhysicalDiskNumbers, right.Storage.PhysicalDiskNumbers)
+}
+
+func preparePublicationRatio(result *report.Report, position int, ratio float64, changedWorks, plannedRuns int) (int, int, []time.Duration, error) {
+	matrix := result.PublicationMatrix
+	if len(matrix.Ratios) == position {
+		matrix.Ratios = append(matrix.Ratios, report.PublicationRatioResult{
+			ChangeRatio: ratio, ChangedWorks: changedWorks, PlannedRuns: plannedRuns,
+		})
+		result.Latencies = append(result.Latencies, report.LatencySample{
+			Category: fmt.Sprintf("publication/change-%g", ratio), Concurrency: 1,
+			PlannedRuns: plannedRuns, NotAttemptedRuns: plannedRuns,
+			CacheState: report.CacheStateWarm, PercentileMethod: report.PercentileMethodNearestRank,
+		})
+	}
+	if len(matrix.Ratios) <= position || len(result.Latencies) <= position {
+		return 0, 0, nil, fmt.Errorf("publication 比例进度缺少位置 %d", position)
+	}
+	current := &matrix.Ratios[position]
+	if !almostEqual(current.ChangeRatio, ratio) || current.ChangedWorks != changedWorks || current.PlannedRuns != plannedRuns {
+		return 0, 0, nil, fmt.Errorf("publication 比例位置 %d 与配置不匹配", position)
+	}
+	publishDurations := make([]time.Duration, 0, plannedRuns)
+	for _, sample := range current.Runs {
+		publishDurations = append(publishDurations, time.Duration(sample.PublishMs*float64(time.Millisecond)))
+	}
+	if len(publishDurations) > 0 {
+		result.Latencies[position] = report.Summarize(report.Measurement{
+			Category: fmt.Sprintf("publication/change-%g", ratio), Concurrency: 1,
+			PlannedRuns: plannedRuns, AttemptedRuns: len(publishDurations),
+			NotAttemptedRuns: plannedRuns - len(publishDurations), Durations: publishDurations,
+			CacheState: report.CacheStateWarm,
+		})
+	}
+	return position, position, publishDurations, nil
+}
+
+func parseSyntheticWorkIndex(sourceKey string, scale int) (int, error) {
+	const prefix = "stage4/work-"
+	if !strings.HasPrefix(sourceKey, prefix) {
+		return 0, fmt.Errorf("非合成 source_key")
+	}
+	index, err := strconv.Atoi(strings.TrimPrefix(sourceKey, prefix))
+	if err != nil || index < 0 || index >= scale || corpus.SourceKey(index) != sourceKey {
+		return 0, fmt.Errorf("非法合成 source_key")
+	}
+	return index, nil
+}
+
+func reconstructPublicationState(ctx context.Context, store *storage.Store, catalogStore *catalog.Store,
+	cfg PublicationMatrixConfig, primaryWorks int) (baselineState, int, error) {
+	publication, err := catalogStore.Current(ctx)
+	if err != nil {
+		return baselineState{}, 0, err
+	}
+	var primarySourceID string
+	if err := store.Catalog.SQL().QueryRowContext(ctx, `SELECT source_id FROM work_projections
+WHERE catalog_revision_id=? AND overlay_revision_id=? AND source_key=?`,
+		publication.CatalogRevisionID, publication.OverlayRevisionID, corpus.SourceKey(0)).Scan(&primarySourceID); err != nil {
+		return baselineState{}, 0, err
+	}
+	rows, err := store.Catalog.SQL().QueryContext(ctx, `SELECT source_id, count(*) FROM work_projections
+WHERE catalog_revision_id=? AND overlay_revision_id=? GROUP BY source_id ORDER BY source_id`,
+		publication.CatalogRevisionID, publication.OverlayRevisionID)
+	if err != nil {
+		return baselineState{}, 0, err
+	}
+	defer rows.Close()
+	state := baselineState{sourceIDs: []string{primarySourceID}, creatorIDs: make([]string, corpus.CreatorCount),
+		overlayFacts: make(map[string]catalog.OverlayFact, cfg.Scale), identities: make(map[int]stagedIdentity, primaryWorks)}
+	totalWorks := 0
+	primaryCount := 0
+	for rows.Next() {
+		var sourceID string
+		var count int
+		if err := rows.Scan(&sourceID, &count); err != nil {
+			return baselineState{}, 0, err
+		}
+		totalWorks += count
+		if sourceID == primarySourceID {
+			primaryCount = count
+		} else {
+			state.sourceIDs = append(state.sourceIDs, sourceID)
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return baselineState{}, 0, err
+	}
+	if len(state.sourceIDs) != cfg.Sources || totalWorks != cfg.Scale || primaryCount != primaryWorks {
+		return baselineState{}, 0, fmt.Errorf("active Source 分布不匹配: sources=%d works=%d primary=%d",
+			len(state.sourceIDs), totalWorks, primaryCount)
+	}
+	if err := store.Catalog.SQL().QueryRowContext(ctx, `SELECT library_id FROM catalog_revision_sources
+WHERE catalog_revision_id=? AND source_id=?`, publication.CatalogRevisionID, primarySourceID).Scan(&state.libraryID); err != nil {
+		return baselineState{}, 0, err
+	}
+	for slot := range state.creatorIDs {
+		if err := store.Catalog.SQL().QueryRowContext(ctx, `SELECT r.creator_id
+FROM work_projections w JOIN work_creator_relations r
+  ON r.catalog_revision_id=w.catalog_revision_id AND r.overlay_revision_id=w.overlay_revision_id AND r.work_id=w.work_id
+WHERE w.catalog_revision_id=? AND w.overlay_revision_id=? AND w.source_key=? AND r.role='primary' AND r.ordinal=0`,
+			publication.CatalogRevisionID, publication.OverlayRevisionID, corpus.SourceKey(slot)).Scan(&state.creatorIDs[slot]); err != nil {
+			return baselineState{}, 0, err
+		}
+	}
+	rows, err = store.Catalog.SQL().QueryContext(ctx, `SELECT w.source_key, w.work_id, m.media_id
+FROM work_projections w JOIN media_projections m
+  ON m.catalog_revision_id=w.catalog_revision_id AND m.overlay_revision_id=w.overlay_revision_id AND m.work_id=w.work_id
+WHERE w.catalog_revision_id=? AND w.overlay_revision_id=? AND w.source_id=? AND m.ordinal=0
+ORDER BY w.source_key`, publication.CatalogRevisionID, publication.OverlayRevisionID, primarySourceID)
+	if err != nil {
+		return baselineState{}, 0, err
+	}
+	for rows.Next() {
+		var sourceKey, workID, mediaID string
+		if err := rows.Scan(&sourceKey, &workID, &mediaID); err != nil {
+			rows.Close()
+			return baselineState{}, 0, err
+		}
+		index, err := parseSyntheticWorkIndex(sourceKey, cfg.Scale)
+		if err != nil || index >= primaryWorks {
+			rows.Close()
+			return baselineState{}, 0, fmt.Errorf("主 Source 身份索引不匹配")
+		}
+		if _, duplicate := state.identities[index]; duplicate {
+			rows.Close()
+			return baselineState{}, 0, fmt.Errorf("主 Source 身份重复")
+		}
+		state.identities[index] = stagedIdentity{workID: workID, mediaID: mediaID}
+	}
+	if err := rows.Close(); err != nil {
+		return baselineState{}, 0, err
+	}
+	rows, err = store.Catalog.SQL().QueryContext(ctx, `SELECT source_key, work_id FROM work_projections
+WHERE catalog_revision_id=? AND overlay_revision_id=?`, publication.CatalogRevisionID, publication.OverlayRevisionID)
+	if err != nil {
+		return baselineState{}, 0, err
+	}
+	for rows.Next() {
+		var sourceKey, workID string
+		if err := rows.Scan(&sourceKey, &workID); err != nil {
+			rows.Close()
+			return baselineState{}, 0, err
+		}
+		index, err := parseSyntheticWorkIndex(sourceKey, cfg.Scale)
+		if err != nil {
+			rows.Close()
+			return baselineState{}, 0, err
+		}
+		state.overlayFacts[workID] = catalog.OverlayFact{
+			Hidden: corpus.Hidden(index), Favorite: corpus.Favorite(index), Progress: corpus.Progress(index),
+		}
+	}
+	if err := rows.Close(); err != nil {
+		return baselineState{}, 0, err
+	}
+	var revision sql.NullInt64
+	if err := store.Catalog.SQL().QueryRowContext(ctx, `SELECT max(CASE
+WHEN instr(title, 'publication-change-')>0
+THEN CAST(substr(title, instr(title, 'publication-change-')+length('publication-change-'), 4) AS INTEGER)
+END) FROM work_projections WHERE catalog_revision_id=? AND overlay_revision_id=?`,
+		publication.CatalogRevisionID, publication.OverlayRevisionID).Scan(&revision); err != nil {
+		return baselineState{}, 0, err
+	}
+	currentRevision := 0
+	if revision.Valid {
+		currentRevision = int(revision.Int64)
+	}
+	expectedVerified := 0
+	for index := 0; index < cfg.Scale; index++ {
+		if corpus.ContentVerified(index) {
+			expectedVerified++
+		}
+	}
+	shape, err := activeProjectionCounts(ctx, store, publication, currentRevision)
+	if err != nil {
+		return baselineState{}, 0, err
+	}
+	if len(state.identities) != primaryWorks || len(state.overlayFacts) != cfg.Scale ||
+		shape.works != cfg.Scale || shape.workCreatorRelations != cfg.Scale*2 || shape.mediaProjections != cfg.Scale ||
+		shape.sourceMedia != cfg.Scale || shape.contentBlobs != expectedVerified || shape.fileLocations != expectedVerified ||
+		shape.ftsDocuments != cfg.Scale || shape.searchCandidates != cfg.Scale || shape.sources != cfg.Sources {
+		return baselineState{}, 0, fmt.Errorf("active publication 形状不完整")
+	}
+	return state, currentRevision, nil
+}
+
+// RunPublicationMatrix 构建一个十 Source 可扩展的完整基线，并只重扫持有足够作品的
+// 主 Source。变化比例以整个 active publication 的 WorkProjection 数为分母；这保证
+// 1%/10%/50% 都是全局比例，而不是把「主 Source 内 50%」误写成「全库 50%」。
+func RunPublicationMatrix(ctx context.Context, raw PublicationMatrixConfig) (report.Report, error) {
+	runStarted := time.Now()
+	cfg, primaryWorks, err := normalizePublicationMatrixConfig(raw)
+	if err != nil {
+		return report.Report{}, err
+	}
+	sourceIndices := weightedSourceIndices(primaryWorks)
+	dirs := appdirs.UnderRoot(cfg.AppRoot)
+	var result report.Report
+	var state baselineState
+	if cfg.Resume == nil {
+		if err := ensureEmptyPublicationRoot(cfg.AppRoot); err != nil {
+			return report.Report{}, err
+		}
+		baseline, baselineState, err := runBaseline(ctx, Config{
+			AppRoot: cfg.AppRoot, Scale: cfg.Scale, BatchSize: cfg.BatchSize, Sources: cfg.Sources,
+		}, baselineOptions{sourceIndices: sourceIndices, captureSource: 0, relationsPerWork: 2})
+		if err != nil {
+			return report.Report{}, fmt.Errorf("构建 publication baseline: %w", err)
+		}
+		state = baselineState
+		baselineBytes, err := treeBytes(cfg.AppRoot)
+		if err != nil {
+			return report.Report{}, fmt.Errorf("统计 baseline 空间: %w", err)
+		}
+		facts := hostfacts.Collect(dirs.Data)
+		result = newPublicationMatrixReport(cfg, primaryWorks, baseline, baselineBytes, facts, runStarted)
+		if len(state.identities) != primaryWorks || len(state.overlayFacts) != cfg.Scale {
+			return result, fmt.Errorf("baseline 身份/覆盖事实不完整: identities=%d/%d overlays=%d/%d",
+				len(state.identities), primaryWorks, len(state.overlayFacts), cfg.Scale)
+		}
+		if cfg.Checkpoint != nil {
+			if err := cfg.Checkpoint(&result); err != nil {
+				return result, fmt.Errorf("保存 baseline 报告: %w", err)
+			}
+		}
+	} else {
+		result = *cfg.Resume
+		if err := validatePublicationResumeReport(cfg, primaryWorks, &result); err != nil {
+			return result, err
+		}
+		if err := ensureExistingPublicationRoot(cfg.AppRoot); err != nil {
+			return result, err
 		}
 	}
 
@@ -249,29 +538,50 @@ func RunPublicationMatrix(ctx context.Context, raw PublicationMatrixConfig) (rep
 	if err != nil {
 		return result, fmt.Errorf("建立 publication Catalog Store: %w", err)
 	}
-
 	revision := 0
+	if cfg.Resume != nil {
+		facts := hostfacts.Collect(dirs.Data)
+		if result.Environment == nil || !samePublicationEnvironment(*result.Environment, facts) {
+			return result, fmt.Errorf("续跑环境与原报告不一致")
+		}
+		if result.CompletedCombinations == result.PlannedCombinations {
+			if _, _, err := reconstructPublicationState(ctx, store, catalogStore, cfg, primaryWorks); err != nil {
+				return result, fmt.Errorf("复核已完成 publication 报告: %w", err)
+			}
+			return result, nil
+		}
+		cleaned, err := catalogStore.GarbageCollectWithOptions(ctx, catalog.GCOptions{Retention: 0})
+		if err != nil {
+			return result, fmt.Errorf("收敛续跑遗留 candidate: %w", err)
+		}
+		state, revision, err = reconstructPublicationState(ctx, store, catalogStore, cfg, primaryWorks)
+		if err != nil {
+			return result, fmt.Errorf("重建 publication 续跑状态: %w", err)
+		}
+		result.PublicationMatrix.ResumeCount++
+		result.PublicationMatrix.RecoveredStaging += cleaned.StagingAborted
+		result.FinishedAt = ""
+		if cfg.Checkpoint != nil {
+			if err := cfg.Checkpoint(&result); err != nil {
+				return result, fmt.Errorf("保存续跑恢复报告: %w", err)
+			}
+		}
+	}
+
 	expectedVerified := 0
 	for index := 0; index < cfg.Scale; index++ {
 		if corpus.ContentVerified(index) {
 			expectedVerified++
 		}
 	}
-	for _, ratio := range cfg.ChangeRatios {
+	result.CompletedCombinations = completedPublicationRuns(&result)
+	for ratioPosition, ratio := range cfg.ChangeRatios {
 		changedWorks := int(math.Round(float64(cfg.Scale) * ratio))
-		ratioResult := report.PublicationRatioResult{
-			ChangeRatio: ratio, ChangedWorks: changedWorks, PlannedRuns: cfg.SamplesPerRatio,
+		ratioIndex, latencyIndex, publishDurations, err := preparePublicationRatio(&result, ratioPosition, ratio, changedWorks, cfg.SamplesPerRatio)
+		if err != nil {
+			return result, err
 		}
-		result.PublicationMatrix.Ratios = append(result.PublicationMatrix.Ratios, ratioResult)
-		ratioIndex := len(result.PublicationMatrix.Ratios) - 1
-		result.Latencies = append(result.Latencies, report.LatencySample{
-			Category: fmt.Sprintf("publication/change-%g", ratio), Concurrency: 1,
-			PlannedRuns: cfg.SamplesPerRatio, NotAttemptedRuns: cfg.SamplesPerRatio,
-			CacheState: report.CacheStateWarm, PercentileMethod: report.PercentileMethodNearestRank,
-		})
-		latencyIndex := len(result.Latencies) - 1
-		publishDurations := make([]time.Duration, 0, cfg.SamplesPerRatio)
-		for run := 1; run <= cfg.SamplesPerRatio; run++ {
+		for run := len(result.PublicationMatrix.Ratios[ratioIndex].Runs) + 1; run <= cfg.SamplesPerRatio; run++ {
 			revision++
 			previous, err := catalogStore.Current(ctx)
 			if err != nil {
@@ -300,7 +610,8 @@ func RunPublicationMatrix(ctx context.Context, raw PublicationMatrixConfig) (rep
 				libraryID: state.libraryID, sourceID: state.sourceIDs[0], slot: 0, sources: cfg.Sources,
 				scale: cfg.Scale, batchSize: cfg.BatchSize, ids: ids, creatorIDs: state.creatorIDs,
 				overlayFacts: state.overlayFacts, sourceIndices: sourceIndices, identities: state.identities,
-				requireIdentities: true, mutation: mutationProfile{revision: revision, changedWorks: changedWorks},
+				requireIdentities: true, relationsPerWork: 2,
+				mutation: mutationProfile{revision: revision, changedWorks: changedWorks},
 			}); err != nil {
 				return result, fmt.Errorf("stage publication ratio=%g run=%d: %w", ratio, run, err)
 			}
@@ -340,7 +651,7 @@ func RunPublicationMatrix(ctx context.Context, raw PublicationMatrixConfig) (rep
 			if err != nil {
 				return result, fmt.Errorf("复核 publication ratio=%g run=%d: %w", ratio, run, err)
 			}
-			if shape.works != cfg.Scale || shape.workCreatorRelations != cfg.Scale || shape.mediaProjections != cfg.Scale ||
+			if shape.works != cfg.Scale || shape.workCreatorRelations != cfg.Scale*2 || shape.mediaProjections != cfg.Scale ||
 				shape.sourceMedia != cfg.Scale || shape.contentBlobs != expectedVerified || shape.fileLocations != expectedVerified ||
 				shape.ftsDocuments != cfg.Scale || shape.searchCandidates != cfg.Scale || shape.sources != cfg.Sources ||
 				shape.changed != changedWorks {
@@ -432,8 +743,14 @@ func RunPublicationMatrix(ctx context.Context, raw PublicationMatrixConfig) (rep
 		}
 	}
 	if cfg.Tier == "reference" {
-		result.Add("environment/reference-fields-complete", facts.Complete(),
-			fmt.Sprintf("missing=%s", strings.Join(facts.MissingFields(), ",")))
+		missing := []string{"environment"}
+		complete := false
+		if result.Environment != nil {
+			complete = result.Environment.Complete()
+			missing = result.Environment.MissingFields()
+		}
+		result.Add("environment/reference-fields-complete", complete,
+			fmt.Sprintf("missing=%s", strings.Join(missing, ",")))
 	}
 	if cfg.Checkpoint != nil {
 		if err := cfg.Checkpoint(&result); err != nil {

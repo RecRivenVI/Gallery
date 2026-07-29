@@ -78,6 +78,22 @@ type WorkFact struct {
 	// 重新计算，不进 control.db，也不与用户 Overlay 合并。
 	Badges []Badge
 	WorkID string
+	// CreatorRelations 是 primary Creator 之外的有序创作者关系。旧调用方继续使用
+	// CreatorID/CreatorSourceKey 表达 primary:0；多创作者调用方在这里追加 contributor、
+	// assistant 等关系，使 WorkCreator(role, ordinal) 的正式多对多模型不被 Stage API
+	// 压扁成单一作者。
+	CreatorRelations []WorkCreatorFact
+}
+
+type WorkCreatorFact struct {
+	CreatorID         string
+	CreatorName       string
+	CreatorSourceKey  string
+	CreatorProviderID string
+	CreatorExternalID string
+	SourceCreatorName string
+	Role              string
+	Ordinal           int
 }
 
 // encodeBadges 把角标序列编码为投影列内容。空序列固定编码为 `[]` 而不是 null，使该列
@@ -1878,6 +1894,21 @@ func (s *Store) stageWorks(ctx context.Context, candidate Candidate, works []Wor
 		if work.SourceID != candidate.SourceID {
 			return fault.New(fault.CodeCatalogCandidateInvalid, false, nil)
 		}
+		seenRelations := make(map[string]struct{}, len(work.CreatorRelations)+1)
+		if work.CreatorID != "" {
+			seenRelations[fmt.Sprintf("%s\x00%d", "primary", 0)] = struct{}{}
+		}
+		for _, relation := range work.CreatorRelations {
+			key := fmt.Sprintf("%s\x00%d", relation.Role, relation.Ordinal)
+			if relation.CreatorID == "" || relation.CreatorName == "" || relation.CreatorSourceKey == "" ||
+				relation.Role == "" || relation.Ordinal < 0 {
+				return fault.New(fault.CodeCatalogCandidateInvalid, false, nil)
+			}
+			if _, duplicate := seenRelations[key]; duplicate {
+				return fault.New(fault.CodeCatalogCandidateInvalid, false, nil)
+			}
+			seenRelations[key] = struct{}{}
+		}
 		if libraryID, exists := members[work.SourceID]; exists && libraryID != work.LibraryID {
 			return fault.New(fault.CodeCatalogCandidateInvalid, false, nil)
 		}
@@ -1938,27 +1969,36 @@ VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 
 			work.PublishedAtNanos, work.PublishedAtRaw, work.PublishedAtParser); err != nil {
 			return fault.New(fault.CodeInternal, true, err)
 		}
+		creatorRelations := make([]WorkCreatorFact, 0, len(work.CreatorRelations)+1)
 		if work.CreatorID != "" {
-			sourceCreatorName := work.SourceCreatorName
+			creatorRelations = append(creatorRelations, WorkCreatorFact{
+				CreatorID: work.CreatorID, CreatorName: work.Creator, CreatorSourceKey: work.CreatorSourceKey,
+				CreatorProviderID: work.CreatorProviderID, CreatorExternalID: work.CreatorExternalID,
+				SourceCreatorName: work.SourceCreatorName, Role: "primary", Ordinal: 0,
+			})
+		}
+		creatorRelations = append(creatorRelations, work.CreatorRelations...)
+		for _, relation := range creatorRelations {
+			sourceCreatorName := relation.SourceCreatorName
 			if sourceCreatorName == "" {
-				sourceCreatorName = work.Creator
+				sourceCreatorName = relation.CreatorName
 			}
 			if _, err := tx.ExecContext(ctx, `INSERT INTO source_creators
 (catalog_revision_id, source_id, source_key, provider_id, external_id, name)
-VALUES (?, ?, ?, ?, ?, ?)`, candidate.CatalogRevisionID, work.SourceID, work.CreatorSourceKey,
-				work.CreatorProviderID, work.CreatorExternalID, sourceCreatorName); err != nil {
+VALUES (?, ?, ?, ?, ?, ?)`, candidate.CatalogRevisionID, work.SourceID, relation.CreatorSourceKey,
+				relation.CreatorProviderID, relation.CreatorExternalID, sourceCreatorName); err != nil {
 				return fault.New(fault.CodeInternal, true, err)
 			}
 			if _, err := tx.ExecContext(ctx, `INSERT OR IGNORE INTO creator_projections
 (catalog_revision_id, overlay_revision_id, creator_id, name, sort_name_key)
 VALUES (?, ?, ?, ?, ?)`, candidate.CatalogRevisionID, candidate.OverlayRevisionID,
-				work.CreatorID, work.Creator, querytext.NaturalSortKey(work.Creator)); err != nil {
+				relation.CreatorID, relation.CreatorName, querytext.NaturalSortKey(relation.CreatorName)); err != nil {
 				return fault.New(fault.CodeInternal, true, err)
 			}
 			if _, err := tx.ExecContext(ctx, `INSERT INTO work_creator_relations
 (catalog_revision_id, overlay_revision_id, work_id, creator_id, role, ordinal)
-VALUES (?, ?, ?, ?, 'primary', 0)`, candidate.CatalogRevisionID, candidate.OverlayRevisionID,
-				work.WorkID, work.CreatorID); err != nil {
+VALUES (?, ?, ?, ?, ?, ?)`, candidate.CatalogRevisionID, candidate.OverlayRevisionID,
+				work.WorkID, relation.CreatorID, relation.Role, relation.Ordinal); err != nil {
 				return fault.New(fault.CodeInternal, true, err)
 			}
 		}

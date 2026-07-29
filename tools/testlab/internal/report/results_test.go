@@ -78,6 +78,22 @@ func TestReportSaveAcceptsCleanReport(t *testing.T) {
 	}
 }
 
+func TestReportLoadReadsAtomicCheckpoint(t *testing.T) {
+	want := &Report{SchemaVersion: 2, Scenario: "stage4-publication-change-matrix", Scale: 100,
+		PlannedCombinations: 2, CompletedCombinations: 1}
+	path := filepath.Join(t.TempDir(), "report.json")
+	if err := want.Save(path); err != nil {
+		t.Fatal(err)
+	}
+	got, err := Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Scenario != want.Scenario || got.Scale != want.Scale || got.CompletedCombinations != 1 {
+		t.Fatalf("Load()=%+v", got)
+	}
+}
+
 // TestPercentileNearestRankGoldenValues 锁定最近秩定义：秩 = ceil(p·n)，取升序第
 // 「秩」个样本。n=10 时 P95 的秩是 ceil(9.5)=10，即最大值——旧实现（floor(p·n)−1）
 // 在这里返回 90，低整整一名。

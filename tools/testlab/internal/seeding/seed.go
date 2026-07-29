@@ -61,8 +61,9 @@ type mutationProfile struct {
 }
 
 type baselineOptions struct {
-	sourceIndices sourceIndexProvider
-	captureSource int
+	sourceIndices    sourceIndexProvider
+	captureSource    int
+	relationsPerWork int
 }
 
 type baselineState struct {
@@ -218,6 +219,7 @@ func runBaseline(ctx context.Context, cfg Config, options baselineOptions) (corp
 			libraryID: libraryID, sourceID: sourceIDs[slot], slot: slot, sources: sources,
 			scale: n, batchSize: batchSize, ids: ids, creatorIDs: creatorIDs, overlayFacts: overlayFacts,
 			sourceIndices: options.sourceIndices, identities: identities, captureIdentities: slot == options.captureSource,
+			relationsPerWork: options.relationsPerWork,
 		}); err != nil {
 			return corpus.Manifest{}, baselineState{}, err
 		}
@@ -359,6 +361,7 @@ type stageParams struct {
 	identities        map[int]stagedIdentity
 	captureIdentities bool
 	requireIdentities bool
+	relationsPerWork  int
 	mutation          mutationProfile
 }
 
@@ -403,7 +406,7 @@ func stageSourceWorks(ctx context.Context, catalogStore *catalog.Store, candidat
 			}
 			creatorSlot := corpus.CreatorIndex(i)
 			tagA, tagB := corpus.TagSlots(i)
-			works = append(works, catalog.WorkFact{
+			workFact := catalog.WorkFact{
 				SourceID: p.sourceID, LibraryID: p.libraryID, SourceKey: corpus.SourceKey(i),
 				ProviderID: corpus.ProviderID(corpus.ProviderIndex(i)),
 				Title:      title,
@@ -415,7 +418,16 @@ func stageSourceWorks(ctx context.Context, catalogStore *catalog.Store, candidat
 				Tags:             []string{corpus.TagName(tagA), corpus.TagName(tagB)},
 				Filenames:        []string{corpus.Filename(i)},
 				WorkID:           identity.workID,
-			})
+			}
+			if p.relationsPerWork >= 2 {
+				assistantSlot := (creatorSlot + 1) % len(p.creatorIDs)
+				workFact.CreatorRelations = append(workFact.CreatorRelations, catalog.WorkCreatorFact{
+					CreatorID: p.creatorIDs[assistantSlot], CreatorName: corpus.CreatorName(assistantSlot),
+					CreatorSourceKey: fmt.Sprintf("creator-occurrence/%08d/assistant/0", i),
+					Role:             "assistant", Ordinal: 0,
+				})
+			}
+			works = append(works, workFact)
 
 			verified := corpus.ContentVerified(i)
 			state := catalog.ContentVerificationStateLocatedUnverified
