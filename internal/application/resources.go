@@ -18,6 +18,7 @@ import (
 	"github.com/RecRivenVI/gallery/internal/domain"
 	"github.com/RecRivenVI/gallery/internal/platform/appdirs"
 	"github.com/RecRivenVI/gallery/internal/ports"
+	"github.com/RecRivenVI/gallery/internal/querytext"
 	"github.com/RecRivenVI/gallery/internal/rules"
 )
 
@@ -857,7 +858,7 @@ WHERE source_id=? AND provider_id=? AND external_id=? AND status IN ('active', '
 			return "", "", fault.New(fault.CodeInternal, true, err)
 		}
 		creatorID, name = id.String(), item.Name
-		if _, err := tx.ExecContext(ctx, "INSERT INTO canonical_creators (creator_id, name, created_at) VALUES (?, ?, ?)", creatorID, name, now); err != nil {
+		if _, err := tx.ExecContext(ctx, "INSERT INTO canonical_creators (creator_id, name, sort_name_key, created_at) VALUES (?, ?, ?, ?)", creatorID, name, querytext.NaturalSortKey(name), now); err != nil {
 			return "", "", fault.New(fault.CodeInternal, true, err)
 		}
 	}

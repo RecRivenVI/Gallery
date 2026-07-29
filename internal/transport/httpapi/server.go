@@ -1845,26 +1845,53 @@ func (s *Server) listCreators(w http.ResponseWriter, r *http.Request) {
 		s.writeRequestError(w, fault.New(fault.CodeInternal, false, nil))
 		return
 	}
+	if creatorBrowseRequested(r) {
+		s.listCreatorBrowse(w, r, session)
+		return
+	}
+
+	// 无查询参数继续履行既有“全部 CanonicalCreator”兼容契约。Binding 改为一次批量
+	// 读取，授权也先按 Source 集合批量求值，避免旧实现逐 Creator Get/逐 Binding 授权。
 	list, err := s.creators.List(r.Context())
 	if err != nil {
 		s.writeRequestError(w, err)
 		return
 	}
+	bindingsByCreator, err := s.creators.AllSourceBindings(r.Context())
+	if err != nil {
+		s.writeRequestError(w, err)
+		return
+	}
+	global, err := s.auth.AuthorizeSession(r.Context(), session, "library.read", auth.ResourceScope{Kind: "global"})
+	if err != nil {
+		s.writeRequestError(w, fault.New(fault.CodeInternal, true, err))
+		return
+	}
+	allowedSources := map[string]struct{}{}
+	if !global {
+		candidateSources, sourceErr := s.creators.BindingSourceIDs(r.Context(), false)
+		if sourceErr != nil {
+			s.writeRequestError(w, sourceErr)
+			return
+		}
+		allowed, authorizeErr := s.auth.AuthorizeSessionSources(r.Context(), session, []string{"library.read"}, candidateSources)
+		if authorizeErr != nil {
+			s.writeRequestError(w, fault.New(fault.CodeInternal, true, authorizeErr))
+			return
+		}
+		for _, sourceID := range allowed {
+			allowedSources[sourceID] = struct{}{}
+		}
+	}
 	visibleCreators := make([]creators.Creator, 0, len(list))
 	scopeIDs := make([]string, 0, len(list))
 	for _, creator := range list {
-		_, bindings, getErr := s.creators.Get(r.Context(), creator.ID)
-		if getErr != nil {
-			s.writeRequestError(w, getErr)
-			return
-		}
-		_, visible, authErr := s.creatorBindingsAllowed(r, session, bindings)
-		if authErr != nil {
-			s.writeRequestError(w, authErr)
-			return
-		}
-		if !visible {
-			continue
+		if !global {
+			allowedBindings := filterCreatorBindings(bindingsByCreator[creator.ID], allowedSources)
+			if len(allowedBindings) == 0 {
+				continue
+			}
+			creator.SourceCount = activeCreatorSourceCount(allowedBindings)
 		}
 		visibleCreators = append(visibleCreators, creator)
 		scopeIDs = append(scopeIDs, creator.ID)
@@ -1882,6 +1909,86 @@ func (s *Server) listCreators(w http.ResponseWriter, r *http.Request) {
 		items = append(items, creatorDTO(creator, publicationID, covers))
 	}
 	writeJSON(w, http.StatusOK, api.CreatorListResponse{Creators: items})
+}
+
+func creatorBrowseRequested(r *http.Request) bool {
+	query := r.URL.Query()
+	for _, key := range []string{"sourceId", "includeMerged", "sort", "limit", "cursor"} {
+		if query.Has(key) {
+			return true
+		}
+	}
+	return false
+}
+
+func (s *Server) listCreatorBrowse(w http.ResponseWriter, r *http.Request, session auth.Session) {
+	limit := 50
+	var err error
+	if raw := r.URL.Query().Get("limit"); raw != "" {
+		limit, err = strconv.Atoi(raw)
+		if err != nil {
+			s.writeRequestError(w, fault.WithField(fault.CodeValidation, "limit", err))
+			return
+		}
+	}
+	includeMerged := false
+	if raw := r.URL.Query().Get("includeMerged"); raw != "" {
+		includeMerged, err = strconv.ParseBool(raw)
+		if err != nil {
+			s.writeRequestError(w, fault.WithField(fault.CodeValidation, "includeMerged", err))
+			return
+		}
+	}
+	sourceID := r.URL.Query().Get("sourceId")
+	if sourceID != "" {
+		if _, err := domain.ParseID(domain.IDSource, sourceID); err != nil {
+			s.writeRequestError(w, fault.WithField(fault.CodeValidation, "sourceId", err))
+			return
+		}
+	}
+	candidateSources, err := s.creators.BindingSourceIDs(r.Context(), true)
+	if err != nil {
+		s.writeRequestError(w, err)
+		return
+	}
+	if sourceID != "" {
+		candidateSources = []string{sourceID}
+	}
+	allowedSources, err := s.auth.AuthorizeSessionSources(r.Context(), session, []string{"library.read"}, candidateSources)
+	if err != nil {
+		s.writeRequestError(w, fault.New(fault.CodeInternal, true, err))
+		return
+	}
+	page, err := s.creators.ListPage(r.Context(), creators.ListPageRequest{
+		AllowedSourceIDs: allowedSources,
+		SourceID:         sourceID,
+		IncludeMerged:    includeMerged,
+		Sort:             r.URL.Query().Get("sort"),
+		Limit:            limit,
+		Cursor:           r.URL.Query().Get("cursor"),
+	})
+	if err != nil {
+		s.writeRequestError(w, err)
+		return
+	}
+	groups := make([]catalog.CreatorAggregateGroup, 0, len(page.Items))
+	for _, creator := range page.Items {
+		groups = append(groups, catalog.CreatorAggregateGroup{ScopeID: creator.ID, CreatorIDs: creator.MemberIDs})
+	}
+	publicationID, covers, err := s.authorizedCreatorGroupCovers(r.Context(), session, sourceID, groups)
+	if err != nil {
+		s.writeRequestError(w, err)
+		return
+	}
+	items := make([]api.Creator, 0, len(page.Items))
+	for _, creator := range page.Items {
+		items = append(items, creatorDTO(creator, publicationID, covers))
+	}
+	response := api.CreatorListResponse{Creators: items}
+	if page.NextCursor != "" {
+		response.NextCursor = &page.NextCursor
+	}
+	writeJSON(w, http.StatusOK, response)
 }
 
 func (s *Server) getCreator(w http.ResponseWriter, r *http.Request) {
@@ -1908,6 +2015,7 @@ func (s *Server) getCreator(w http.ResponseWriter, r *http.Request) {
 		s.writeRequestError(w, fault.New(fault.CodeNotFound, false, nil))
 		return
 	}
+	creator.SourceCount = activeCreatorSourceCount(allowed)
 	publicationID, covers, err := s.authorizedAggregateCoversForScope(r.Context(), session, catalog.AggregateScopeCreator, []string{creator.ID})
 	if err != nil {
 		s.writeRequestError(w, err)
@@ -1922,6 +2030,26 @@ func (s *Server) getCreator(w http.ResponseWriter, r *http.Request) {
 		})
 	}
 	writeJSON(w, http.StatusOK, api.CreatorDetail{Creator: creatorDTO(creator, publicationID, covers), SourceBindings: items})
+}
+
+func filterCreatorBindings(bindings []creators.SourceBinding, allowedSources map[string]struct{}) []creators.SourceBinding {
+	allowed := make([]creators.SourceBinding, 0, len(bindings))
+	for _, binding := range bindings {
+		if _, ok := allowedSources[binding.SourceID]; ok {
+			allowed = append(allowed, binding)
+		}
+	}
+	return allowed
+}
+
+func activeCreatorSourceCount(bindings []creators.SourceBinding) int {
+	sources := make(map[string]struct{})
+	for _, binding := range bindings {
+		if binding.Status == "active" {
+			sources[binding.SourceID] = struct{}{}
+		}
+	}
+	return len(sources)
 }
 
 func (s *Server) creatorBindingsAllowed(r *http.Request, session auth.Session, bindings []creators.SourceBinding) ([]creators.SourceBinding, bool, error) {
@@ -3873,6 +4001,45 @@ func (s *Server) authorizedAggregateCoversForScope(ctx context.Context, session 
 		return publication.ID, covers, nil
 	}
 	covers, err := s.catalog.AggregateCoversForSourcesAt(ctx, publication.ID, scopeKind, allowedSourceIDs, scopeIDs...)
+	if err != nil {
+		return "", nil, err
+	}
+	return publication.ID, covers, nil
+}
+
+// authorizedCreatorGroupCovers 是有效 Creator 浏览页的 publication-bound 封面路径。
+// Catalog 中的 Creator 关系永久保留 base 身份，因此这里显式携带当前页等价组；Source
+// 范围页还要把媒体候选收紧到该平台，不能借用同一作者在其它平台上的图片。
+func (s *Server) authorizedCreatorGroupCovers(ctx context.Context, session auth.Session, sourceID string, groups []catalog.CreatorAggregateGroup) (string, map[string]catalog.AggregateCover, error) {
+	if s.catalog == nil || len(groups) == 0 {
+		return "", map[string]catalog.AggregateCover{}, nil
+	}
+	publication, sourceIDs, err := s.catalog.SourceIDsAt(ctx, "")
+	if err != nil {
+		if asFault(err).Code == fault.CodeNotFound {
+			return "", nil, nil
+		}
+		return "", nil, err
+	}
+	if sourceID != "" {
+		member := false
+		for _, candidate := range sourceIDs {
+			if candidate == sourceID {
+				member = true
+				break
+			}
+		}
+		if !member {
+			return publication.ID, map[string]catalog.AggregateCover{}, nil
+		}
+		sourceIDs = []string{sourceID}
+	}
+	allowedSourceIDs, err := s.auth.AuthorizeSessionSources(ctx, session,
+		[]string{"library.read", "media.read"}, sourceIDs)
+	if err != nil {
+		return "", nil, fault.New(fault.CodeInternal, true, err)
+	}
+	covers, err := s.catalog.CreatorAggregateCoversForGroupsAt(ctx, publication.ID, allowedSourceIDs, groups)
 	if err != nil {
 		return "", nil, err
 	}

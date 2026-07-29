@@ -129,6 +129,49 @@ ORDER BY source_id`, publication.CatalogRevisionID, publication.OverlayRevisionI
 	}
 }
 
+func TestCreatorAggregateCoversForMergedBrowseGroups(t *testing.T) {
+	ctx := context.Background()
+	catalogStore, _ := newCandidateTestStore(t)
+	stage := func(jobID, sourceID string, watermark int64, work catalog.WorkFact, media catalog.MediaFact) catalog.Publication {
+		t.Helper()
+		candidate, err := catalogStore.BeginCandidate(ctx, jobID, sourceID, watermark)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := catalogStore.Stage(ctx, candidate, []catalog.WorkFact{work}, []catalog.MediaFact{media}); err != nil {
+			t.Fatal(err)
+		}
+		if err := catalogStore.ValidateCandidate(ctx, candidate); err != nil {
+			t.Fatal(err)
+		}
+		return publishCandidate(t, catalogStore, candidate)
+	}
+	stage("job-group-a", "source-a", 1,
+		aggregateWork("source-a", "library-a", "work-a", "creator-a", "作者甲", 1000),
+		coverMediaFact("source-a", "work-a", "work-a/01.jpg", "work-a-m1", 0, candidateDigestA))
+	publication := stage("job-group-b", "source-b", 2,
+		aggregateWork("source-b", "library-a", "work-b", "creator-b", "作者乙", 9000),
+		coverMediaFact("source-b", "work-b", "work-b/01.jpg", "work-b-m1", 0, candidateDigestB))
+	groups := []catalog.CreatorAggregateGroup{{
+		ScopeID: "creator-a", CreatorIDs: []string{"creator-a", "creator-b"},
+	}}
+
+	covers, err := catalogStore.CreatorAggregateCoversForGroupsAt(ctx, publication.ID,
+		[]string{"source-a", "source-b"}, groups)
+	if err != nil || covers["creator-a"].CoverMediaID != "work-b-m1" {
+		t.Fatalf("合并组全局封面错误: covers=%+v err=%v", covers, err)
+	}
+	covers, err = catalogStore.CreatorAggregateCoversForGroupsAt(ctx, publication.ID,
+		[]string{"source-a"}, groups)
+	if err != nil || covers["creator-a"].CoverMediaID != "work-a-m1" {
+		t.Fatalf("合并组 Source 授权回退错误: covers=%+v err=%v", covers, err)
+	}
+	covers, err = catalogStore.CreatorAggregateCoversForGroupsAt(ctx, publication.ID, nil, groups)
+	if err != nil || covers == nil || len(covers) != 0 {
+		t.Fatalf("合并组空授权集合未 fail-closed: covers=%#v err=%v", covers, err)
+	}
+}
+
 // TestAggregateCreatorSourcePlanMaterializesCandidatesOnce 对生产 SQL 建立结构性计划门禁：
 // Work/Creator 关系与 WorkProjection 的基础连接只允许出现在持久窄候选构建阶段一次，Creator
 // 和 Source 两个窗口随后只扫描 creator_source_cover_projections。固定墙钟不适合作为可移植

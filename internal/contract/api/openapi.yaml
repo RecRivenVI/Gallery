@@ -2323,17 +2323,32 @@ paths:
     get:
       operationId: listCreators
       summary: 列出 CanonicalCreator 及其有效合并状态
+      description: >-
+        不带任何查询参数时保留兼容行为，返回全部 CanonicalCreator（包括已被合并身份）。
+        携带任一查询参数时进入面向用户的 live 身份浏览：默认折叠到有效合并根并按名称
+        keyset 分页；身份与 Binding 来自 control.db 当前事实，不是 publication 可重复读，
+        但每项封面仍严格绑定自身 queryPublicationId。Source 或授权变化会使旧 cursor 过期。
+      parameters:
+        - {name: sourceId, in: query, required: false, schema: {$ref: "#/components/schemas/SourceId"}, description: 只浏览当前 active Binding 属于该 Source 的有效 Creator}
+        - {name: includeMerged, in: query, required: false, schema: {type: boolean, default: false}, description: 分页浏览时是否把已被合并身份作为独立行返回}
+        - {name: sort, in: query, required: false, schema: {type: string, enum: [name_asc, name_desc], default: name_asc}}
+        - {name: limit, in: query, required: false, schema: {type: integer, minimum: 1, maximum: 200, default: 50}}
+        - {name: cursor, in: query, required: false, schema: {type: string}}
       responses:
         "200":
-          description: 全部 CanonicalCreator
+          description: 兼容全量清单或 Creator 浏览页
           content:
             application/json:
               schema:
                 $ref: "#/components/schemas/CreatorListResponse"
+        "400":
+          $ref: "#/components/responses/ValidationError"
         "401":
           $ref: "#/components/responses/UnauthenticatedError"
         "403":
           $ref: "#/components/responses/ForbiddenError"
+        "409":
+          $ref: "#/components/responses/ConflictError"
   /api/v1/creators/{creatorId}:
     get:
       operationId: getCreator
@@ -3812,6 +3827,9 @@ components:
           type: array
           items:
             $ref: "#/components/schemas/Creator"
+        nextCursor:
+          type: string
+          description: 分页浏览下一页游标；兼容全量响应或末页缺省。
     CreatorDetail:
       type: object
       additionalProperties: false

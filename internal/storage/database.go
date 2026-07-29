@@ -121,6 +121,11 @@ func openDatabase(ctx context.Context, role Role, path string) (*Database, error
 			_ = db.Close()
 			return nil, fault.New(fault.CodeMigrationFailed, false, err)
 		}
+	} else if role == RoleControl {
+		if err := ensureControlCreatorNaturalSortKeyEncoding(ctx, db); err != nil {
+			_ = db.Close()
+			return nil, fault.New(fault.CodeMigrationFailed, false, err)
+		}
 	}
 	if err := verifyDatabase(ctx, db, role); err != nil {
 		_ = db.Close()

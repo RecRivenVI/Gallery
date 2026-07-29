@@ -24,6 +24,14 @@ type AggregateCover struct {
 	PublishedAtNanos int64
 }
 
+// CreatorAggregateGroup 把公开的有效 Creator 根映射到 publication 内保持 base 身份的
+// Creator 集合。合并是 control.db 用户事实，Catalog 关系故意不改写；浏览端必须显式携带
+// 这层映射，才能既保留撤销可逆性，又为合并后的整组作品选择一张代表封面。
+type CreatorAggregateGroup struct {
+	ScopeID    string   `json:"scopeId"`
+	CreatorIDs []string `json:"creatorIds"`
+}
+
 // computeAggregateCovers 从**完整**的 work_projections 集合整体重算三级聚合封面。
 //
 // 必须整体重算而不是增量维护，有两个各自独立的原因：
@@ -361,6 +369,82 @@ ORDER BY scope_id`
 	defer rows.Close()
 	for rows.Next() {
 		item := AggregateCover{ScopeKind: scopeKind}
+		if err := rows.Scan(&item.ScopeID, &item.CoverMediaID, &item.PublishedAtNanos); err != nil {
+			return nil, fault.New(fault.CodeInternal, true, err)
+		}
+		result[item.ScopeID] = item
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fault.New(fault.CodeInternal, true, err)
+	}
+	return result, nil
+}
+
+// CreatorAggregateCoversForGroupsAt 在一个不可变 publication 内，为调用方给出的有效
+// Creator 等价组重选封面。请求只会携带当前页（至多 200 个）的组；SQL 先把组成员和允许
+// Source 都物化为小表，再沿 creator_source_cover_rank_idx 读取 publication 冻结候选。
+//
+// 这条路径不能退化为逐组 AggregateCoverAt：合并根可能没有自己的 Work，封面来自任意被并
+// 成员；媒体授权裁掉全局胜出 Source 时也必须在同组内回退到下一条允许候选。
+func (s *Store) CreatorAggregateCoversForGroupsAt(ctx context.Context, publicationID string, sourceIDs []string, groups []CreatorAggregateGroup) (map[string]AggregateCover, error) {
+	publication, err := s.resolvePublication(ctx, publicationID)
+	if err != nil {
+		return nil, err
+	}
+	result := make(map[string]AggregateCover)
+	if len(sourceIDs) == 0 || len(groups) == 0 {
+		return result, nil
+	}
+	sourceIDsJSON, err := json.Marshal(sourceIDs)
+	if err != nil {
+		return nil, fault.New(fault.CodeInternal, true, err)
+	}
+	type member struct {
+		ScopeID   string `json:"scopeId"`
+		CreatorID string `json:"creatorId"`
+	}
+	members := make([]member, 0)
+	for _, group := range groups {
+		for _, creatorID := range group.CreatorIDs {
+			members = append(members, member{ScopeID: group.ScopeID, CreatorID: creatorID})
+		}
+	}
+	if len(members) == 0 {
+		return result, nil
+	}
+	membersJSON, err := json.Marshal(members)
+	if err != nil {
+		return nil, fault.New(fault.CodeInternal, true, err)
+	}
+	rows, err := s.db.QueryContext(ctx, `WITH allowed_sources(source_id) AS MATERIALIZED (
+    SELECT DISTINCT CAST(value AS TEXT) FROM json_each(?)
+), requested_members(scope_id, creator_id) AS MATERIALIZED (
+    SELECT CAST(json_extract(value, '$.scopeId') AS TEXT),
+           CAST(json_extract(value, '$.creatorId') AS TEXT)
+    FROM json_each(?)
+), ranked AS (
+    SELECT requested.scope_id,
+           candidate.cover_media_id,
+           candidate.published_at_ns,
+           row_number() OVER (
+               PARTITION BY requested.scope_id
+               ORDER BY candidate.published_at_ns DESC, candidate.work_id DESC
+           ) AS rank_in_scope
+    FROM requested_members AS requested
+    JOIN creator_source_cover_projections AS candidate INDEXED BY creator_source_cover_rank_idx
+      ON candidate.catalog_revision_id=? AND candidate.overlay_revision_id=?
+     AND candidate.creator_id=requested.creator_id
+    JOIN allowed_sources AS allowed ON allowed.source_id=candidate.source_id
+)
+SELECT scope_id, cover_media_id, published_at_ns
+FROM ranked WHERE rank_in_scope=1 ORDER BY scope_id`,
+		string(sourceIDsJSON), string(membersJSON), publication.CatalogRevisionID, publication.OverlayRevisionID)
+	if err != nil {
+		return nil, fault.New(fault.CodeInternal, true, err)
+	}
+	defer rows.Close()
+	for rows.Next() {
+		item := AggregateCover{ScopeKind: AggregateScopeCreator}
 		if err := rows.Scan(&item.ScopeID, &item.CoverMediaID, &item.PublishedAtNanos); err != nil {
 			return nil, fault.New(fault.CodeInternal, true, err)
 		}

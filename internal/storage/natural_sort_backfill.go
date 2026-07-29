@@ -11,6 +11,38 @@ import (
 
 const naturalSortKeyEncodingVersion = 2
 
+// ensureControlCreatorNaturalSortKeyEncoding 在 control.db 对外可用前补齐 CanonicalCreator
+// 的可重建排序键。它不改变 Creator ID、名称、合并或 Binding 等用户事实；事务提交前
+// 版本标记保持旧值，进程中断后会在下一次启动整体重试。
+func ensureControlCreatorNaturalSortKeyEncoding(ctx context.Context, db *sql.DB) error {
+	var rawVersion string
+	if err := db.QueryRowContext(ctx,
+		"SELECT value FROM gallery_control_meta WHERE key='creator_natural_sort_key_encoding'").Scan(&rawVersion); err != nil {
+		return err
+	}
+	version, err := strconv.Atoi(rawVersion)
+	if err != nil || version < 1 || version > naturalSortKeyEncodingVersion {
+		return fmt.Errorf("creator natural sort key encoding version 无效: %q", rawVersion)
+	}
+	if version == naturalSortKeyEncodingVersion {
+		return nil
+	}
+	tx, err := db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	if err := backfillNaturalSortTable(ctx, tx, "canonical_creators", "name", "sort_name_key"); err != nil {
+		return err
+	}
+	if _, err := tx.ExecContext(ctx,
+		"UPDATE gallery_control_meta SET value=? WHERE key='creator_natural_sort_key_encoding'",
+		strconv.Itoa(naturalSortKeyEncodingVersion)); err != nil {
+		return err
+	}
+	return tx.Commit()
+}
+
 // ensureNaturalSortKeyEncoding 在 Catalog 对外可用前同步升级持久排序键。排序键完全由同一行的
 // title/name 重建，不读取 Source，也不改变任何不可重建事实。使用 rowid 小批读取，避免把大型
 // Catalog 的全部标题一次装入内存；整个升级处于一个 IMMEDIATE 事务中，版本标记只在全部行成功

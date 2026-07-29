@@ -282,6 +282,10 @@ func run() (exitCode int) {
 		testErr = command(runCtx, 2*time.Minute, webRoot, env, nodeBin, playwright, "test",
 			"e2e/real-bootstrap.spec.ts", projectArgument, "--workers=1", "--retries=0")
 	}
+	if testErr == nil {
+		testErr = command(runCtx, time.Minute, webRoot, env, nodeBin, playwright, "test",
+			"e2e/real-creator-browse.spec.ts", projectArgument, "--workers=1", "--retries=0")
+	}
 	// publication E2E 以 bootstrap 留下的首次 index/J1 未确认媒体为前置；规则生命周期则要在
 	// media/custom-cover/gallery 完成后再用新 Personal Session 继续同一隔离实例。分开调用把这些
 	// 状态依赖和每段独立超时预算写进运行器契约，不依赖 Playwright 对多 spec 的偶然排序。

@@ -29,6 +29,10 @@ type Creator struct {
 	EffectiveID string
 	SourceCount int
 	CreatedAt   time.Time
+	SortNameKey string
+	// MemberIDs 只用于面向浏览的有效身份页：根身份包含自身与全部直接/间接被并入成员，
+	// 使 Catalog 能在同一 publication 内为整个等价组选择封面。它不进入公开 DTO。
+	MemberIDs []string
 }
 
 type SourceBinding struct {
@@ -80,8 +84,8 @@ func New(ctx context.Context, control *sql.DB, jobStore *jobs.Store, catalogStor
 
 func (s *Service) List(ctx context.Context) ([]Creator, error) {
 	rows, err := s.control.QueryContext(ctx, `SELECT c.creator_id, c.name, c.merged_into, c.created_at,
-(SELECT count(*) FROM creator_bindings b WHERE b.creator_id=c.creator_id AND b.status='active')
-FROM canonical_creators c ORDER BY c.name, c.creator_id`)
+(SELECT count(DISTINCT b.source_id) FROM creator_bindings b WHERE b.creator_id=c.creator_id AND b.status='active')
+FROM canonical_creators c ORDER BY c.sort_name_key, c.creator_id`)
 	if err != nil {
 		return nil, fault.New(fault.CodeInternal, true, err)
 	}

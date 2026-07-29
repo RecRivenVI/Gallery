@@ -30,6 +30,7 @@ import { useCsrfHeaders } from '../shared/session';
 import {
   classifyCursorFailure,
   type Creator,
+  type CreatorListResponse,
   type CursorRecovery,
   type FileRoot,
   type FileRootEntryListResponse,
@@ -61,11 +62,29 @@ export function useLibraries() {
   });
 }
 
-export function useCreators() {
-  return useQuery({
-    queryKey: ['creators'],
-    queryFn: async ({ signal }): Promise<Creator[]> =>
-      expectData(await api.GET('/api/v1/creators', { signal })).creators
+export type CreatorSort = 'name_asc' | 'name_desc';
+
+export function useCreators(sourceId: string | undefined, sort: CreatorSort, enabled = true) {
+  return useInfiniteQuery({
+    enabled,
+    queryKey: ['creators', 'browse', sourceId ?? '', sort],
+    initialPageParam: undefined as string | undefined,
+    queryFn: async ({ pageParam, signal }): Promise<CreatorListResponse> =>
+      expectData(
+        await api.GET('/api/v1/creators', {
+          params: {
+            query: {
+              includeMerged: false,
+              sort,
+              limit: 48,
+              ...(sourceId === undefined || sourceId === '' ? {} : { sourceId }),
+              ...(pageParam === undefined ? {} : { cursor: pageParam })
+            }
+          },
+          signal
+        })
+      ),
+    getNextPageParam: (lastPage) => lastPage.nextCursor
   });
 }
 

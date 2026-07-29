@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"path/filepath"
 	"testing"
 	"time"
@@ -23,6 +24,7 @@ import (
 	"github.com/RecRivenVI/gallery/internal/platform/clock"
 	"github.com/RecRivenVI/gallery/internal/platform/filesystem"
 	"github.com/RecRivenVI/gallery/internal/platform/identity"
+	"github.com/RecRivenVI/gallery/internal/querytext"
 	"github.com/RecRivenVI/gallery/internal/storage"
 	"github.com/RecRivenVI/gallery/internal/transport/httpapi"
 	api "github.com/RecRivenVI/gallery/pkg/galleryapi"
@@ -86,6 +88,34 @@ func TestAggregateCoversRespectMediaAuthorization(t *testing.T) {
 	}
 	assertBearerCreatorCover(t, token.Secret, server.URL, creatorID, mediaA, publicationID)
 
+	// 分页浏览必须在 LIMIT 前完成 Source 授权；否则一页可能先被未授权身份占满，再在
+	// transport 层裁成空页。这里给 Source A/B 各加一个独占作者，Source A Token 应连续
+	// 取得“共享作者 + A 独占作者”，永远看不到 B 独占作者，sourceCount 也只能是 1。
+	creatorAOnly := seedAggregateBoundCreator(t, store, generator, sourceA, "A 独占作者")
+	creatorBOnly := seedAggregateBoundCreator(t, store, generator, sourceB, "B 独占作者")
+	endpoint := server.URL + "/api/v1/creators?includeMerged=false&sourceId=" + url.QueryEscape(sourceA) + "&sort=name_asc&limit=1"
+	seen := make(map[string]api.Creator)
+	for pageNumber := 0; pageNumber < 4; pageNumber++ {
+		var page api.CreatorListResponse
+		if status := getAggregateJSON(t, nil, token.Secret, endpoint, &page); status != http.StatusOK {
+			t.Fatalf("Creator 分页失败: page=%d status=%d", pageNumber, status)
+		}
+		for _, creator := range page.Creators {
+			seen[creator.Id] = creator
+		}
+		if page.NextCursor == nil {
+			break
+		}
+		endpoint = server.URL + "/api/v1/creators?includeMerged=false&sourceId=" + url.QueryEscape(sourceA) +
+			"&sort=name_asc&limit=1&cursor=" + url.QueryEscape(*page.NextCursor)
+	}
+	if len(seen) != 2 || seen[creatorID].SourceCount != 1 || seen[creatorAOnly].SourceCount != 1 {
+		t.Fatalf("Source A Creator 分页集合错误: %+v", seen)
+	}
+	if _, leaked := seen[creatorBOnly]; leaked {
+		t.Fatalf("Source A Token 泄露 Source B 独占 Creator: %+v", seen[creatorBOnly])
+	}
+
 	// Source 范围 Token 不自动获得整个 Library 身份；列表为空且详情保持 404。
 	var libraries api.LibraryListResponse
 	if status := getAggregateJSON(t, nil, token.Secret, server.URL+"/api/v1/libraries", &libraries); status != http.StatusOK || len(libraries.Libraries) != 0 {
@@ -95,6 +125,26 @@ func TestAggregateCoversRespectMediaAuthorization(t *testing.T) {
 	if status := getAggregateJSON(t, nil, token.Secret, server.URL+"/api/v1/libraries/"+libraryID, &library); status != http.StatusNotFound {
 		t.Fatalf("Source Token Library 详情未隐藏: status=%d body=%+v", status, library)
 	}
+}
+
+func seedAggregateBoundCreator(t *testing.T, store *storage.Store, generator identity.Generator, sourceID, name string) string {
+	t.Helper()
+	ctx := context.Background()
+	creatorID := newAggregateCoverID(t, generator, domain.IDCanonicalCreator)
+	bindingID := newAggregateCoverID(t, generator, domain.IDCreatorBinding)
+	if _, err := store.Control.SQL().ExecContext(ctx,
+		"INSERT INTO canonical_creators (creator_id, name, sort_name_key, created_at) VALUES (?, ?, ?, 1)",
+		creatorID, name, querytext.NaturalSortKey(name)); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.Control.SQL().ExecContext(ctx, `INSERT INTO creator_bindings
+(binding_id, source_id, provider_id, external_id, source_key, creator_id, identity_version,
+ status, last_seen_generation, created_at, updated_at)
+VALUES (?, ?, 'test', ?, ?, ?, 1, 'active', 1, 1, 1)`,
+		bindingID, sourceID, creatorID, "creator-"+creatorID, creatorID); err != nil {
+		t.Fatal(err)
+	}
+	return creatorID
 }
 
 func newLANAggregateCoverServer(t *testing.T) (*httptest.Server, *storage.Store, *catalog.Store, identity.Generator) {
@@ -153,7 +203,8 @@ func seedAuthorizedAggregateCovers(
 	ctx := context.Background()
 	creatorID = newAggregateCoverID(t, generator, domain.IDCanonicalCreator)
 	if _, err := store.Control.SQL().ExecContext(ctx,
-		"INSERT INTO canonical_creators (creator_id, name, created_at) VALUES (?, '授权作者', 1)", creatorID); err != nil {
+		"INSERT INTO canonical_creators (creator_id, name, sort_name_key, created_at) VALUES (?, '授权作者', ?, 1)",
+		creatorID, querytext.NaturalSortKey("授权作者")); err != nil {
 		t.Fatal(err)
 	}
 	for index, sourceID := range []string{sourceA, sourceB} {

@@ -77,3 +77,31 @@ UPDATE gallery_catalog_meta SET value='1' WHERE key='natural_sort_key_encoding';
 		t.Fatalf("重复回填应为 no-op: %v", err)
 	}
 }
+
+func TestControlCreatorNaturalSortKeyBackfillIsIdempotent(t *testing.T) {
+	store, _ := openTestStore(t)
+	ctx := context.Background()
+	db := store.Control.db
+	if _, err := db.ExecContext(ctx, `INSERT INTO canonical_creators
+(creator_id, name, sort_name_key, created_at) VALUES ('creator', '作者10', 'OLD', 1);
+UPDATE gallery_control_meta SET value='1' WHERE key='creator_natural_sort_key_encoding';`); err != nil {
+		t.Fatal(err)
+	}
+	if err := ensureControlCreatorNaturalSortKeyEncoding(ctx, db); err != nil {
+		t.Fatal(err)
+	}
+	var key, version string
+	if err := db.QueryRowContext(ctx, "SELECT sort_name_key FROM canonical_creators WHERE creator_id='creator'").Scan(&key); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.QueryRowContext(ctx,
+		"SELECT value FROM gallery_control_meta WHERE key='creator_natural_sort_key_encoding'").Scan(&version); err != nil {
+		t.Fatal(err)
+	}
+	if key != querytext.NaturalSortKey("作者10") || version != "2" {
+		t.Fatalf("control Creator 排序键回填不完整: key=%q version=%q", key, version)
+	}
+	if err := ensureControlCreatorNaturalSortKeyEncoding(ctx, db); err != nil {
+		t.Fatalf("重复回填应为 no-op: %v", err)
+	}
+}

@@ -31,6 +31,7 @@ export type Source = components['schemas']['Source'];
 export type SourcePresentation = components['schemas']['SourcePresentation'];
 export type Library = components['schemas']['Library'];
 export type Creator = components['schemas']['Creator'];
+export type CreatorListResponse = components['schemas']['CreatorListResponse'];
 export type FileRoot = components['schemas']['FileRoot'];
 export type FileRootEntry = components['schemas']['FileRootEntry'];
 export type FileRootEntryListResponse = components['schemas']['FileRootEntryListResponse'];

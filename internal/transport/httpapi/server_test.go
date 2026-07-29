@@ -1198,14 +1198,14 @@ func TestCreatorMergeAPIContract(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if unauth, err := anonymous.ListCreatorsWithResponse(ctx); err != nil || unauth.JSON401 == nil {
+	if unauth, err := anonymous.ListCreatorsWithResponse(ctx, nil); err != nil || unauth.JSON401 == nil {
 		t.Fatalf("未认证列表未 401: %v status=%d", err, unauth.StatusCode())
 	}
 
 	csrf := pairSession(t, ctx, client, server.URL)
 	editor := sameOrigin(server.URL)
 
-	list, err := client.ListCreatorsWithResponse(ctx)
+	list, err := client.ListCreatorsWithResponse(ctx, nil)
 	if err != nil || list.JSON200 == nil || len(list.JSON200.Creators) != 2 {
 		t.Fatalf("创作者列表错误: %v status=%d", err, list.StatusCode())
 	}

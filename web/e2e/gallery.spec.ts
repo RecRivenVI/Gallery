@@ -265,6 +265,108 @@ test('主题选择跨两个入口共享 @smoke', async ({ page }) => {
   await expect(page.locator('html')).toHaveAttribute('data-theme', 'dark');
 });
 
+test('平台创作者按有效身份游标分页且窄屏无溢出 @smoke', async ({ page }) => {
+  const requested: Array<Record<string, string | null>> = [];
+  let creatorWorksRequest: Record<string, string | null> | undefined;
+  const json = (route: Route, body: unknown) =>
+    route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(body) });
+  await page.route('**/api/v1/sources', (route) =>
+    json(route, {
+      sources: [
+        {
+          id: 'src_pixiv',
+          libraryId: 'lib_main',
+          displayName: 'pixiv source',
+          presentation: {
+            name: 'pixiv',
+            authorLabel: '画师',
+            showInSidebar: true,
+            showInManager: true,
+            sort: { authorDefault: 'name_desc', authorOptions: ['name_desc', 'name_asc'] }
+          },
+          readOnly: true,
+          available: true,
+          createdAt: '2026-07-01T00:00:00Z'
+        }
+      ]
+    })
+  );
+  await page.route('**/api/v1/creators?*', (route) => {
+    const url = new URL(route.request().url());
+    requested.push({
+      sourceId: url.searchParams.get('sourceId'),
+      includeMerged: url.searchParams.get('includeMerged'),
+      sort: url.searchParams.get('sort'),
+      limit: url.searchParams.get('limit'),
+      cursor: url.searchParams.get('cursor')
+    });
+    const cursor = url.searchParams.get('cursor');
+    return json(route, {
+      creators: [
+        {
+          id: cursor === null ? 'creator_b' : 'creator_a',
+          name: cursor === null ? '画师乙' : '画师甲',
+          effectiveId: cursor === null ? 'creator_b' : 'creator_a',
+          sourceCount: 1,
+          createdAt: '2026-07-01T00:00:00Z'
+        }
+      ],
+      ...(cursor === null ? { nextCursor: 'page-two' } : {})
+    });
+  });
+  await page.route('**/api/v1/creators/creator_b', (route) =>
+    json(route, {
+      creator: {
+        id: 'creator_b',
+        name: '画师乙',
+        effectiveId: 'creator_b',
+        sourceCount: 1,
+        createdAt: '2026-07-01T00:00:00Z'
+      },
+      sourceBindings: []
+    })
+  );
+  await page.route('**/api/v1/works?*', async (route) => {
+    const url = new URL(route.request().url());
+    creatorWorksRequest = {
+      sourceId: url.searchParams.get('sourceId'),
+      filter: url.searchParams.get('filter'),
+      sort: url.searchParams.get('sort')
+    };
+    await route.fallback();
+  });
+
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.goto('/creators?sourceId=src_pixiv');
+  await expect(page.getByRole('heading', { name: 'pixiv · 画师' })).toBeVisible();
+  await expect(page.getByText('画师乙', { exact: true })).toBeVisible();
+  await page.getByRole('button', { name: '加载更多画师', exact: true }).click();
+  await expect(page.getByText('画师甲', { exact: true })).toBeVisible();
+  expect(requested).toEqual([
+    { sourceId: 'src_pixiv', includeMerged: 'false', sort: 'name_desc', limit: '48', cursor: null },
+    {
+      sourceId: 'src_pixiv',
+      includeMerged: 'false',
+      sort: 'name_desc',
+      limit: '48',
+      cursor: 'page-two'
+    }
+  ]);
+  await page.getByText('画师乙', { exact: true }).click();
+  await expect(page).toHaveURL(/\/creators\/creator_b\?sourceId=src_pixiv$/);
+  await expect(page.getByRole('heading', { name: '画师乙' })).toBeVisible();
+  await expect
+    .poll(() => creatorWorksRequest)
+    .toEqual({
+      sourceId: 'src_pixiv',
+      filter: JSON.stringify({ field: 'creator.id', op: 'eq', value: 'creator_b' }),
+      sort: 'title_asc'
+    });
+  await expectNoHorizontalOverflow(page);
+  const results = await new AxeBuilder({ page }).withTags(['wcag2a', 'wcag2aa']).analyze();
+  expect(results.violations).toEqual([]);
+});
+
 test('迟到的旧分页响应不会覆盖较新的搜索结果 @smoke', async ({ page }) => {
   let releaseOldPage: (() => void) | undefined;
   let oldPageSettled = false;

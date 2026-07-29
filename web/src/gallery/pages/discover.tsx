@@ -6,12 +6,12 @@
  * 差异的唯一解释入口，在界面里硬编码平台特例会绕开它。
  */
 
-import { Link, useParams } from 'react-router-dom';
-import { Badge, EmptyState, ErrorState, Spinner } from '../../design';
+import { Link, useParams, useSearchParams } from 'react-router-dom';
+import { Badge, Button, EmptyState, ErrorState, Select, Spinner } from '../../design';
 import { describeError, errorCode, errorCorrelationId } from '../../shared/errors';
 import { useCapability } from '../../shared/session';
 import { mediaContentUrl, type Creator, type Source, type SourcePresentation } from '../contracts';
-import { useCreator, useCreators, useFileRoots, useSources } from '../queries';
+import { useCreator, useCreators, useFileRoots, useSources, type CreatorSort } from '../queries';
 import { WorkBrowser } from '../components/browser';
 import { CoverMissing, MediaImage } from '../components/media';
 
@@ -204,6 +204,11 @@ export function SourcePage() {
             {source.presentation?.description === undefined ? null : (
               <p className="gal-muted">{source.presentation.description}</p>
             )}
+            <nav className="gal-quicklinks" aria-label={`${presentationName(source)}浏览方式`}>
+              <Link className="gal-quicklink" to={`/creators?sourceId=${encodeURIComponent(source.id)}`}>
+                浏览{source.presentation?.authorLabel ?? '创作者'}
+              </Link>
+            </nav>
           </header>
         }
       />
@@ -213,10 +218,14 @@ export function SourcePage() {
 
 /* ————————————————————————————— 创作者 ————————————————————————————— */
 
-function CreatorTile({ creator }: { creator: Creator }) {
+function CreatorTile({ creator, sourceId }: { creator: Creator; sourceId?: string }) {
+  const sourceQuery = sourceId === undefined ? '' : `?sourceId=${encodeURIComponent(sourceId)}`;
   return (
     <article className="gal-tile">
-      <Link className="gal-tile__link" to={`/creators/${encodeURIComponent(creator.effectiveId)}`}>
+      <Link
+        className="gal-tile__link"
+        to={`/creators/${encodeURIComponent(creator.effectiveId)}${sourceQuery}`}
+      >
         <span className="gal-tile__cover">
           {creator.coverMediaId === null || creator.coverMediaId === undefined ? (
             <CoverMissing label={`${creator.name} 暂无封面`} />
@@ -242,19 +251,95 @@ function CreatorTile({ creator }: { creator: Creator }) {
   );
 }
 
+const CREATOR_SORT_LABELS: Record<CreatorSort, string> = {
+  name_asc: '名称升序',
+  name_desc: '名称降序'
+};
+
+function isCreatorSort(value: string | null | undefined): value is CreatorSort {
+  return value !== null && value !== undefined && Object.hasOwn(CREATOR_SORT_LABELS, value);
+}
+
 export function CreatorsPage() {
-  const creators = useCreators();
-  // 服务端已排好序，这里只做展示过滤：被合并掉的身份不单独出现，避免同一个人出现两次。
-  const items = (creators.data ?? []).filter(
-    (creator) => creator.mergedInto === null || creator.mergedInto === undefined
-  );
+  const [searchParams, setSearchParams] = useSearchParams();
+  const sourceId = searchParams.get('sourceId') ?? undefined;
+  const sources = useSources();
+  const source = sourceId === undefined ? undefined : sources.data?.find((item) => item.id === sourceId);
+  const declaredSorts = source?.presentation?.sort?.authorOptions?.filter(isCreatorSort) ?? [];
+  const sortValues: CreatorSort[] =
+    declaredSorts.length === 0 ? ['name_asc', 'name_desc'] : [...new Set(declaredSorts)];
+  const declaredDefault = source?.presentation?.sort?.authorDefault;
+  const fallbackSort: CreatorSort =
+    isCreatorSort(declaredDefault) && sortValues.includes(declaredDefault)
+      ? declaredDefault
+      : (sortValues[0] ?? 'name_asc');
+  const requestedSort = searchParams.get('sort');
+  const sort: CreatorSort =
+    isCreatorSort(requestedSort) && sortValues.includes(requestedSort) ? requestedSort : fallbackSort;
+  // Source 下发的 authorDefault 决定首个请求的排序。Source 尚未解析时先暂停 Creator
+  // 查询，避免用全局默认发出一条随即废弃的第一页请求。
+  const creators = useCreators(sourceId, sort, sourceId === undefined || source !== undefined);
+  const items = creators.data?.pages.flatMap((page) => page.creators) ?? [];
+  const authorLabel = source?.presentation?.authorLabel ?? '创作者';
+
+  if (sourceId !== undefined && sources.error !== null) {
+    return (
+      <div className="gal-page">
+        <ErrorState
+          description={describeError(sources.error)}
+          code={errorCode(sources.error)}
+          correlationId={errorCorrelationId(sources.error)}
+          onRetry={() => void sources.refetch()}
+        />
+      </div>
+    );
+  }
+  if (sourceId !== undefined && !sources.isPending && source === undefined) {
+    return (
+      <div className="gal-page">
+        <ErrorState
+          title="找不到这个平台"
+          description="它可能已被移除，或当前账户没有查看它的权限。"
+          code="NOT_FOUND"
+        />
+      </div>
+    );
+  }
 
   return (
     <div className="gal-page">
-      <h1 className="gal-page__title">创作者</h1>
-      {creators.isPending ? (
-        <Spinner label="正在加载创作者" />
-      ) : creators.error !== null ? (
+      <header className="gal-page__header">
+        <h1 className="gal-page__title">
+          {source === undefined ? '创作者' : `${presentationName(source)} · ${authorLabel}`}
+        </h1>
+        {source === undefined ? null : (
+          <p className="gal-muted">
+            这里只显示当前平台有 active Binding 的{authorLabel}；代表图也不会借用其它平台的媒体。
+          </p>
+        )}
+      </header>
+      <div className="gal-toolbar">
+        <Select
+          className="gal-toolbar__control"
+          label={`${authorLabel}排序`}
+          options={sortValues.map((id) => ({ id, label: CREATOR_SORT_LABELS[id] }))}
+          selectedKey={sort}
+          onSelectionChange={(key) => {
+            const next = new URLSearchParams(searchParams);
+            if (key === null || key === fallbackSort) next.delete('sort');
+            else next.set('sort', key);
+            setSearchParams(next);
+          }}
+        />
+        {source === undefined ? null : (
+          <Link className="gal-quicklink" to={`/sources/${encodeURIComponent(source.id)}`}>
+            返回{presentationName(source)}作品
+          </Link>
+        )}
+      </div>
+      {creators.isPending || (sourceId !== undefined && sources.isPending) ? (
+        <Spinner label={`正在加载${authorLabel}`} />
+      ) : creators.error !== null && items.length === 0 ? (
         <ErrorState
           description={describeError(creators.error)}
           code={errorCode(creators.error)}
@@ -263,15 +348,36 @@ export function CreatorsPage() {
         />
       ) : items.length === 0 ? (
         <EmptyState
-          title="还没有创作者"
-          description="作品的创作者由规则从来源解析；有些平台的作品本来就没有创作者，这是正常的。"
+          title={`还没有${authorLabel}`}
+          description={
+            source === undefined
+              ? '作品的创作者由规则从来源解析；有些平台的作品本来就没有创作者，这是正常的。'
+              : `当前平台还没有可浏览的${authorLabel}，或现有作品没有解析出这项事实。`
+          }
         />
       ) : (
-        <div className="gal-tiles">
-          {items.map((creator) => (
-            <CreatorTile key={creator.id} creator={creator} />
-          ))}
-        </div>
+        <>
+          <div className="gal-tiles">
+            {items.map((creator) => (
+              <CreatorTile key={creator.id} creator={creator} sourceId={sourceId} />
+            ))}
+          </div>
+          {creators.isFetchNextPageError ? (
+            <ErrorState
+              title={`更多${authorLabel}加载失败`}
+              description={describeError(creators.error)}
+              code={errorCode(creators.error)}
+              correlationId={errorCorrelationId(creators.error)}
+              onRetry={() => void creators.fetchNextPage()}
+            />
+          ) : creators.hasNextPage ? (
+            <div className="gal-browser__more">
+              <Button onPress={() => void creators.fetchNextPage()} isDisabled={creators.isFetchingNextPage}>
+                {creators.isFetchingNextPage ? `正在加载更多${authorLabel}` : `加载更多${authorLabel}`}
+              </Button>
+            </div>
+          ) : null}
+        </>
       )}
     </div>
   );
@@ -280,21 +386,68 @@ export function CreatorsPage() {
 export function CreatorPage() {
   const params = useParams();
   const creatorId = params.creatorId ?? '';
+  const [searchParams] = useSearchParams();
+  const sourceId = searchParams.get('sourceId') ?? undefined;
+  const sources = useSources();
+  const source = sourceId === undefined ? undefined : sources.data?.find((item) => item.id === sourceId);
   const creator = useCreator(creatorId);
+
+  if (sourceId !== undefined && sources.error !== null) {
+    return (
+      <div className="gal-page">
+        <ErrorState
+          description={describeError(sources.error)}
+          code={errorCode(sources.error)}
+          correlationId={errorCorrelationId(sources.error)}
+          onRetry={() => void sources.refetch()}
+        />
+      </div>
+    );
+  }
+  if (sourceId !== undefined && sources.isPending) {
+    return (
+      <div className="gal-page">
+        <Spinner label="正在加载平台" />
+      </div>
+    );
+  }
+  if (sourceId !== undefined && source === undefined) {
+    return (
+      <div className="gal-page">
+        <ErrorState
+          title="找不到这个平台"
+          description="它可能已被移除，或当前账户没有查看它的权限。"
+          code="NOT_FOUND"
+        />
+      </div>
+    );
+  }
+
+  const authorLabel = source?.presentation?.authorLabel ?? '创作者';
 
   return (
     <div className="gal-page">
       <WorkBrowser
-        scope={{ creatorId }}
+        scope={{ creatorId, ...(sourceId === undefined ? {} : { sourceId }) }}
+        presentation={source?.presentation}
         heading={
           <header className="gal-page__header">
             <h1 className="gal-page__title">{creator.data?.name ?? '创作者'}</h1>
             {creator.data === undefined ? null : (
-              <p className="gal-muted">来自 {creator.data.sourceCount} 个来源的作品</p>
+              <p className="gal-muted">
+                {source === undefined
+                  ? `来自 ${creator.data.sourceCount} 个来源的作品`
+                  : `${presentationName(source)}中的${authorLabel}作品`}
+              </p>
+            )}
+            {source === undefined ? null : (
+              <Link className="gal-link" to={`/creators?sourceId=${encodeURIComponent(source.id)}`}>
+                返回{presentationName(source)}的{authorLabel}清单
+              </Link>
             )}
           </header>
         }
-        emptyDescription="这位创作者名下没有可见的作品。"
+        emptyDescription={`这位${authorLabel}在当前范围内没有可见的作品。`}
       />
     </div>
   );

@@ -1502,7 +1502,10 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        /** 列出 CanonicalCreator 及其有效合并状态 */
+        /**
+         * 列出 CanonicalCreator 及其有效合并状态
+         * @description 不带任何查询参数时保留兼容行为，返回全部 CanonicalCreator（包括已被合并身份）。 携带任一查询参数时进入面向用户的 live 身份浏览：默认折叠到有效合并根并按名称 keyset 分页；身份与 Binding 来自 control.db 当前事实，不是 publication 可重复读， 但每项封面仍严格绑定自身 queryPublicationId。Source 或授权变化会使旧 cursor 过期。
+         */
         get: operations["listCreators"];
         put?: never;
         post?: never;
@@ -2218,6 +2221,8 @@ export interface components {
         };
         CreatorListResponse: {
             creators: components["schemas"]["Creator"][];
+            /** @description 分页浏览下一页游标；兼容全量响应或末页缺省。 */
+            nextCursor?: string;
         };
         CreatorDetail: {
             creator: components["schemas"]["Creator"];
@@ -6115,14 +6120,22 @@ export interface operations {
     };
     listCreators: {
         parameters: {
-            query?: never;
+            query?: {
+                /** @description 只浏览当前 active Binding 属于该 Source 的有效 Creator */
+                sourceId?: components["schemas"]["SourceId"];
+                /** @description 分页浏览时是否把已被合并身份作为独立行返回 */
+                includeMerged?: boolean;
+                sort?: "name_asc" | "name_desc";
+                limit?: number;
+                cursor?: string;
+            };
             header?: never;
             path?: never;
             cookie?: never;
         };
         requestBody?: never;
         responses: {
-            /** @description 全部 CanonicalCreator */
+            /** @description 兼容全量清单或 Creator 浏览页 */
             200: {
                 headers: {
                     [name: string]: unknown;
@@ -6131,8 +6144,10 @@ export interface operations {
                     "application/json": components["schemas"]["CreatorListResponse"];
                 };
             };
+            400: components["responses"]["ValidationError"];
             401: components["responses"]["UnauthenticatedError"];
             403: components["responses"]["ForbiddenError"];
+            409: components["responses"]["ConflictError"];
         };
     };
     getCreator: {

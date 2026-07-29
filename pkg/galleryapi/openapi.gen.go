@@ -2044,6 +2044,24 @@ func (e ListBindingIssuesParamsStatus) Valid() bool {
 	}
 }
 
+// Defines values for ListCreatorsParamsSort.
+const (
+	ListCreatorsParamsSortNameAsc  ListCreatorsParamsSort = "name_asc"
+	ListCreatorsParamsSortNameDesc ListCreatorsParamsSort = "name_desc"
+)
+
+// Valid indicates whether the value is a known member of the ListCreatorsParamsSort enum.
+func (e ListCreatorsParamsSort) Valid() bool {
+	switch e {
+	case ListCreatorsParamsSortNameAsc:
+		return true
+	case ListCreatorsParamsSortNameDesc:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for ListOrphanCandidatesParamsEntityType.
 const (
 	ListOrphanCandidatesParamsEntityTypeCreator ListOrphanCandidatesParamsEntityType = "creator"
@@ -2160,34 +2178,34 @@ func (e ListSourceStructureDecisionsParamsStatus) Valid() bool {
 
 // Defines values for ListWorksParamsSort.
 const (
-	DateAsc      ListWorksParamsSort = "date_asc"
-	DateDesc     ListWorksParamsSort = "date_desc"
-	NameAsc      ListWorksParamsSort = "name_asc"
-	NameDesc     ListWorksParamsSort = "name_desc"
-	ProgressAsc  ListWorksParamsSort = "progress_asc"
-	ProgressDesc ListWorksParamsSort = "progress_desc"
-	TitleAsc     ListWorksParamsSort = "title_asc"
-	TitleDesc    ListWorksParamsSort = "title_desc"
+	ListWorksParamsSortDateAsc      ListWorksParamsSort = "date_asc"
+	ListWorksParamsSortDateDesc     ListWorksParamsSort = "date_desc"
+	ListWorksParamsSortNameAsc      ListWorksParamsSort = "name_asc"
+	ListWorksParamsSortNameDesc     ListWorksParamsSort = "name_desc"
+	ListWorksParamsSortProgressAsc  ListWorksParamsSort = "progress_asc"
+	ListWorksParamsSortProgressDesc ListWorksParamsSort = "progress_desc"
+	ListWorksParamsSortTitleAsc     ListWorksParamsSort = "title_asc"
+	ListWorksParamsSortTitleDesc    ListWorksParamsSort = "title_desc"
 )
 
 // Valid indicates whether the value is a known member of the ListWorksParamsSort enum.
 func (e ListWorksParamsSort) Valid() bool {
 	switch e {
-	case DateAsc:
+	case ListWorksParamsSortDateAsc:
 		return true
-	case DateDesc:
+	case ListWorksParamsSortDateDesc:
 		return true
-	case NameAsc:
+	case ListWorksParamsSortNameAsc:
 		return true
-	case NameDesc:
+	case ListWorksParamsSortNameDesc:
 		return true
-	case ProgressAsc:
+	case ListWorksParamsSortProgressAsc:
 		return true
-	case ProgressDesc:
+	case ListWorksParamsSortProgressDesc:
 		return true
-	case TitleAsc:
+	case ListWorksParamsSortTitleAsc:
 		return true
-	case TitleDesc:
+	case ListWorksParamsSortTitleDesc:
 		return true
 	default:
 		return false
@@ -2526,6 +2544,9 @@ type CreatorDetail struct {
 // CreatorListResponse defines model for CreatorListResponse.
 type CreatorListResponse struct {
 	Creators []Creator `json:"creators"`
+
+	// NextCursor 分页浏览下一页游标；兼容全量响应或末页缺省。
+	NextCursor *string `json:"nextCursor,omitempty"`
 }
 
 // CreatorMerge defines model for CreatorMerge.
@@ -4113,6 +4134,21 @@ type ResolveSourceStructureIssueParams struct {
 	XGalleryCSRF CSRFHeader `json:"X-Gallery-CSRF"`
 }
 
+// ListCreatorsParams defines parameters for ListCreators.
+type ListCreatorsParams struct {
+	// SourceId 只浏览当前 active Binding 属于该 Source 的有效 Creator
+	SourceId *SourceId `form:"sourceId,omitempty" json:"sourceId,omitempty"`
+
+	// IncludeMerged 分页浏览时是否把已被合并身份作为独立行返回
+	IncludeMerged *bool                   `form:"includeMerged,omitempty" json:"includeMerged,omitempty"`
+	Sort          *ListCreatorsParamsSort `form:"sort,omitempty" json:"sort,omitempty"`
+	Limit         *int                    `form:"limit,omitempty" json:"limit,omitempty"`
+	Cursor        *string                 `form:"cursor,omitempty" json:"cursor,omitempty"`
+}
+
+// ListCreatorsParamsSort defines parameters for ListCreators.
+type ListCreatorsParamsSort string
+
 // MergeCreatorsParams defines parameters for MergeCreators.
 type MergeCreatorsParams struct {
 	XGalleryCSRF CSRFHeader `json:"X-Gallery-CSRF"`
@@ -5376,7 +5412,7 @@ type ClientInterface interface {
 	GetBootstrap(ctx context.Context, reqEditors ...RequestEditorFn) (*http.Response, error)
 
 	// ListCreators request
-	ListCreators(ctx context.Context, reqEditors ...RequestEditorFn) (*http.Response, error)
+	ListCreators(ctx context.Context, params *ListCreatorsParams, reqEditors ...RequestEditorFn) (*http.Response, error)
 
 	// ListCreatorMerges request
 	ListCreatorMerges(ctx context.Context, reqEditors ...RequestEditorFn) (*http.Response, error)
@@ -6277,8 +6313,8 @@ func (c *Client) GetBootstrap(ctx context.Context, reqEditors ...RequestEditorFn
 	return c.Client.Do(req)
 }
 
-func (c *Client) ListCreators(ctx context.Context, reqEditors ...RequestEditorFn) (*http.Response, error) {
-	req, err := NewListCreatorsRequest(c.Server)
+func (c *Client) ListCreators(ctx context.Context, params *ListCreatorsParams, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewListCreatorsRequest(c.Server, params)
 	if err != nil {
 		return nil, err
 	}
@@ -9249,7 +9285,7 @@ func NewGetBootstrapRequest(server string) (*http.Request, error) {
 }
 
 // NewListCreatorsRequest generates requests for ListCreators
-func NewListCreatorsRequest(server string) (*http.Request, error) {
+func NewListCreatorsRequest(server string, params *ListCreatorsParams) (*http.Request, error) {
 	var err error
 
 	serverURL, err := url.Parse(server)
@@ -9265,6 +9301,81 @@ func NewListCreatorsRequest(server string) (*http.Request, error) {
 	queryURL, err := serverURL.Parse(operationPath)
 	if err != nil {
 		return nil, err
+	}
+
+	if params != nil {
+		// queryValues collects non-styled parameters (passthrough, JSON)
+		// that are safe to round-trip through url.Values.Encode().
+		queryValues := queryURL.Query()
+		// rawQueryFragments collects pre-encoded query fragments from
+		// styled parameters, preserving literal commas as delimiters
+		// per the OpenAPI spec (e.g. "color=blue,black,brown").
+		var rawQueryFragments []string
+
+		if params.SourceId != nil {
+
+			if queryFrag, err := runtime.StyleParamWithOptions("form", true, "sourceId", *params.SourceId, runtime.StyleParamOptions{ParamLocation: runtime.ParamLocationQuery, Type: "string", Format: ""}); err != nil {
+				return nil, err
+			} else {
+				for _, qp := range strings.Split(queryFrag, "&") {
+					rawQueryFragments = append(rawQueryFragments, qp)
+				}
+			}
+
+		}
+
+		if params.IncludeMerged != nil {
+
+			if queryFrag, err := runtime.StyleParamWithOptions("form", true, "includeMerged", *params.IncludeMerged, runtime.StyleParamOptions{ParamLocation: runtime.ParamLocationQuery, Type: "boolean", Format: ""}); err != nil {
+				return nil, err
+			} else {
+				for _, qp := range strings.Split(queryFrag, "&") {
+					rawQueryFragments = append(rawQueryFragments, qp)
+				}
+			}
+
+		}
+
+		if params.Sort != nil {
+
+			if queryFrag, err := runtime.StyleParamWithOptions("form", true, "sort", *params.Sort, runtime.StyleParamOptions{ParamLocation: runtime.ParamLocationQuery, Type: "string", Format: ""}); err != nil {
+				return nil, err
+			} else {
+				for _, qp := range strings.Split(queryFrag, "&") {
+					rawQueryFragments = append(rawQueryFragments, qp)
+				}
+			}
+
+		}
+
+		if params.Limit != nil {
+
+			if queryFrag, err := runtime.StyleParamWithOptions("form", true, "limit", *params.Limit, runtime.StyleParamOptions{ParamLocation: runtime.ParamLocationQuery, Type: "integer", Format: ""}); err != nil {
+				return nil, err
+			} else {
+				for _, qp := range strings.Split(queryFrag, "&") {
+					rawQueryFragments = append(rawQueryFragments, qp)
+				}
+			}
+
+		}
+
+		if params.Cursor != nil {
+
+			if queryFrag, err := runtime.StyleParamWithOptions("form", true, "cursor", *params.Cursor, runtime.StyleParamOptions{ParamLocation: runtime.ParamLocationQuery, Type: "string", Format: ""}); err != nil {
+				return nil, err
+			} else {
+				for _, qp := range strings.Split(queryFrag, "&") {
+					rawQueryFragments = append(rawQueryFragments, qp)
+				}
+			}
+
+		}
+
+		if encoded := queryValues.Encode(); encoded != "" {
+			rawQueryFragments = append(rawQueryFragments, encoded)
+		}
+		queryURL.RawQuery = strings.Join(rawQueryFragments, "&")
 	}
 
 	req, err := http.NewRequest(http.MethodGet, queryURL.String(), nil)
@@ -14229,7 +14340,7 @@ type ClientWithResponsesInterface interface {
 	GetBootstrapWithResponse(ctx context.Context, reqEditors ...RequestEditorFn) (*GetBootstrapResponse, error)
 
 	// ListCreatorsWithResponse request
-	ListCreatorsWithResponse(ctx context.Context, reqEditors ...RequestEditorFn) (*ListCreatorsResponse, error)
+	ListCreatorsWithResponse(ctx context.Context, params *ListCreatorsParams, reqEditors ...RequestEditorFn) (*ListCreatorsResponse, error)
 
 	// ListCreatorMergesWithResponse request
 	ListCreatorMergesWithResponse(ctx context.Context, reqEditors ...RequestEditorFn) (*ListCreatorMergesResponse, error)
@@ -15585,8 +15696,10 @@ type ListCreatorsResponse struct {
 	Body         []byte
 	HTTPResponse *http.Response
 	JSON200      *CreatorListResponse
+	JSON400      *ValidationError
 	JSON401      *UnauthenticatedError
 	JSON403      *ForbiddenError
+	JSON409      *ConflictError
 }
 
 // Status returns HTTPResponse.Status
@@ -18969,8 +19082,8 @@ func (c *ClientWithResponses) GetBootstrapWithResponse(ctx context.Context, reqE
 }
 
 // ListCreatorsWithResponse request returning *ListCreatorsResponse
-func (c *ClientWithResponses) ListCreatorsWithResponse(ctx context.Context, reqEditors ...RequestEditorFn) (*ListCreatorsResponse, error) {
-	rsp, err := c.ListCreators(ctx, reqEditors...)
+func (c *ClientWithResponses) ListCreatorsWithResponse(ctx context.Context, params *ListCreatorsParams, reqEditors ...RequestEditorFn) (*ListCreatorsResponse, error) {
+	rsp, err := c.ListCreators(ctx, params, reqEditors...)
 	if err != nil {
 		return nil, err
 	}
@@ -21471,6 +21584,13 @@ func ParseListCreatorsResponse(rsp *http.Response) (*ListCreatorsResponse, error
 		}
 		response.JSON200 = &dest
 
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 400:
+		var dest ValidationError
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON400 = &dest
+
 	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 401:
 		var dest UnauthenticatedError
 		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
@@ -21484,6 +21604,13 @@ func ParseListCreatorsResponse(rsp *http.Response) (*ListCreatorsResponse, error
 			return nil, err
 		}
 		response.JSON403 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 409:
+		var dest ConflictError
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON409 = &dest
 
 	}
 

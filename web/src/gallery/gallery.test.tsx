@@ -26,6 +26,7 @@ import { TopBar } from './components/chrome';
 import { MediaImage, MediaLoaderProvider } from './components/media';
 import { MediaLoader } from './media';
 import { WorkPage } from './pages/work';
+import { CreatorsPage } from './pages/discover';
 
 const PUBLICATION = 'qpub_test';
 
@@ -230,6 +231,77 @@ describe('服务端排序协议', () => {
     await userEvent.click(screen.getByLabelText('排序'));
     await userEvent.click(await screen.findByRole('option', { name: '标题升序' }));
     await waitFor(() => expect(requestedSort).toBe('title_asc'));
+  });
+});
+
+describe('创作者浏览分页', () => {
+  it('继承平台作者称谓，并以显式 Source 范围和游标连续加载', async () => {
+    const requests: Array<Record<string, string | null>> = [];
+    setFetchHandler((request) => {
+      const url = new URL(request.url);
+      if (url.pathname === '/api/v1/bootstrap') return jsonResponse(BOOTSTRAP);
+      if (url.pathname === '/api/v1/sources') {
+        return jsonResponse({
+          sources: [
+            {
+              id: 'src_pixiv',
+              libraryId: 'lib_main',
+              displayName: 'pixiv source',
+              presentation: {
+                name: 'pixiv',
+                authorLabel: '画师',
+                showInSidebar: true,
+                showInManager: true
+              },
+              readOnly: true,
+              available: true,
+              createdAt: '2026-07-01T00:00:00Z'
+            }
+          ]
+        });
+      }
+      if (url.pathname === '/api/v1/creators') {
+        requests.push({
+          sourceId: url.searchParams.get('sourceId'),
+          includeMerged: url.searchParams.get('includeMerged'),
+          sort: url.searchParams.get('sort'),
+          limit: url.searchParams.get('limit'),
+          cursor: url.searchParams.get('cursor')
+        });
+        const cursor = url.searchParams.get('cursor');
+        return jsonResponse({
+          creators: [
+            {
+              id: cursor === null ? 'creator_a' : 'creator_b',
+              name: cursor === null ? '画师甲' : '画师乙',
+              effectiveId: cursor === null ? 'creator_a' : 'creator_b',
+              sourceCount: 1,
+              createdAt: '2026-07-01T00:00:00Z'
+            }
+          ],
+          ...(cursor === null ? { nextCursor: 'next-page' } : {})
+        });
+      }
+      return faultResponse('NOT_FOUND', 404);
+    });
+
+    renderGallery(<CreatorsPage />, '/creators?sourceId=src_pixiv');
+
+    expect(await screen.findByRole('heading', { name: 'pixiv · 画师' })).toBeInTheDocument();
+    const firstCreator = await screen.findByText('画师甲');
+    expect(firstCreator.closest('a')).toHaveAttribute('href', '/creators/creator_a?sourceId=src_pixiv');
+    await userEvent.click(screen.getByRole('button', { name: '加载更多画师' }));
+    expect(await screen.findByText('画师乙')).toBeInTheDocument();
+    expect(requests).toEqual([
+      { sourceId: 'src_pixiv', includeMerged: 'false', sort: 'name_asc', limit: '48', cursor: null },
+      {
+        sourceId: 'src_pixiv',
+        includeMerged: 'false',
+        sort: 'name_asc',
+        limit: '48',
+        cursor: 'next-page'
+      }
+    ]);
   });
 });
 
