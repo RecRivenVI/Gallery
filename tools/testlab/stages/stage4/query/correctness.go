@@ -4,6 +4,7 @@
 package query
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"strings"
@@ -79,7 +80,7 @@ func ptr[T any](v T) *T { return &v }
 // Source 的可见计数，而这类"期望值来源随语料形态变化"的判断只有拿到完整 manifest 才
 // 做得对。
 func RunStructuredFilterCorrectness(rep *report.Report, sess *environment.Session, manifest corpus.Manifest) {
-	libraryID, sourceID, creatorIDs, stats := manifest.LibraryID, manifest.SourceID, manifest.CreatorIDs, manifest.Stats
+	libraryID, sourceID, stats := manifest.LibraryID, manifest.SourceID, manifest.Stats
 	// 单 Source 语料下第一个 Source 就是全部可见作品；多 Source 语料下必须用该 Source
 	// 自己的可见计数，否则这条断言会在正确的产品行为上失败。
 	sourceVisibleCount := stats.VisibleN
@@ -121,14 +122,6 @@ func RunStructuredFilterCorrectness(rep *report.Report, sess *environment.Sessio
 	// 服务端不再叠加默认隐式条件，期望值必须用未排除 Hidden 的原始 HiddenCount。
 	check("filter/overlay.hidden=true", leaf("overlay.hidden", "eq", true), stats.HiddenCount, nil)
 	check("filter/overlay.progress gte 0.5", leaf("overlay.progress", "gte", 0.5), countProgressGTEVisible(stats.N, 0.5), nil)
-	// creator.id 过滤已知限制：该过滤路径通过 internal/creators.ResolveEquivalenceGroup
-	// 解析合并等价组，依赖 control.db 中存在对应 CanonicalCreator 行；本工具的批量
-	// 数据生成路径即使为自动化 smoke 建立 Library/Source，也不创建 CanonicalCreator
-	// 领域事实，因此不测试 creator.id，留给 media 场景（通过真实 API 创建 Creator）覆盖。
-	if len(creatorIDs) > 0 {
-		rep.Limitations = append(rep.Limitations, "本次未测试 filter/creator.id：批量合成数据集不建立 control.db CanonicalCreator 事实")
-	}
-
 	check("filter/AND(provider,tag)", all(leaf("provider.id", "eq", corpus.ProviderID(0)), leaf("tag", "eq", corpus.TagName(3))),
 		countAndProviderTagVisible(stats.N, 0, 3), nil)
 	check("filter/OR(two providers)", any_(leaf("provider.id", "eq", corpus.ProviderID(0)), leaf("provider.id", "eq", corpus.ProviderID(1))),
@@ -175,6 +168,61 @@ func RunStructuredFilterCorrectness(rep *report.Report, sess *environment.Sessio
 	} else {
 		rep.Add("filter/unknown operator rejected", true, "")
 	}
+}
+
+// RunCreatorFilterCorrectness 使用真实扫描建立的 control.db CanonicalCreator 与
+// Catalog publication 关系，补齐批量 catalog seed 无法单独证明的 creator.id 过滤。
+// Source 范围与 Creator ID 同时下发，保证这条 smoke 验证的是生产用户端实际使用的
+// 组合，而不是按展示名或路径做测试侧近似。
+func RunCreatorFilterCorrectness(rep *report.Report, sess *environment.Session, sourceID string, expectedCreators, expectedWorks int) {
+	if expectedCreators <= 0 || expectedWorks <= 0 || expectedWorks%expectedCreators != 0 {
+		rep.Add("filter/creator.id", false, fmt.Sprintf("非法夹具期望: creators=%d works=%d", expectedCreators, expectedWorks))
+		return
+	}
+	ctx := context.Background()
+	includeMerged := false
+	limit := 200
+	sortOrder := api.ListCreatorsParamsSortNameAsc
+	creators, err := sess.Client.ListCreatorsWithResponse(ctx, &api.ListCreatorsParams{
+		SourceId: &sourceID, IncludeMerged: &includeMerged, Sort: &sortOrder, Limit: &limit,
+	}, sess.SameOrigin)
+	if err != nil || creators.JSON200 == nil {
+		rep.Add("filter/creator.id", false, fmt.Sprintf("Creator 列表失败: err=%v status=%d", err, environment.StatusOf(creators)))
+		return
+	}
+	if len(creators.JSON200.Creators) != expectedCreators || creators.JSON200.NextCursor != nil {
+		rep.Add("filter/creator.id", false, fmt.Sprintf("Creator 数量=%d expected=%d nextCursor=%v works=%d", len(creators.JSON200.Creators), expectedCreators, creators.JSON200.NextCursor != nil, expectedWorks))
+		return
+	}
+
+	expectedPerCreator := expectedWorks / expectedCreators
+	seenWorks := make(map[string]struct{}, expectedWorks)
+	for _, creator := range creators.JSON200.Creators {
+		filter := filterJSON(leaf("creator.id", "eq", creator.EffectiveId))
+		works, listErr := listWorks(sess, api.ListWorksParams{SourceId: &sourceID, Filter: &filter, Limit: &limit})
+		if listErr != nil || works.JSON200 == nil {
+			rep.Add("filter/creator.id", false, fmt.Sprintf("作品查询失败: err=%v status=%d", listErr, environment.StatusOf(works)))
+			return
+		}
+		if works.JSON200.Total.Mode != api.Exact || works.JSON200.Total.Value == nil || int(*works.JSON200.Total.Value) != expectedPerCreator || len(works.JSON200.Works) != expectedPerCreator {
+			rep.Add("filter/creator.id", false, fmt.Sprintf("Creator total 非 exact 或分布错误: mode=%s works=%d expected=%d", works.JSON200.Total.Mode, len(works.JSON200.Works), expectedPerCreator))
+			return
+		}
+		for _, work := range works.JSON200.Works {
+			if work.Creator != creator.Name {
+				rep.Add("filter/creator.id", false, "Creator ID 查询返回了其它展示身份的 Work")
+				return
+			}
+			if _, duplicate := seenWorks[work.Id]; duplicate {
+				rep.Add("filter/creator.id", false, "不同 Creator 查询返回重复 Work")
+				return
+			}
+			seenWorks[work.Id] = struct{}{}
+		}
+	}
+
+	rep.Add("filter/creator.id", len(seenWorks) == expectedWorks,
+		fmt.Sprintf("creators=%d uniqueWorks=%d expected=%d", len(creators.JSON200.Creators), len(seenWorks), expectedWorks))
 }
 
 // 以下 count*Visible 辅助函数都按 corpus.ComputeStats 相同的确定性生成规则逐条

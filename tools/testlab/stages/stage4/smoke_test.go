@@ -47,6 +47,7 @@ var stage4QueryCursorFindingNames = []string{
 	"filter/NOT(media.kind=video)",
 	"filter/OR(two providers)",
 	"filter/bad value type rejected",
+	"filter/creator.id",
 	"filter/duplicate condition",
 	"filter/empty-all-rejected",
 	"filter/empty-any-rejected",
@@ -144,13 +145,7 @@ func TestStage4CorrectnessSmoke(t *testing.T) {
 	query.RunTotalTriStateCorrectness(queryReport, sess, manifest.Stats)
 	query.RunSortCorrectness(queryReport, sess)
 	query.RunCursorCorrectness(queryReport, sess)
-	assertReportPassed(t, queryReport)
-	assertExactFindingNames(t, queryReport, stage4QueryCursorFindingNames)
 	assertEverySourceIsQueryable(t, sess, manifest)
-	assertLimitations(t, queryReport, []string{"filter/creator.id"})
-	if err := queryReport.Save(filepath.Join(root, "stage4-query-cursor-smoke.json")); err != nil {
-		t.Fatalf("保存脱敏 query/cursor smoke 报告: %v", err)
-	}
 
 	mediaReport := &report.Report{
 		SchemaVersion: 2, Scenario: "stage4-media-smoke", Tier: "smoke",
@@ -164,6 +159,15 @@ func TestStage4CorrectnessSmoke(t *testing.T) {
 	sourceBefore, err := sourceguard.Walk(mediaSourceRoot)
 	if err != nil {
 		t.Fatalf("记录合成媒体 Source guard: %v", err)
+	}
+	// metadata 只提供展示名，没有可复用的稳定外部身份；即使名称三轮重复，12 个
+	// Source occurrence 仍应是 12 个不同 CanonicalCreator，不能按名称合并。
+	query.RunCreatorFilterCorrectness(queryReport, sess, sourceID, workCount, workCount)
+	assertReportPassed(t, queryReport)
+	assertExactFindingNames(t, queryReport, stage4QueryCursorFindingNames)
+	assertLimitations(t, queryReport, nil)
+	if err := queryReport.Save(filepath.Join(root, "stage4-query-cursor-smoke.json")); err != nil {
+		t.Fatalf("保存脱敏 query/cursor smoke 报告: %v", err)
 	}
 	media.RunMediaCorrectness(mediaReport, sess, libraryID, sourceID, workCount)
 	assertReportPassed(t, mediaReport)
