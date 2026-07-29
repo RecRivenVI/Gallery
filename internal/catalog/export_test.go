@@ -5,3 +5,14 @@ package catalog
 func AggregateCreatorSourceStatementForTest() string {
 	return aggregateCreatorSourceStatement
 }
+
+// AggregateCreatorSourceCandidateStatementForTest 暴露 Work/关系到持久窄候选的生产语句。
+func AggregateCreatorSourceCandidateStatementForTest() string {
+	return aggregateCreatorSourceCandidateStatement
+}
+
+// CreatorCoversSmallAllowedStatementForTest 暴露小 allowed 生产查询的执行计划。
+func CreatorCoversSmallAllowedStatementForTest() string { return creatorCoversSmallAllowedStatement }
+
+// CreatorCoversSmallDeniedStatementForTest 暴露小 deny 生产查询的执行计划。
+func CreatorCoversSmallDeniedStatementForTest() string { return creatorCoversSmallDeniedStatement }

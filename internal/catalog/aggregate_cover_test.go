@@ -27,7 +27,7 @@ func aggregateWork(sourceID, libraryID, workID, creatorID, creatorName string, p
 // 仅含该共享 Creator 的 Source A 会错误丢失自身封面。
 func TestAggregateCoversKeepSourceMediaWithinSource(t *testing.T) {
 	ctx := context.Background()
-	catalogStore, _ := newCandidateTestStore(t)
+	catalogStore, store := newCandidateTestStore(t)
 	stage := func(jobID, sourceID string, watermark int64, work catalog.WorkFact, media catalog.MediaFact) catalog.Publication {
 		t.Helper()
 		candidate, err := catalogStore.BeginCandidate(ctx, jobID, sourceID, watermark)
@@ -104,59 +104,83 @@ func TestAggregateCoversKeepSourceMediaWithinSource(t *testing.T) {
 			t.Fatalf("%s 空授权集合必须 fail-closed，得到 %#v", scopeKind, covers)
 		}
 	}
-}
 
-// TestAggregateCreatorSourcePlanMaterializesCandidatesOnce 对生产 SQL 建立结构性计划门禁：
-// Work/Creator 关系与 WorkProjection 的基础连接只能出现在 candidate_covers 物化阶段一次，Creator
-// 和 Source 两个窗口随后各自扫描这份窄结果。固定墙钟不适合作为可移植单元测试，因此这里只锁定
-// 渐进结构，不对执行毫秒数作断言。
-func TestAggregateCreatorSourcePlanMaterializesCandidatesOnce(t *testing.T) {
-	ctx := context.Background()
-	_, store := newCandidateTestStore(t)
-	statement := "EXPLAIN QUERY PLAN " + catalog.AggregateCreatorSourceStatementForTest()
-	rows, err := store.Catalog.SQL().QueryContext(ctx, statement, "cat-plan", "ovr-plan")
+	rows, err := store.Catalog.SQL().QueryContext(ctx, `SELECT source_id, cover_media_id, work_id
+FROM creator_source_cover_projections
+WHERE catalog_revision_id=? AND overlay_revision_id=? AND creator_id='creator-shared'
+ORDER BY source_id`, publication.CatalogRevisionID, publication.OverlayRevisionID)
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer rows.Close()
-
-	var details []string
+	var candidates []string
 	for rows.Next() {
-		var id, parent, unused int
-		var detail string
-		if err := rows.Scan(&id, &parent, &unused, &detail); err != nil {
+		var sourceID, mediaID, workID string
+		if err := rows.Scan(&sourceID, &mediaID, &workID); err != nil {
 			t.Fatal(err)
 		}
-		details = append(details, detail)
+		candidates = append(candidates, sourceID+"/"+mediaID+"/"+workID)
 	}
 	if err := rows.Err(); err != nil {
 		t.Fatal(err)
 	}
-	plan := strings.Join(details, "\n")
+	if strings.Join(candidates, ",") != "source-a/work-a-m1/work-a,source-b/work-b-m1/work-b" {
+		t.Fatalf("Creator/Source 持久窄候选错误: %v", candidates)
+	}
+}
 
-	countMatching := func(needle string) int {
-		count := 0
-		for _, detail := range details {
-			if strings.Contains(detail, needle) {
-				count++
-			}
+// TestAggregateCreatorSourcePlanMaterializesCandidatesOnce 对生产 SQL 建立结构性计划门禁：
+// Work/Creator 关系与 WorkProjection 的基础连接只允许出现在持久窄候选构建阶段一次，Creator
+// 和 Source 两个窗口随后只扫描 creator_source_cover_projections。固定墙钟不适合作为可移植
+// 单元测试，因此这里只锁定渐进结构，不对执行毫秒数作断言。
+func TestAggregateCreatorSourcePlanMaterializesCandidatesOnce(t *testing.T) {
+	ctx := context.Background()
+	_, store := newCandidateTestStore(t)
+	explain := func(statement string, args ...any) []string {
+		t.Helper()
+		rows, err := store.Catalog.SQL().QueryContext(ctx, "EXPLAIN QUERY PLAN "+statement, args...)
+		if err != nil {
+			t.Fatal(err)
 		}
-		return count
+		defer rows.Close()
+		var details []string
+		for rows.Next() {
+			var id, parent, unused int
+			var detail string
+			if err := rows.Scan(&id, &parent, &unused, &detail); err != nil {
+				t.Fatal(err)
+			}
+			details = append(details, detail)
+		}
+		if err := rows.Err(); err != nil {
+			t.Fatal(err)
+		}
+		return details
 	}
-	if countMatching("MATERIALIZE candidate_covers") != 1 {
-		t.Fatalf("候选集未恰好物化一次:\n%s", plan)
+
+	candidateDetails := explain(catalog.AggregateCreatorSourceCandidateStatementForTest(), "cat-plan", "ovr-plan")
+	candidatePlan := strings.Join(candidateDetails, "\n")
+	if got := countTableAccess(candidateDetails, "r"); got != 1 {
+		t.Fatalf("候选构建的 work_creator_relations 访问次数 = %d want 1:\n%s", got, candidatePlan)
 	}
-	if got := countTableAccess(details, "r"); got != 1 {
-		t.Fatalf("work_creator_relations 访问次数 = %d want 1:\n%s", got, plan)
+	if got := countTableAccess(candidateDetails, "w"); got != 1 {
+		t.Fatalf("候选构建的 work_projections 访问次数 = %d want 1:\n%s", got, candidatePlan)
 	}
-	if got := countTableAccess(details, "w"); got != 1 {
-		t.Fatalf("work_projections 访问次数 = %d want 1:\n%s", got, plan)
+	if strings.Contains(catalog.AggregateCreatorSourceCandidateStatementForTest(), "aggregate_cover_projections AS a") {
+		t.Fatal("候选构建恢复了从全局 Creator 聚合行向全部作品二次扇出的路径")
 	}
-	if countMatching("SCAN candidate_covers") != 2 {
-		t.Fatalf("两个窗口未各自复用物化候选集:\n%s", plan)
+
+	aggregateStatement := catalog.AggregateCreatorSourceStatementForTest()
+	aggregateDetails := explain(aggregateStatement, "cat-plan", "ovr-plan", "cat-plan", "ovr-plan")
+	aggregatePlan := strings.Join(aggregateDetails, "\n")
+	if strings.Contains(aggregateStatement, "work_projections") || strings.Contains(aggregateStatement, "work_creator_relations") {
+		t.Fatal("Creator/Source 全局聚合重新引入了 WorkProjection 或 Creator 关系")
 	}
-	if strings.Contains(catalog.AggregateCreatorSourceStatementForTest(), "aggregate_cover_projections AS a") {
-		t.Fatal("生产 SQL 恢复了从 Creator 聚合行向全部作品二次扇出的路径")
+	if got := strings.Count(aggregateStatement, "FROM creator_source_cover_projections"); got != 2 {
+		t.Fatalf("Creator/Source 窗口读取窄候选次数 = %d want 2", got)
+	}
+	if got := countTableAccess(aggregateDetails, "creator_source_cover_projections"); got != 2 {
+		t.Fatalf("生产计划的窄候选访问次数 = %d want 2:\n%s", got, aggregatePlan)
 	}
 }
 
@@ -172,6 +196,52 @@ func countTableAccess(details []string, alias string) int {
 		}
 	}
 	return count
+}
+
+// TestAuthorizedAggregateCoverPlansStayOnNarrowProjection 锁定请求期授权重选只读取 v20
+// 窄投影：小 allowed 必须从 Source 索引驱动，小 deny 必须沿 Creator rank 索引做相关
+// LIMIT 1；两条路径都不得重新连接 WorkProjection 或 Creator 关系。
+func TestAuthorizedAggregateCoverPlansStayOnNarrowProjection(t *testing.T) {
+	_, store := newCandidateTestStore(t)
+	for _, test := range []struct {
+		name, statement, index string
+		args                   []any
+	}{
+		{"small-allowed", catalog.CreatorCoversSmallAllowedStatementForTest(), "creator_source_cover_source_idx",
+			[]any{`["source-a"]`, "cat-plan", "ovr-plan"}},
+		{"small-denied", catalog.CreatorCoversSmallDeniedStatementForTest(), "creator_source_cover_rank_idx",
+			[]any{`["source-a"]`, "cat-plan", "ovr-plan"}},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			rows, err := store.Catalog.SQL().Query("EXPLAIN QUERY PLAN "+test.statement, test.args...)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer rows.Close()
+			var details []string
+			for rows.Next() {
+				var id, parent, unused int
+				var detail string
+				if err := rows.Scan(&id, &parent, &unused, &detail); err != nil {
+					t.Fatal(err)
+				}
+				details = append(details, detail)
+			}
+			if err := rows.Err(); err != nil {
+				t.Fatal(err)
+			}
+			plan := strings.Join(details, "\n")
+			if !strings.Contains(plan, test.index) {
+				t.Fatalf("生产计划未使用 %s:\n%s", test.index, plan)
+			}
+			if strings.Contains(test.statement, "work_projections") || strings.Contains(test.statement, "work_creator_relations") {
+				t.Fatalf("授权重选重新引入宽事实表:\n%s", test.statement)
+			}
+			if test.name != "small-allowed" && !strings.Contains(plan, "CORRELATED SCALAR SUBQUERY") {
+				t.Fatalf("小 deny 未按 Creator 执行相关 LIMIT 1:\n%s", plan)
+			}
+		})
+	}
 }
 
 // TestAggregateCoversCascadeThroughCreatorSourceAndLibrary 覆盖三级聚合的核心语义：

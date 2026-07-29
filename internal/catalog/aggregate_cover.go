@@ -56,28 +56,39 @@ func computeAggregateCovers(ctx context.Context, tx *sql.Tx, catalogRevisionID, 
 WHERE catalog_revision_id=? AND overlay_revision_id=?`, catalogRevisionID, overlayRevisionID); err != nil {
 		return fault.New(fault.CodeInternal, true, err)
 	}
+	if _, err := tx.ExecContext(ctx, `DELETE FROM creator_source_cover_projections
+WHERE catalog_revision_id=? AND overlay_revision_id=?`, catalogRevisionID, overlayRevisionID); err != nil {
+		return fault.New(fault.CodeInternal, true, err)
+	}
 
-	// Creator 与 Source 两级共用同一份窄候选集。MATERIALIZED 是这里的结构性性能约束：关系表与
-	// WorkProjection 的连接只执行一次，两个窗口各自扫描窄临时结果；不得把它改回「先生成 Creator
-	// 聚合，再从每个 Creator 扇出其全部作品」的二次关系扫描。
-	//
-	// Source 排序的 (published_at_ns, creator_id, work_id) 与「先为 Source 内每个 Creator 选其最新
-	// Work，再从这些 Creator 中选最新者」严格等价，但无需建立只服务本次发布的中间持久实体。
-	if _, err := tx.ExecContext(ctx, aggregateCreatorSourceStatement,
+	// 先把关系表与 WorkProjection 恰好连接一次，持久化每个 Creator/Source 内的唯一最佳
+	// 候选。它既是全局聚合的窄输入，也是逐主体授权回退的 publication 冻结事实。
+	if _, err := tx.ExecContext(ctx, aggregateCreatorSourceCandidateStatement,
 		catalogRevisionID, overlayRevisionID); err != nil {
+		return fault.New(fault.CodeInternal, true, err)
+	}
+
+	// Creator 与 Source 两级共用上一步的窄候选，不再连接宽 WorkProjection。Source 排序的
+	// (published_at_ns, creator_id, work_id) 与「先为 Source 内每个 Creator 选其最新 Work，
+	// 再从这些 Creator 中选最新者」严格等价。
+	if _, err := tx.ExecContext(ctx, aggregateCreatorSourceStatement,
+		catalogRevisionID, overlayRevisionID, catalogRevisionID, overlayRevisionID); err != nil {
 		return fault.New(fault.CodeInternal, true, err)
 	}
 
 	// 资料库级：取该 Library 下最新的**平台**。同样复用上一步的结果。
 	if _, err := tx.ExecContext(ctx, `INSERT INTO aggregate_cover_projections
-(catalog_revision_id, overlay_revision_id, scope_kind, scope_id, cover_media_id, published_at_ns)
-SELECT catalog_revision_id, overlay_revision_id, 'library', library_id, cover_media_id, published_at_ns
+(catalog_revision_id, overlay_revision_id, scope_kind, scope_id,
+ cover_media_id, published_at_ns, source_id)
+SELECT catalog_revision_id, overlay_revision_id, 'library', library_id,
+       cover_media_id, published_at_ns, source_id
 FROM (
     SELECT a.catalog_revision_id,
            a.overlay_revision_id,
            m.library_id,
            a.cover_media_id,
            a.published_at_ns,
+           a.source_id,
            row_number() OVER (
                PARTITION BY a.catalog_revision_id, a.overlay_revision_id, m.library_id
                ORDER BY a.published_at_ns DESC, a.scope_id DESC
@@ -94,16 +105,25 @@ WHERE rank_in_scope = 1`, catalogRevisionID, overlayRevisionID); err != nil {
 	return nil
 }
 
-// aggregateCreatorSourceStatement 同时生成 Creator 与 Source 两级聚合封面。保持为包级常量，
-// 让测试可以直接对生产 SQL 执行 EXPLAIN QUERY PLAN，避免用一份手写近似 SQL 产生假保护。
-const aggregateCreatorSourceStatement = `WITH candidate_covers AS MATERIALIZED (
+// aggregateCreatorSourceCandidateStatement 只连接一次 Work/Creator 基础事实，并把每个
+// Creator/Source 内的最佳 Work 收窄为一行。保持为包级常量供生产计划测试直接检查。
+const aggregateCreatorSourceCandidateStatement = `INSERT INTO creator_source_cover_projections
+(catalog_revision_id, overlay_revision_id, creator_id, source_id,
+ cover_media_id, published_at_ns, work_id)
+SELECT catalog_revision_id, overlay_revision_id, creator_id, source_id,
+       cover_media_id, published_at_ns, work_id
+FROM (
     SELECT r.catalog_revision_id,
            r.overlay_revision_id,
            r.creator_id,
            w.source_id,
-           w.work_id,
            w.cover_media_id,
-           w.published_at_ns
+           w.published_at_ns,
+           w.work_id,
+           row_number() OVER (
+               PARTITION BY r.catalog_revision_id, r.overlay_revision_id, r.creator_id, w.source_id
+               ORDER BY w.published_at_ns DESC, w.work_id DESC
+           ) AS rank_in_scope
     FROM work_creator_relations AS r
     JOIN work_projections AS w
       ON w.catalog_revision_id = r.catalog_revision_id
@@ -112,18 +132,24 @@ const aggregateCreatorSourceStatement = `WITH candidate_covers AS MATERIALIZED (
     WHERE r.catalog_revision_id = ?
       AND r.overlay_revision_id = ?
       AND w.cover_media_id <> ''
-),
-creator_ranked AS (
+)
+WHERE rank_in_scope = 1`
+
+// aggregateCreatorSourceStatement 从持久窄候选同时生成 Creator 与 Source 两级聚合。
+// 不得把 WorkProjection 或 work_creator_relations 重新引入这一步。
+const aggregateCreatorSourceStatement = `WITH creator_ranked AS (
     SELECT catalog_revision_id,
            overlay_revision_id,
            creator_id AS scope_id,
            cover_media_id,
            published_at_ns,
+           source_id,
            row_number() OVER (
                PARTITION BY catalog_revision_id, overlay_revision_id, creator_id
                ORDER BY published_at_ns DESC, work_id DESC
            ) AS rank_in_scope
-    FROM candidate_covers
+    FROM creator_source_cover_projections
+    WHERE catalog_revision_id=? AND overlay_revision_id=?
 ),
 source_ranked AS (
     SELECT catalog_revision_id,
@@ -131,19 +157,24 @@ source_ranked AS (
            source_id AS scope_id,
            cover_media_id,
            published_at_ns,
+           source_id,
            row_number() OVER (
                PARTITION BY catalog_revision_id, overlay_revision_id, source_id
                ORDER BY published_at_ns DESC, creator_id DESC, work_id DESC
            ) AS rank_in_scope
-    FROM candidate_covers
+    FROM creator_source_cover_projections
+    WHERE catalog_revision_id=? AND overlay_revision_id=?
 )
 INSERT INTO aggregate_cover_projections
-(catalog_revision_id, overlay_revision_id, scope_kind, scope_id, cover_media_id, published_at_ns)
-SELECT catalog_revision_id, overlay_revision_id, 'creator', scope_id, cover_media_id, published_at_ns
+(catalog_revision_id, overlay_revision_id, scope_kind, scope_id,
+ cover_media_id, published_at_ns, source_id)
+SELECT catalog_revision_id, overlay_revision_id, 'creator', scope_id,
+       cover_media_id, published_at_ns, source_id
 FROM creator_ranked
 WHERE rank_in_scope = 1
 UNION ALL
-SELECT catalog_revision_id, overlay_revision_id, 'source', scope_id, cover_media_id, published_at_ns
+SELECT catalog_revision_id, overlay_revision_id, 'source', scope_id,
+       cover_media_id, published_at_ns, source_id
 FROM source_ranked
 WHERE rank_in_scope = 1`
 
@@ -240,6 +271,9 @@ func (s *Store) AggregateCoversForSourcesAt(ctx context.Context, publicationID, 
 	if len(sourceIDs) == 0 {
 		return result, nil
 	}
+	if scopeKind == AggregateScopeCreator {
+		return s.creatorAggregateCoversForSourcesAt(ctx, publication, sourceIDs)
+	}
 	sourceIDsJSON, err := json.Marshal(sourceIDs)
 	if err != nil {
 		return nil, fault.New(fault.CodeInternal, true, err)
@@ -247,31 +281,9 @@ func (s *Store) AggregateCoversForSourcesAt(ctx context.Context, publicationID, 
 
 	var statement string
 	switch scopeKind {
-	case AggregateScopeCreator:
-		statement = `WITH allowed_sources(source_id) AS (
-    SELECT CAST(value AS TEXT) FROM json_each(?)
-), ranked AS (
-    SELECT r.creator_id AS scope_id,
-           w.cover_media_id,
-           w.published_at_ns,
-           row_number() OVER (
-               PARTITION BY r.creator_id
-               ORDER BY w.published_at_ns DESC, w.work_id DESC
-           ) AS rank_in_scope
-    FROM work_creator_relations AS r
-    JOIN work_projections AS w
-      ON w.catalog_revision_id = r.catalog_revision_id
-     AND w.overlay_revision_id = r.overlay_revision_id
-     AND w.work_id = r.work_id
-    JOIN allowed_sources AS a ON a.source_id = w.source_id
-    WHERE r.catalog_revision_id=? AND r.overlay_revision_id=? AND w.cover_media_id<>''
-)
-SELECT scope_id, cover_media_id, published_at_ns
-FROM ranked WHERE rank_in_scope=1
-ORDER BY scope_id`
 	case AggregateScopeLibrary:
 		statement = `WITH allowed_sources(source_id) AS (
-    SELECT CAST(value AS TEXT) FROM json_each(?)
+    SELECT DISTINCT CAST(value AS TEXT) FROM json_each(?)
 ), ranked AS (
     SELECT m.library_id AS scope_id,
            a.cover_media_id,
@@ -310,3 +322,91 @@ ORDER BY scope_id`
 	}
 	return result, nil
 }
+
+// creatorAggregateCoversForSourcesAt 只读取 publication 持久化的 Creator/Source 窄候选。
+// 小 allowed 集合从 Source 索引驱动后做窄窗口；小 deny 集合直接复用仍获授权的
+// 全局胜出项，只为被拒绝的 Creator 沿正式 rank 索引寻找第一条允许候选。
+func (s *Store) creatorAggregateCoversForSourcesAt(ctx context.Context, publication Publication, sourceIDs []string) (map[string]AggregateCover, error) {
+	sourceIDsJSON, err := json.Marshal(sourceIDs)
+	if err != nil {
+		return nil, fault.New(fault.CodeInternal, true, err)
+	}
+	var totalSources int
+	if err := s.db.QueryRowContext(ctx, `SELECT count(*) FROM catalog_revision_sources
+WHERE catalog_revision_id=?`, publication.CatalogRevisionID).Scan(&totalSources); err != nil {
+		return nil, fault.New(fault.CodeInternal, true, err)
+	}
+	result := make(map[string]AggregateCover)
+	statement := creatorCoversSmallAllowedStatement
+	if len(sourceIDs)*2 > totalSources {
+		statement = creatorCoversSmallDeniedStatement
+	}
+	rows, err := s.db.QueryContext(ctx, statement, string(sourceIDsJSON), publication.CatalogRevisionID, publication.OverlayRevisionID)
+	if err != nil {
+		return nil, fault.New(fault.CodeInternal, true, err)
+	}
+	defer rows.Close()
+	for rows.Next() {
+		item := AggregateCover{ScopeKind: AggregateScopeCreator}
+		if err := rows.Scan(&item.ScopeID, &item.CoverMediaID, &item.PublishedAtNanos); err != nil {
+			return nil, fault.New(fault.CodeInternal, true, err)
+		}
+		result[item.ScopeID] = item
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fault.New(fault.CodeInternal, true, err)
+	}
+	return result, nil
+}
+
+const creatorCoversSmallAllowedStatement = `WITH allowed_sources(source_id) AS MATERIALIZED (
+    SELECT DISTINCT CAST(value AS TEXT) FROM json_each(?)
+), ranked AS (
+    SELECT c.creator_id AS scope_id,
+           c.cover_media_id,
+           c.published_at_ns,
+           row_number() OVER (
+               PARTITION BY c.creator_id
+               ORDER BY c.published_at_ns DESC, c.work_id DESC
+           ) AS rank_in_scope
+    FROM allowed_sources AS a
+    CROSS JOIN creator_source_cover_projections AS c INDEXED BY creator_source_cover_source_idx
+    WHERE c.catalog_revision_id=? AND c.overlay_revision_id=? AND c.source_id=a.source_id
+)
+SELECT scope_id, cover_media_id, published_at_ns
+FROM ranked WHERE rank_in_scope=1
+ORDER BY scope_id`
+
+const creatorCoversSmallDeniedStatement = `WITH allowed_sources(source_id) AS MATERIALIZED (
+    SELECT DISTINCT CAST(value AS TEXT) FROM json_each(?)
+), global_covers AS MATERIALIZED (
+    SELECT catalog_revision_id,
+           overlay_revision_id,
+           scope_id,
+           cover_media_id,
+           published_at_ns,
+           source_id
+    FROM aggregate_cover_projections
+    WHERE catalog_revision_id=? AND overlay_revision_id=? AND scope_kind='creator'
+), affected_covers AS MATERIALIZED (
+    SELECT *
+    FROM global_covers
+    WHERE source_id NOT IN (SELECT source_id FROM allowed_sources)
+)
+SELECT scope_id, cover_media_id, published_at_ns
+FROM global_covers
+WHERE source_id IN (SELECT source_id FROM allowed_sources)
+UNION ALL
+SELECT a.scope_id, c.cover_media_id, c.published_at_ns
+FROM affected_covers AS a
+JOIN creator_source_cover_projections AS c ON c.rowid = (
+    SELECT candidate.rowid
+    FROM creator_source_cover_projections AS candidate INDEXED BY creator_source_cover_rank_idx
+    WHERE candidate.catalog_revision_id=a.catalog_revision_id
+      AND candidate.overlay_revision_id=a.overlay_revision_id
+      AND candidate.creator_id=a.scope_id
+      AND candidate.source_id IN (SELECT source_id FROM allowed_sources)
+    ORDER BY candidate.published_at_ns DESC, candidate.work_id DESC
+    LIMIT 1
+)
+ORDER BY scope_id`
