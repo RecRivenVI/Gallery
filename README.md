@@ -105,6 +105,8 @@ EV-94 已完成真实补证：首轮 Scan/Attempt 在 45 秒边界同秒 cancell
 
 EV-96 已建立 publication 性能执行器：十 Source 加权语料可精确测量全局 1%/10%/50% 变化，覆盖生产 Store 的完整候选、验证、发布、GC/Checkpoint、历史快照与空间报告。但初版虽声明每 Work 两条 Creator 关系，实际只写入一条；旧 1,000/100,000 Work 数字因此只保留为容量与工具证据。EV-97 已真正实装并核对每 Work 两条关系，增加 fail-closed 原子断点续跑；EV-98 随后以 2 核亲和性完成纠正后 100,000 Work/10 Source 预检，全局三档 3/3、0 failure，每轮实测 200,000 条 WorkCreator 关系，同环境完成报告 `-resume` 退出码 0；EV-99 又将十个权威目标来源代号和实测 `goMaxProcs` 纳入报告/续跑指纹；EV-100 再让通用 Query Reference seed/probe 强制同一 500k/十目标来源/双关系形状，并在计时前验证实际 active publication 与 manifest 一致；EV-101 又把 63 组合 Query 矩阵改为只复用完整成功前缀的原子分窗续跑，并把矩阵、缓存、publication 与实测环境共同封入报告身份。正式 500,000 多样本、并发/冷缓存与 Degradation 仍未执行，因此 Reference Performance/API Freeze Gate 继续保持未通过。
 
+EV-102 部分采纳新增的共享动效语言基座：双入口共用重新选定的四档时序和曲线，用户端同范围查询在新快照到达前保留不可交互旧视觉，并以稳定作品身份完成有预算、可中断且无残留的网格交接；媒体在实际解码后于固定槽位显现，灯箱拖动/捏合保持跟手，管理端只增加局部状态与浮层反馈。当前作品 API 是 keyset cursor，数量还可能只是下限，因此没有伪造精确页码滑轨。Chromium/Firefox mock smoke 20/20 与两浏览器各 21 项隔离真实 `galleryd` 完整链通过，但物理移动设备、人工屏幕阅读器和正式 Web Gate 仍未完成。
+
 详细依据见 [PROJECT_STATUS.md](./PROJECT_STATUS.md)。
 
 ## 仓库导航

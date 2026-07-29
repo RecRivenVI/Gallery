@@ -30,7 +30,7 @@
   box-shadow: var(--shadow-md);
   /* 未聚焦时移出视口而不是 display:none，否则它不在 Tab 序里，跳转链接就失去意义。 */
   transform: translateY(-200%);
-  transition: transform var(--motion-fast) ease-out;
+  transition: transform var(--motion-feedback) var(--ease-feedback);
 }
 
 .ui-skip-link:focus-visible {
@@ -56,8 +56,8 @@
   white-space: nowrap;
   cursor: pointer;
   transition:
-    background-color var(--motion-fast) ease-out,
-    border-color var(--motion-fast) ease-out;
+    background-color var(--motion-feedback) var(--ease-feedback),
+    border-color var(--motion-feedback) var(--ease-feedback);
 }
 
 .ui-button--primary {
@@ -246,7 +246,9 @@
   border: 2px solid var(--color-border);
   border-radius: var(--radius-sm);
   background: var(--color-surface);
-  transition: background-color var(--motion-fast) ease-out;
+  transition:
+    background-color var(--motion-feedback) var(--ease-feedback),
+    border-color var(--motion-feedback) var(--ease-feedback);
 }
 
 .ui-checkbox[data-selected] .ui-checkbox__box,
@@ -280,7 +282,9 @@
   border: 1px solid var(--color-border);
   border-radius: var(--radius-full);
   background: var(--color-surface);
-  transition: background-color var(--motion-fast) ease-out;
+  transition:
+    background-color var(--motion-feedback) var(--ease-feedback),
+    border-color var(--motion-feedback) var(--ease-feedback);
 }
 
 .ui-switch[data-selected] .ui-switch__track {
@@ -293,7 +297,7 @@
   height: 1rem;
   border-radius: var(--radius-full);
   background: var(--color-border);
-  transition: transform var(--motion-fast) ease-out;
+  transition: transform var(--motion-feedback) var(--ease-feedback);
 }
 
 .ui-switch[data-selected] .ui-switch__thumb {
@@ -313,6 +317,14 @@
   background: var(--color-overlay);
 }
 
+.ui-modal-overlay[data-entering] {
+  animation: ui-overlay-in var(--motion-state) var(--ease-state);
+}
+
+.ui-modal-overlay[data-exiting] {
+  animation: ui-overlay-out var(--motion-feedback) var(--ease-exit);
+}
+
 .ui-modal {
   width: min(100%, 34rem);
   max-height: min(90vh, 48rem);
@@ -322,6 +334,14 @@
   border: 1px solid var(--color-border);
   border-radius: var(--radius-lg);
   box-shadow: var(--shadow-lg);
+}
+
+.ui-modal[data-entering] {
+  animation: ui-surface-in var(--motion-structure) var(--ease-structure);
+}
+
+.ui-modal[data-exiting] {
+  animation: ui-surface-out var(--motion-feedback) var(--ease-exit);
 }
 
 .ui-modal--sm {
@@ -369,6 +389,16 @@
   border: 1px solid var(--color-border);
   border-radius: var(--radius-md);
   box-shadow: var(--shadow-md);
+}
+
+.ui-popover[data-entering],
+.ui-tooltip[data-entering] {
+  animation: ui-popover-in var(--motion-state) var(--ease-structure);
+}
+
+.ui-popover[data-exiting],
+.ui-tooltip[data-exiting] {
+  animation: ui-popover-out var(--motion-feedback) var(--ease-exit);
 }
 
 .ui-listbox {
@@ -424,6 +454,56 @@
   box-shadow: var(--shadow-md);
   font-size: var(--text-xs);
   line-height: var(--leading-normal);
+}
+
+/* 有身份列表的离场副本只承担视觉交接，不能建立新的交互层或无障碍身份。 */
+.ui-motion-ghost {
+  z-index: 60;
+  margin: 0;
+  pointer-events: none;
+  user-select: none;
+  contain: paint;
+  transform-origin: center;
+}
+
+@keyframes ui-overlay-in {
+  from {
+    opacity: 0;
+  }
+}
+
+@keyframes ui-overlay-out {
+  to {
+    opacity: 0;
+  }
+}
+
+@keyframes ui-surface-in {
+  from {
+    opacity: 0;
+    transform: translate3d(0, var(--space-2), 0) scale(0.99);
+  }
+}
+
+@keyframes ui-surface-out {
+  to {
+    opacity: 0;
+    transform: translate3d(0, var(--space-1), 0) scale(0.995);
+  }
+}
+
+@keyframes ui-popover-in {
+  from {
+    opacity: 0;
+    transform: translate3d(0, calc(0rem - var(--space-1)), 0);
+  }
+}
+
+@keyframes ui-popover-out {
+  to {
+    opacity: 0;
+    transform: translate3d(0, calc(0rem - var(--space-1)), 0);
+  }
 }
 
 /* ——————————————————————————— Tabs ——————————————————————————— */

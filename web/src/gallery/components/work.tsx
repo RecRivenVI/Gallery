@@ -13,9 +13,10 @@
 
 import type { ReactNode } from 'react';
 import { Link } from 'react-router-dom';
-import { Badge, IconButton, useToast } from '../../design';
+import { Badge, IconButton, useKeyedLayoutMotion, useToast } from '../../design';
 import { describeError } from '../../shared/errors';
 import { useCapability } from '../../shared/session';
+import { useTheme } from '../../shared/theme';
 import {
   formatCreator,
   formatPublishedAt,
@@ -177,13 +178,27 @@ export interface WorkGridProps {
   works: readonly PublishedWork[];
   timeZone?: string;
   authorLabel?: string;
+  /** 旧快照只用于视觉交接，必须退出点击、焦点和无障碍树。 */
+  isVisualPlaceholder?: boolean;
 }
 
-export function WorkGrid({ works, timeZone, authorLabel }: WorkGridProps) {
+export function WorkGrid({ works, timeZone, authorLabel, isVisualPlaceholder = false }: WorkGridProps) {
+  const { reducedMotion } = useTheme();
+  const motion = useKeyedLayoutMotion(
+    works.map((work) => work.id),
+    { reducedMotion }
+  );
+
   return (
-    <div className="gal-grid" role="list">
+    <div
+      className="gal-grid"
+      role="list"
+      inert={isVisualPlaceholder}
+      aria-hidden={isVisualPlaceholder ? true : undefined}
+      data-replacing={isVisualPlaceholder ? true : undefined}
+    >
       {works.map((work) => (
-        <div key={work.id} role="listitem" className="gal-grid__cell">
+        <div key={work.id} ref={motion.itemRef(work.id)} role="listitem" className="gal-grid__cell">
           <WorkCard work={work} timeZone={timeZone} authorLabel={authorLabel} />
         </div>
       ))}

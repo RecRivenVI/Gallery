@@ -49,6 +49,7 @@ function clampScale(value: number): number {
  */
 function ImageStage({ media, publicationId }: { media: PublishedMedia; publicationId: string }) {
   const [transform, setTransform] = useState<Transform>(IDENTITY);
+  const [directManipulation, setDirectManipulation] = useState(false);
   const stageRef = useRef<HTMLDivElement>(null);
   const pointers = useRef(new Map<number, { x: number; y: number }>());
   const pinchDistance = useRef<number | null>(null);
@@ -56,6 +57,7 @@ function ImageStage({ media, publicationId }: { media: PublishedMedia; publicati
 
   useEffect(() => {
     setTransform(IDENTITY);
+    setDirectManipulation(false);
   }, [media.id]);
 
   const zoomBy = useCallback((factor: number) => {
@@ -95,6 +97,7 @@ function ImageStage({ media, publicationId }: { media: PublishedMedia; publicati
       ref={stageRef}
       className="gal-viewer__stage"
       onPointerDown={(event) => {
+        setDirectManipulation(true);
         pointers.current.set(event.pointerId, { x: event.clientX, y: event.clientY });
         event.currentTarget.setPointerCapture(event.pointerId);
         pinchDistance.current = distanceBetweenPointers();
@@ -124,10 +127,12 @@ function ImageStage({ media, publicationId }: { media: PublishedMedia; publicati
       onPointerUp={(event) => {
         pointers.current.delete(event.pointerId);
         pinchDistance.current = null;
+        if (pointers.current.size === 0) setDirectManipulation(false);
       }}
       onPointerCancel={(event) => {
         pointers.current.delete(event.pointerId);
         pinchDistance.current = null;
+        if (pointers.current.size === 0) setDirectManipulation(false);
       }}
       onDoubleClick={() => {
         setTransform((current) =>
@@ -139,7 +144,10 @@ function ImageStage({ media, publicationId }: { media: PublishedMedia; publicati
         className="gal-viewer__canvas"
         style={{
           transform: `translate(${transform.x}px, ${transform.y}px) scale(${transform.scale})`,
-          transition: reducedMotion ? 'none' : `transform var(--motion-fast) ease-out`
+          transition:
+            reducedMotion || directManipulation
+              ? 'none'
+              : `transform var(--motion-state) var(--ease-structure)`
         }}
       >
         <MediaImage

@@ -137,6 +137,7 @@ export function WorkBrowser({ scope, presentation, heading, emptyDescription }: 
   );
 
   const params: WorkQueryParams = {
+    scopeKey: JSON.stringify([scope?.sourceId ?? null, scope?.libraryId ?? null, scope?.creatorId ?? null]),
     q,
     tag,
     sourceId: scope?.sourceId,
@@ -300,7 +301,12 @@ export function WorkBrowser({ scope, presentation, heading, emptyDescription }: 
         />
       ) : (
         <>
-          <WorkGrid works={list.works} timeZone={timeZone} authorLabel={authorLabel} />
+          <WorkGrid
+            works={list.works}
+            timeZone={timeZone}
+            authorLabel={authorLabel}
+            isVisualPlaceholder={list.isPlaceholderData}
+          />
           <div className="gal-browser__more" ref={sentinelRef}>
             {list.hasNextPage ? (
               <Button variant="secondary" isPending={list.isFetchingNextPage} onPress={list.fetchNextPage}>

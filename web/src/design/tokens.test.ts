@@ -53,6 +53,14 @@ const REQUIRED_TOKENS = [
   '--shadow-sm',
   '--shadow-md',
   '--shadow-lg',
+  '--motion-direct',
+  '--motion-feedback',
+  '--motion-state',
+  '--motion-structure',
+  '--ease-feedback',
+  '--ease-state',
+  '--ease-structure',
+  '--ease-exit',
   '--motion-fast',
   '--motion-base',
   '--motion-slow',
@@ -119,11 +127,19 @@ describe('tokens.css', () => {
     expect(block).toContain('--control-height: 2.75rem');
   });
 
-  it('减少动效时三个动效 token 全部归零', () => {
+  it('减少动效时全部时长 token 归零', () => {
     const start = tokens.indexOf('@media (prefers-reduced-motion: reduce)');
     expect(start).toBeGreaterThanOrEqual(0);
     const block = tokens.slice(start);
-    for (const name of ['--motion-fast', '--motion-base', '--motion-slow']) {
+    for (const name of [
+      '--motion-direct',
+      '--motion-feedback',
+      '--motion-state',
+      '--motion-structure',
+      '--motion-fast',
+      '--motion-base',
+      '--motion-slow'
+    ]) {
       expect(block).toContain(`${name}: 0ms`);
     }
   });

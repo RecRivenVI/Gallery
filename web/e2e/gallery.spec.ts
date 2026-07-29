@@ -265,6 +265,23 @@ test('主题选择跨两个入口共享 @smoke', async ({ page }) => {
   await expect(page.locator('html')).toHaveAttribute('data-theme', 'dark');
 });
 
+test('管理端只使用局部状态过渡并尊重减弱动画 @smoke', async ({ page }) => {
+  await page.goto('/manage');
+  const navigation = page.locator('.manage-nav__link').first();
+  await expect(navigation).toBeVisible();
+  expect(
+    await navigation.evaluate((element) => Number.parseFloat(getComputedStyle(element).transitionDuration))
+  ).toBeGreaterThan(0);
+
+  await page.emulateMedia({ reducedMotion: 'reduce' });
+  await expect
+    .poll(() =>
+      navigation.evaluate((element) => Number.parseFloat(getComputedStyle(element).transitionDuration))
+    )
+    .toBeLessThanOrEqual(0.00001);
+  expect(await navigation.evaluate((element) => element.getAnimations().length)).toBe(0);
+});
+
 test('平台创作者按有效身份游标分页且窄屏无溢出 @smoke', async ({ page }) => {
   const requested: Array<Record<string, string | null>> = [];
   let creatorWorksRequest: Record<string, string | null> | undefined;
@@ -445,6 +462,124 @@ test('迟到的旧分页响应不会覆盖较新的搜索结果 @smoke', async (
   await expect.poll(() => oldPageSettled).toBe(true);
   await expect(page.getByText('迟到的旧分页第二页', { exact: true })).toHaveCount(0);
   await expect(page.getByText('最新查询结果', { exact: true })).toBeVisible();
+});
+
+test('作品快照替换保留旧内容并按业务身份连续交接 @smoke', async ({ page }) => {
+  let releaseReordered: (() => void) | undefined;
+  const work = (id: string, title: string) => ({
+    id,
+    title,
+    creator: '动效测试创作者',
+    tags: ['合成'],
+    mediaCount: 0,
+    coverMediaId: null,
+    favorite: false,
+    progress: 0,
+    queryPublicationId: publication
+  });
+  const list = (works: unknown[]) => ({
+    queryPublicationId: publication,
+    sortProtocolVersion: 2,
+    rankProtocolVersion: 2,
+    catalogRevision: 'cat_motion',
+    overlayProjectionRevision: 'overlay_motion',
+    total: { mode: 'exact', value: works.length, protocolVersion: 1 },
+    dependencySet: [],
+    liveUserStateFields: ['favorite', 'progress'],
+    works
+  });
+
+  await page.route('**/api/v1/works?*', async (route) => {
+    const query = new URL(route.request().url()).searchParams.get('q') ?? '';
+    if (query === '重排') {
+      await new Promise<void>((resolve) => {
+        releaseReordered = resolve;
+      });
+      return route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify(
+          list([work('work_c', '作品丙'), work('work_a', '作品甲'), work('work_d', '作品丁')])
+        )
+      });
+    }
+    if (query === '减弱') {
+      return route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify(
+          list([work('work_a', '作品甲'), work('work_c', '作品丙'), work('work_e', '作品戊')])
+        )
+      });
+    }
+    return route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify(
+        list([work('work_a', '作品甲'), work('work_b', '作品乙'), work('work_c', '作品丙')])
+      )
+    });
+  });
+
+  await page.goto('/browse');
+  await expect(page.getByText('作品乙', { exact: true })).toBeVisible();
+  // 延长本用例的观察窗口只为稳定读取浏览器动画状态，不改变生产 token。
+  await page.evaluate(() => {
+    document.documentElement.style.setProperty('--motion-state', '1600ms');
+    document.documentElement.style.setProperty('--motion-structure', '1600ms');
+  });
+
+  const search = page.getByRole('searchbox', { name: '搜索作品' });
+  await search.fill('重排');
+  await page.getByRole('button', { name: '搜索', exact: true }).click();
+  await expect.poll(() => releaseReordered !== undefined).toBe(true);
+  await expect(page.getByText('作品乙', { exact: true })).toBeVisible();
+  await expect(page.getByText('正在获取结果', { exact: true })).toBeAttached();
+  await expect(page.locator('.gal-grid')).toHaveAttribute('inert', '');
+  await expect(page.locator('.gal-grid')).toHaveAttribute('aria-hidden', 'true');
+
+  releaseReordered?.();
+  await expect(page.getByText('作品丁', { exact: true })).toBeVisible();
+  await expect
+    .poll(() =>
+      page
+        .locator('.gal-grid__cell')
+        .filter({ hasText: '作品丙' })
+        .evaluate((element) => element.getAnimations().length)
+    )
+    .toBeGreaterThan(0);
+  const ghost = page.locator('.ui-motion-ghost');
+  await expect(ghost).toHaveCount(1);
+  await expect(ghost).toHaveAttribute('aria-hidden', 'true');
+  await expect(ghost).toHaveAttribute('inert', '');
+  await page.evaluate(() => document.getAnimations().forEach((animation) => animation.finish()));
+  await expect(ghost).toHaveCount(0);
+
+  await page.evaluate(() => {
+    document.documentElement.style.removeProperty('--motion-state');
+    document.documentElement.style.removeProperty('--motion-structure');
+  });
+  await page.emulateMedia({ reducedMotion: 'reduce' });
+  await expect
+    .poll(() =>
+      page.evaluate(() =>
+        Number.parseFloat(
+          getComputedStyle(document.documentElement).getPropertyValue('--motion-structure').trim()
+        )
+      )
+    )
+    .toBe(0);
+  await search.fill('减弱');
+  await page.getByRole('button', { name: '搜索', exact: true }).click();
+  await expect(page.getByText('作品戊', { exact: true })).toBeVisible();
+  expect(
+    await page
+      .locator('.gal-grid__cell')
+      .evaluateAll((elements) =>
+        elements.reduce((count, element) => count + element.getAnimations().length, 0)
+      )
+  ).toBe(0);
+  await expect(page.locator('.ui-motion-ghost')).toHaveCount(0);
 });
 
 test('服务停机超过旧重连预算后仍会自动恢复快照通道 @smoke', async ({ page }) => {

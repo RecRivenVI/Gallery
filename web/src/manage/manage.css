@@ -144,6 +144,10 @@
   color: var(--color-text-muted);
   font-size: var(--text-sm);
   text-decoration: none;
+  transition:
+    background-color var(--motion-feedback) var(--ease-feedback),
+    border-color var(--motion-feedback) var(--ease-feedback),
+    color var(--motion-feedback) var(--ease-feedback);
 }
 
 .manage-nav__link:hover {
@@ -621,6 +625,10 @@
 
 .manage-table tbody tr:hover {
   background: color-mix(in srgb, var(--color-accent) 8%, transparent);
+}
+
+.manage-table tbody tr {
+  transition: background-color var(--motion-feedback) var(--ease-feedback);
 }
 
 .manage-cell-actions {

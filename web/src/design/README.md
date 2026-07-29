@@ -141,13 +141,18 @@
 
 ### 动效
 
-`--motion-fast` 120ms / `--motion-base` 200ms / `--motion-slow` 320ms。
+动效按职责分成四档，而不是由组件自由选择毫秒数：`--motion-direct`（直接操纵，0ms）、
+`--motion-feedback`（按下、悬停与局部确认，110ms）、`--motion-state`（短状态和内容显现，180ms）与
+`--motion-structure`（抽屉、布局和空间承接，280ms）。既有 `--motion-fast/base/slow` 只是前三档可见
+时长的兼容别名。曲线统一从 `--ease-feedback/state/structure/exit` 选择。
 
-- 组件只允许用这三个 token 表达时长。
-- `@media (prefers-reduced-motion: reduce)` 下三者归零，`reset.css` 另有 `!important` 兜底
+- 组件只允许用这些语义 token 表达时长和曲线；拖动过程本身不加缓动，释放后的收束才使用曲线。
+- `@media (prefers-reduced-motion: reduce)` 下全部时长归零，`reset.css` 另有 `!important` 兜底
   拦住第三方写死的动画；`Spinner` 停止旋转，"进行中"完全由它的无障碍文本承担。
 - 逻辑动效（自动滚动、自动轮播、自动聚焦跳转）必须读 `useTheme().reducedMotion` 主动关闭，
   CSS 兜不住它们。
+- 同一业务键的列表更新优先保留真实节点并承接位置；离场副本必须 `aria-hidden`、不可聚焦、不可命中，
+  新请求和新交互不等待动画。无限列表只测量视口附近的有限节点，超预算时直接落到最终布局。
 
 ---
 

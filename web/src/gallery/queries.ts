@@ -17,6 +17,7 @@
  */
 
 import {
+  keepPreviousData,
   useInfiniteQuery,
   useMutation,
   useQuery,
@@ -137,6 +138,8 @@ export function useFileEntries(rootId: string, path: string) {
 /* ————————————————————————————— 作品列表 ————————————————————————————— */
 
 export interface WorkQueryParams {
+  /** 仅用于客户端缓存/占位边界；Source、Library 或 Creator 范围变化时不得复用旧视觉。 */
+  scopeKey?: string;
   q?: string;
   tag?: string;
   sourceId?: string;
@@ -176,6 +179,8 @@ export interface WorkListView {
   queryPublicationId: string | undefined;
   isPending: boolean;
   isFetching: boolean;
+  /** 当前 data 是同一浏览范围上一组查询的视觉占位，不可作为新查询的交互事实。 */
+  isPlaceholderData: boolean;
   isFetchingNextPage: boolean;
   hasNextPage: boolean;
   error: unknown;
@@ -206,17 +211,22 @@ export function useWorkList(params: WorkQueryParams): WorkListView {
   const [generation, setGeneration] = useState(0);
   const [storedNotice, setStoredNotice] = useState<StoredCursorNotice | undefined>(undefined);
   const queryScope = workQuery(params, undefined);
+  const scopeKey = params.scopeKey ?? '';
   // workQuery 按固定字段顺序构造纯 JSON；签名只用于把局部 UI 通知绑定到同一组查询条件，
   // 服务端事实身份仍由 query_publication_id 与签名游标决定。
   const querySignature = JSON.stringify(queryScope);
   const notice = storedNotice?.querySignature === querySignature ? storedNotice : undefined;
 
   const query = useInfiniteQuery({
-    queryKey: ['works', 'list', queryScope, generation],
+    queryKey: ['works', 'list', scopeKey, queryScope, generation],
     initialPageParam: undefined as string | undefined,
     queryFn: async ({ pageParam, signal }): Promise<WorkListResponse> =>
       expectData(await api.GET('/api/v1/works', { params: { query: workQuery(params, pageParam) }, signal })),
     getNextPageParam: (last) => last.nextCursor ?? undefined,
+    // 筛选、排序与搜索切换期间保留上一组已发布结果，直到新快照真正到达。这样界面不会先清空再
+    // 重建，稳定业务键也能承接位置；状态区的 isFetching 仍明确说明旧内容正在被替换。
+    placeholderData: (previousData, previousQuery) =>
+      previousQuery?.queryKey[2] === scopeKey ? keepPreviousData(previousData) : undefined,
     // 游标类失败不能靠重试解决：同一个游标再发一次仍然是同一个结果，只会放大限流压力。
     retry: (failureCount, error) =>
       classifyCursorFailure(error) === 'none' && isRetryable(error) && failureCount < 2
@@ -258,6 +268,7 @@ export function useWorkList(params: WorkQueryParams): WorkListView {
     queryPublicationId: first?.queryPublicationId,
     isPending: query.isPending,
     isFetching: query.isFetching,
+    isPlaceholderData: query.isPlaceholderData,
     isFetchingNextPage: query.isFetchingNextPage,
     hasNextPage: query.hasNextPage,
     // 游标失败由 cursorNotice 表达，不再重复渲染成页面级错误；没有失败时统一成 undefined

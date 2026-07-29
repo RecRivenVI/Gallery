@@ -11,11 +11,11 @@
  */
 
 import { QueryClientProvider } from '@tanstack/react-query';
-import { act, render, screen, waitFor, within } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { Link, MemoryRouter, Route, Routes } from 'react-router-dom';
 import { beforeEach, describe, expect, it } from 'vitest';
-import type { ReactNode } from 'react';
+import { useState, type ReactNode } from 'react';
 import { faultResponse, jsonResponse, setFetchHandler } from '../../tests/http';
 import { ToastProvider } from '../design';
 import { createQueryClient } from '../shared/query';
@@ -508,6 +508,87 @@ describe('游标失效', () => {
 });
 
 describe('迟到 HTTP 响应', () => {
+  it('新筛选快照到达前保留旧结果并明确显示后台获取状态', async () => {
+    let releaseNew: ((response: Response) => void) | undefined;
+    setFetchHandler((request) => {
+      const url = new URL(request.url);
+      if (url.pathname === '/api/v1/bootstrap') return jsonResponse(BOOTSTRAP);
+      if (url.pathname === '/api/v1/works') {
+        if (url.searchParams.get('q') === '新筛选') {
+          return new Promise<Response>((resolve) => {
+            releaseNew = resolve;
+          });
+        }
+        return jsonResponse(workList({ works: [work({ id: 'work_old', title: '旧快照作品' })] }));
+      }
+      return faultResponse('NOT_FOUND', 404);
+    });
+
+    renderGallery(<WorkBrowser />);
+    expect(await screen.findByText('旧快照作品')).toBeInTheDocument();
+
+    const search = screen.getByRole('searchbox', { name: '搜索作品' });
+    await userEvent.type(search, '新筛选');
+    await userEvent.click(screen.getByRole('button', { name: '搜索' }));
+    await waitFor(() => expect(releaseNew).toBeDefined());
+
+    expect(screen.getByText('旧快照作品')).toBeInTheDocument();
+    expect(screen.getByText('正在获取结果')).toBeInTheDocument();
+    const replacingGrid = screen.getByRole('list', { hidden: true });
+    expect(replacingGrid).toHaveAttribute('inert');
+    expect(replacingGrid).toHaveAttribute('aria-hidden', 'true');
+
+    await act(async () => {
+      releaseNew?.(jsonResponse(workList({ works: [work({ id: 'work_new', title: '新快照作品' })] })));
+      await Promise.resolve();
+    });
+    expect(await screen.findByText('新快照作品')).toBeInTheDocument();
+    expect(screen.queryByText('旧快照作品')).not.toBeInTheDocument();
+  });
+
+  it('切换 Source 浏览范围时不复用上一范围的旧视觉', async () => {
+    let releaseSourceB: ((response: Response) => void) | undefined;
+    setFetchHandler((request) => {
+      const url = new URL(request.url);
+      if (url.pathname === '/api/v1/bootstrap') return jsonResponse(BOOTSTRAP);
+      if (url.pathname === '/api/v1/works') {
+        if (url.searchParams.get('sourceId') === 'source_b') {
+          return new Promise<Response>((resolve) => {
+            releaseSourceB = resolve;
+          });
+        }
+        return jsonResponse(workList({ works: [work({ id: 'work_a', title: '来源甲作品' })] }));
+      }
+      return faultResponse('NOT_FOUND', 404);
+    });
+
+    function ScopedBrowser() {
+      const [sourceId, setSourceId] = useState('source_a');
+      return (
+        <>
+          <button type="button" onClick={() => setSourceId('source_b')}>
+            切换来源
+          </button>
+          <WorkBrowser scope={{ sourceId }} />
+        </>
+      );
+    }
+
+    renderGallery(<ScopedBrowser />);
+    expect(await screen.findByText('来源甲作品')).toBeInTheDocument();
+    await userEvent.click(screen.getByRole('button', { name: '切换来源' }));
+    await waitFor(() => expect(releaseSourceB).toBeDefined());
+
+    expect(screen.queryByText('来源甲作品')).not.toBeInTheDocument();
+    expect(screen.getByText('正在加载作品')).toBeInTheDocument();
+
+    await act(async () => {
+      releaseSourceB?.(jsonResponse(workList({ works: [work({ id: 'work_b', title: '来源乙作品' })] })));
+      await Promise.resolve();
+    });
+    expect(await screen.findByText('来源乙作品')).toBeInTheDocument();
+  });
+
   it('旧搜索的迟到分页响应不能追加到较新的搜索结果', async () => {
     let releaseOldPage: ((response: Response) => void) | undefined;
     let oldPageSignal: AbortSignal | undefined;
@@ -647,6 +728,29 @@ describe('迟到 HTTP 响应', () => {
 });
 
 describe('媒体读取的降级表现', () => {
+  it('图片解码完成前保留同尺寸占位，完成后只在媒体层内部显现', async () => {
+    render(
+      <QueryClientProvider client={createQueryClient()}>
+        <ThemeProvider surface="gallery">
+          <MediaLoaderProvider loader={testMediaLoader()}>
+            <MediaImage eager src="/api/v1/media/m1/content" alt="封面" />
+          </MediaLoaderProvider>
+        </ThemeProvider>
+      </QueryClientProvider>
+    );
+
+    const image = await screen.findByRole('img', { name: '封面' });
+    const container = image.closest('.gal-media');
+    expect(container).toHaveAttribute('aria-busy', 'true');
+    expect(image).not.toHaveClass('gal-media__img--ready');
+
+    fireEvent.load(image);
+
+    expect(image).toHaveClass('gal-media__img--ready');
+    expect(container).not.toHaveAttribute('aria-busy');
+    expect(container?.querySelector('.gal-media__placeholder')).toHaveClass('gal-media__placeholder--hidden');
+  });
+
   it('MEDIA_READ_BUSY 用尽重试后显示可重试的占位，而不是碎图', async () => {
     setFetchHandler((request) => {
       const url = new URL(request.url);

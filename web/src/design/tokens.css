@@ -77,10 +77,19 @@
   --shadow-md: 0 8px 24px rgb(17 18 16 / 0.14);
   --shadow-lg: 0 24px 64px rgb(17 18 16 / 0.24);
 
-  /* —— 动效 —— */
-  --motion-fast: 120ms;
-  --motion-base: 200ms;
-  --motion-slow: 320ms;
+  /* —— 动效：直接操纵 / 即时反馈 / 普通状态 / 结构变化 —— */
+  --motion-direct: 0ms;
+  --motion-feedback: 110ms;
+  --motion-state: 180ms;
+  --motion-structure: 280ms;
+  --ease-feedback: cubic-bezier(0.2, 0, 0, 1);
+  --ease-state: cubic-bezier(0.2, 0, 0, 1);
+  --ease-structure: cubic-bezier(0.16, 1, 0.3, 1);
+  --ease-exit: cubic-bezier(0.4, 0, 1, 1);
+  /* 既有组件的时长角色保留为语义别名，新代码优先使用上面的职责名。 */
+  --motion-fast: var(--motion-feedback);
+  --motion-base: var(--motion-state);
+  --motion-slow: var(--motion-structure);
 
   /* —— 焦点 —— */
   --focus-ring: 0 0 0 2px var(--color-bg), 0 0 0 4px var(--color-focus);
@@ -241,11 +250,15 @@
 }
 
 /*
- * 用户要求减少动效时，所有动效 token 归零。组件只允许用这三个 token 表达时长，
+ * 用户要求减少动效时，所有动效 token 归零。组件只允许用这些 token 表达时长，
  * 因此这一处归零即可关闭全部过渡；额外的 !important 兜底见 reset.css。
  */
 @media (prefers-reduced-motion: reduce) {
   :root {
+    --motion-direct: 0ms;
+    --motion-feedback: 0ms;
+    --motion-state: 0ms;
+    --motion-structure: 0ms;
     --motion-fast: 0ms;
     --motion-base: 0ms;
     --motion-slow: 0ms;

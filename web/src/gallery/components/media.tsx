@@ -109,6 +109,7 @@ export function MediaImage({ src, alt, eager, allowRetry = true, className }: Me
   const inView = useInView(containerRef, eager !== true);
   const [attempt, setAttempt] = useState(0);
   const [state, setState] = useState<ImageState>({ kind: 'idle' });
+  const [decodedSource, setDecodedSource] = useState<string | null>(null);
 
   useEffect(() => {
     if (!inView) {
@@ -145,16 +146,38 @@ export function MediaImage({ src, alt, eager, allowRetry = true, className }: Me
     setAttempt((value) => value + 1);
   }, []);
 
+  const displayed = state.kind === 'ready' && decodedSource === state.objectUrl;
+
   return (
-    <span ref={containerRef} className={className === undefined ? 'gal-media' : `gal-media ${className}`}>
-      {state.kind === 'ready' ? (
-        <img className="gal-media__img" src={state.objectUrl} alt={alt} draggable={false} />
-      ) : state.kind === 'error' ? (
+    <span
+      ref={containerRef}
+      className={className === undefined ? 'gal-media' : `gal-media ${className}`}
+      aria-busy={state.kind === 'loading' || (state.kind === 'ready' && !displayed) ? true : undefined}
+    >
+      {state.kind === 'error' ? (
         <MediaFailure error={state.error} onRetry={allowRetry ? retry : undefined} />
       ) : (
-        <span className="gal-media__placeholder" aria-hidden={alt === '' ? true : undefined}>
-          {state.kind === 'loading' ? <Spinner label={`正在加载${alt === '' ? '图片' : alt}`} /> : null}
-        </span>
+        <>
+          {state.kind === 'ready' ? (
+            <img
+              className={displayed ? 'gal-media__img gal-media__img--ready' : 'gal-media__img'}
+              src={state.objectUrl}
+              alt={alt}
+              draggable={false}
+              onLoad={() => setDecodedSource(state.objectUrl)}
+            />
+          ) : null}
+          <span
+            className={
+              displayed ? 'gal-media__placeholder gal-media__placeholder--hidden' : 'gal-media__placeholder'
+            }
+            aria-hidden={displayed || alt === '' ? true : undefined}
+          >
+            {state.kind === 'loading' || (state.kind === 'ready' && !displayed) ? (
+              <Spinner label={`正在加载${alt === '' ? '图片' : alt}`} />
+            ) : null}
+          </span>
+        </>
       )}
     </span>
   );

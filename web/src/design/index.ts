@@ -13,3 +13,4 @@ import './reset.css';
 
 export * from './primitives';
 export * from './icons';
+export * from './motion';
