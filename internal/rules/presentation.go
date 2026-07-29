@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"strings"
 	"time"
+	_ "time/tzdata"
 )
 
 // PresentationRegistryVersion 标识平台呈现语义的版本，随 IR 一起进入 rule_ir_hash。

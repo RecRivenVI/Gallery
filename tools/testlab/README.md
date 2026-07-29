@@ -223,8 +223,9 @@ $common = @(
 - **`-storage-class` 决定内容哈希范围**：`ssd` → 全量（生产 `incremental` 档案对全部媒体建立
   ContentBlob）；其它值 → 有界（只对前 `-max-media-items-bounded` 个媒体做按需确认）。可用
   `-hash-scope full|bounded` 显式覆盖。
-- **`-max-wall-clock` 是硬边界**：超时会主动取消扫描 Job，并在报告里写明 `stoppedByBound`，不会把
-  被截断的运行说成跑完了。
+- **`-max-wall-clock` 是硬边界**：扫描阶段超时会主动取消 Scan Job；`source-bounded` 随后的按需
+  确认阶段另外以同一数值作为全部目标共享的总墙钟，而不是让每个媒体分别获得一份超时预算。确认阶段
+  触顶时会取消当前 Job，并要求 30 秒内收敛终态；取消迟滞同样以失败报告，不会把被截断的运行说成跑完了。
 - **guard 内容哈希默认关闭**。`-guard-hash-content` 能发现「大小与 mtime 都不变的原地改写」，但必须
   同时给出 `-guard-max-hash-files` 或 `-guard-max-hash-bytes`，否则拒绝启动；触顶时报告写明
   `hashStoppedByBound`，不得当作已全量校验内容。
@@ -288,3 +289,6 @@ $common = @(
   `work_directory` glob 又固定为 `*/*`，无法只让它扫描根下的一部分作者目录；用链接做有界镜像也
   不可行，因为扫描器按 `LINK-1` 裁决跳过链接、不跟随。因此「有界」的真实含义是：先做有界普查，再在
   墙钟上限内跑扫描、超限主动取消，而不是让扫描只看一部分目录。
+- 单媒体按需确认当前仍会为冻结身份重新执行整个 Source 的 discovery/规则解析；因此
+  `-max-media-items-bounded` 只限制确认目标数量，不等于把前置枚举工作量按同一数量裁剪。大 Source 必须
+  同时保留 `-max-wall-clock`，并把逐目标重复扫描成本作为独立性能结论。

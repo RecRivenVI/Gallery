@@ -601,11 +601,12 @@ func runBounded(rep *report.Report, sess *environment.Session, cfg Config, guard
 			fmt.Sprintf("verified=%d unverified=%d", summary.VerifiedCount, summary.UnverifiedCount))
 	}
 
-	confirmed, err := confirmBoundedSubset(rep, sess, cfg, guard, state)
+	confirmed, stoppedBy, err := confirmBoundedSubset(rep, sess, cfg, guard, state)
 	if err != nil {
 		return err
 	}
-	rep.Add("sourcelab/bounded-on-demand-verification", confirmed > 0, fmt.Sprintf("confirmed=%d limit=%d", confirmed, cfg.MaxMediaItems))
+	rep.Add("sourcelab/bounded-on-demand-verification", confirmed > 0,
+		fmt.Sprintf("confirmed=%d limit=%d stoppedByBound=%q", confirmed, cfg.MaxMediaItems, stoppedBy))
 
 	state.LastProfile = "index"
 	state.WorkCount, state.MediaCount, state.VerifiedCount = summary.WorkCount, summary.MediaCount, confirmed
@@ -675,7 +676,7 @@ func runIndex(rep *report.Report, sess *environment.Session, cfg Config, guard *
 		state.VerifiedCount = hashed.VerifiedCount
 		state.DigestFold, state.VerifiedAtFold = hashed.DigestFold, hashed.VerifiedAtFold
 	case HashBounded, "":
-		confirmed, err := confirmBoundedSubset(rep, sess, cfg, guard, state)
+		confirmed, _, err := confirmBoundedSubset(rep, sess, cfg, guard, state)
 		if err != nil {
 			return err
 		}
@@ -694,8 +695,10 @@ func runIndex(rep *report.Report, sess *environment.Session, cfg Config, guard *
 	return nil
 }
 
-// confirmBoundedSubset 对前若干个未确认媒体做目标化按需确认。
-func confirmBoundedSubset(rep *report.Report, sess *environment.Session, cfg Config, guard *sourceguard.Guard, state *State) (int, error) {
+// confirmBoundedSubset 对前若干个未确认媒体做目标化按需确认。bounded 模式下，
+// MaxWallClock 同时约束整个确认阶段，而不是让每个媒体分别获得 30 分钟：真实 Source
+// 可能把一个超大附件排在很前面，逐媒体独立超时会让名义上的有界运行膨胀到数小时。
+func confirmBoundedSubset(rep *report.Report, sess *environment.Session, cfg Config, guard *sourceguard.Guard, state *State) (int, string, error) {
 	ctx := context.Background()
 	limit := cfg.MaxMediaItems
 	if limit <= 0 {
@@ -704,13 +707,28 @@ func confirmBoundedSubset(rep *report.Report, sess *environment.Session, cfg Con
 	targets, err := unverifiedMediaIDs(sess, state.LibraryID, limit)
 	if err != nil {
 		rep.Add("sourcelab/on-demand-targets", false, sanitize(err.Error()))
-		return 0, err
+		return 0, "", err
 	}
 	rep.Add("sourcelab/on-demand-targets", len(targets) > 0, fmt.Sprintf("targets=%d limit=%d", len(targets), limit))
 
 	confirmed := 0
+	stoppedBy := ""
+	verificationDeadline := time.Time{}
+	if cfg.Mode == ModeBounded && cfg.Limits.MaxWallClock > 0 {
+		verificationDeadline = time.Now().Add(cfg.Limits.MaxWallClock)
+	}
 	err = guard.Around("on-demand-verification", func() error {
 		for _, mediaID := range targets {
+			waitTimeout := 30 * time.Minute
+			cancelAtTimeout := false
+			if !verificationDeadline.IsZero() {
+				waitTimeout = time.Until(verificationDeadline)
+				cancelAtTimeout = true
+				if waitTimeout <= 0 {
+					stoppedBy = bounds.ReasonWallClock
+					break
+				}
+			}
 			if err := setBindingStatus(sess, state.BindingID, api.UpdateSourceRuleBindingJSONBodyStatusActive); err != nil {
 				return err
 			}
@@ -727,9 +745,13 @@ func confirmBoundedSubset(rep *report.Report, sess *environment.Session, cfg Con
 				// 已确认或不适用：稳定拒绝，不是缺陷。
 				continue
 			}
-			job, err := waitForJob(sess, created.JSON202.Id, 30*time.Minute)
+			job, stopped, err := waitForJob(sess, created.JSON202.Id, waitTimeout, cancelAtTimeout)
 			if err != nil {
 				return err
+			}
+			if stopped {
+				stoppedBy = bounds.ReasonWallClock
+				break
 			}
 			if job.Status == "completed" {
 				confirmed++
@@ -739,11 +761,17 @@ func confirmBoundedSubset(rep *report.Report, sess *environment.Session, cfg Con
 	})
 	if err != nil {
 		rep.Add("sourcelab/on-demand-verification-completed", false, sanitize(err.Error()))
-		return confirmed, err
+		return confirmed, stoppedBy, err
 	}
-	rep.Add("sourcelab/on-demand-verification-completed", confirmed == len(targets),
-		fmt.Sprintf("confirmed=%d targets=%d", confirmed, len(targets)))
-	return confirmed, nil
+	if stoppedBy != "" {
+		rep.Add("sourcelab/on-demand-verification-stopped-by-bound", true,
+			fmt.Sprintf("confirmed=%d targets=%d stoppedByBound=%q", confirmed, len(targets), stoppedBy))
+		rep.Limitations = append(rep.Limitations,
+			fmt.Sprintf("按需内容确认因墙钟边界（%s）停止，本次只确认已完成的有界子集", cfg.Limits.MaxWallClock))
+	}
+	rep.Add("sourcelab/on-demand-verification-completed", stoppedBy != "" || confirmed == len(targets),
+		fmt.Sprintf("confirmed=%d targets=%d stoppedByBound=%q", confirmed, len(targets), stoppedBy))
+	return confirmed, stoppedBy, nil
 }
 
 func unverifiedMediaIDs(sess *environment.Session, libraryID string, limit int) ([]string, error) {
@@ -885,24 +913,44 @@ func runProfileAndCollect(rep *report.Report, sess *environment.Session, cfg Con
 	return run, nil
 }
 
-func waitForJob(sess *environment.Session, jobID string, timeout time.Duration) (*api.Job, error) {
+func waitForJob(sess *environment.Session, jobID string, timeout time.Duration, cancelAtTimeout bool) (*api.Job, bool, error) {
 	deadline := time.Now().Add(timeout)
-	for time.Now().Before(deadline) {
+	cancelRequested := false
+	cancelDeadline := time.Time{}
+	for {
 		resp, err := sess.Client.GetJobWithResponse(context.Background(), jobID, sess.SameOrigin)
 		if err != nil {
-			return nil, err
+			return nil, cancelRequested, err
 		}
 		if resp.JSON200 == nil {
-			return nil, fmt.Errorf("job snapshot 状态 %d", environment.StatusOf(resp))
+			return nil, cancelRequested, fmt.Errorf("job snapshot 状态 %d", environment.StatusOf(resp))
 		}
 		status := string(resp.JSON200.Status)
 		if status == "completed" || status == "failed" || status == "cancelled" || status == "needs_repair" {
 			job := *resp.JSON200
-			return &job, nil
+			return &job, cancelRequested, nil
+		}
+		now := time.Now()
+		if !cancelRequested && !now.Before(deadline) {
+			if !cancelAtTimeout {
+				return nil, false, fmt.Errorf("job 未在 %s 内终止", timeout)
+			}
+			cancelled, err := sess.Client.CancelJobWithResponse(context.Background(), jobID,
+				&api.CancelJobParams{XGalleryCSRF: sess.CSRF}, sess.SameOrigin)
+			if err != nil {
+				return nil, true, fmt.Errorf("墙钟边界到达后取消按需确认 Job: %w", err)
+			}
+			if cancelled.JSON202 == nil {
+				return nil, true, fmt.Errorf("墙钟边界到达后取消按需确认 Job: status=%d", environment.StatusOf(cancelled))
+			}
+			cancelRequested = true
+			cancelDeadline = now.Add(30 * time.Second)
+		}
+		if cancelRequested && !now.Before(cancelDeadline) {
+			return nil, true, fmt.Errorf("按需确认 Job 在取消请求后 30s 内未终止")
 		}
 		time.Sleep(100 * time.Millisecond)
 	}
-	return nil, fmt.Errorf("job 未在 %s 内终止", timeout)
 }
 
 // sanitize 是写进 Finding 之前的最后一道本地防线。report.Add 本身也会脱敏；这里额外
