@@ -57,6 +57,23 @@ type restoreLast struct {
 	FinishedAt time.Time `json:"finishedAt"`
 }
 
+// restoreContinuityError 表示恢复替换已经越过“当前库仍在原位”的边界，且无法确认
+// control.db 已恢复到可继续启动的状态。普通坏备份/候选落位失败可以记录后继续使用旧库；
+// 这类错误则必须阻止 bootstrap 打开缺失路径并意外创建空 control.db。类型保持包内，
+// 不进入 API 契约。
+type restoreContinuityError struct{ cause error }
+
+func (e *restoreContinuityError) Error() string { return e.cause.Error() }
+func (e *restoreContinuityError) Unwrap() error { return e.cause }
+
+type restoreFileOps struct {
+	stat   func(string) (os.FileInfo, error)
+	rename func(string, string) error
+	remove func(string) error
+}
+
+var osRestoreFileOps = restoreFileOps{stat: os.Stat, rename: os.Rename, remove: os.Remove}
+
 // Verify 对指定备份执行恢复前验证：检查 manifest、role、checksum 与版本兼容性，并在隔离临时目录
 // 打开、迁移与完整性/外键校验一份副本。它绝不触碰当前 control.db，也不写入任何标记。
 func (s *Service) Verify(ctx context.Context, backupID string) (RestoreReport, error) {
@@ -199,13 +216,26 @@ func ApplyPendingRestore(ctx context.Context, dirs appdirs.Dirs) (RestoreOutcome
 	}
 	outcome, applyErr := applyRestore(ctx, dirs, request.BackupID)
 	if applyErr != nil {
-		recordRestoreOutcome(dirs, request.BackupID, false, applyErr.Error())
-		_ = os.Remove(markerPath)
+		if err := handleRestoreApplyFailure(dirs, markerPath, request.BackupID, applyErr); err != nil {
+			return RestoreOutcome{}, err
+		}
 		return RestoreOutcome{}, nil // 保留当前库并继续启动。
 	}
 	recordRestoreOutcome(dirs, request.BackupID, true, "已原子替换 control.db")
 	_ = os.Remove(markerPath)
 	return outcome, nil
+}
+
+func handleRestoreApplyFailure(dirs appdirs.Dirs, markerPath, backupID string, applyErr error) error {
+	recordRestoreOutcome(dirs, backupID, false, applyErr.Error())
+	var continuityErr *restoreContinuityError
+	if errors.As(applyErr, &continuityErr) {
+		// 当前库可能只剩轮换副本；保留 pending 供修复文件系统条件后的下一次
+		// 启动重试，并 fail-closed 阻止 storage.Open 创建空 control.db。
+		return fault.New(fault.CodeRestoreFailed, false, applyErr)
+	}
+	_ = os.Remove(markerPath)
+	return nil
 }
 
 func applyRestore(ctx context.Context, dirs appdirs.Dirs, backupID string) (RestoreOutcome, error) {
@@ -250,27 +280,58 @@ func applyRestore(ctx context.Context, dirs appdirs.Dirs, backupID string) (Rest
 		return RestoreOutcome{}, err
 	}
 
-	// 原子替换：先轮换当前库，再落位候选；任一步失败都回滚到当前库。
+	// 原子替换：先轮换当前库，再落位候选；只有确认旧库已回到原路径时，失败后才允许
+	// 继续启动。回滚也失败时必须阻止 bootstrap 打开缺失路径并创建空 control.db。
 	rotated := filepath.Join(dirs.Data, fmt.Sprintf("%s%d.bak", preRestorePrefix, time.Now().UnixNano()))
+	rotatedCurrent, err := placeRestoreCandidate(controlPath, incoming, rotated, osRestoreFileOps)
+	if err != nil {
+		return RestoreOutcome{}, err
+	}
+	rotatedPath := ""
+	if rotatedCurrent {
+		rotatedPath = rotated
+	}
+	return RestoreOutcome{Applied: true, BackupID: backupID, RotatedPath: rotatedPath}, nil
+}
+
+func placeRestoreCandidate(controlPath, incoming, rotated string, ops restoreFileOps) (bool, error) {
 	rotatedCurrent := false
-	if _, statErr := os.Stat(controlPath); statErr == nil {
-		if err := os.Rename(controlPath, rotated); err != nil {
-			_ = os.Remove(incoming)
-			return RestoreOutcome{}, fmt.Errorf("轮换当前 control.db: %w", err)
+	if _, statErr := ops.stat(controlPath); statErr == nil {
+		if err := ops.rename(controlPath, rotated); err != nil {
+			_ = ops.remove(incoming)
+			return false, fmt.Errorf("轮换当前 control.db: %w", err)
 		}
 		rotatedCurrent = true
+	} else if !errors.Is(statErr, os.ErrNotExist) {
+		_ = ops.remove(incoming)
+		return false, fmt.Errorf("检查当前 control.db: %w", statErr)
 	}
-	// 移除旧库的 WAL/SHM，避免新库被过期日志遮蔽。
-	_ = os.Remove(controlPath + "-wal")
-	_ = os.Remove(controlPath + "-shm")
-	if err := os.Rename(incoming, controlPath); err != nil {
+
+	rollback := func(stageErr error) error {
 		if rotatedCurrent {
-			_ = os.Rename(rotated, controlPath) // 回滚，保留当前库可用。
+			if rollbackErr := ops.rename(rotated, controlPath); rollbackErr == nil {
+				_ = ops.remove(incoming)
+				return stageErr
+			} else {
+				stageErr = errors.Join(stageErr, fmt.Errorf("回滚当前 control.db: %w", rollbackErr))
+			}
 		}
-		_ = os.Remove(incoming)
-		return RestoreOutcome{}, fmt.Errorf("落位恢复候选: %w", err)
+		_ = ops.remove(incoming)
+		// 没有旧库可回滚，或旧库回滚失败：controlPath 的连续性无法证明。
+		return &restoreContinuityError{cause: stageErr}
 	}
-	return RestoreOutcome{Applied: true, BackupID: backupID, RotatedPath: rotated}, nil
+
+	// 旧库已经离开原路径后，WAL/SHM 清理也属于替换协议的一部分；不能忽略失败后
+	// 继续落位候选，否则过期日志可能遮蔽新主库。
+	for _, sidecar := range []string{controlPath + "-wal", controlPath + "-shm"} {
+		if err := ops.remove(sidecar); err != nil && !errors.Is(err, os.ErrNotExist) {
+			return false, rollback(fmt.Errorf("清理旧 control.db sidecar: %w", err))
+		}
+	}
+	if err := ops.rename(incoming, controlPath); err != nil {
+		return false, rollback(fmt.Errorf("落位恢复候选: %w", err))
+	}
+	return rotatedCurrent, nil
 }
 
 // FinalizeRestore 在恢复应用后、数据库重新打开时执行恢复后清理：使无法验证的运行时安全状态
