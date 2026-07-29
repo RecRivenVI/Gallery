@@ -104,6 +104,8 @@ content_verified     已通过完整 SHA-256 确认，ContentBlob/FileLocation �
 
 目标化确认 Job 复用与普通扫描完全相同的 `jobs` 表与 `ResourceScan` 资源类，因此同一 Source 同时只能有一个未终结的 scan 类 Job——无论它是普通扫描还是目标化确认，均受既有"Source 单活跃扫描"数据库唯一约束保护，不引入并行的第二套约束。
 
+公共契约同时保留单媒体入口 `POST /api/v1/media/{mediaId}/verification-jobs` 与同源批量入口 `POST /api/v1/media/verification-jobs`。批量请求的 `mediaIds` 必须非空、唯一且最多 200 项；全部媒体必须来自同一个实际使用的 current `queryPublicationId` 和同一个 Source，并且都处于 `located_unverified`。服务端必须在创建 Job 前完成全部目标、授权、Source、确认状态与 observation 校验，任一项失败都整批拒绝，不得创建部分 Job。目标集合按稳定身份规范化后参与幂等键，客户端顺序不改变 Job 身份；一个批量请求只建立一个目标化 Scan Job，因此 Source discovery 与规则解析只执行一次，但列表内每个目标仍分别完整哈希，任一目标在执行阶段失配仍使整个 Job fail-closed。200 项是公开请求的 PRE_FREEZE 防滥用上限，不代表 Hash 并发度，也不改变 Source 单活跃扫描约束。
+
 ## 默认提交模型
 
 默认采用 **staging snapshot + publish pointer**：

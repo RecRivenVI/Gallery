@@ -139,6 +139,8 @@ HEAD/GET、下载 disposition、内容确认和派生生成不得全部隐含落
 - 服务端为显式快照读取的请求处理期间建立短期 publication 读取租约（复用既有 `query_publication_leases` 表与 GC 保护判据），防止解析、读取正文期间被 GC 回收；current 模式因为 active publication 永不被 GC 而不需要额外租约；
 - DerivedAsset 创建的输入 ContentBlob 从请求指定（或省略时当前 active）的快照解析并在创建时冻结，异步生成过程中不得重新从"之后可能变化的 active publication"寻找输入，保证同一 Job 的重试和幂等语义引用的是同一个输入 Blob。
 
+按需确认的单媒体入口为 `POST /api/v1/media/{mediaId}/verification-jobs`；同源批量入口为 `POST /api/v1/media/verification-jobs`，请求体只接受 1～200 个唯一 `mediaIds`。批量入口不引入新的 capability 或任务类型：仍逐目标按实际 Source 检查 `scan.run`，要求全部目标属于同一 current publication 与同一 Source，并原子创建一个目标化 Scan Job；跨 Source、历史 publication、重复 ID、已确认目标或任一 observation 无效都整批失败。
+
 作品详情返回的 `queryPublicationId` 是其 `coverMediaId`、Favorite/Progress snapshot 与后续媒体列表的共同快照句柄。Web/客户端从列表进入详情时必须把列表 publication 传给作品详情，再把详情实际返回的同一 ID 用于封面正文和媒体列表；不得先读旧 Work、再从当前 active publication 解析封面。显式 publication 不存在或已被 GC 时返回 `CURSOR_EXPIRED`，不静默回退。
 
 这解决了"客户端通过旧 cursor 拿到的 Work 引用了某个媒体，后台新 publication 发布后该媒体内容或存在性已变化"的快照一致性问题：作品详情、媒体读取与 `/works` 列表查询遵循同一条"服务端签发/校验 `query_publication_id`，不允许客户端自行选择两类 revision 任意组合"的规则（见「查询响应与实时附加状态」）。

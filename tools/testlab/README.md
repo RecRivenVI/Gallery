@@ -289,6 +289,7 @@ $common = @(
   `work_directory` glob 又固定为 `*/*`，无法只让它扫描根下的一部分作者目录；用链接做有界镜像也
   不可行，因为扫描器按 `LINK-1` 裁决跳过链接、不跟随。因此「有界」的真实含义是：先做有界普查，再在
   墙钟上限内跑扫描、超限主动取消，而不是让扫描只看一部分目录。
-- 单媒体按需确认当前仍会为冻结身份重新执行整个 Source 的 discovery/规则解析；因此
-  `-max-media-items-bounded` 只限制确认目标数量，不等于把前置枚举工作量按同一数量裁剪。大 Source 必须
-  同时保留 `-max-wall-clock`，并把逐目标重复扫描成本作为独立性能结论。
+- 有界确认现在把同一 Source 的前 `-max-media-items-bounded` 个目标合并为一个公共批量确认 Job，只执行一次
+  完整 Source discovery/规则解析；该数量仍只限制强制完整哈希的目标数，不会把前置枚举裁剪成同样大小。
+  大 Source 必须继续保留 `-max-wall-clock`，报告会记录 `jobs=1`、确认阶段 `elapsedMs` 与实际 confirmed 数；
+  墙钟到界后的 30 秒终态要求不因批量化而放宽。

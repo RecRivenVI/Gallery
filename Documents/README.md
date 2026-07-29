@@ -24,6 +24,8 @@ EV-67 延续上述真实后端持续门禁：当前 primitive config 的 15 个 
 
 [EV-110](证据/验证记录.md) 随后以真实 Windows handle 阻止便携 `galleryd` 的 `control.db.incoming` 落位，证明当前库已轮换后的 sharing violation 会安全回滚旧库、保留备份后事实并继续启动；落位与回滚双失败、磁盘满、ACL/断电及正式签名仍未完成。
 
+[EV-111](证据/验证记录.md) 又在 Scanner 既有多目标语义上增加同源批量确认公共契约，保留原单媒体 API 与用户交互；真实 Pawchive 12 目标最终以一个 Job 在 74.003 秒确认 12/12，完整 Source guard 前后零变化。该切片关闭每目标重复完整 Source 处理，但没有触发或关闭真实活动 Hash 取消、HDD/SMB/NAS、完整语义、全量扫描、正式性能/API Freeze 或 RC Gate。
+
 2026-07-26 的 [EV-42](证据/验证记录.md#ev-42规则封面customcover-与-work-快照封面闭环e1) 又补齐规则 `CoverPath` → SourceMedia/CanonicalMedia → publication 有效封面的显式链路：同 Work 有效 CustomCover 优先，失效事实保留并回退规则封面，媒体顺序不再借用 `ordinal=-1`；`PublishedWork.coverMediaId` 为 required nullable，作品详情支持 `queryPublicationId`，Web 浏览、详情、封面与媒体沿用同一快照并提供 CustomCover 编辑。该轮通过根级 `Check.ps1`、WSL2 Debian 定向 race、合成 migration 与 Web Vitest/Chromium mock，未使用真实 Source/媒体，也没有真实后端浏览器证据；阶段 4 Reference Performance/API Freeze、阶段 5 Security Gate 与阶段 6 Web Gate 状态不变。
 
 ## 如何使用
