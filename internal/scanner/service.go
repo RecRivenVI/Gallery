@@ -1025,6 +1025,13 @@ func discover(ctx context.Context, root string, ir rules.RuleIR, parameters []by
 	skippedWorks := 0
 	skippedReason := ""
 	err = filepath.WalkDir(root, func(onDisk string, entry fs.DirEntry, walkErr error) error {
+		// Scheduler 取消 Scan 时会取消 Execute 的 context。WalkDir 本身不感知 context；
+		// 若不在每个回调入口检查，真实大 Source 会继续枚举到 discovery 自然结束，Job
+		// 长时间停留在 cancelling。检查必须位于 walkErr 与回调内任何后续 Source 读取
+		// 之前，使已经取消的扫描不再打开下一目录或 metadata。
+		if err := ctx.Err(); err != nil {
+			return err
+		}
 		if walkErr != nil {
 			return walkErr
 		}

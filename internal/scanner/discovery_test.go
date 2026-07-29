@@ -2,6 +2,7 @@ package scanner
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -10,6 +11,17 @@ import (
 
 	"github.com/RecRivenVI/gallery/internal/rules"
 )
+
+func TestDiscoveryStopsAtWalkEntryWhenContextIsCancelled(t *testing.T) {
+	root := t.TempDir()
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	_, err := discover(ctx, root, rules.RuleIR{}, nil)
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("已取消 discovery 未返回 context.Canceled: %v", err)
+	}
+}
 
 func TestFantiaCreatorStableIdentityIsSharedWithoutDisplayNameMerging(t *testing.T) {
 	fixtureRoot := filepath.Join("..", "..", "tests", "fixtures", "creator-aggregation", "fantia")
