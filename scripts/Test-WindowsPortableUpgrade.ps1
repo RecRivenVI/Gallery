@@ -110,6 +110,8 @@ try {
             'factsSurvivedTransition',
             'backupVerified',
             'restoreAppliedOnRestart',
+            'failedRestoreKeptCurrent',
+            'failedRestoreRecorded',
             'allStopsExitedGracefully'
         )) {
         if ($result.$field -ne $true) { throw "版本切换结果未通过：$field" }
@@ -129,6 +131,8 @@ try {
         FactsSurvivedTransition = 'passed'
         BackupVerified = 'passed'
         RestoreAppliedOnRestart = 'passed'
+        FailedRestoreKeptCurrent = 'passed'
+        FailedRestoreRecorded = 'passed'
         AllStopsExitedGracefully = 'passed'
     }
 } finally {

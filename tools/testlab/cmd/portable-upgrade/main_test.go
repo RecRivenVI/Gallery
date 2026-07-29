@@ -1,6 +1,8 @@
 package main
 
 import (
+	"os"
+	"path/filepath"
 	"testing"
 
 	api "github.com/RecRivenVI/gallery/pkg/galleryapi"
@@ -35,5 +37,53 @@ func TestValidateLibraryPresence(t *testing.T) {
 	}
 	if err := validateLibraryPresence(libraries, map[string]bool{"missing": true}); err == nil {
 		t.Fatal("缺失 Library 未被拒绝")
+	}
+}
+
+func TestCorruptBackupStaysInsideAppRoot(t *testing.T) {
+	root := t.TempDir()
+	if err := corruptBackup(root, "../../outside"); err == nil {
+		t.Fatal("路径样式 backup ID 未被拒绝")
+	}
+	backupID := "bkp_00000000-0000-7000-8000-000000000001"
+	directory := filepath.Join(root, "state", "backups", backupID)
+	if err := os.MkdirAll(directory, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(directory, "control.db")
+	if err := os.WriteFile(path, []byte("valid fixture"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := corruptBackup(root, backupID); err != nil {
+		t.Fatal(err)
+	}
+	content, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(content) != "intentional corrupt backup fixture" {
+		t.Fatalf("备份未被精确替换: %q", content)
+	}
+}
+
+func TestAssertFailedRestoreRecorded(t *testing.T) {
+	root := t.TempDir()
+	state := filepath.Join(root, "state")
+	if err := os.MkdirAll(state, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	backupID := "bkp_00000000-0000-7000-8000-000000000001"
+	content := []byte(`{"backupId":"` + backupID + `","applied":false,"detail":"checksum mismatch"}`)
+	if err := os.WriteFile(filepath.Join(state, "restore-last.json"), content, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := assertFailedRestoreRecorded(root, backupID); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(state, "restore-pending.json"), []byte(`{}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := assertFailedRestoreRecorded(root, backupID); err == nil {
+		t.Fatal("未消费的恢复标记未被拒绝")
 	}
 }

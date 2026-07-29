@@ -6,6 +6,7 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"flag"
 	"fmt"
 	"net/http"
@@ -23,10 +24,11 @@ import (
 )
 
 const (
-	beforeBackupLibrary = "Portable upgrade persistent fact"
-	afterBackupLibrary  = "Portable upgrade restore sentinel"
-	startupTimeout      = 60 * time.Second
-	jobTimeout          = 30 * time.Second
+	beforeBackupLibrary   = "Portable upgrade persistent fact"
+	afterBackupLibrary    = "Portable upgrade restore sentinel"
+	afterBadBackupLibrary = "Portable failed restore current fact"
+	startupTimeout        = 60 * time.Second
+	jobTimeout            = 30 * time.Second
 )
 
 type pairedClient struct {
@@ -45,7 +47,15 @@ type result struct {
 	FactsSurvivedTransition  bool   `json:"factsSurvivedTransition"`
 	BackupVerified           bool   `json:"backupVerified"`
 	RestoreAppliedOnRestart  bool   `json:"restoreAppliedOnRestart"`
+	FailedRestoreKeptCurrent bool   `json:"failedRestoreKeptCurrent"`
+	FailedRestoreRecorded    bool   `json:"failedRestoreRecorded"`
 	AllStopsExitedGracefully bool   `json:"allStopsExitedGracefully"`
+}
+
+type restoreLastRecord struct {
+	BackupID string `json:"backupId"`
+	Applied  bool   `json:"applied"`
+	Detail   string `json:"detail"`
 }
 
 func main() {
@@ -162,17 +172,8 @@ func run(previousBin, currentBin, previousVersion, currentVersion string) error 
 	if !verify.Compatible || !verify.ChecksumVerified || !verify.IntegrityOk || !verify.InvariantsOk {
 		return fmt.Errorf("control 备份 dry-run 未通过全部检查")
 	}
-	request, err := currentClient.api.RequestControlRestoreWithResponse(
-		ctx,
-		&api.RequestControlRestoreParams{XGalleryCSRF: currentClient.csrf},
-		api.ControlRestoreRequest{BackupId: backup.BackupId},
-		currentClient.editor,
-	)
-	if err != nil || request.JSON202 == nil {
-		return fmt.Errorf("登记 control 恢复失败：status=%d err=%v", statusCode(request), err)
-	}
-	if !request.JSON202.RestartRequired || request.JSON202.Report.BackupId != backup.BackupId {
-		return fmt.Errorf("恢复登记没有返回精确待重启事实")
+	if err := requestRestore(ctx, currentClient, backup.BackupId); err != nil {
+		return err
 	}
 	if outcome := active.Stop(); !outcome.ExitedGracefully || outcome.ForcedKill || outcome.Err != nil {
 		stopsGraceful = false
@@ -196,9 +197,49 @@ func run(previousBin, currentBin, previousVersion, currentVersion string) error 
 	}); err != nil {
 		return fmt.Errorf("恢复后的用户事实: %w", err)
 	}
+
+	badBackup, err := createBackup(ctx, restoredClient)
+	if err != nil {
+		return fmt.Errorf("创建失败回滚夹具备份: %w", err)
+	}
+	if err := createLibrary(ctx, restoredClient, afterBadBackupLibrary); err != nil {
+		return err
+	}
+	if err := requestRestore(ctx, restoredClient, badBackup.BackupId); err != nil {
+		return err
+	}
 	if outcome := active.Stop(); !outcome.ExitedGracefully || outcome.ForcedKill || outcome.Err != nil {
 		stopsGraceful = false
-		return fmt.Errorf("恢复后当前版本未优雅停止：forced=%t err=%v", outcome.ForcedKill, outcome.Err)
+		return fmt.Errorf("损坏备份恢复前当前版本未优雅停止：forced=%t err=%v", outcome.ForcedKill, outcome.Err)
+	}
+	active = nil
+	if err := corruptBackup(appRoot, badBackup.BackupId); err != nil {
+		return err
+	}
+
+	active, err = testprocess.StartGallerydWithSourceRootsContext(
+		ctx, currentPath, appRoot, filepath.Join(logs, "current-after-failed-restore.log"), startupTimeout,
+	)
+	if err != nil {
+		return fmt.Errorf("损坏备份后启动当前版本: %w", err)
+	}
+	failedRestoreClient, err := pair(ctx, active.BaseURL)
+	if err != nil {
+		return fmt.Errorf("损坏备份后重新配对: %w", err)
+	}
+	if err := assertLibraries(ctx, failedRestoreClient, map[string]bool{
+		beforeBackupLibrary:   true,
+		afterBackupLibrary:    false,
+		afterBadBackupLibrary: true,
+	}); err != nil {
+		return fmt.Errorf("损坏备份后的当前用户事实: %w", err)
+	}
+	if err := assertFailedRestoreRecorded(appRoot, badBackup.BackupId); err != nil {
+		return err
+	}
+	if outcome := active.Stop(); !outcome.ExitedGracefully || outcome.ForcedKill || outcome.Err != nil {
+		stopsGraceful = false
+		return fmt.Errorf("损坏备份回滚后当前版本未优雅停止：forced=%t err=%v", outcome.ForcedKill, outcome.Err)
 	}
 	active = nil
 
@@ -212,6 +253,8 @@ func run(previousBin, currentBin, previousVersion, currentVersion string) error 
 		FactsSurvivedTransition:  true,
 		BackupVerified:           true,
 		RestoreAppliedOnRestart:  true,
+		FailedRestoreKeptCurrent: true,
+		FailedRestoreRecorded:    true,
 		AllStopsExitedGracefully: stopsGraceful,
 	}
 	encoded, err := json.Marshal(value)
@@ -331,6 +374,63 @@ func verifyBackup(ctx context.Context, client *pairedClient, backupID string) (a
 		return api.ControlRestoreReport{}, fmt.Errorf("验证 control 备份：status=%d err=%v", statusCode(response), err)
 	}
 	return *response.JSON200, nil
+}
+
+func requestRestore(ctx context.Context, client *pairedClient, backupID string) error {
+	response, err := client.api.RequestControlRestoreWithResponse(
+		ctx,
+		&api.RequestControlRestoreParams{XGalleryCSRF: client.csrf},
+		api.ControlRestoreRequest{BackupId: backupID},
+		client.editor,
+	)
+	if err != nil || response.JSON202 == nil {
+		return fmt.Errorf("登记 control 恢复失败：status=%d err=%v", statusCode(response), err)
+	}
+	if !response.JSON202.RestartRequired || response.JSON202.Report.BackupId != backupID {
+		return fmt.Errorf("恢复登记没有返回精确待重启事实")
+	}
+	return nil
+}
+
+func corruptBackup(appRoot, backupID string) error {
+	if backupID == "" || filepath.Base(backupID) != backupID || strings.ContainsAny(backupID, "/\\:") {
+		return fmt.Errorf("拒绝损坏非法备份身份")
+	}
+	target := filepath.Join(appRoot, "state", "backups", backupID, "control.db")
+	relative, err := filepath.Rel(appRoot, target)
+	if err != nil || filepath.IsAbs(relative) || relative == ".." || strings.HasPrefix(relative, ".."+string(filepath.Separator)) {
+		return fmt.Errorf("拒绝损坏测试根之外的备份")
+	}
+	info, err := os.Stat(target)
+	if err != nil {
+		return fmt.Errorf("定位失败回滚夹具备份: %w", err)
+	}
+	if !info.Mode().IsRegular() {
+		return fmt.Errorf("失败回滚夹具备份不是普通文件")
+	}
+	if err := os.WriteFile(target, []byte("intentional corrupt backup fixture"), 0o600); err != nil {
+		return fmt.Errorf("损坏失败回滚夹具备份: %w", err)
+	}
+	return nil
+}
+
+func assertFailedRestoreRecorded(appRoot, backupID string) error {
+	pendingPath := filepath.Join(appRoot, "state", "restore-pending.json")
+	if _, err := os.Stat(pendingPath); !errors.Is(err, os.ErrNotExist) {
+		return fmt.Errorf("损坏备份恢复标记未被消费")
+	}
+	data, err := os.ReadFile(filepath.Join(appRoot, "state", "restore-last.json"))
+	if err != nil {
+		return fmt.Errorf("读取损坏备份恢复结果: %w", err)
+	}
+	var record restoreLastRecord
+	if err := json.Unmarshal(data, &record); err != nil {
+		return fmt.Errorf("解析损坏备份恢复结果: %w", err)
+	}
+	if record.BackupID != backupID || record.Applied || strings.TrimSpace(record.Detail) == "" {
+		return fmt.Errorf("损坏备份恢复结果未精确记录")
+	}
+	return nil
 }
 
 func waitJob(parent context.Context, client *pairedClient, jobID string) error {
