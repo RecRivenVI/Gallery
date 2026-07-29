@@ -11,6 +11,21 @@ import (
 	"github.com/RecRivenVI/gallery/tools/testlab/internal/corpus"
 )
 
+func TestRelationsPerWorkForSeedRejectsReferenceLabelOnDegradedShape(t *testing.T) {
+	if got, err := relationsPerWorkForSeed("preflight", 1000, 1); err != nil || got != 1 {
+		t.Fatalf("preflight relations=%d err=%v", got, err)
+	}
+	if _, err := relationsPerWorkForSeed("reference", 100_000, corpus.ReferenceSourceCount); err == nil {
+		t.Fatal("100k 不得冒充 reference")
+	}
+	if _, err := relationsPerWorkForSeed("reference", corpus.ReferenceScale, 1); err == nil {
+		t.Fatal("单 Source 不得冒充 reference")
+	}
+	if got, err := relationsPerWorkForSeed("reference", corpus.ReferenceScale, corpus.ReferenceSourceCount); err != nil || got != corpus.ReferenceRelationsPerWork {
+		t.Fatalf("reference relations=%d err=%v", got, err)
+	}
+}
+
 // coreSeedDedupeScales/coreSeedDedupeBatches 是跨 race 与非 race 构建都运行的核心
 // 边界矩阵（corpus.CreatorCount 当前为 24）：
 //

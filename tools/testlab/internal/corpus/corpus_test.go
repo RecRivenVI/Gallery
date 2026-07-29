@@ -2,11 +2,49 @@ package corpus
 
 import (
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"reflect"
+	"slices"
 	"testing"
 )
+
+func TestReferenceSourceAliasesAndManifestShape(t *testing.T) {
+	want := []string{
+		"Source-pixiv", "Source-pixivFANBOX", "Source-Gank", "Source-Fantia", "Source-Patreon",
+		"Source-Pawchive", "Source-X", "Source-微博", "Source-微博_Legacy", "Source-Venera",
+	}
+	if got := ReferenceSourceAliases(); !slices.Equal(got, want) {
+		t.Fatalf("ReferenceSourceAliases() = %v, want %v", got, want)
+	}
+	aliases := ReferenceSourceAliases()
+	aliases[0] = "mutated"
+	if HasReferenceSourceAliases(aliases) || !HasReferenceSourceAliases(ReferenceSourceAliases()) {
+		t.Fatal("正式来源代号必须返回副本并按顺序精确校验")
+	}
+
+	sourceIDs := make([]string, ReferenceSourceCount)
+	visible := make([]int, ReferenceSourceCount)
+	timings := make([]int64, ReferenceSourceCount)
+	for index := range sourceIDs {
+		sourceIDs[index] = fmt.Sprintf("src-%02d", index)
+	}
+	manifest := Manifest{
+		Scale: ReferenceScale, SourceID: sourceIDs[0], SourceIDs: sourceIDs,
+		SourceAliases: ReferenceSourceAliases(), RelationsPerWork: ReferenceRelationsPerWork,
+		Sources: ReferenceSourceCount, SourceVisibleWorkCounts: visible,
+		SourceBeginDurationsMs: timings, SourceValidationDurationsMs: timings, SourcePublishDurationsMs: timings,
+		Stats: Stats{N: ReferenceScale}, QueryPublicationID: "qpub", CatalogRevisionID: "catrev",
+	}
+	if err := manifest.ValidateReferenceShape(); err != nil {
+		t.Fatalf("正式 manifest 被拒绝: %v", err)
+	}
+	manifest.RelationsPerWork = 1
+	if err := manifest.ValidateReferenceShape(); err == nil {
+		t.Fatal("单关系 manifest 不得通过正式形状校验")
+	}
+}
 
 func TestComputeStatsMatchesManualCounting(t *testing.T) {
 	const n = 12345

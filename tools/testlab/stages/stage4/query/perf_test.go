@@ -10,9 +10,26 @@ import (
 	"testing"
 	"time"
 
+	"github.com/RecRivenVI/gallery/tools/testlab/internal/corpus"
 	"github.com/RecRivenVI/gallery/tools/testlab/internal/environment"
 	"github.com/RecRivenVI/gallery/tools/testlab/internal/report"
 )
+
+func TestValidatePerfCorpusBindingMatchesCurrentAppRoot(t *testing.T) {
+	sess := newFakeSession(t, fakeWorksHandler(0, nil))
+	rep := &report.Report{}
+	manifest := corpus.Manifest{
+		QueryPublicationID: "qpub_00000000-0000-7000-8000-000000000000",
+		CatalogRevisionID:  "crev_00000000-0000-7000-8000-000000000000",
+	}
+	if !ValidatePerfCorpusBinding(rep, sess, manifest) || rep.FailureCount != 0 {
+		t.Fatalf("匹配的 AppRoot/manifest 被拒绝: findings=%+v", rep.Findings)
+	}
+	manifest.QueryPublicationID = "qpub_00000000-0000-7000-8000-000000000001"
+	if ValidatePerfCorpusBinding(rep, sess, manifest) || rep.FailureCount != 1 {
+		t.Fatalf("错配的 AppRoot/manifest 未被拒绝: findings=%+v", rep.Findings)
+	}
+}
 
 // fakeWorksHandler 是一个最小可用的 /api/v1/works 伪造实现：delay 为 0 时立即返回
 // 一个合法的空 WorkListResponse；delay 大于 0 时先等待 delay（或客户端提前取消）

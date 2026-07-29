@@ -46,6 +46,10 @@ type Config struct {
 	// 全部 Source 的投影（含 FTS5 索引）搬进新 revision；最后一个 Source 搬运的比例是
 	// (N-1)/N，与"重扫其中一个 Source"这一生产形态的最重情形一致。
 	Sources int
+
+	// RelationsPerWork 是每个 Work 的 Creator 关系数。0 保持兼容并按 1 处理；正式
+	// Reference 查询语料必须显式为 2，当前生成器只支持 1 或 2。
+	RelationsPerWork int
 }
 
 type sourceIndexProvider func(slot, scale, sources int) []int
@@ -123,7 +127,14 @@ func mimeForKind(kind string) string {
 // 规模下该 map 只有数十 MB。若未来需要真正分批 Overlay 应用，必须先扩展生产
 // ApplyCatalogCandidateOverlays 的语义，不由测试工具伪装实现。
 func Run(ctx context.Context, cfg Config) (corpus.Manifest, error) {
-	manifest, _, err := runBaseline(ctx, cfg, baselineOptions{captureSource: -1})
+	relationsPerWork := cfg.RelationsPerWork
+	if relationsPerWork == 0 {
+		relationsPerWork = 1
+	}
+	if relationsPerWork != 1 && relationsPerWork != corpus.ReferenceRelationsPerWork {
+		return corpus.Manifest{}, fmt.Errorf("每 Work Creator 关系数只支持 1 或 %d: %d", corpus.ReferenceRelationsPerWork, relationsPerWork)
+	}
+	manifest, _, err := runBaseline(ctx, cfg, baselineOptions{captureSource: -1, relationsPerWork: relationsPerWork})
 	return manifest, err
 }
 
@@ -262,6 +273,8 @@ func runBaseline(ctx context.Context, cfg Config, options baselineOptions) (corp
 		Stats:                       corpus.ComputeStats(n),
 		Sources:                     sources,
 		SourceIDs:                   sourceIDs,
+		SourceAliases:               corpus.SourceAliasesForCount(sources),
+		RelationsPerWork:            options.relationsPerWork,
 		SourceVisibleWorkCounts:     visibleCounts,
 		SourceBeginDurationsMs:      beginDurations,
 		SourceValidationDurationsMs: validationDurations,

@@ -8,9 +8,33 @@ import (
 	"time"
 
 	api "github.com/RecRivenVI/gallery/pkg/galleryapi"
+	"github.com/RecRivenVI/gallery/tools/testlab/internal/corpus"
 	"github.com/RecRivenVI/gallery/tools/testlab/internal/environment"
 	"github.com/RecRivenVI/gallery/tools/testlab/internal/report"
 )
+
+// ValidatePerfCorpusBinding 在任何计时请求之前，证明当前 AppRoot 的 active publication
+// 与 manifest 是同一个快照。否则 manifest 自报的 500k/十来源/双关系形状可能被贴到
+// 另一套数据库的性能结果上。该请求不计入分位数，并会预热当前进程；cold-process
+// 模式随后仍会在每个组合前重启，warm 模式则本来就会显式 warmup。
+func ValidatePerfCorpusBinding(rep *report.Report, sess *environment.Session, manifest corpus.Manifest) bool {
+	limit, omitTotal := 1, true
+	resp, err := listWorks(sess, api.ListWorksParams{Limit: &limit, OmitTotal: &omitTotal})
+	if err != nil || resp == nil || resp.JSON200 == nil {
+		rep.Add("perf/corpus-publication-matches-manifest", false,
+			fmt.Sprintf("预检请求失败: err=%v status=%d", err, environment.StatusOf(resp)))
+		return false
+	}
+	actualPublication := string(resp.JSON200.QueryPublicationId)
+	ok := actualPublication == manifest.QueryPublicationID && resp.JSON200.CatalogRevision == manifest.CatalogRevisionID
+	detail := ""
+	if !ok {
+		// 只记录是否匹配，不把任何可能被手工替换的 ID 回显进报告。
+		detail = "当前 publication 或 Catalog revision 与 manifest 不一致"
+	}
+	rep.Add("perf/corpus-publication-matches-manifest", ok, detail)
+	return ok
+}
 
 // perfShape 描述第九节「查询类别」中的一个可重复查询类别。
 type perfShape struct {

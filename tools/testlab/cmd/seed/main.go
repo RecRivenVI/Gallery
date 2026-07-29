@@ -33,6 +33,8 @@ import (
 	"fmt"
 	"log"
 	"os"
+
+	"github.com/RecRivenVI/gallery/tools/testlab/internal/corpus"
 )
 
 const nonrecommendedScaleThreshold = 1_000_000
@@ -43,7 +45,7 @@ func main() {
 	batchSize := flag.Int("batch", 20000, "单次 Stage 调用的批大小，控制峰值内存")
 	sources := flag.Int("sources", 0, "语料分布到的 Source 数量；0 时兼容读取 GALLERY_TESTLAB_SEED_SOURCES，仍未指定则为 1")
 	manifestPath := flag.String("manifest-out", "", "写入生成语料统计摘要 JSON 的路径（必需，probe 从中读取真实生成的 ID）")
-	tier := flag.String("tier", "", "本次运行的规模等级标签（smoke/integration/preflight/reference/nonrecommended），仅写入 manifest 供报告标注，不影响生成逻辑")
+	tier := flag.String("tier", "", "本次运行的规模等级（smoke/integration/preflight/reference/nonrecommended）；reference 会强制 500k/10 Source/每 Work 两关系")
 	allowNonrecommended := flag.Bool("allow-nonrecommended-scale", false, "显式允许生成 >=1,000,000 的非推荐诊断规模")
 	flag.Parse()
 
@@ -56,8 +58,15 @@ func main() {
 	if *scale >= nonrecommendedScaleThreshold {
 		fmt.Println("NONRECOMMENDED_SCALE：本次规模不属于正式支持规模，不构成标准 Gate")
 	}
+	relationsPerWork, err := relationsPerWorkForSeed(*tier, *scale, *sources)
+	if err != nil {
+		log.Fatal(err)
+	}
 
-	manifest, err := runSeed(context.Background(), seedConfig{AppRoot: *appRoot, Scale: *scale, BatchSize: *batchSize, Sources: *sources})
+	manifest, err := runSeed(context.Background(), seedConfig{
+		AppRoot: *appRoot, Scale: *scale, BatchSize: *batchSize, Sources: *sources,
+		RelationsPerWork: relationsPerWork,
+	})
 	if err != nil {
 		log.Fatalf("testlabseed 失败: %v", err)
 	}
@@ -74,4 +83,16 @@ func main() {
 	fmt.Printf("testlabseed: scale=%d tier=%s stageMs=%d overlayMs=%d validationMs=%d publishMs=%d totalMs=%d manifest=%s\n",
 		manifest.Scale, manifest.Tier, manifest.StageDurationMs, manifest.OverlayDurationMs, manifest.ValidationDurationMs, manifest.PublishDurationMs,
 		manifest.TotalDurationMs, *manifestPath)
+}
+
+// relationsPerWorkForSeed 让 reference 不只是输出标签：正式入口必须在任何高成本
+// 构建前拒绝降级规模或匿名 Source 数，并真实生成每 Work 两条 Creator 关系。
+func relationsPerWorkForSeed(tier string, scale, sources int) (int, error) {
+	if tier != "reference" {
+		return 1, nil
+	}
+	if scale != corpus.ReferenceScale || sources != corpus.ReferenceSourceCount {
+		return 0, fmt.Errorf("reference 查询语料必须显式使用 scale=%d、sources=%d", corpus.ReferenceScale, corpus.ReferenceSourceCount)
+	}
+	return corpus.ReferenceRelationsPerWork, nil
 }

@@ -12,6 +12,7 @@ import (
 	"github.com/RecRivenVI/gallery/internal/platform/clock"
 	"github.com/RecRivenVI/gallery/internal/platform/identity"
 	"github.com/RecRivenVI/gallery/internal/storage"
+	"github.com/RecRivenVI/gallery/tools/testlab/internal/corpus"
 	"github.com/RecRivenVI/gallery/tools/testlab/internal/hostfacts"
 	"github.com/RecRivenVI/gallery/tools/testlab/internal/report"
 )
@@ -47,10 +48,10 @@ func TestPublicationSourceAliasesBindAllReferenceTargetsInOrder(t *testing.T) {
 		"Source-pixiv", "Source-pixivFANBOX", "Source-Gank", "Source-Fantia", "Source-Patreon",
 		"Source-Pawchive", "Source-X", "Source-微博", "Source-微博_Legacy", "Source-Venera",
 	}
-	if got := publicationSourceAliases(ReferencePublicationSources); !slices.Equal(got, want) {
+	if got := corpus.SourceAliasesForCount(ReferencePublicationSources); !slices.Equal(got, want) {
 		t.Fatalf("正式来源槽位=%v want=%v", got, want)
 	}
-	if got := publicationSourceAliases(4); !slices.Equal(got,
+	if got := corpus.SourceAliasesForCount(4); !slices.Equal(got,
 		[]string{"synthetic-source-00", "synthetic-source-01", "synthetic-source-02", "synthetic-source-03"}) {
 		t.Fatalf("非正式来源槽位=%v", got)
 	}

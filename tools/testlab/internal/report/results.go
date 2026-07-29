@@ -221,6 +221,8 @@ type PublicationBuildSample struct {
 type CorpusFacts struct {
 	Scale       int `json:"scale"`
 	SourceCount int `json:"sourceCount"`
+	// RelationsPerWork 记录每个 Work 的实际 Creator 关系形状；正式 Reference 为 2。
+	RelationsPerWork int `json:"relationsPerWork,omitempty"`
 	// SourceAliases 按语料槽位记录非敏感的目标来源代号，使“10 Source”
 	// 不能在报告中退化成十个没有平台身份的匿名槽位。
 	SourceAliases []string `json:"sourceAliases,omitempty"`

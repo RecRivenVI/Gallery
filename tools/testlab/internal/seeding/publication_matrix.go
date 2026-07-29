@@ -26,27 +26,14 @@ import (
 )
 
 const (
-	ReferencePublicationScale       = 500_000
-	ReferencePublicationSources     = 10
+	ReferencePublicationScale       = corpus.ReferenceScale
+	ReferencePublicationSources     = corpus.ReferenceSourceCount
 	ReferencePrimarySourceShare     = 0.50
 	MinReferencePublicationSamples  = 20
 	ReferencePublishP95Milliseconds = 250.0
 )
 
 var ReferencePublicationRatios = []float64{0.01, 0.10, 0.50}
-
-var ReferencePublicationSourceAliases = []string{
-	"Source-pixiv",
-	"Source-pixivFANBOX",
-	"Source-Gank",
-	"Source-Fantia",
-	"Source-Patreon",
-	"Source-Pawchive",
-	"Source-X",
-	"Source-微博",
-	"Source-微博_Legacy",
-	"Source-Venera",
-}
 
 // PublicationMatrixConfig 描述一次完整 Catalog publication 变化矩阵。
 // Checkpoint 在 baseline 和每个样本完成后收到可原子持久化的当前报告，使数小时的
@@ -154,17 +141,6 @@ func sameRatios(left, right []float64) bool {
 	return true
 }
 
-func publicationSourceAliases(sources int) []string {
-	if sources == len(ReferencePublicationSourceAliases) {
-		return append([]string(nil), ReferencePublicationSourceAliases...)
-	}
-	aliases := make([]string, sources)
-	for slot := range aliases {
-		aliases[slot] = fmt.Sprintf("synthetic-source-%02d", slot)
-	}
-	return aliases
-}
-
 func ensureEmptyPublicationRoot(root string) error {
 	items, err := os.ReadDir(root)
 	if os.IsNotExist(err) {
@@ -217,11 +193,12 @@ func newPublicationMatrixReport(cfg PublicationMatrixConfig, primaryWorks int, b
 		SchemaVersion: 2, Scenario: "stage4-publication-change-matrix", Tier: cfg.Tier,
 		Transport: "production-catalog-store", Scale: cfg.Scale, Environment: &facts,
 		Corpus: &report.CorpusFacts{
-			Scale: cfg.Scale, SourceCount: cfg.Sources, ClonedSourceCountOnLastPublish: cfg.Sources - 1,
-			SourceAliases:               publicationSourceAliases(cfg.Sources),
-			SourceBeginDurationsMs:      baseline.SourceBeginDurationsMs,
-			SourceValidationDurationsMs: baseline.SourceValidationDurationsMs,
-			SourcePublishDurationsMs:    baseline.SourcePublishDurationsMs,
+			Scale: cfg.Scale, SourceCount: cfg.Sources, RelationsPerWork: corpus.ReferenceRelationsPerWork,
+			ClonedSourceCountOnLastPublish: cfg.Sources - 1,
+			SourceAliases:                  corpus.SourceAliasesForCount(cfg.Sources),
+			SourceBeginDurationsMs:         baseline.SourceBeginDurationsMs,
+			SourceValidationDurationsMs:    baseline.SourceValidationDurationsMs,
+			SourcePublishDurationsMs:       baseline.SourcePublishDurationsMs,
 		},
 		PublicationMatrix: &report.PublicationMatrix{
 			ChangeRatioBasis: "active-publication-work-projections", PrimarySourceShare: cfg.PrimarySourceShare,
@@ -263,7 +240,7 @@ func validatePublicationResumeReport(cfg PublicationMatrixConfig, primaryWorks i
 	if result.SchemaVersion != 2 || result.Scenario != "stage4-publication-change-matrix" ||
 		result.Tier != cfg.Tier || result.Scale != cfg.Scale || result.Transport != "production-catalog-store" ||
 		result.Corpus == nil || result.Corpus.Scale != cfg.Scale || result.Corpus.SourceCount != cfg.Sources ||
-		!slices.Equal(result.Corpus.SourceAliases, publicationSourceAliases(cfg.Sources)) ||
+		!slices.Equal(result.Corpus.SourceAliases, corpus.SourceAliasesForCount(cfg.Sources)) ||
 		result.PublicationMatrix == nil {
 		return fmt.Errorf("续跑报告与 publication 场景、规模或语料不匹配")
 	}

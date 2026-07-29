@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"path/filepath"
+	"slices"
 	"testing"
 
 	"github.com/RecRivenVI/gallery/internal/platform/appdirs"
@@ -42,6 +43,12 @@ func TestMultiSourceSeedExercisesCloneUnchangedSources(t *testing.T) {
 	}
 	if manifest.SourceCount() != sources {
 		t.Fatalf("manifest.SourceCount() = %d, want %d", manifest.SourceCount(), sources)
+	}
+	if manifest.RelationsPerWork != 1 {
+		t.Fatalf("manifest.RelationsPerWork = %d, want 1", manifest.RelationsPerWork)
+	}
+	if got, want := manifest.SourceAliases, corpus.SourceAliasesForCount(sources); !slices.Equal(got, want) {
+		t.Fatalf("manifest.SourceAliases = %v, want %v", got, want)
 	}
 	seen := map[string]struct{}{}
 	for _, sourceID := range manifest.SourceIDs {
@@ -118,6 +125,28 @@ func TestMultiSourceSeedExercisesCloneUnchangedSources(t *testing.T) {
 	}
 	if got := countRows(t, db, `SELECT count(*) FROM work_projections WHERE catalog_revision_id=? AND source_id=? AND hidden=1`, revision, firstSource); got != expectedHidden {
 		t.Fatalf("首个 Source 的 hidden 行数 = %d, want %d", got, expectedHidden)
+	}
+}
+
+func TestMultiSourceSeedCanBuildTwoCreatorRelationsPerWork(t *testing.T) {
+	const scale, sources = 120, 3
+	root := t.TempDir()
+	manifest, err := Run(context.Background(), Config{
+		AppRoot: filepath.Join(root, "app"), Scale: scale, BatchSize: 37, Sources: sources,
+		RelationsPerWork: corpus.ReferenceRelationsPerWork,
+	})
+	if err != nil {
+		t.Fatalf("构建双关系语料: %v", err)
+	}
+	if manifest.RelationsPerWork != corpus.ReferenceRelationsPerWork {
+		t.Fatalf("manifest.RelationsPerWork = %d, want %d", manifest.RelationsPerWork, corpus.ReferenceRelationsPerWork)
+	}
+	db := openCatalog(t, filepath.Join(root, "app"))
+	if got := countRows(t, db, `SELECT count(*) FROM work_creator_relations AS r
+JOIN query_publications AS q
+  ON q.catalog_revision_id=r.catalog_revision_id AND q.overlay_revision_id=r.overlay_revision_id
+WHERE q.query_publication_id=?`, manifest.QueryPublicationID); got != scale*corpus.ReferenceRelationsPerWork {
+		t.Fatalf("当前 publication 关系数 = %d, want %d", got, scale*corpus.ReferenceRelationsPerWork)
 	}
 }
 

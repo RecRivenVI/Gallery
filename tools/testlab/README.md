@@ -66,9 +66,41 @@ Cursor 与 20 项媒体/DerivedAsset finding；`creator.id` 使用另一个真�
 # 多 Source preflight（100k；显式覆盖 cloneUnchangedSources）
 & $env:GALLERY_GO run ./tools/testlab/cmd/seed -approot <root>/appdirs/query-100k -scale 100000 -sources 10 -tier preflight -manifest-out <root>/manifests/query-100k.json
 
+# 正式 Query Reference 语料；reference 标签会在构建前强制 500k、10 个权威目标来源槽位和每 Work 两条 Creator 关系
+& $env:GALLERY_GO run ./tools/testlab/cmd/seed `
+  -approot <root>/appdirs/query-reference-500k `
+  -scale 500000 -sources 10 -tier reference `
+  -manifest-out <root>/manifests/query-reference-500k.json
+
+# 热缓存、并发查询矩阵；每个组合显式预热，报告逐项记录 limit/concurrency/runs/P95/P99
+& $env:GALLERY_GO run ./tools/testlab/cmd/probe `
+  -go $env:GALLERY_GO -repo . `
+  -approot <root>/appdirs/query-reference-500k `
+  -log <root>/logs/query-reference-500k-warm.log `
+  -scenario perf -perf-matrix full -perf-cache warm -perf-warmup-runs 3 `
+  -runs 30 -perf-p99-runs 100 -perf-scenario-timeout 30m `
+  -manifest <root>/manifests/query-reference-500k.json `
+  -results-out <root>/reports/query-reference-500k-warm.json -tier reference
+
+# 冷进程矩阵；每个组合前重启 galleryd，但不清空操作系统文件缓存，不能冒充冷存储读
+& $env:GALLERY_GO run ./tools/testlab/cmd/probe `
+  -go $env:GALLERY_GO -repo . `
+  -approot <root>/appdirs/query-reference-500k `
+  -log <root>/logs/query-reference-500k-cold-process.log `
+  -scenario perf -perf-matrix full -perf-cache cold-process -perf-warmup-runs 0 `
+  -runs 30 -perf-p99-runs 100 -perf-scenario-timeout 60m `
+  -manifest <root>/manifests/query-reference-500k.json `
+  -results-out <root>/reports/query-reference-500k-cold-process.json -tier reference
+
 # ≥1,000,000（非推荐诊断场景，必须显式确认）
 & $env:GALLERY_GO run ./tools/testlab/cmd/seed -approot <root>/appdirs/query-nonrec -scale 2000000 -allow-nonrecommended-scale -tier nonrecommended -manifest-out <root>/manifests/query-nonrec.json
 ```
+
+`reference` 不是自由文本标签：seed 会在创建 AppRoot 前拒绝非 500,000、非 10 Source 的参数，并
+实际生成每 Work 两条 Creator 关系；manifest 与 report 同时记录十目标来源代号和关系数。probe 在任何
+计时请求前先经真实 HTTP 核对当前 active publication/Catalog revision 与 manifest 一致，错配 AppRoot
+会直接失败而不会开始矩阵。这个预检不进入分位数；warm 模式随后逐组合显式预热，cold-process 模式逐
+组合重启 `galleryd`，但两者都不清空操作系统文件缓存。
 
 ## Publication 变化矩阵
 

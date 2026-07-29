@@ -16,7 +16,53 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"slices"
 )
+
+const (
+	// ReferenceScale、ReferenceSourceCount 与 ReferenceRelationsPerWork 是查询和
+	// publication 两条正式性能入口共用的语料形状。只给命令加 tier 标签但不满足
+	// 这些事实时，不得产出可被误认成 Reference Gate 的报告。
+	ReferenceScale            = 500_000
+	ReferenceSourceCount      = 10
+	ReferenceRelationsPerWork = 2
+)
+
+var referenceSourceAliases = [...]string{
+	"Source-pixiv",
+	"Source-pixivFANBOX",
+	"Source-Gank",
+	"Source-Fantia",
+	"Source-Patreon",
+	"Source-Pawchive",
+	"Source-X",
+	"Source-微博",
+	"Source-微博_Legacy",
+	"Source-Venera",
+}
+
+// ReferenceSourceAliases 返回按正式门禁顺序排列的十个非敏感目标来源代号副本。
+func ReferenceSourceAliases() []string {
+	return append([]string(nil), referenceSourceAliases[:]...)
+}
+
+// SourceAliasesForCount 为合成语料的每个 Source 槽位提供稳定、非敏感身份。
+// 十 Source 正式形状绑定权威目标平台；其它规模明确标成 synthetic，不能冒充正式覆盖。
+func SourceAliasesForCount(count int) []string {
+	if count == len(referenceSourceAliases) {
+		return ReferenceSourceAliases()
+	}
+	aliases := make([]string, count)
+	for slot := range aliases {
+		aliases[slot] = fmt.Sprintf("synthetic-source-%02d", slot)
+	}
+	return aliases
+}
+
+// HasReferenceSourceAliases 要求数量、顺序和内容全部匹配正式目标来源集合。
+func HasReferenceSourceAliases(aliases []string) bool {
+	return slices.Equal(aliases, referenceSourceAliases[:])
+}
 
 // SpecialCJKMarker 是选择性中文搜索标记：出现在每 1000 个作品中固定余数为
 // specialCJKOffset 的那一个。
@@ -221,10 +267,52 @@ type Manifest struct {
 	// 之一。只有 Sources>1 的语料才会真正走到它。
 	Sources                     int      `json:"sources,omitempty"`
 	SourceIDs                   []string `json:"sourceIds,omitempty"`
+	SourceAliases               []string `json:"sourceAliases,omitempty"`
+	RelationsPerWork            int      `json:"relationsPerWork,omitempty"`
 	SourceVisibleWorkCounts     []int    `json:"sourceVisibleWorkCounts,omitempty"`
 	SourceBeginDurationsMs      []int64  `json:"sourceBeginDurationsMs,omitempty"`
 	SourceValidationDurationsMs []int64  `json:"sourceValidationDurationsMs,omitempty"`
 	SourcePublishDurationsMs    []int64  `json:"sourcePublishDurationsMs,omitempty"`
+}
+
+// ValidateReferenceShape 拒绝仅带 reference 标签、却没有正式规模、双关系与十目标
+// 来源身份的 manifest。它只校验可审计语料身份，不替代 probe 对数据库与查询行为的验证。
+func (m Manifest) ValidateReferenceShape() error {
+	if m.Scale != ReferenceScale {
+		return fmt.Errorf("scale=%d，必须为 %d", m.Scale, ReferenceScale)
+	}
+	if m.SourceCount() != ReferenceSourceCount {
+		return fmt.Errorf("sourceCount=%d，必须为 %d", m.SourceCount(), ReferenceSourceCount)
+	}
+	if m.RelationsPerWork != ReferenceRelationsPerWork {
+		return fmt.Errorf("relationsPerWork=%d，必须为 %d", m.RelationsPerWork, ReferenceRelationsPerWork)
+	}
+	if !HasReferenceSourceAliases(m.SourceAliases) {
+		return fmt.Errorf("sourceAliases 未按正式目标来源顺序绑定")
+	}
+	if len(m.SourceIDs) != ReferenceSourceCount || m.SourceID == "" || m.SourceID != m.SourceIDs[0] {
+		return fmt.Errorf("Source ID 集合不完整或首项不一致")
+	}
+	seen := make(map[string]struct{}, len(m.SourceIDs))
+	for _, sourceID := range m.SourceIDs {
+		if sourceID == "" {
+			return fmt.Errorf("Source ID 集合包含空值")
+		}
+		if _, duplicate := seen[sourceID]; duplicate {
+			return fmt.Errorf("Source ID 集合包含重复值")
+		}
+		seen[sourceID] = struct{}{}
+	}
+	if len(m.SourceVisibleWorkCounts) != ReferenceSourceCount ||
+		len(m.SourceBeginDurationsMs) != ReferenceSourceCount ||
+		len(m.SourceValidationDurationsMs) != ReferenceSourceCount ||
+		len(m.SourcePublishDurationsMs) != ReferenceSourceCount {
+		return fmt.Errorf("逐 Source 计数或计时集合不完整")
+	}
+	if m.Stats.N != ReferenceScale || m.QueryPublicationID == "" || m.CatalogRevisionID == "" {
+		return fmt.Errorf("语料统计或 publication 身份不完整")
+	}
+	return nil
 }
 
 // SourceCount 返回本次语料的 Source 数量，对没有该字段的历史 manifest 返回 1。

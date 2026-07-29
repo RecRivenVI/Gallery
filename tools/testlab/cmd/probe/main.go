@@ -145,6 +145,17 @@ func run() int {
 		}
 		rep.Nonrecommended = manifest.Nonrecommended
 		recordCorpusFacts(rep, manifest)
+		if rep.Tier == "reference" {
+			if shapeErr := manifest.ValidateReferenceShape(); shapeErr != nil {
+				rep.Add("corpus/reference-shape", false, shapeErr.Error())
+				if saveErr := rep.Save(*resultsOut); saveErr != nil {
+					fmt.Fprintf(os.Stderr, "save rejected reference report: %v\n", saveErr)
+				}
+				fmt.Fprintf(os.Stderr, "reference corpus shape: %v\n", shapeErr)
+				return 1
+			}
+			rep.Add("corpus/reference-shape", true, "")
+		}
 	}
 
 	switch *scenario {
@@ -160,11 +171,17 @@ func run() int {
 		if *perfMatrixKind == "directional" {
 			rep.Nonrecommended = true
 		}
+		if !query.ValidatePerfCorpusBinding(rep, sess, manifest) {
+			if saveErr := rep.Save(*resultsOut); saveErr != nil {
+				fmt.Fprintf(os.Stderr, "save rejected perf report: %v\n", saveErr)
+			}
+			return 1
+		}
 		combos := query.PerfCombosFor(*perfMatrixKind, *runs, *perfP99Runs)
 		timeouts := query.PerfTimeouts{PerRequest: *perfRequestTimeout, PerCombination: *perfCombinationTimeout, Scenario: *perfScenarioTimeout}
-		// perf 场景在矩阵之前只建立过 Session（bootstrap/pairing 走 control.db，不触碰
-		// Catalog 查询路径），因此可以如实断言进程尚未服务过任何查询请求。
-		opts, optsErr := perfOptions(*perfCacheMode, *perfWarmupRuns, true, runner)
+		// publication/manifest 绑定预检已经服务过一次查询，warm 模式不能再把首组合
+		// 标成 cold-process；cold-process 仍会在每个组合前重启。
+		opts, optsErr := perfOptions(*perfCacheMode, *perfWarmupRuns, false, runner)
 		if optsErr != nil {
 			fmt.Fprintf(os.Stderr, "%v\n", optsErr)
 			return 2
@@ -250,6 +267,12 @@ func run() int {
 		query.RunTotalTriStateCorrectness(rep, sess, manifest.Stats)
 		query.RunSortCorrectness(rep, sess)
 		query.RunCursorCorrectness(rep, sess)
+		if !query.ValidatePerfCorpusBinding(rep, sess, manifest) {
+			if saveErr := rep.Save(*resultsOut); saveErr != nil {
+				fmt.Fprintf(os.Stderr, "save rejected perf report: %v\n", saveErr)
+			}
+			return 1
+		}
 		combos := query.PerfCombosFor(*perfMatrixKind, *runs, *perfP99Runs)
 		timeouts := query.PerfTimeouts{PerRequest: *perfRequestTimeout, PerCombination: *perfCombinationTimeout, Scenario: *perfScenarioTimeout}
 		// all 场景在矩阵之前已经跑完全部 Correctness/Cursor 断言，进程早已服务过大量
@@ -316,7 +339,8 @@ func recordEnvironmentFacts(rep *report.Report, dbDir, manualStorageClass string
 func recordCorpusFacts(rep *report.Report, manifest corpus.Manifest) {
 	sources := manifest.SourceCount()
 	rep.Corpus = &report.CorpusFacts{
-		Scale: manifest.Scale, SourceCount: sources,
+		Scale: manifest.Scale, SourceCount: sources, RelationsPerWork: manifest.RelationsPerWork,
+		SourceAliases:                  append([]string(nil), manifest.SourceAliases...),
 		ClonedSourceCountOnLastPublish: sources - 1,
 		SourceBeginDurationsMs:         manifest.SourceBeginDurationsMs,
 		SourceValidationDurationsMs:    manifest.SourceValidationDurationsMs,
