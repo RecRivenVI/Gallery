@@ -24,6 +24,7 @@ const REQUIRED_TOKENS = [
   '--color-text-muted',
   '--color-accent',
   '--color-accent-text',
+  '--color-link',
   '--color-danger',
   '--color-warning',
   '--color-success',
@@ -109,6 +110,22 @@ describe('tokens.css', () => {
     for (const theme of ['light', 'dark', 'high-contrast']) {
       expect(tokens.indexOf(`:root[data-theme='${theme}']`)).toBeGreaterThan(media);
     }
+  });
+
+  it('系统强制颜色模式用系统色完整覆盖颜色 token', () => {
+    const start = tokens.indexOf('@media (forced-colors: active)');
+    expect(start).toBeGreaterThanOrEqual(0);
+    const end = tokens.indexOf('/*\n * 密度。', start);
+    const block = tokens.slice(start, end);
+    expect(block).toContain(':root[data-theme]');
+    for (const name of THEME_COLOR_TOKENS) {
+      expect(block, `forced-colors 缺少 ${name}`).toContain(`${name}:`);
+    }
+    expect(block).toContain('--color-bg: Canvas');
+    expect(block).toContain('--color-text: CanvasText');
+    expect(block).toContain('--color-accent: ButtonFace');
+    expect(block).toContain('--color-accent-text: ButtonText');
+    expect(block).toContain('--color-link: LinkText');
   });
 
   it('两种密度都定义控件与行高', () => {

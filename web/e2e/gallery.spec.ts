@@ -616,6 +616,67 @@ type AccessibilityRoute = {
   ready: (page: Page) => ReturnType<Page['locator']>;
 };
 
+const galleryAccessibilityRoutes: readonly AccessibilityRoute[] = [
+  { path: '/', ready: (current) => current.getByRole('heading', { name: '画廊', exact: true }) },
+  { path: '/browse', ready: (current) => current.getByRole('heading', { name: '全部作品' }) },
+  { path: '/sources/missing', ready: (current) => current.getByText('找不到这个平台', { exact: true }) },
+  { path: '/creators', ready: (current) => current.getByRole('heading', { name: '创作者', exact: true }) },
+  {
+    path: '/creators/missing',
+    ready: (current) => current.getByRole('heading', { name: '创作者', exact: true })
+  },
+  {
+    path: '/works/work_01SYNTHETIC',
+    ready: (current) => current.getByRole('heading', { name: '合成作品', exact: true })
+  },
+  {
+    path: `/works/work_01SYNTHETIC/view/media_01FIRST?queryPublicationId=${publication}`,
+    ready: (current) => current.getByRole('link', { name: '返回作品', exact: true })
+  },
+  { path: '/files', ready: (current) => current.getByRole('heading', { name: '文件', exact: true }) },
+  {
+    path: '/files/missing',
+    ready: (current) => current.getByRole('navigation', { name: '路径', exact: true })
+  },
+  { path: '/route-not-found', ready: (current) => current.getByText('这个页面不存在', { exact: true }) }
+];
+
+const manageAccessibilityRoutes: readonly AccessibilityRoute[] = [
+  { path: '/manage', ready: (current) => current.getByRole('heading', { name: '概览', exact: true }) },
+  {
+    path: '/manage/scans',
+    ready: (current) => current.getByRole('heading', { name: '扫描与任务', exact: true })
+  },
+  {
+    path: '/manage/scans/missing',
+    ready: (current) => current.getByRole('heading', { name: '任务详情', exact: true })
+  },
+  {
+    path: '/manage/diagnostics',
+    ready: (current) => current.getByRole('heading', { name: '验证和诊断', exact: true })
+  },
+  {
+    path: '/manage/security',
+    ready: (current) => current.getByRole('heading', { name: '连接与安全', exact: true })
+  },
+  {
+    path: '/manage/rules',
+    ready: (current) => current.getByRole('heading', { name: '规则', exact: true })
+  },
+  {
+    path: '/manage/rules/missing',
+    ready: (current) => current.getByRole('heading', { name: '规则包', exact: true })
+  },
+  {
+    path: '/manage/governance',
+    ready: (current) => current.getByRole('heading', { name: '治理', exact: true })
+  },
+  {
+    path: '/manage/route-not-found',
+    ready: (current) => current.getByText('没有这个管理页面', { exact: true })
+  }
+];
+
 async function navigateWithinMountedEntry(page: Page, path: string): Promise<void> {
   await page.evaluate((nextPath) => {
     window.history.pushState({}, '', nextPath);
@@ -637,76 +698,15 @@ async function expectRoutesAccessible(page: Page, routes: readonly Accessibility
 
 test('当前用户端与管理端完整路由表在桌面与窄屏通过自动可访问性基线 @smoke', async ({ page }) => {
   test.setTimeout(90_000);
-  const galleryRoutes: readonly AccessibilityRoute[] = [
-    { path: '/', ready: (current) => current.getByRole('heading', { name: '画廊', exact: true }) },
-    { path: '/browse', ready: (current) => current.getByRole('heading', { name: '全部作品' }) },
-    { path: '/sources/missing', ready: (current) => current.getByText('找不到这个平台', { exact: true }) },
-    { path: '/creators', ready: (current) => current.getByRole('heading', { name: '创作者', exact: true }) },
-    {
-      path: '/creators/missing',
-      ready: (current) => current.getByRole('heading', { name: '创作者', exact: true })
-    },
-    {
-      path: '/works/work_01SYNTHETIC',
-      ready: (current) => current.getByRole('heading', { name: '合成作品', exact: true })
-    },
-    {
-      path: `/works/work_01SYNTHETIC/view/media_01FIRST?queryPublicationId=${publication}`,
-      ready: (current) => current.getByRole('link', { name: '返回作品', exact: true })
-    },
-    { path: '/files', ready: (current) => current.getByRole('heading', { name: '文件', exact: true }) },
-    {
-      path: '/files/missing',
-      ready: (current) => current.getByRole('navigation', { name: '路径', exact: true })
-    },
-    { path: '/route-not-found', ready: (current) => current.getByText('这个页面不存在', { exact: true }) }
-  ];
-
-  const manageRoutes: readonly AccessibilityRoute[] = [
-    { path: '/manage', ready: (current) => current.getByRole('heading', { name: '概览', exact: true }) },
-    {
-      path: '/manage/scans',
-      ready: (current) => current.getByRole('heading', { name: '扫描与任务', exact: true })
-    },
-    {
-      path: '/manage/scans/missing',
-      ready: (current) => current.getByRole('heading', { name: '任务详情', exact: true })
-    },
-    {
-      path: '/manage/diagnostics',
-      ready: (current) => current.getByRole('heading', { name: '验证和诊断', exact: true })
-    },
-    {
-      path: '/manage/security',
-      ready: (current) => current.getByRole('heading', { name: '连接与安全', exact: true })
-    },
-    {
-      path: '/manage/rules',
-      ready: (current) => current.getByRole('heading', { name: '规则', exact: true })
-    },
-    {
-      path: '/manage/rules/missing',
-      ready: (current) => current.getByRole('heading', { name: '规则包', exact: true })
-    },
-    {
-      path: '/manage/governance',
-      ready: (current) => current.getByRole('heading', { name: '治理', exact: true })
-    },
-    {
-      path: '/manage/route-not-found',
-      ready: (current) => current.getByText('没有这个管理页面', { exact: true })
-    }
-  ];
-
   for (const viewport of [
     { width: 1280, height: 800 },
     { width: 390, height: 844 }
   ]) {
     await page.setViewportSize(viewport);
     await page.goto('/');
-    await expectRoutesAccessible(page, galleryRoutes);
+    await expectRoutesAccessible(page, galleryAccessibilityRoutes);
     await page.goto('/manage');
-    await expectRoutesAccessible(page, manageRoutes);
+    await expectRoutesAccessible(page, manageAccessibilityRoutes);
   }
 });
 
@@ -732,7 +732,7 @@ async function expectDialogFocusBoundary(page: Page, dialogName: string, trigger
   await expect(trigger).toBeFocused();
 }
 
-async function expectNoHorizontalOverflow(page: Page) {
+async function expectNoHorizontalOverflow(page: Page, context = '') {
   const overflow = await page.evaluate(() => {
     const clientWidth = document.documentElement.clientWidth;
     const scrollWidth = document.documentElement.scrollWidth;
@@ -740,14 +740,22 @@ async function expectNoHorizontalOverflow(page: Page) {
     const offenders = elements
       .map((element: Element) => {
         const rect = element.getBoundingClientRect();
+        const style = getComputedStyle(element);
+        const parentRect = element.parentElement?.getBoundingClientRect();
         return {
           element: `${element.tagName.toLowerCase()}${element.id ? `#${element.id}` : ''}${
             typeof element.className === 'string' && element.className
               ? `.${element.className.trim().replace(/\s+/g, '.')}`
               : ''
           }`,
+          left: Math.round(rect.left * 100) / 100,
           right: Math.round(rect.right * 100) / 100,
-          width: Math.round(rect.width * 100) / 100
+          width: Math.round(rect.width * 100) / 100,
+          cssWidth: style.width,
+          minWidth: style.minWidth,
+          boxSizing: style.boxSizing,
+          parentWidth: parentRect ? Math.round(parentRect.width * 100) / 100 : null,
+          parentRight: parentRect ? Math.round(parentRect.right * 100) / 100 : null
         };
       })
       .filter((item) => item.right > clientWidth + 0.5)
@@ -758,10 +766,53 @@ async function expectNoHorizontalOverflow(page: Page) {
 
   expect(
     overflow.scrollWidth,
-    `页面发生横向溢出：clientWidth=${overflow.clientWidth}, scrollWidth=${overflow.scrollWidth}, ` +
+    `${context ? `${context} ` : ''}页面发生横向溢出：clientWidth=${overflow.clientWidth}, scrollWidth=${overflow.scrollWidth}, ` +
       `elements=${JSON.stringify(overflow.offenders)}`
   ).toBeLessThanOrEqual(overflow.clientWidth);
 }
+
+const wcagTextSpacingOverride = `
+  :where(body, body *) {
+    line-height: 1.5 !important;
+    letter-spacing: 0.12em !important;
+    word-spacing: 0.16em !important;
+  }
+  p {
+    margin-bottom: 2em !important;
+  }
+`;
+
+async function expectRoutesAccessibleWithReflow(
+  page: Page,
+  routes: readonly AccessibilityRoute[]
+): Promise<void> {
+  for (const route of routes) {
+    await navigateWithinMountedEntry(page, route.path);
+    await expect(route.ready(page), `${route.path} 没有进入预期稳定状态`).toBeVisible();
+    await expect(page.locator('.ui-spinner')).toHaveCount(0);
+    await expect(page.locator('html')).toHaveAttribute('data-theme', 'high-contrast');
+    await expectNoHorizontalOverflow(page, route.path);
+    const results = await new AxeBuilder({ page }).withTags(['wcag2a', 'wcag2aa']).analyze();
+    expect(results.violations, `${route.path} 在高对比/文本间距/320px 下存在可访问性违规`).toEqual([]);
+  }
+}
+
+test('高对比、文本间距与 400% 等效宽度下完整路由保持可访问重排 @smoke', async ({ page }) => {
+  test.setTimeout(90_000);
+  await page.addInitScript(() => window.localStorage.setItem('gallery.theme', 'high-contrast'));
+  await page.emulateMedia({ forcedColors: 'active', contrast: 'more' });
+  await page.setViewportSize({ width: 320, height: 800 });
+
+  await page.goto('/');
+  expect(await page.evaluate(() => window.matchMedia('(forced-colors: active)').matches)).toBe(true);
+  await page.addStyleTag({ content: wcagTextSpacingOverride });
+  await expectRoutesAccessibleWithReflow(page, galleryAccessibilityRoutes);
+
+  await page.goto('/manage');
+  expect(await page.evaluate(() => window.matchMedia('(forced-colors: active)').matches)).toBe(true);
+  await page.addStyleTag({ content: wcagTextSpacingOverride });
+  await expectRoutesAccessibleWithReflow(page, manageAccessibilityRoutes);
+});
 
 test('窄屏导航限制焦点并由 Escape 关闭后返还触发点 @smoke', async ({ page }) => {
   await page.setViewportSize({ width: 390, height: 844 });

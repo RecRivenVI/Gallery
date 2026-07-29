@@ -29,6 +29,7 @@
   --color-text-muted: #62635d;
   --color-accent: #30312d;
   --color-accent-text: #ffffff;
+  --color-link: #30312d;
   --color-danger: #a52b25;
   --color-warning: #876018;
   --color-success: #37694f;
@@ -114,6 +115,7 @@
     --color-text-muted: #aaaba2;
     --color-accent: #e5e5dc;
     --color-accent-text: #1b1c18;
+    --color-link: #e5e5dc;
     --color-danger: #f0a098;
     --color-warning: #ddb85f;
     --color-success: #89c6a4;
@@ -145,6 +147,7 @@
   --color-text-muted: #62635d;
   --color-accent: #30312d;
   --color-accent-text: #ffffff;
+  --color-link: #30312d;
   --color-danger: #a52b25;
   --color-warning: #876018;
   --color-success: #37694f;
@@ -174,6 +177,7 @@
   --color-text-muted: #aaaba2;
   --color-accent: #e5e5dc;
   --color-accent-text: #1b1c18;
+  --color-link: #e5e5dc;
   --color-danger: #f0a098;
   --color-warning: #ddb85f;
   --color-success: #89c6a4;
@@ -208,6 +212,7 @@
   --color-text-muted: #ececec;
   --color-accent: #6ff5d0;
   --color-accent-text: #000000;
+  --color-link: #6ff5d0;
   --color-danger: #ff9b8f;
   --color-warning: #ffd166;
   --color-success: #7dfab5;
@@ -222,6 +227,45 @@
   --shadow-sm: 0 0 0 1px #ffffff;
   --shadow-md: 0 0 0 1px #ffffff;
   --shadow-lg: 0 0 0 2px #ffffff;
+}
+
+/*
+ * Windows High Contrast / forced-colors 的系统调色板高于应用主题。浏览器会把背景替换成 Canvas，
+ * 但自定义属性里的普通 RGB 颜色未必同步替换；若继续沿用深色高对比主题的浅色文字，就会在系统
+ * 的白色 Canvas 上变成近白字。这里把全部颜色 token 映射到系统色，让画廊与管理端共同服从用户
+ * 选择的高对比调色板。语义状态继续由文字和图标表达，不依赖 danger/warning/success 的色相。
+ */
+@media (forced-colors: active) {
+  :root,
+  :root[data-theme] {
+    color-scheme: light dark;
+
+    --color-bg: Canvas;
+    --color-surface-sunken: Canvas;
+    --color-surface: Canvas;
+    --color-surface-raised: Canvas;
+    --color-surface-immersive: Canvas;
+    --color-border: CanvasText;
+    --color-text: CanvasText;
+    --color-text-muted: CanvasText;
+    --color-accent: ButtonFace;
+    --color-accent-text: ButtonText;
+    --color-link: LinkText;
+    --color-danger: CanvasText;
+    --color-warning: CanvasText;
+    --color-success: CanvasText;
+
+    --color-accent-soft: Canvas;
+    --color-danger-soft: Canvas;
+    --color-warning-soft: Canvas;
+    --color-success-soft: Canvas;
+    --color-overlay: Canvas;
+    --color-focus: Highlight;
+
+    --shadow-sm: 0 0 0 1px CanvasText;
+    --shadow-md: 0 0 0 1px CanvasText;
+    --shadow-lg: 0 0 0 2px CanvasText;
+  }
 }
 
 /*

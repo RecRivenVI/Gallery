@@ -73,7 +73,7 @@ textarea {
 }
 
 a {
-  color: var(--color-accent);
+  color: var(--color-link);
   text-underline-offset: 0.2em;
 }
 
