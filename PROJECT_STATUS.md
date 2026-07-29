@@ -58,7 +58,7 @@ Gallery 是一个"本地优先"（数据主要放在自己电脑上，不依赖�
 | 阶段 1：领域和数据所有权 | ✅ | ✅（限定范围内） | 备份/恢复、目录库整体重建、作者合并/撤销合并、文件"孤儿"处理等全部完成并通过验证 | 真实网络共享盘（SMB/NAS）、Windows/Linux 底层文件身份识别等留待以后阶段 | 已完成 |
 | 阶段 2：规则系统 | ✅（正确性层面） | ✅（限定范围内） | 规则生命周期、编译执行、参数/绑定和影响调度已形成闭环 | 正式性能/平台测试尚未完成 | 已完成 |
 | 阶段 3：扫描、任务与目录库 | ✅（代码与模拟数据层面） | 🟡（真实大盘抽样通过，全量未完成） | 真实固态硬盘（SSD）、机械硬盘（HDD）各完成几十万文件规模的抽样验收，发现并修复了 2 个真实 bug | 真实全量扫描被主动叫停，正式性能门禁尚未跑完；网络共享盘尚未验证 | 阶段 4 正式压力测试 |
-| 阶段 4：查询与媒体 | 🟡（主线代码完成，部分参数未冻结） | 🟡（正确性收口完成，500,000 规模正式压力测试已执行） | 搜索、排序、分页、显式规则/有效封面、媒体读取/下载、缩略图生成全部有代码闭环；EV-51 用 catalog v18 窄候选降低搜索开销，EV-52 用 catalog v19 验证封印把完整候选验证与 publication 指针切换分离，EV-86 再关闭 Creator/Library 聚合封面逐主体授权正确性缺口 | 新基准与 100k/10 Source 生产预检都不是完整 500k Reference/Degradation 矩阵；受限聚合重选、排序权重、Total、租约和正式 API Freeze 尚未完成 | 完成正式性能矩阵与接口冻结 |
+| 阶段 4：查询与媒体 | 🟡（主线代码完成，部分参数未冻结） | 🟡（正确性收口完成，500,000 规模正式压力测试已执行） | 搜索、排序、分页、显式规则/有效封面、媒体读取/下载、缩略图生成全部有代码闭环；EV-51 用 catalog v18 窄候选降低搜索开销，EV-52 用 catalog v19 验证封印分离重验证与 publication 指针切换，EV-87 再用 catalog v20 窄候选把代表性受限聚合重选降至 9.6～130.1 ms P95 | 正式十来源变化 publication/并发/Degradation 矩阵仍未完成；50,000 Creator 高基数最坏回退为 1.32 s，排序权重、Total、租约和正式 API Freeze 尚未冻结 | 完成正式性能矩阵与接口冻结 |
 | 阶段 5：账户、安全与多客户端 | 🟠（代码与合成安全收尾已实现；恶意输入缺陷已收口） | 🟡（Personal 与同机 LAN 安全管理补证，正式 Gate 未通过） | EV-37/EV-38/EV-44/EV-48 的安全收口之外，EV-60 已把 Session、API Token、Share、allow/deny Grant、账户停用恢复和精确 Session 吊销接入隔离真实浏览器；EV-86 又让 Creator/Library 聚合封面遵守 deny、Token scope 与独立 `media.read` | 真实 LAN 多设备、目标低端设备 Argon2id、真实恶意资源和外部安全测试门禁仍未完成；同机 loopback 不能替代正式 Security Gate | 完成外部设备与恶意资源门禁 |
 | 阶段 6：Web/PWA 界面 | 🟠（前端双入口、设计重构与首批真实业务链路已实现） | 🟡（隔离 Chromium/Firefox 真实 `galleryd` E2E 已建立，正式 Gate 未通过） | 共享设计系统、媒体优先画廊端与紧凑管理端；EV-54～EV-77 覆盖主要业务、治理、取消和重启恢复链，EV-78～EV-85 建立窄屏焦点/溢出、弱网、双入口重构及真实媒体背压恢复 | 门禁仍只用合成 Source；真实存储取消与崩溃恢复响应、其余完整弱网矩阵、触摸设备与屏幕阅读器未验证；画廊端无 DOM 虚拟化 | 扩大真实后端业务与可访问性 E2E，不进入桌面壳 |
 | 阶段 7：平台适配与正式发行 | ⏳（仅早期实验代码涉及，不属于正式产品） | ⛔ | 无 | Windows 之外的平台、安装包、签名、升级等均尚未开始 | 最后阶段 |
@@ -78,6 +78,8 @@ EV-84 完整评审三份 Legacy 前端设计材料，并在现行 React/OpenAPI/
 EV-85 在 E2E 专用真实 `galleryd` 中把媒体读取闸门收窄为 1，并在首个请求已经打开合成 Source 句柄后确定性占满名额；生产用户端收到真实 503 `MEDIA_READ_BUSY/retryable=true`，不刷新页面地自动退避并恢复 200 与 4×3 图片解码。Chromium/Firefox 完整链各增加到 20 项且 Source guard 通过。默认 16 名额/5 秒仍为 PRE_FREEZE，真实 HDD/SMB/NAS、大文件/视频 Range 和多客户端争用尚未验证，Web Gate 结论不变。
 
 EV-86 关闭 EV-50 遗留的 Creator/Library 聚合封面逐主体授权缺口：身份仍只需 `library.read`，非空封面候选则在 publication 冻结 Source 成员上批量求 `library.read` 与 `media.read`，并应用 deny 与 Token scope；全局胜出项不可见时从同快照回退到下一条获授权候选，全成员主体继续读取已物化结果。合成 LAN HTTP 回归覆盖列表/详情、媒体缺权、两种 Source deny 与 Source Token scope。正式 500,000 受限重选性能、物理 LAN 和 Security Gate 结论不变。
+
+EV-87 随后增加 catalog v20 Creator/Source 封面窄候选和全局胜出 Source：请求期不再重连 WorkProjection/Creator 关系，小 allowed 走 Source covering index，大 allowed/小 deny 复用仍获授权的全局胜出项并仅对受影响 Creator 沿 rank index 回退。500,000 Work、5,000 Creator、10 Source 的三路径 P95 为 11.7/9.6/130.1 ms；50,000 Creator 高基数诊断为 276.1/285.0 ms/1.32 s。该结果补齐代表性单机测量，同时把高基数响应明确登记为 Degradation/分页化任务；正式十来源完整关系、变化 publication、并发、冷缓存与真实存储矩阵仍缺，Reference Performance Gate 不变。
 
 **2026-07-27 首次真实来源有界验证与安全审计的结论（[EV-47](Documents/证据/验证记录.md)）**：本轮再次证实
 「代码闭环」与「真实可用」之间的距离比此前记录的更大——发现的缺陷全部属于「代码存在、测试通过、
@@ -133,7 +135,7 @@ EV-86 关闭 EV-50 遗留的 Creator/Library 聚合封面逐主体授权缺口�
 | `galleryd`（后端主程序） | 唯一真正运行业务逻辑的独立进程，负责数据处理和对外接口 | ✅ 完整实现，能启动、能自愈（重启后自动恢复未完成的任务） |
 | `galleryctl`（命令行工具） | 通过命令行操作 Gallery 的工具 | 🟠 当前只提供 `version`（查看版本）和 `health`（查看健康状态）两个命令，尚未覆盖后端已有的约 70 个接口对应的管理能力 |
 | `control.db`（控制数据库） | 存放不能凭空重建的数据：用户的收藏、备注、账号、规则配置等 | ✅ 有完整的备份/恢复机制，验证过删库重建不会丢失用户数据 |
-| `catalog.db`（目录数据库） | 存放扫描出来、可以随时重新生成的数据：作品列表、搜索索引、规则/有效封面投影等 | ✅ 支持整体删除后重新扫描重建；v11～v14 增加显式封面、revision 成员、mtime、规则隐藏/角标，v15～v17 增加 Work 标量、聚合封面与排序协议 v2，v18 增加 FTS 同 rowid 搜索窄候选，v19 增加候选验证封印与 Overlay candidate 创建基线 |
+| `catalog.db`（目录数据库） | 存放扫描出来、可以随时重新生成的数据：作品列表、搜索索引、规则/有效封面投影等 | ✅ 支持整体删除后重新扫描重建；v11～v14 增加显式封面、revision 成员、mtime、规则隐藏/角标，v15～v17 增加 Work 标量、聚合封面与排序协议 v2，v18 增加 FTS 同 rowid 搜索窄候选，v19 增加候选验证封印与 Overlay candidate 创建基线，v20 增加 Creator/Source 封面窄候选与胜出 Source |
 | 规则系统 | 让用户自定义"什么样的文件夹结构算一个作品"的规则引擎 | ✅ 规则的编写、检查、试运行、影响分析、上线、回滚全部完成 |
 | 任务系统（Job/Attempt） | 后台长时间任务（比如扫描、计算哈希）的排队和进度追踪系统 | ✅ 支持取消、重试、断点恢复，有 6 个独立的任务池（一种任务卡住不会影响其他任务） |
 | 扫描（Scanner） | 读取用户文件夹、识别文件的模块 | ✅ 支持"索引/增量/校验"三种模式，真实几十万文件规模的抽样测试通过 |
@@ -243,7 +245,7 @@ EV-86 关闭 EV-50 遗留的 Creator/Library 聚合封面逐主体授权缺口�
 | 签名分页游标（防篡改、绑定发布版本） | 需要 | 已扩充（新增排名协议版本字段） | `internal/contract/query/cursor.schema.json` | ✅ | 契约测试（含篡改/过期测试） | EV-30/31 | ✅ | 游标的有效期（5 分钟）是暂定值 |
 | 覆盖层（Overlay）字段能力注册表 + 按查询动态计算依赖 | 需要 | 从"全局静态划分"改为"按查询动态计算"（真实的设计修正） | `internal/overlay` | ✅ | 单元测试 | EV-31 | ✅ | 无 |
 | 规则封面、CustomCover 与 Work 快照封面 | 需要 | `CoverPath` 映射稳定 SourceMedia/CanonicalMedia；显式规则/有效封面列；CustomCover 优先、失效保留并回退；`PublishedWork.coverMediaId` required nullable；Work 详情接受 `queryPublicationId` | `internal/rules`、`internal/scanner`、`internal/catalog`、`internal/query`、`internal/transport/httpapi` | ✅ | 8 包定向 Go + 合成 v10→v11 migration | EV-42 | ✅（合成范围） | 未使用真实 Source/媒体，未做真实规模或 API Freeze 验证 |
-| Creator/Source/Library 三级聚合封面 | 需要 | Creator 全局选择；Source 严格 Source-local；Library 复用 Source；Creator/Source 共用一次物化候选连接 | `internal/catalog/aggregate_cover.go` | ✅（合成 Correctness） | 跨 Source 行为、生产 SQL 查询计划、Catalog 回归 | EV-50 | ✅（合成范围） | EV-51 的 500k 测量只覆盖 Work 搜索候选，不覆盖聚合封面正式性能；Creator/Library 按主体 deny/Token scope 与独立 `media.read` 裁剪仍未完成 |
+| Creator/Source/Library 三级聚合封面 | 需要 | Creator 全局选择；Source 严格 Source-local；Library 复用 Source；每个 Creator/Source 持久一条 publication 窄候选供授权回退 | `internal/catalog/aggregate_cover.go`、catalog `00020` | ✅（合成 Correctness） | 跨 Source/授权行为、生产 SQL 查询计划、迁移、opt-in 500k 参考性能 | EV-50、EV-86、EV-87 | 🟡 | 500,000 Work/5,000 Creator 代表分布已测；50,000 Creator 高基数最坏回退 P95 1.32 s，完整十来源变化 publication/并发/Degradation 矩阵仍未完成 |
 | Work 聚合查询逐 Source 授权与 cursor 绑定 | EV-39 缺陷收口 | 保留 global/显式范围入口授权；按 publication 成员求 `library.read`，hidden 再求 `library.write`；授权 SQL 先于 total/ranking/keyset/limit | `internal/auth`、`internal/query`、`internal/transport/httpapi`、catalog `00012` | ✅（合成 Correctness） | 标量/批量差分、HTTP deny/Token scope、cursor、查询计划、migration/发布完整性 | EV-44 | ✅（合成范围） | 不代表真实 LAN、其他列表端点或正式性能/API Freeze |
 | 媒体文件按需校验单个文件（VerificationTarget） | 计划外新增 | 新增，经历 5 轮修正（EV-30→34） | `internal/transport/httpapi/server.go` | ✅（以最新一轮结论为准） | 单元+回归测试 | EV-34 明确说明这是最新、最终生效的结论，此前 EV-33 的判断被更正 | ✅（限定为压力测试前的正确性） | 只证明压力测试前的正确性已收口，不代表压力测试已完成或参数已冻结 |
 | 派生资源（缩略图）公开接口 + 真实 JPEG 缩略图生成闭环 | 需要 | 未变 | `internal/derived`、`internal/derived/thumbnail`、`internal/derivedjob` | ✅ | 端到端测试 | EV-30/32/33 | ✅ | 曾发现重试次数上限设为 0 导致重试不生效的问题，已修复 |
@@ -327,11 +329,11 @@ EV-86 关闭 EV-50 遗留的 Creator/Library 聚合封面逐主体授权缺口�
 | 项目 | 数量/情况 | 说明 |
 |---|---|---|
 | `control.db` 迁移文件总数 | 22 个（`00001_initialize.sql` 到 `00022_rule_audit_subjects.sql`） | 在既有身份/授权/安全/规则事实基础上增加 RuleAudit `subject_type`/`subject_id`，并按历史 publish/deprecate/package 动作回填准确主体 |
-| `catalog.db` 迁移文件总数 | 19 个（`00001_initialize.sql` 到 `00019_candidate_validation_seals.sql`） | 除既有发布/快照/稳定引用/派生/媒体/封面/成员事实外，增加发布 mtime、规则呈现、Work 标量、三级聚合封面、排序协议 v2、FTS 同 rowid 搜索窄候选、候选验证封印与 Overlay candidate 创建基线 |
+| `catalog.db` 迁移文件总数 | 20 个（`00001_initialize.sql` 到 `00020_creator_source_cover_projections.sql`） | 除既有发布/快照/稳定引用/派生/媒体/封面/成员事实外，增加发布 mtime、规则呈现、Work 标量、三级聚合封面、排序协议 v2、FTS 同 rowid 搜索窄候选、候选验证封印、Overlay candidate 创建基线与 Creator/Source 封面窄候选 |
 | 阶段 1 Schema Freeze（领域模型冻结） | 已执行（`00016_schema_freeze_phase1.sql`） | 冻结了作品/作者/媒体的唯一性约束、稳定引用规则；文件在网络共享盘环境下的最终唯一约束、大文件哈希计算的持久任务等仍属"兼容演进基线"，未最终冻结 |
 | 阶段 2 规则生命周期迁移 | 已执行（`00017_rules_lifecycle.sql`） | 固化了规则包的不可变发布、草稿乐观锁等；单一生效绑定规则仍属"兼容演进基线" |
 | 阶段 3 任务/正确性迁移 | 已执行（`00018`、`00019`） | 固化了任务/尝试模型、6 个资源池调度；真实大规模性能门禁未随迁移一起完成 |
-| 阶段 4 Catalog 兼容迁移 | 已执行 `00010_query_dependency_fields.sql`～`00019_candidate_validation_seals.sql` | v9→v10 查询依赖回填的提前完成缺陷已由 EV-33 修复；v10→v14 封面/成员/mtime/规则呈现见 EV-42/44/46；v15→v19 的 Work 标量、聚合封面、排序协议、窄候选与验证封印见 EV-50/51/52，物理 Schema 仍未 Freeze |
+| 阶段 4 Catalog 兼容迁移 | 已执行 `00010_query_dependency_fields.sql`～`00020_creator_source_cover_projections.sql` | v9→v10 查询依赖回填的提前完成缺陷已由 EV-33 修复；v10→v14 封面/成员/mtime/规则呈现见 EV-42/44/46；v15→v20 的 Work 标量、聚合封面、排序协议、搜索窄候选、验证封印与 Creator/Source 封面窄候选见 EV-50/51/52/87，物理 Schema 仍未 Freeze |
 | 阶段 5 安全迁移 | 已执行（`00020_phase5_security.sql`） | 方向登记为 COMPATIBILITY_BASELINE；Argon2id、Session 时长等数值保持 PRE_FREEZE；空库和 v19 有数据升级有自动测试 |
 | "已冻结"与"兼容演进基线"与"暂定（PRE_FREEZE）"的区别 | 见状态图例 | **已冻结**＝以后只能兼容式扩展，不能推翻重来；**兼容演进基线**＝方向已定，具体数值/边界还能调整；**暂定/PRE_FREEZE**＝连方向都可能因压力测试结果而调整 |
 
