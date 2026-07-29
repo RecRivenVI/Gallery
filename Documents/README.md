@@ -30,6 +30,8 @@ EV-67 延续上述真实后端持续门禁：当前 primitive config 的 15 个 
 
 [EV-113](证据/验证记录.md) 又把当前用户端 10 条与管理端 9 条路由的稳定成功/空/错误状态纳入统一自动可访问性门禁：Chromium/Firefox 在 1280×800 和 390×844 各完成 38 个最终 DOM 的 WCAG 2 A/AA axe，完整 mock smoke 22/22、根级检查通过。该结果不替代真实移动/触控、缩放/高对比、交互状态组合或人工屏幕阅读器，Web Gate 仍未通过。
 
+[EV-114](证据/验证记录.md) 纠正外部工具测试状态的文档漂移：既有提交 `2af146a` 已让 1,024-byte 输出溢出与 3 秒执行超时实际驱动父子孙 OS 进程树终止；Windows 各 5 轮重复和 WSL2 race 复验通过。生产 Resolver、真实 ffmpeg/恶意媒体容器及 CPU/内存硬限额仍未验证，Security Gate 不因此通过。
+
 2026-07-26 的 [EV-42](证据/验证记录.md#ev-42规则封面customcover-与-work-快照封面闭环e1) 又补齐规则 `CoverPath` → SourceMedia/CanonicalMedia → publication 有效封面的显式链路：同 Work 有效 CustomCover 优先，失效事实保留并回退规则封面，媒体顺序不再借用 `ordinal=-1`；`PublishedWork.coverMediaId` 为 required nullable，作品详情支持 `queryPublicationId`，Web 浏览、详情、封面与媒体沿用同一快照并提供 CustomCover 编辑。该轮通过根级 `Check.ps1`、WSL2 Debian 定向 race、合成 migration 与 Web Vitest/Chromium mock，未使用真实 Source/媒体，也没有真实后端浏览器证据；阶段 4 Reference Performance/API Freeze、阶段 5 Security Gate 与阶段 6 Web Gate 状态不变。
 
 ## 如何使用
