@@ -80,6 +80,7 @@ func run() int {
 	maxFiles := flag.Int("max-files", 0, "source-* 场景的文件数上限；0 表示不限制")
 	maxWallClock := flag.Duration("max-wall-clock", 0, "source-* 场景的墙钟上限；超限主动取消扫描并如实报告「因边界停止」；0 表示不限制")
 	boundedMediaItems := flag.Int("max-media-items-bounded", 12, "source-* 场景有界内容哈希（按需确认）的媒体数上限")
+	cancelOnActiveHash := flag.Bool("cancel-on-active-hash", false, "仅 source-bounded：观察到同 Source 的 Hash 子任务进入 running 后取消父 Scan，并要求父子 30s 内收敛为 cancelled")
 	hashScope := flag.String("hash-scope", "", "source-index 的内容哈希范围：full（全量，SSD）| bounded（有界子集，HDD）；留空时按 -storage-class 推导")
 	guardHashContent := flag.Bool("guard-hash-content", false, "guard 清单是否补充完整内容 SHA-256（默认关闭；开启时务必设置 -guard-max-hash-files/-guard-max-hash-bytes）")
 	guardMaxHashFiles := flag.Int("guard-max-hash-files", 0, "guard 内容哈希的文件数硬边界；0 表示不限制")
@@ -272,7 +273,8 @@ func run() int {
 	case "source-bounded", "source-index", "source-incremental", "source-verify":
 		cfg, cfgErr := buildSourcelabConfig(*scenario, *rulesIndex, *platformCode, *storageClass, *hashScope,
 			bounds.Limits{MaxDirs: *maxDirs, MaxFiles: *maxFiles, MaxWallClock: *maxWallClock}, *boundedMediaItems,
-			sourceguard.Options{HashContent: *guardHashContent, MaxHashFiles: *guardMaxHashFiles, MaxHashBytes: *guardMaxHashBytes})
+			sourceguard.Options{HashContent: *guardHashContent, MaxHashFiles: *guardMaxHashFiles, MaxHashBytes: *guardMaxHashBytes},
+			*cancelOnActiveHash)
 		if cfgErr != nil {
 			fmt.Fprintf(os.Stderr, "%v\n", cfgErr)
 			return 2
@@ -558,7 +560,7 @@ func (r *gallerydRunner) stop() {
 // 对一块机械盘上的完整来源做全量 SHA-256 会把一次验证拖成不可预期的长任务。推导结果
 // 可以被 -hash-scope 显式覆盖。
 func buildSourcelabConfig(scenario, indexPath, platformCode, storageClass, hashScope string,
-	limits bounds.Limits, boundedMediaItems int, guardOptions sourceguard.Options) (sourcelab.Config, error) {
+	limits bounds.Limits, boundedMediaItems int, guardOptions sourceguard.Options, cancelOnActiveHash bool) (sourcelab.Config, error) {
 	if indexPath == "" || platformCode == "" {
 		return sourcelab.Config{}, fmt.Errorf("-scenario=%s 必须指定 -rules-index 与 -platform-code（由 testlabrulesimport 产出）", scenario)
 	}
@@ -589,6 +591,6 @@ func buildSourcelabConfig(scenario, indexPath, platformCode, storageClass, hashS
 		Entry: entry, Package: rulePackage,
 		Mode:   strings.TrimPrefix(scenario, "source-"),
 		Limits: limits, HashScope: hashScope, MaxMediaItems: boundedMediaItems,
-		GuardOptions: guardOptions, StorageClass: storageClass,
+		GuardOptions: guardOptions, StorageClass: storageClass, CancelOnActiveHash: cancelOnActiveHash,
 	}, nil
 }

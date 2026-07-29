@@ -70,6 +70,10 @@ type Config struct {
 	GuardOptions sourceguard.Options
 	// StorageClass 只作为报告标注（ssd/hdd），不影响任何判定。
 	StorageClass string
+	// CancelOnActiveHash 只用于 bounded 真实存储取消门禁：必须先从公共
+	// Job API 观察到同 Source 的 Hash 子任务进入 running，才取消父 Scan。
+	// 默认关闭，不改变普通有界成功链。
+	CancelOnActiveHash bool
 }
 
 // Validate 拒绝名不副实的配置。
@@ -87,6 +91,14 @@ func (c Config) Validate() error {
 	}
 	if c.Mode == ModeBounded && c.Limits.Unlimited() {
 		return fmt.Errorf("bounded 模式必须至少设置一项边界（目录数/文件数/墙钟）；全不设限的「有界模式」名不副实")
+	}
+	if c.CancelOnActiveHash {
+		if c.Mode != ModeBounded {
+			return fmt.Errorf("活动 Hash 取消门禁只允许用于 bounded 模式")
+		}
+		if c.Limits.MaxWallClock <= 0 {
+			return fmt.Errorf("活动 Hash 取消门禁必须设置明确的墙钟上限")
+		}
 	}
 	switch c.HashScope {
 	case HashFull, HashBounded, "":
@@ -605,7 +617,11 @@ func runBounded(rep *report.Report, sess *environment.Session, cfg Config, guard
 	if err != nil {
 		return err
 	}
-	rep.Add("sourcelab/bounded-on-demand-verification", confirmed > 0,
+	verificationOK := confirmed > 0
+	if cfg.CancelOnActiveHash {
+		verificationOK = confirmed == 0 && stoppedBy == "active-hash-cancel"
+	}
+	rep.Add("sourcelab/bounded-on-demand-verification", verificationOK,
 		fmt.Sprintf("confirmed=%d limit=%d stoppedByBound=%q", confirmed, cfg.MaxMediaItems, stoppedBy))
 
 	state.LastProfile = "index"
@@ -755,6 +771,20 @@ func confirmBoundedSubset(rep *report.Report, sess *environment.Session, cfg Con
 			return fmt.Errorf("创建批量按需确认 Job 失败: status=%d", environment.StatusOf(created))
 		}
 		verificationJobs = 1
+		if cfg.CancelOnActiveHash {
+			outcome, cancelErr := waitForActiveHashAndCancel(sess, created.JSON202.Id, state.SourceID,
+				created.JSON202.CreatedAt, waitTimeout)
+			if cancelErr != nil {
+				rep.Add("sourcelab/active-hash-cancellation", false, sanitize(cancelErr.Error()))
+				return cancelErr
+			}
+			stoppedBy = "active-hash-cancel"
+			rep.Add("sourcelab/active-hash-cancellation",
+				outcome.ParentStatus == "cancelled" && outcome.HashStatus == "cancelled",
+				fmt.Sprintf("activeHashObserved=%v parentStatus=%q hashStatus=%q cancelElapsedMs=%d",
+					outcome.ActiveHashObserved, outcome.ParentStatus, outcome.HashStatus, outcome.CancelElapsed.Milliseconds()))
+			return nil
+		}
 		job, stopped, err := waitForJob(sess, created.JSON202.Id, waitTimeout, cancelAtTimeout)
 		if err != nil {
 			return err
@@ -959,6 +989,93 @@ func waitForJob(sess *environment.Session, jobID string, timeout time.Duration, 
 			return nil, true, fmt.Errorf("按需确认 Job 在取消请求后 30s 内未终止")
 		}
 		time.Sleep(100 * time.Millisecond)
+	}
+}
+
+type activeHashCancellationOutcome struct {
+	ActiveHashObserved bool
+	ParentStatus       string
+	HashStatus         string
+	CancelElapsed      time.Duration
+}
+
+// waitForActiveHashAndCancel 只在公共 Job snapshot 明确显示同 Source、本轮创建的
+// Hash 子任务已进入 running 后才取消父 Scan。若截止时仍未观察到活动 Hash，
+// 仍会取消父任务做安全清理，但返回失败，不把普通 discovery 超时冒充为 Hash 取消证据。
+func waitForActiveHashAndCancel(sess *environment.Session, parentJobID, sourceID string,
+	createdAt time.Time, timeout time.Duration) (activeHashCancellationOutcome, error) {
+	deadline := time.Now().Add(timeout)
+	limit := 100
+	for time.Now().Before(deadline) {
+		listed, err := sess.Client.ListJobsWithResponse(context.Background(), &api.ListJobsParams{Limit: &limit}, sess.SameOrigin)
+		if err != nil {
+			return activeHashCancellationOutcome{}, fmt.Errorf("列出 Hash Job 失败: %w", err)
+		}
+		if listed.JSON200 == nil {
+			return activeHashCancellationOutcome{}, fmt.Errorf("列出 Hash Job 失败: status=%d", environment.StatusOf(listed))
+		}
+		for _, job := range listed.JSON200.Jobs {
+			if string(job.Type) != "hash" || string(job.Status) != "running" || job.SourceId == nil || string(*job.SourceId) != sourceID {
+				continue
+			}
+			if job.CreatedAt.Before(createdAt.Add(-time.Second)) {
+				continue
+			}
+			return cancelParentAndAwaitHash(sess, parentJobID, job.Id)
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+
+	// 未命中活动 Hash 也必须回收父任务；清理成功不改变本门禁失败的结论。
+	if _, _, err := waitForJob(sess, parentJobID, time.Nanosecond, true); err != nil {
+		return activeHashCancellationOutcome{}, fmt.Errorf("未观察到活动 Hash，且父 Scan 清理失败: %w", err)
+	}
+	return activeHashCancellationOutcome{}, fmt.Errorf("墙钟上限内未观察到同 Source 的活动 Hash Job")
+}
+
+func cancelParentAndAwaitHash(sess *environment.Session, parentJobID, hashJobID string) (activeHashCancellationOutcome, error) {
+	started := time.Now()
+	cancelled, err := sess.Client.CancelJobWithResponse(context.Background(), parentJobID,
+		&api.CancelJobParams{XGalleryCSRF: sess.CSRF}, sess.SameOrigin)
+	if err != nil {
+		return activeHashCancellationOutcome{}, fmt.Errorf("观察到活动 Hash 后取消父 Scan: %w", err)
+	}
+	if cancelled.JSON202 == nil {
+		return activeHashCancellationOutcome{}, fmt.Errorf("观察到活动 Hash 后取消父 Scan: status=%d", environment.StatusOf(cancelled))
+	}
+
+	deadline := time.Now().Add(30 * time.Second)
+	outcome := activeHashCancellationOutcome{ActiveHashObserved: true}
+	for time.Now().Before(deadline) {
+		parent, err := sess.Client.GetJobWithResponse(context.Background(), parentJobID, sess.SameOrigin)
+		if err != nil || parent.JSON200 == nil {
+			return outcome, fmt.Errorf("读取取消中父 Scan 失败: status=%d err=%v", environment.StatusOf(parent), err)
+		}
+		hash, err := sess.Client.GetJobWithResponse(context.Background(), hashJobID, sess.SameOrigin)
+		if err != nil || hash.JSON200 == nil {
+			return outcome, fmt.Errorf("读取取消中 Hash 失败: status=%d err=%v", environment.StatusOf(hash), err)
+		}
+		outcome.ParentStatus = string(parent.JSON200.Status)
+		outcome.HashStatus = string(hash.JSON200.Status)
+		if outcome.ParentStatus == "cancelled" && outcome.HashStatus == "cancelled" {
+			outcome.CancelElapsed = time.Since(started)
+			return outcome, nil
+		}
+		if isIncompatibleTerminalJobStatus(outcome.ParentStatus) || isIncompatibleTerminalJobStatus(outcome.HashStatus) {
+			return outcome, fmt.Errorf("活动 Hash 取消未收敛为父子 cancelled: parent=%s hash=%s",
+				outcome.ParentStatus, outcome.HashStatus)
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+	return outcome, fmt.Errorf("活动 Hash 取消后 30s 内未收敛: parent=%s hash=%s", outcome.ParentStatus, outcome.HashStatus)
+}
+
+func isIncompatibleTerminalJobStatus(status string) bool {
+	switch status {
+	case "completed", "failed", "needs_repair", "superseded":
+		return true
+	default:
+		return false
 	}
 }
 

@@ -232,6 +232,26 @@ func TestSourcelabRejectsUnboundedBoundedMode(t *testing.T) {
 	}
 }
 
+func TestSourcelabActiveHashCancellationRequiresBoundedWallClock(t *testing.T) {
+	base := sourcelab.Config{
+		Entry: ruleindex.Entry{PlatformCode: "p-00000000", SourceRoot: "x"}, Package: map[string]any{"rule_set_id": "x"},
+		Mode: sourcelab.ModeIndex, Limits: bounds.Limits{MaxWallClock: time.Minute}, CancelOnActiveHash: true,
+	}
+	if err := base.Validate(); err == nil {
+		t.Fatal("非 bounded 模式不得启用活动 Hash 取消门禁")
+	}
+	base.Mode = sourcelab.ModeBounded
+	base.Limits.MaxWallClock = 0
+	base.Limits.MaxFiles = 1
+	if err := base.Validate(); err == nil {
+		t.Fatal("活动 Hash 取消门禁必须有明确墙钟上限")
+	}
+	base.Limits.MaxWallClock = time.Minute
+	if err := base.Validate(); err != nil {
+		t.Fatalf("合法的活动 Hash 取消配置被拒绝: %v", err)
+	}
+}
+
 func runMode(t *testing.T, sess *environment.Session, cfg sourcelab.Config, statePath, scenario string) *report.Report {
 	t.Helper()
 	previous, err := sourcelab.LoadState(statePath)
