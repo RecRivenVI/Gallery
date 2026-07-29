@@ -94,7 +94,15 @@ func run() int {
 	// 环境事实必须在任何测量之前采集：门禁要求每次结果同时记录 CPU、内存、存储型号/
 	// 介质、OS 与 SQLite 版本。介质判定针对 AppDirs 的 data 目录（control.db/catalog.db
 	// 真正所在的目录），而不是仓库所在盘或进程工作目录——这两者经常不是同一块物理盘。
-	recordEnvironmentFacts(rep, filepath.Join(*appRoot, "data"), *storageClass)
+	// 新隔离 AppDirs 此时可能只有 approot 本身；Windows 句柄式卷解析要求目标目录已经
+	// 存在。先建立 Gallery 自有的空 data 目录，再采集物理盘事实，避免把明确的 SSD/HDD
+	// 因“路径尚不存在”降成 unknown。这里从不触碰 Source。
+	dataDir := filepath.Join(*appRoot, "data")
+	if err := os.MkdirAll(dataDir, 0o700); err != nil {
+		fmt.Fprintf(os.Stderr, "prepare AppDirs data directory: %v\n", err)
+		return 1
+	}
+	recordEnvironmentFacts(rep, dataDir, *storageClass)
 
 	binPath := filepath.Join(filepath.Dir(*logPath), fmt.Sprintf("testlab-galleryd-%d.exe", time.Now().UnixNano()))
 	if err := process.BuildGalleryd(*goBin, *repoRoot, binPath); err != nil {

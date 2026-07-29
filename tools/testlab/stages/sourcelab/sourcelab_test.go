@@ -16,6 +16,7 @@ import (
 	appconfig "github.com/RecRivenVI/gallery/internal/config"
 	"github.com/RecRivenVI/gallery/internal/platform/appdirs"
 	"github.com/RecRivenVI/gallery/internal/platform/descriptor"
+	api "github.com/RecRivenVI/gallery/pkg/galleryapi"
 	"github.com/RecRivenVI/gallery/tools/testlab/internal/bounds"
 	"github.com/RecRivenVI/gallery/tools/testlab/internal/environment"
 	"github.com/RecRivenVI/gallery/tools/testlab/internal/legacyrules"
@@ -242,6 +243,7 @@ func runMode(t *testing.T, sess *environment.Session, cfg sourcelab.Config, stat
 	if err != nil {
 		t.Fatalf("%s 运行失败: %v（findings=%+v）", scenario, err, rep.Findings)
 	}
+	requireSourcelabBindingPaused(t, sess, state)
 	if err := sourcelab.SaveState(state, statePath); err != nil {
 		t.Fatalf("%s 保存续跑状态: %v", scenario, err)
 	}
@@ -264,6 +266,29 @@ func runMode(t *testing.T, sess *environment.Session, cfg sourcelab.Config, stat
 		t.Fatalf("%s 只留下 %d 条 guard 结论，真实 Source 操作没有被 guard 包住", scenario, guardChecks)
 	}
 	return rep
+}
+
+func requireSourcelabBindingPaused(t *testing.T, sess *environment.Session, state *sourcelab.State) {
+	t.Helper()
+	if state == nil || state.SourceID == "" || state.BindingID == "" {
+		t.Fatalf("sourcelab 状态缺少 Source/Binding 身份: %+v", state)
+	}
+	sourceID := api.SourceId(state.SourceID)
+	response, err := sess.Client.ListSourceRuleBindingsWithResponse(context.Background(),
+		&api.ListSourceRuleBindingsParams{SourceId: &sourceID}, sess.SameOrigin)
+	if err != nil || response.JSON200 == nil {
+		t.Fatalf("读取 sourcelab Binding 状态失败: status=%d err=%v", environment.StatusOf(response), err)
+	}
+	for _, binding := range response.JSON200.Bindings {
+		if string(binding.Id) != state.BindingID {
+			continue
+		}
+		if binding.Status == nil || *binding.Status != api.SourceRuleBindingStatusPaused {
+			t.Fatalf("sourcelab Binding 在显式 Job 创建后必须暂停，实际=%v", binding.Status)
+		}
+		return
+	}
+	t.Fatalf("未找到 sourcelab Binding %s", state.BindingID)
 }
 
 func requireFinding(t *testing.T, rep *report.Report, name string) {

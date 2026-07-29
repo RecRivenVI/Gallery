@@ -101,6 +101,11 @@ type State struct {
 	PlatformCode string `json:"platformCode"`
 	LibraryID    string `json:"libraryId"`
 	SourceID     string `json:"sourceId"`
+	// BindingID 是本验证持有的 SourceRuleBinding。真实大 Source 的完整 guard 可能持续
+	// 数分钟；Binding 若在这段时间保持 active，30 秒 Watcher 会先创建系统扫描，使随后
+	// 的显式档案请求稳定命中 SCAN_ALREADY_RUNNING。sourcelab 因此只在创建显式 Job 的
+	// 极短窗口恢复 Binding，Job 持久化后立即重新暂停；执行仍使用 Job 冻结的规则快照。
+	BindingID string `json:"bindingId"`
 	// LastProfile 是最近一次成功完成的扫描档案。
 	LastProfile string `json:"lastScanProfile"`
 	// WorkCount/MediaCount/VerifiedCount 是最近一次的发布规模。
@@ -153,7 +158,7 @@ func Run(rep *report.Report, sess *environment.Session, cfg Config, previous *St
 
 	state := &State{PlatformCode: cfg.Entry.PlatformCode}
 	if previous != nil && previous.PlatformCode == cfg.Entry.PlatformCode {
-		state.LibraryID, state.SourceID = previous.LibraryID, previous.SourceID
+		state.LibraryID, state.SourceID, state.BindingID = previous.LibraryID, previous.SourceID, previous.BindingID
 	}
 
 	if err := ensureRegistration(rep, sess, cfg, guard, state); err != nil {
@@ -263,16 +268,69 @@ func ensureRegistration(rep *report.Report, sess *environment.Session, cfg Confi
 	rep.Add("sourcelab/rule-version", true, fmt.Sprintf("primitives=%d semanticHashLen=%d", cfg.Entry.PrimitiveCount, len(semanticHash)))
 
 	bindings, err := sess.Client.ListSourceRuleBindingsWithResponse(ctx, &api.ListSourceRuleBindingsParams{SourceId: &state.SourceID}, sess.SameOrigin)
-	bound := err == nil && bindings.JSON200 != nil && len(bindings.JSON200.Bindings) > 0
-	if !bound {
-		if _, err := sess.Client.CreateSourceRuleBindingWithResponse(ctx, &api.CreateSourceRuleBindingParams{XGalleryCSRF: sess.CSRF},
-			api.NewDirectSourceRuleBindingCreateRequest(state.SourceID, semanticHash, map[string]any{}, 0),
-			sess.SameOrigin); err != nil {
-			rep.Add("sourcelab/registration", false, sanitize(err.Error()))
-			return fmt.Errorf("绑定转换产出的规则失败: %w", err)
+	if err != nil || bindings.JSON200 == nil {
+		detail := fmt.Sprintf("status=%d", environment.StatusOf(bindings))
+		if err != nil {
+			detail = sanitize(err.Error())
+		}
+		rep.Add("sourcelab/registration", false, detail)
+		return fmt.Errorf("读取 SourceRuleBinding 失败: %s", detail)
+	}
+	bound := false
+	previousBindingID := state.BindingID
+	for _, binding := range bindings.JSON200.Bindings {
+		if string(binding.SemanticHash) != semanticHash {
+			continue
+		}
+		state.BindingID = string(binding.Id)
+		bound = true
+		if state.BindingID == previousBindingID {
+			break
 		}
 	}
+	if !bound && len(bindings.JSON200.Bindings) > 0 {
+		detail := "已有 Binding 的 semantic hash 与本次转换结果不一致；请使用新的隔离 AppDirs"
+		rep.Add("sourcelab/registration", false, detail)
+		return fmt.Errorf("%s", detail)
+	}
+	if !bound {
+		created, err := sess.Client.CreateSourceRuleBindingWithResponse(ctx, &api.CreateSourceRuleBindingParams{XGalleryCSRF: sess.CSRF},
+			api.NewDirectSourceRuleBindingCreateRequest(state.SourceID, semanticHash, map[string]any{}, 0),
+			sess.SameOrigin)
+		if err != nil || created.JSON201 == nil {
+			detail := fmt.Sprintf("status=%d", environment.StatusOf(created))
+			if err != nil {
+				detail = sanitize(err.Error())
+			}
+			rep.Add("sourcelab/registration", false, detail)
+			return fmt.Errorf("绑定转换产出的规则失败: %s", detail)
+		}
+		state.BindingID = string(created.JSON201.Id)
+	}
+	// Source 注册后，Watcher 的首次 online 收敛会把它标为 dirty。对真实大 Source，
+	// 后续 scan 前 guard 足以跨过多个 30 秒周期；这里先暂停 Binding，避免 Watcher 抢在
+	// 显式 index/incremental/verify 之前创建默认扫描。runScan 会在 Job 创建窗口恢复它。
+	if err := setBindingStatus(sess, state.BindingID, api.UpdateSourceRuleBindingJSONBodyStatusPaused); err != nil {
+		rep.Add("sourcelab/registration", false, sanitize(err.Error()))
+		return err
+	}
 	rep.Add("sourcelab/registration", true, fmt.Sprintf("reusedSource=%v reusedBinding=%v", reused, bound))
+	return nil
+}
+
+func setBindingStatus(sess *environment.Session, bindingID string, status api.UpdateSourceRuleBindingJSONBodyStatus) error {
+	if strings.TrimSpace(bindingID) == "" {
+		return fmt.Errorf("缺少 sourcelab SourceRuleBinding ID")
+	}
+	response, err := sess.Client.UpdateSourceRuleBindingWithResponse(context.Background(), api.SourceRuleBindingId(bindingID),
+		&api.UpdateSourceRuleBindingParams{XGalleryCSRF: sess.CSRF},
+		api.UpdateSourceRuleBindingJSONRequestBody{Status: status}, sess.SameOrigin)
+	if err != nil {
+		return fmt.Errorf("更新 sourcelab SourceRuleBinding 状态失败: %w", err)
+	}
+	if response.JSON200 == nil {
+		return fmt.Errorf("更新 sourcelab SourceRuleBinding 状态失败: status=%d", environment.StatusOf(response))
+	}
 	return nil
 }
 
@@ -296,10 +354,13 @@ func (o scanOutcome) summary() string {
 //
 // 超过墙钟上限时**主动取消**而不是继续等：这既是「有界」的真实含义，也顺带给出一次
 // 真实的中断，使随后的 incremental 能证明「续跑不重做已完成工作」。
-func runScan(sess *environment.Session, sourceID, profile string, wallClock time.Duration) (scanOutcome, error) {
+func runScan(sess *environment.Session, sourceID, bindingID, profile string, wallClock time.Duration) (scanOutcome, error) {
 	ctx := context.Background()
 	outcome := scanOutcome{Profile: profile}
 	started := time.Now()
+	if err := setBindingStatus(sess, bindingID, api.UpdateSourceRuleBindingJSONBodyStatusActive); err != nil {
+		return outcome, err
+	}
 
 	body := api.ScanJobCreateRequest{}
 	if profile != "" {
@@ -307,8 +368,17 @@ func runScan(sess *environment.Session, sourceID, profile string, wallClock time
 		body.ScanProfile = &value
 	}
 	created, err := sess.Client.CreateScanJobWithResponse(ctx, sourceID, &api.CreateScanJobParams{XGalleryCSRF: sess.CSRF}, body, sess.SameOrigin)
+	// Job 已冻结 semantic hash/IR/参数；立即暂停 Binding 只阻止 Watcher 在当前扫描期间或
+	// 完成后再创建默认扫描，不改变这个 Job 的执行语义。创建失败时也必须恢复 paused。
+	pauseErr := setBindingStatus(sess, bindingID, api.UpdateSourceRuleBindingJSONBodyStatusPaused)
 	if err != nil || created.JSON202 == nil {
+		if pauseErr != nil {
+			return outcome, pauseErr
+		}
 		return outcome, fmt.Errorf("创建 %s 扫描失败: status=%d", profile, environment.StatusOf(created))
+	}
+	if pauseErr != nil {
+		return outcome, pauseErr
 	}
 	jobID := created.JSON202.Id
 
@@ -490,7 +560,7 @@ func indexIfNeeded(rep *report.Report, sess *environment.Session, cfg Config, gu
 	var outcome scanOutcome
 	err = guard.Around("scan-index", func() error {
 		var scanErr error
-		outcome, scanErr = runScan(sess, state.SourceID, "index", cfg.Limits.MaxWallClock)
+		outcome, scanErr = runScan(sess, state.SourceID, state.BindingID, "index", cfg.Limits.MaxWallClock)
 		return scanErr
 	})
 	return outcome, false, err
@@ -583,7 +653,7 @@ func runIndex(rep *report.Report, sess *environment.Session, cfg Config, guard *
 		var hashOutcome scanOutcome
 		err := guard.Around("scan-incremental-full-hash", func() error {
 			var scanErr error
-			hashOutcome, scanErr = runScan(sess, state.SourceID, "incremental", cfg.Limits.MaxWallClock)
+			hashOutcome, scanErr = runScan(sess, state.SourceID, state.BindingID, "incremental", cfg.Limits.MaxWallClock)
 			return scanErr
 		})
 		if err != nil {
@@ -641,10 +711,17 @@ func confirmBoundedSubset(rep *report.Report, sess *environment.Session, cfg Con
 	confirmed := 0
 	err = guard.Around("on-demand-verification", func() error {
 		for _, mediaID := range targets {
+			if err := setBindingStatus(sess, state.BindingID, api.UpdateSourceRuleBindingJSONBodyStatusActive); err != nil {
+				return err
+			}
 			created, err := sess.Client.CreateMediaVerificationJobWithResponse(ctx, mediaID,
 				&api.CreateMediaVerificationJobParams{XGalleryCSRF: sess.CSRF}, sess.SameOrigin)
+			pauseErr := setBindingStatus(sess, state.BindingID, api.UpdateSourceRuleBindingJSONBodyStatusPaused)
 			if err != nil {
 				return fmt.Errorf("创建按需确认 Job 失败: %w", err)
+			}
+			if pauseErr != nil {
+				return pauseErr
 			}
 			if created.JSON202 == nil {
 				// 已确认或不适用：稳定拒绝，不是缺陷。
@@ -786,7 +863,7 @@ func runProfileAndCollect(rep *report.Report, sess *environment.Session, cfg Con
 	stage := fmt.Sprintf("scan-%s-%s", profile, label)
 	err := guard.Around(stage, func() error {
 		var scanErr error
-		run.outcome, scanErr = runScan(sess, state.SourceID, profile, cfg.Limits.MaxWallClock)
+		run.outcome, scanErr = runScan(sess, state.SourceID, state.BindingID, profile, cfg.Limits.MaxWallClock)
 		return scanErr
 	})
 	if err != nil {
