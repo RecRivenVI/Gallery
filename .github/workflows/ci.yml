@@ -139,11 +139,25 @@ jobs:
       - name: 构建并验证未签名便携包
         shell: pwsh
         run: |
-          $version = '0.0.0-ci.${{ github.run_number }}+${{ github.sha }}'
+          $previousVersion = '0.0.0-ci.${{ github.run_number }}.0+${{ github.sha }}'
+          $version = '0.0.0-ci.${{ github.run_number }}.1+${{ github.sha }}'
           $tool = Join-Path (& go env GOPATH) 'bin\cyclonedx-gomod.exe'
           $output = Join-Path $env:RUNNER_TEMP 'gallery-portable'
-          ./scripts/Build-WindowsPortable.ps1 -Version $version -OutputDirectory $output -CycloneDXGoModExecutable $tool
-          $archives = @(Get-ChildItem -LiteralPath $output -Filter '*.zip' -File)
-          if ($archives.Count -ne 1) { throw "预期恰好一个 ZIP，实际为 $($archives.Count)" }
-          $archive = $archives[0]
-          ./scripts/Test-WindowsPortable.ps1 -ArchivePath $archive.FullName -ExpectedVersion $version
+          $currentOutput = Join-Path $output 'current'
+          $previousOutput = Join-Path $output 'previous'
+          ./scripts/Build-WindowsPortable.ps1 -Version $version -OutputDirectory $currentOutput -CycloneDXGoModExecutable $tool
+          ./scripts/Build-WindowsPortable.ps1 -Version $previousVersion -OutputDirectory $previousOutput -CycloneDXGoModExecutable $tool -SkipWebBuild
+          $currentArchives = @(Get-ChildItem -LiteralPath $currentOutput -Filter '*.zip' -File)
+          $previousArchives = @(Get-ChildItem -LiteralPath $previousOutput -Filter '*.zip' -File)
+          if ($currentArchives.Count -ne 1 -or $previousArchives.Count -ne 1) {
+            throw "预期两个版本各一个 ZIP，实际 current=$($currentArchives.Count) previous=$($previousArchives.Count)"
+          }
+          $probe = Join-Path $output 'portable-upgrade.exe'
+          go build -trimpath -o $probe ./tools/testlab/cmd/portable-upgrade
+          if ($LASTEXITCODE -ne 0) { throw "构建版本切换 probe 失败，退出码 $LASTEXITCODE" }
+          ./scripts/Test-WindowsPortableUpgrade.ps1 `
+            -PreviousArchivePath $previousArchives[0].FullName `
+            -CurrentArchivePath $currentArchives[0].FullName `
+            -PreviousVersion $previousVersion `
+            -CurrentVersion $version `
+            -UpgradeProbeExecutable $probe
