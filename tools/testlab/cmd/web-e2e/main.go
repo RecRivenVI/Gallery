@@ -148,9 +148,18 @@ func run() (exitCode int) {
 	if err := writeSyntheticPNG(filepath.Join(sourceRoot, "work-one", "02-custom.png"), 3, 2, 97); err != nil {
 		return fail("写入自定义封面合成媒体", err)
 	}
+	if err := os.MkdirAll(filepath.Join(sourceRoot, "work-busy"), 0o700); err != nil {
+		return fail("创建媒体背压合成作品", err)
+	}
+	if err := writeSyntheticPNG(filepath.Join(sourceRoot, "work-busy", "01-busy.png"), 4, 3, 151); err != nil {
+		return fail("写入媒体背压合成媒体", err)
+	}
 	metadata := []byte("{\"creator\":{\"name\":\"Synthetic Creator\"}}\n")
 	if err := os.WriteFile(filepath.Join(sourceRoot, "work-one", "metadata.json"), metadata, 0o600); err != nil {
 		return fail("写入合成 metadata", err)
+	}
+	if err := os.WriteFile(filepath.Join(sourceRoot, "work-busy", "metadata.json"), metadata, 0o600); err != nil {
+		return fail("写入媒体背压合成 metadata", err)
 	}
 	if err := writeRunningCancelSource(runningCancelSourceRoot); err != nil {
 		return fail("写入运行中取消合成 Source", err)
@@ -200,8 +209,18 @@ func run() (exitCode int) {
 	}
 
 	gallerydLog := filepath.Join(logsRoot, "galleryd.log")
+	mediaReadReady := filepath.Join(testRoot, "media-read-ready")
+	mediaReadRelease := filepath.Join(testRoot, "media-read-release")
 	const runningCancelRelativePath = "work-cancel/media-block.png"
-	testEnvironment := []string{"GALLERY_E2E_BLOCK_HASH_RELATIVE_PATH=" + runningCancelRelativePath}
+	const blockedMediaRelativePath = "work-busy/01-busy.png"
+	testEnvironment := []string{
+		"GALLERY_E2E_BLOCK_HASH_RELATIVE_PATH=" + runningCancelRelativePath,
+		"GALLERY_E2E_MEDIA_READ_CONCURRENCY=1",
+		"GALLERY_E2E_MEDIA_READ_GATE_WAIT_MS=300",
+		"GALLERY_E2E_BLOCK_MEDIA_RELATIVE_PATH=" + blockedMediaRelativePath,
+		"GALLERY_E2E_MEDIA_READ_READY_FILE=" + mediaReadReady,
+		"GALLERY_E2E_MEDIA_READ_RELEASE_FILE=" + mediaReadRelease,
+	}
 	server, err := testprocess.StartGallerydWithSourceRootsEnvironmentContext(
 		runCtx,
 		galleryd,
@@ -253,6 +272,8 @@ func run() (exitCode int) {
 		"GALLERY_REAL_SERVICE_OUTAGE_READY=" + serviceOutageReady,
 		"GALLERY_REAL_SERVICE_OUTAGE_BUDGET=" + serviceOutageBudget,
 		"GALLERY_REAL_SERVICE_OUTAGE_RESTARTED=" + serviceOutageRestarted,
+		"GALLERY_REAL_MEDIA_READ_READY=" + mediaReadReady,
+		"GALLERY_REAL_MEDIA_READ_RELEASE=" + mediaReadRelease,
 	}
 	playwright := filepath.Join(webRoot, "node_modules", "@playwright", "test", "cli.js")
 	projectArgument := "--project=" + browserProject
@@ -267,6 +288,13 @@ func run() (exitCode int) {
 	if testErr == nil {
 		testErr = command(runCtx, 2*time.Minute, webRoot, env, nodeBin, playwright, "test",
 			"e2e/real-media.spec.ts",
+			projectArgument, "--workers=1", "--retries=0")
+	}
+	// 在已确认的独立合成媒体上占满真实正文读取闸门，要求生产 MediaLoader 收到可重试
+	// MEDIA_READ_BUSY 后退避，并在释放只读 Source 句柄后自动恢复实际图片。
+	if testErr == nil {
+		testErr = command(runCtx, 2*time.Minute, webRoot, env, nodeBin, playwright, "test",
+			"e2e/real-media-busy.spec.ts",
 			projectArgument, "--workers=1", "--retries=0")
 	}
 	if testErr == nil {

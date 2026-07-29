@@ -2921,6 +2921,10 @@ func (s *Server) serveMediaItem(w http.ResponseWriter, r *http.Request, item cat
 		return
 	}
 	defer handle.Close()
+	if err := waitForMediaReadTestHook(r.Context(), item.RelativePath); err != nil {
+		s.writeRequestError(w, err)
+		return
+	}
 	s.writeMediaContent(w, r, handle, item.Algorithm, item.Digest, item.MIME, download)
 }
 

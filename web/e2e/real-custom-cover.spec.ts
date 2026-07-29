@@ -17,6 +17,7 @@ interface MediaItem {
 
 interface WorkBody {
   id: string;
+  title: string;
   coverMediaId: string | null;
   queryPublicationId: string;
 }
@@ -217,9 +218,10 @@ test('CustomCover 设置、历史快照冻结与清除回退 @real-custom-cover'
   const customList = await customListPromise;
   const customListBody = (await customList.json()) as { queryPublicationId: string; works: WorkBody[] };
   expect(customListBody.queryPublicationId).toBe(customPublication);
-  expect(customListBody.works.at(0)?.coverMediaId).toBe(customMedia.id);
+  expect(customListBody.works.find((item) => item.id === workId)?.coverMediaId).toBe(customMedia.id);
   expect((await customContentPromise).status()).toBe(200);
-  await expectImageDimensions(page.locator('.gal-card__cover img'), 3, 2);
+  const customCard = page.getByText('work-one', { exact: true }).locator('xpath=ancestor::article[1]');
+  await expectImageDimensions(customCard.locator('.gal-card__cover img'), 3, 2);
 
   // 从 P4 详情通过 UI 清除 CustomCover；PUT 省略字段即为清除，而不是发送空字符串。
   await page.goto(`${workPath}?queryPublicationId=${encodeURIComponent(customPublication)}`);
@@ -274,7 +276,8 @@ test('CustomCover 设置、历史快照冻结与清除回退 @real-custom-cover'
   const fallbackList = await fallbackListPromise;
   const fallbackListBody = (await fallbackList.json()) as { queryPublicationId: string; works: WorkBody[] };
   expect(fallbackListBody.queryPublicationId).toBe(fallbackPublication);
-  expect(fallbackListBody.works.at(0)?.coverMediaId).toBe(ruleMedia.id);
+  expect(fallbackListBody.works.find((item) => item.id === workId)?.coverMediaId).toBe(ruleMedia.id);
   expect((await fallbackContentPromise).status()).toBe(200);
-  await expectImageDimensions(page.locator('.gal-card__cover img'), 2, 2);
+  const fallbackCard = page.getByText('work-one', { exact: true }).locator('xpath=ancestor::article[1]');
+  await expectImageDimensions(fallbackCard.locator('.gal-card__cover img'), 2, 2);
 });

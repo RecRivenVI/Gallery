@@ -323,8 +323,12 @@ func run(ctx context.Context, cfg config.Config, logger *slog.Logger, ready chan
 		return err
 	}
 	webHandler := webapp.New(contractapi.ContractVersion, version.APIVersion)
+	httpOptions := httpapi.Options{Maintenance: maintenanceService, Watcher: watcherService, Scheduler: scheduler, Derived: derivedService, DerivedJob: derivedJobService, AllowedHosts: []string{listener.Addr().String()}, Web: webHandler}
+	if err := applyHTTPOptionsTestHooks(&httpOptions); err != nil {
+		return fmt.Errorf("应用 HTTP 测试钩子: %w", err)
+	}
 	handler := httpapi.New(cfg.Mode, store, systemClock, personal, resources, jobStore, catalogStore, scannerService, overlayService, creatorsService, backupService, hub, logger,
-		httpapi.Options{Maintenance: maintenanceService, Watcher: watcherService, Scheduler: scheduler, Derived: derivedService, DerivedJob: derivedJobService, AllowedHosts: []string{listener.Addr().String()}, Web: webHandler})
+		httpOptions)
 	server := &http.Server{
 		Handler: handler, ReadHeaderTimeout: 10 * time.Second, IdleTimeout: 60 * time.Second,
 	}
