@@ -117,6 +117,8 @@ EV-113 把当前用户端 10 条、管理端 9 条路由的稳定成功/空/错�
 
 EV-114 纠正外部工具测试状态的文档漂移：提交 `2af146a` 已用真实测试进程树证明 1,024-byte 输出溢出与 3 秒超时都会终止父子孙进程，Windows 重复和 WSL2 race 复验通过。生产 Resolver、真实 ffmpeg/恶意媒体容器及 CPU/内存硬限额仍未验证，正式 Security Gate 继续保持未通过。
 
+EV-115 又增加默认关闭、仅接受显式绝对路径的真实 `ffprobe` 门禁：先证明版本输出确实超过 128 bytes，再覆盖 128-byte 溢出、3 秒 loopback 输入超时与纯合成截断 MP4。Windows 5 轮与 WSL2 默认跳过路径 race 通过；生产 ToolDiscovery/版本允许列表没有启用，恶意语料库和 CPU/内存硬限额仍未完成，Security Gate 状态不变。
+
 EV-103 开始阶段 7 的窄发行基线：精确干净提交 `ac92f57` 可构建同源内嵌完整当前用户端/管理端的 Windows x64 便携 ZIP，并生成三个 CycloneDX SBOM、发行清单、包内/外 SHA-256 与实际 Authenticode 状态。12,454,092-byte 本地包通过版本、摘要、SBOM、内嵌 Web 和同 AppDirs 强杀重启 smoke，清单为 `dirty=false`、`unsigned`。它没有安装器、自动更新、CredentialStore、正式签名或真实升级/回滚，不能称为 RC。
 
 EV-104 在上述基线上增加同源双版本标签切换与 control 恢复门禁：两个独立 ZIP 先各自通过完整制品 smoke，旧标签在临时 AppDirs 建立用户事实与备份，新标签承接全部事实、dry-run 校验备份、登记恢复并在同 AppDirs 重启后证明备份后哨兵消失；两个解压程序树运行前后按目录/长度/SHA-256 封印一致，三个服务均优雅停止。精确干净提交 `3ef9acf` 的 `0.1.9-ev104` 与 `0.2.0-ev104` 本地包均为 `dirty=false`、`unsigned` 并通过。两份二进制来自同一源码，这只证明制品编排、程序/数据分离与恢复主路径，不是历史 Schema 升级、降级或失败回滚证据，仍不能称为 RC。
