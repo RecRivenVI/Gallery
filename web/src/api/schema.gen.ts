@@ -2349,6 +2349,7 @@ export interface components {
         };
         SourceStructureDecisionListResponse: {
             decisions: components["schemas"]["SourceStructureDecision"][];
+            nextCursor?: string;
         };
         BindingUnbindRequest: {
             sourceId: components["schemas"]["SourceId"];
@@ -6509,6 +6510,7 @@ export interface operations {
             query?: {
                 sourceId?: components["schemas"]["SourceId"];
                 status?: "applied" | "undone";
+                cursor?: string;
                 limit?: number;
             };
             header?: never;

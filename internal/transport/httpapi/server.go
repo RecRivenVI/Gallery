@@ -2543,17 +2543,21 @@ func (s *Server) listSourceStructureDecisions(w http.ResponseWriter, r *http.Req
 		}
 		limit = parsed
 	}
-	decisions, err := s.data.ListSourceStructureDecisions(r.Context(), r.URL.Query().Get("sourceId"),
-		r.URL.Query().Get("status"), limit)
+	page, err := s.data.ListSourceStructureDecisions(r.Context(), r.URL.Query().Get("sourceId"),
+		r.URL.Query().Get("status"), r.URL.Query().Get("cursor"), limit)
 	if err != nil {
 		s.writeRequestError(w, err)
 		return
 	}
-	items := make([]api.SourceStructureDecision, 0, len(decisions))
-	for _, decision := range decisions {
+	items := make([]api.SourceStructureDecision, 0, len(page.Items))
+	for _, decision := range page.Items {
 		items = append(items, structureDecisionDTO(decision))
 	}
-	writeJSON(w, http.StatusOK, api.SourceStructureDecisionListResponse{Decisions: items})
+	response := api.SourceStructureDecisionListResponse{Decisions: items}
+	if page.NextCursor != "" {
+		response.NextCursor = &page.NextCursor
+	}
+	writeJSON(w, http.StatusOK, response)
 }
 
 func (s *Server) getSourceStructureDecision(w http.ResponseWriter, r *http.Request) {

@@ -3904,7 +3904,8 @@ type SourceStructureDecisionStatus string
 
 // SourceStructureDecisionListResponse defines model for SourceStructureDecisionListResponse.
 type SourceStructureDecisionListResponse struct {
-	Decisions []SourceStructureDecision `json:"decisions"`
+	Decisions  []SourceStructureDecision `json:"decisions"`
+	NextCursor *string                   `json:"nextCursor,omitempty"`
 }
 
 // SourceStructureDecisionRequest defines model for SourceStructureDecisionRequest.
@@ -4567,6 +4568,7 @@ type UpdateSourceRuleBindingJSONBodyStatus string
 type ListSourceStructureDecisionsParams struct {
 	SourceId *SourceId                                 `form:"sourceId,omitempty" json:"sourceId,omitempty"`
 	Status   *ListSourceStructureDecisionsParamsStatus `form:"status,omitempty" json:"status,omitempty"`
+	Cursor   *string                                   `form:"cursor,omitempty" json:"cursor,omitempty"`
 	Limit    *int                                      `form:"limit,omitempty" json:"limit,omitempty"`
 }
 
@@ -13566,6 +13568,18 @@ func NewListSourceStructureDecisionsRequest(server string, params *ListSourceStr
 		if params.Status != nil {
 
 			if queryFrag, err := runtime.StyleParamWithOptions("form", true, "status", *params.Status, runtime.StyleParamOptions{ParamLocation: runtime.ParamLocationQuery, Type: "string", Format: ""}); err != nil {
+				return nil, err
+			} else {
+				for _, qp := range strings.Split(queryFrag, "&") {
+					rawQueryFragments = append(rawQueryFragments, qp)
+				}
+			}
+
+		}
+
+		if params.Cursor != nil {
+
+			if queryFrag, err := runtime.StyleParamWithOptions("form", true, "cursor", *params.Cursor, runtime.StyleParamOptions{ParamLocation: runtime.ParamLocationQuery, Type: "string", Format: ""}); err != nil {
 				return nil, err
 			} else {
 				for _, qp := range strings.Split(queryFrag, "&") {

@@ -210,6 +210,23 @@ function orphanCandidate(overrides: Record<string, unknown> = {}): Record<string
   };
 }
 
+function structureDecision(overrides: Record<string, unknown> = {}): Record<string, unknown> {
+  return {
+    decisionId: 'sdec_PAGE_1',
+    issueId: 'bissue_STRUCTURE_PAGE_1',
+    sourceId: 'src_01',
+    kind: 'split',
+    action: 'split_inherit',
+    targetSourceKey: 'work/structure-page-1',
+    targetWorkId: 'work_STRUCTURE_PAGE_1',
+    status: 'applied',
+    version: 1,
+    createdAt: '2026-07-30T01:00:00Z',
+    updatedAt: '2026-07-30T01:00:00Z',
+    ...overrides
+  };
+}
+
 const SOURCE = {
   id: 'src_01',
   libraryId: 'lib_01',
@@ -830,6 +847,59 @@ describe('治理列表当前页窗口', () => {
     await userEvent.click(screen.getByRole('button', { name: '下一页' }));
     await within(table).findByText('孤儿第二页');
     expect(seenCursors.filter((cursor) => cursor === 'cursor-orphan-page-2')).toHaveLength(1);
+  });
+
+  it('结构决策续页失败保留当前页，成功后前后复用', async () => {
+    let nextAttempts = 0;
+    const seenCursors: Array<string | null> = [];
+    route('GET /api/v1/sources', () => jsonResponse({ sources: [] }));
+    route('GET /api/v1/binding-issues', () => jsonResponse({ issues: [] }));
+    route('GET /api/v1/source-structure-decisions', (_request, url) => {
+      const cursor = url.searchParams.get('cursor');
+      seenCursors.push(cursor);
+      if (cursor === null) {
+        return jsonResponse({
+          decisions: [structureDecision()],
+          nextCursor: 'cursor-structure-page-2'
+        });
+      }
+      nextAttempts += 1;
+      if (nextAttempts === 1) return faultResponse('VALIDATION_ERROR', 400, 'corr-structure-page-2');
+      return jsonResponse({
+        decisions: [
+          structureDecision({
+            decisionId: 'sdec_PAGE_2',
+            issueId: 'bissue_STRUCTURE_PAGE_2',
+            targetSourceKey: 'work/structure-page-2',
+            targetWorkId: 'work_STRUCTURE_PAGE_2',
+            createdAt: '2026-07-29T01:00:00Z',
+            updatedAt: '2026-07-29T01:00:00Z'
+          })
+        ]
+      });
+    });
+
+    renderManage('/governance');
+    await userEvent.click(await screen.findByRole('tab', { name: '结构决策' }));
+    const table = await screen.findByRole('table', { name: '结构决策' });
+    expect(within(table).getByText('work/structure-page-1')).toBeInTheDocument();
+    expect(screen.getByText(/第 1 页 · 本页 1 条 · 每页最多 50 条（还有下一页）/)).toBeInTheDocument();
+
+    await userEvent.click(screen.getByRole('button', { name: '下一页' }));
+    await screen.findByText('下一页结构决策暂时未能载入');
+    expect(within(table).getByText('work/structure-page-1')).toBeInTheDocument();
+    expect(within(table).queryByText('work/structure-page-2')).not.toBeInTheDocument();
+
+    await userEvent.click(screen.getByRole('button', { name: '重试下一页' }));
+    await within(table).findByText('work/structure-page-2');
+    expect(within(table).queryByText('work/structure-page-1')).not.toBeInTheDocument();
+    expect(screen.getByText(/第 2 页 · 本页 1 条 · 每页最多 50 条（已到末页）/)).toBeInTheDocument();
+
+    await userEvent.click(screen.getByRole('button', { name: '上一页' }));
+    await within(table).findByText('work/structure-page-1');
+    await userEvent.click(screen.getByRole('button', { name: '下一页' }));
+    await within(table).findByText('work/structure-page-2');
+    expect(seenCursors.filter((cursor) => cursor === 'cursor-structure-page-2')).toHaveLength(2);
   });
 });
 

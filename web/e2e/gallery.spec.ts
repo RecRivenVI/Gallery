@@ -485,6 +485,71 @@ test('实时文件目录只挂载当前批并复用已访问批次 @smoke', asyn
   expect(results.violations).toEqual([]);
 });
 
+test('结构决策只挂载当前 keyset 页并复用已访问页 @smoke', async ({ page }) => {
+  const requestedCursors: Array<string | null> = [];
+  const json = (route: Route, body: unknown) =>
+    route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(body) });
+  await page.route('**/api/v1/source-structure-decisions?*', (route) => {
+    const url = new URL(route.request().url());
+    const cursor = url.searchParams.get('cursor');
+    requestedCursors.push(cursor);
+    const decisions =
+      cursor === null
+        ? Array.from({ length: 50 }, (_, index) => ({
+            decisionId: `sdec_PAGE_1_${String(index).padStart(2, '0')}`,
+            issueId: `bissue_PAGE_1_${String(index).padStart(2, '0')}`,
+            sourceId: 'src_01',
+            kind: 'split',
+            action: 'split_create_new',
+            targetSourceKey: `structure/page-1/${String(index).padStart(2, '0')}`,
+            status: 'applied',
+            version: 1,
+            createdAt: '2026-07-30T01:00:00Z',
+            updatedAt: '2026-07-30T01:00:00Z'
+          }))
+        : [
+            {
+              decisionId: 'sdec_PAGE_2',
+              issueId: 'bissue_PAGE_2',
+              sourceId: 'src_01',
+              kind: 'merge',
+              action: 'merge_create_new',
+              targetSourceKey: 'structure/page-2',
+              status: 'applied',
+              version: 1,
+              createdAt: '2026-07-29T01:00:00Z',
+              updatedAt: '2026-07-29T01:00:00Z'
+            }
+          ];
+    return json(route, {
+      decisions,
+      ...(cursor === null ? { nextCursor: 'structure-page-2' } : {})
+    });
+  });
+
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.goto('/manage');
+  await navigateWithinMountedEntry(page, '/manage/governance');
+  await page.getByRole('tab', { name: '结构决策', exact: true }).click();
+  const table = page.getByRole('table', { name: '结构决策', exact: true });
+  await expect(table.locator('tbody tr')).toHaveCount(50);
+  await expect(table.getByText('structure/page-1/00', { exact: true })).toBeVisible();
+  await expect(page.getByText(/第 1 页 · 本页 50 条 · 每页最多 50 条（还有下一页）/)).toBeVisible();
+
+  await page.getByRole('button', { name: '下一页', exact: true }).click();
+  await expect(table.locator('tbody tr')).toHaveCount(1);
+  await expect(table.getByText('structure/page-2', { exact: true })).toBeVisible();
+  await expect(table.getByText('structure/page-1/00', { exact: true })).toHaveCount(0);
+  await expect(page.getByText(/第 2 页 · 本页 1 条 · 每页最多 50 条（已到末页）/)).toBeVisible();
+
+  await page.getByRole('button', { name: '上一页', exact: true }).click();
+  await expect(table.locator('tbody tr')).toHaveCount(50);
+  await page.getByRole('button', { name: '下一页', exact: true }).click();
+  await expect(table.getByText('structure/page-2', { exact: true })).toBeVisible();
+  expect(requestedCursors).toEqual([null, 'structure-page-2']);
+  await expectNoHorizontalOverflow(page, '结构决策窄屏分页');
+});
+
 test('迟到的旧分页响应不会覆盖较新的搜索结果 @smoke', async ({ page }) => {
   let releaseOldPage: (() => void) | undefined;
   let oldPageSettled = false;

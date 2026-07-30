@@ -238,14 +238,21 @@ func requireAppliedStructureDecision(
 	resources *application.Resources,
 	sourceID, issueID, action string,
 ) (application.SourceStructureDecision, error) {
-	decisions, err := resources.ListSourceStructureDecisions(ctx, sourceID, "applied", 50)
-	if err != nil {
-		return application.SourceStructureDecision{}, err
-	}
-	for _, decision := range decisions {
-		if decision.IssueID == issueID && decision.Action == action {
-			return decision, nil
+	cursor := ""
+	for {
+		decisions, err := resources.ListSourceStructureDecisions(ctx, sourceID, "applied", cursor, 50)
+		if err != nil {
+			return application.SourceStructureDecision{}, err
 		}
+		for _, decision := range decisions.Items {
+			if decision.IssueID == issueID && decision.Action == action {
+				return decision, nil
+			}
+		}
+		if decisions.NextCursor == "" {
+			break
+		}
+		cursor = decisions.NextCursor
 	}
 	return application.SourceStructureDecision{}, fmt.Errorf(
 		"Source %s 缺少 issue=%s action=%s 的 applied 结构决策", sourceID, issueID, action,

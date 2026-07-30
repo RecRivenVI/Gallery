@@ -2,14 +2,123 @@ package application_test
 
 import (
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"testing"
 
 	"github.com/RecRivenVI/gallery/internal/application"
 	"github.com/RecRivenVI/gallery/internal/contract/fault"
+	"github.com/RecRivenVI/gallery/internal/domain"
 )
+
+func TestSourceStructureDecisionListUsesNewestFirstKeyset(t *testing.T) {
+	f := newIssueFixture(t)
+	for _, index := range []string{
+		"source_structure_decisions_list_idx",
+		"source_structure_decisions_source_list_idx",
+		"source_structure_decisions_source_status_list_idx",
+	} {
+		var name string
+		if err := f.control.QueryRowContext(f.ctx,
+			`SELECT name FROM sqlite_master WHERE type='index' AND name=?`, index).Scan(&name); err != nil {
+			t.Fatalf("结构决策分页索引缺失 %s: %v", index, err)
+		}
+	}
+	type expectedDecision struct {
+		id        string
+		createdAt int64
+	}
+	expected := make([]expectedDecision, 0, 55)
+	tx, err := f.control.BeginTx(f.ctx, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer tx.Rollback()
+	for i := 0; i < 55; i++ {
+		issueID := f.ids(domain.IDBindingIssue)
+		decisionID := f.ids(domain.IDStructureDecision)
+		createdAt := int64(100 + i/3) // 同一秒三条，锁定 decision_id tie-break。
+		if _, err := tx.ExecContext(f.ctx, `INSERT INTO binding_issues
+(issue_id, source_id, entity_type, structure_kind, source_key, code, candidate_fingerprint,
+ candidate_count, status, resolution, version, created_at, updated_at)
+VALUES (?, ?, 'work', 'split', ?, 'SOURCE_WORK_SPLIT_REVIEW_REQUIRED', ?, 1,
+ 'resolved', 'create_new', 1, ?, ?)`, issueID, f.source.ID, fmt.Sprintf("source-%02d", i),
+			fmt.Sprintf("issue-%02d", i), createdAt, createdAt); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := tx.ExecContext(f.ctx, `INSERT INTO source_structure_decisions
+(decision_id, issue_id, source_id, kind, action, fingerprint, decided_by, status, version, created_at, updated_at)
+VALUES (?, ?, ?, 'split', 'split_create_new', ?, 'principal-test', 'applied', 1, ?, ?)`,
+			decisionID, issueID, f.source.ID, fmt.Sprintf("decision-%02d", i), createdAt, createdAt); err != nil {
+			t.Fatal(err)
+		}
+		expected = append(expected, expectedDecision{id: decisionID, createdAt: createdAt})
+	}
+	if err := tx.Commit(); err != nil {
+		t.Fatal(err)
+	}
+	sort.Slice(expected, func(i, j int) bool {
+		if expected[i].createdAt != expected[j].createdAt {
+			return expected[i].createdAt > expected[j].createdAt
+		}
+		return expected[i].id > expected[j].id
+	})
+
+	var got []string
+	cursor := ""
+	for pageNumber := 0; pageNumber < 3; pageNumber++ {
+		page, err := f.resources.ListSourceStructureDecisions(f.ctx, f.source.ID, "applied", cursor, 20)
+		if err != nil {
+			t.Fatal(err)
+		}
+		wantCount := 20
+		if pageNumber == 2 {
+			wantCount = 15
+		}
+		if len(page.Items) != wantCount {
+			t.Fatalf("第 %d 页条数错误: got=%d want=%d", pageNumber+1, len(page.Items), wantCount)
+		}
+		for _, item := range page.Items {
+			got = append(got, item.DecisionID)
+		}
+		if pageNumber < 2 && page.NextCursor == "" {
+			t.Fatalf("第 %d 页缺少 nextCursor", pageNumber+1)
+		}
+		if pageNumber == 2 && page.NextCursor != "" {
+			t.Fatalf("末页不应返回 nextCursor: %q", page.NextCursor)
+		}
+		cursor = page.NextCursor
+	}
+	if len(got) != len(expected) {
+		t.Fatalf("分页集合条数错误: got=%d want=%d", len(got), len(expected))
+	}
+	seen := make(map[string]struct{}, len(got))
+	for i, id := range got {
+		if id != expected[i].id {
+			t.Fatalf("第 %d 项顺序错误: got=%s want=%s", i, id, expected[i].id)
+		}
+		if _, duplicate := seen[id]; duplicate {
+			t.Fatalf("分页出现重复决策: %s", id)
+		}
+		seen[id] = struct{}{}
+	}
+
+	first, err := f.resources.ListSourceStructureDecisions(f.ctx, f.source.ID, "applied", "", 20)
+	if err != nil || first.NextCursor == "" {
+		t.Fatalf("无法取得合法游标: %+v %v", first, err)
+	}
+	for _, invalid := range []string{"%%%", first.NextCursor + "="} {
+		if code := asStructured(t, func() error {
+			_, err := f.resources.ListSourceStructureDecisions(f.ctx, f.source.ID, "applied", invalid, 20)
+			return err
+		}()).Code; code != fault.CodeCursorInvalid {
+			t.Fatalf("非法游标错误码错误: cursor=%q code=%s", invalid, code)
+		}
+	}
+}
 
 // blob 构造一条带 ContentBlob digest 证据的 DiscoveredMedia。digest 用短占位串即可，检测只比较相等性。
 func blob(sourceKey, digest string, ordinal int) application.DiscoveredMedia {

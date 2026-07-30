@@ -157,8 +157,8 @@ WHERE source_id=? AND source_key='wkA2' AND work_id=? AND status='active'`, f.so
 		t.Fatal("重建后被否定候选 X 复现于 wkA2")
 	}
 	// 决策记录仍为 applied，无重复。
-	decisions, err := f.resources.ListSourceStructureDecisions(f.ctx, f.sourceID, "applied", 50)
-	if err != nil || len(decisions) != 1 || decisions[0].Status != "applied" {
+	decisions, err := f.resources.ListSourceStructureDecisions(f.ctx, f.sourceID, "applied", "", 50)
+	if err != nil || len(decisions.Items) != 1 || decisions.Items[0].Status != "applied" {
 		t.Fatalf("重建后决策未保留: %+v %v", decisions, err)
 	}
 	// 无重复 Canonical 实体：恰好 X 与 Y 两个作品。

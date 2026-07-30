@@ -1448,18 +1448,23 @@ export function useResolveStructureIssue(): UseMutationResult<
 }
 
 export function useStructureDecisions(sourceId: string | null) {
-  return useQuery({
+  return useInfiniteQuery({
     queryKey: ['governance', 'structure-decisions', sourceId],
-    queryFn: async ({ signal }) =>
+    initialPageParam: undefined as string | undefined,
+    queryFn: async ({ pageParam, signal }) =>
       expectData(
         await api.GET('/api/v1/source-structure-decisions', {
           params: {
-            query:
-              sourceId === null ? { limit: GOVERNANCE_PAGE_SIZE } : { sourceId, limit: GOVERNANCE_PAGE_SIZE }
+            query: {
+              ...(sourceId === null ? {} : { sourceId }),
+              ...(pageParam === undefined ? {} : { cursor: pageParam }),
+              limit: GOVERNANCE_PAGE_SIZE
+            }
           },
           signal
         })
-      )
+      ),
+    getNextPageParam: (lastPage) => lastPage.nextCursor
   });
 }
 

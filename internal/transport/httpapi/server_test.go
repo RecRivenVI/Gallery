@@ -1880,14 +1880,44 @@ VALUES (?, 0, ?, 'work', 'origin_canonical', 'wkA', '原作品'),
 	}
 	decisionID := resolved.JSON200.DecisionId
 
+	// 再建立一条更早的历史决策，锁定 HTTP keyset 续页与非法游标契约。
+	olderIssueID, olderDecisionID := newID(domain.IDBindingIssue), newID(domain.IDStructureDecision)
+	exec(`INSERT INTO binding_issues
+(issue_id, source_id, entity_type, structure_kind, source_key, code, candidate_fingerprint,
+ candidate_count, status, resolution, version, created_at, updated_at)
+VALUES (?, ?, 'work', 'split', 'older', 'SOURCE_WORK_SPLIT_REVIEW_REQUIRED', 'older-issue',
+ 1, 'resolved', 'create_new', 1, 2, 2)`, olderIssueID, sourceID)
+	exec(`INSERT INTO source_structure_decisions
+(decision_id, issue_id, source_id, kind, action, fingerprint, decided_by, status, version, created_at, updated_at)
+VALUES (?, ?, ?, 'split', 'split_create_new', 'older-decision', 'principal-test', 'applied', 1, 2, 2)`,
+		olderDecisionID, olderIssueID, sourceID)
+
 	// 列表与详情。
 	appliedStatus := api.ListSourceStructureDecisionsParamsStatus("applied")
-	list, err := client.ListSourceStructureDecisionsWithResponse(ctx, &api.ListSourceStructureDecisionsParams{SourceId: &sourceID, Status: &appliedStatus})
-	if err != nil || list.JSON200 == nil || len(list.JSON200.Decisions) != 1 || list.JSON200.Decisions[0].DecisionId != decisionID {
+	limitOne := 1
+	list, err := client.ListSourceStructureDecisionsWithResponse(ctx, &api.ListSourceStructureDecisionsParams{
+		SourceId: &sourceID, Status: &appliedStatus, Limit: &limitOne,
+	})
+	if err != nil || list.JSON200 == nil || len(list.JSON200.Decisions) != 1 ||
+		list.JSON200.Decisions[0].DecisionId != decisionID || list.JSON200.NextCursor == nil {
 		t.Fatalf("决策列表错误: %v status=%d body=%s", err, list.StatusCode(), list.Body)
 	}
 	if bytes.Contains(list.Body, []byte("/seed/root")) {
 		t.Fatal("决策列表泄露绝对路径")
+	}
+	next, err := client.ListSourceStructureDecisionsWithResponse(ctx, &api.ListSourceStructureDecisionsParams{
+		SourceId: &sourceID, Status: &appliedStatus, Cursor: list.JSON200.NextCursor, Limit: &limitOne,
+	})
+	if err != nil || next.JSON200 == nil || len(next.JSON200.Decisions) != 1 ||
+		next.JSON200.Decisions[0].DecisionId != olderDecisionID || next.JSON200.NextCursor != nil {
+		t.Fatalf("决策续页错误: %v status=%d body=%s", err, next.StatusCode(), next.Body)
+	}
+	invalidCursor := "%%%"
+	invalid, err := client.ListSourceStructureDecisionsWithResponse(ctx, &api.ListSourceStructureDecisionsParams{
+		SourceId: &sourceID, Status: &appliedStatus, Cursor: &invalidCursor, Limit: &limitOne,
+	})
+	if err != nil || invalid.JSON400 == nil || invalid.JSON400.Error.Code != api.CURSORINVALID {
+		t.Fatalf("非法决策游标未返回 CURSOR_INVALID: %v status=%d body=%s", err, invalid.StatusCode(), invalid.Body)
 	}
 
 	// 重扫前撤销成功（clean）。

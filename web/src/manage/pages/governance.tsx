@@ -454,7 +454,12 @@ function BindingIssuesPanel() {
 
 function StructureDecisionsPanel() {
   const { show } = useToast();
+  const [pageIndex, setPageIndex] = useState(0);
   const decisions = useStructureDecisions(null);
+  const decisionSnapshotQuery = {
+    ...decisions,
+    isError: decisions.isError && !decisions.isFetchNextPageError
+  };
   const undo = useUndoStructureDecision();
   const canWrite = useCapability('bindings.write');
 
@@ -464,76 +469,129 @@ function StructureDecisionsPanel() {
       description="已经记录的拆分与合并决策。撤回只适用于尚未被扫描消费的 pre-seed Binding；消费后服务端返回 CONFLICT，且不会反向执行已生效的结构变化。"
     >
       <InlineError error={undo.error} title="撤回未能完成" />
-      <AsyncPanel query={decisions}>
-        {(data) => (
-          <DataTable
-            caption="结构决策"
-            rows={data.decisions}
-            rowKey={(row) => row.decisionId}
-            emptyTitle="还没有结构决策"
-            columns={[
-              {
-                id: 'status',
-                header: '状态',
-                render: (row) => (
-                  <Badge tone={row.status === 'applied' ? 'success' : 'neutral'}>
-                    {row.status === 'applied' ? '已生效' : '已撤回'}
-                  </Badge>
-                )
-              },
-              { id: 'kind', header: '类型', render: (row) => (row.kind === 'split' ? '拆分' : '合并') },
-              {
-                id: 'action',
-                header: '决策',
-                render: (row) => STRUCTURE_ACTION_LABELS[row.action] ?? row.action
-              },
-              {
-                id: 'issue',
-                header: '来源问题',
-                render: (row) => <MonoId value={row.issueId} label="问题 ID" />
-              },
-              {
-                id: 'source',
-                header: 'Source',
-                render: (row) => <MonoId value={row.sourceId} label="Source ID" />
-              },
-              {
-                id: 'targetKey',
-                header: '目标 sourceKey',
-                render: (row) => row.targetSourceKey ?? <Absent />,
-                wrap: true
-              },
-              { id: 'targetWork', header: '目标 Work', render: (row) => row.targetWorkId ?? <Absent /> },
-              { id: 'version', header: 'version', render: (row) => row.version },
-              { id: 'updated', header: '更新时间', render: (row) => formatDateTime(row.updatedAt) },
-              {
-                id: 'actions',
-                header: '操作',
-                render: (row) =>
-                  canWrite && row.status === 'applied' ? (
-                    <ConfirmAction
-                      label="撤回"
-                      dialogTitle="撤回结构决策"
-                      confirmLabel="确认撤回"
-                      description="只有尚未被扫描消费的决策才能撤回。若已被消费，服务端会返回 CONFLICT，并且不会反向执行已经发生的结构变化。"
-                      onConfirm={() => {
-                        undo.mutate(
-                          { decisionId: row.decisionId, version: row.version },
-                          {
-                            onSuccess: () => {
-                              show({ title: '结构决策已撤回', tone: 'success' });
-                            }
-                          }
-                        );
-                      }}
-                    />
-                  ) : (
-                    <Absent />
-                  )
+      <InlineError
+        error={decisions.isFetchNextPageError ? decisions.error : null}
+        title="下一页结构决策暂时未能载入"
+      />
+      <AsyncPanel query={decisionSnapshotQuery}>
+        {(data) => {
+          const currentPageIndex = Math.min(pageIndex, Math.max(0, data.pages.length - 1));
+          const rows = data.pages[currentPageIndex]?.decisions ?? [];
+          const hasLoadedNextPage = currentPageIndex + 1 < data.pages.length;
+          const hasNextPage =
+            hasLoadedNextPage || (currentPageIndex === data.pages.length - 1 && decisions.hasNextPage);
+          const nextNeedsRetry = !hasLoadedNextPage && decisions.isFetchNextPageError;
+
+          const showNextPage = () => {
+            if (hasLoadedNextPage) {
+              setPageIndex(currentPageIndex + 1);
+              return;
+            }
+            void decisions.fetchNextPage().then((result) => {
+              if (result.data?.pages[currentPageIndex + 1] !== undefined) {
+                setPageIndex(currentPageIndex + 1);
               }
-            ]}
-          />
-        )}
+            });
+          };
+
+          return (
+            <>
+              <p className="manage-section__description">
+                第 {currentPageIndex + 1} 页 · 本页 {rows.length} 条 · 每页最多 {GOVERNANCE_PAGE_SIZE} 条
+                {hasNextPage ? '（还有下一页）' : '（已到末页）'}。
+              </p>
+              <DataTable
+                caption="结构决策"
+                rows={rows}
+                rowKey={(row) => row.decisionId}
+                emptyTitle="还没有结构决策"
+                columns={[
+                  {
+                    id: 'status',
+                    header: '状态',
+                    render: (row) => (
+                      <Badge tone={row.status === 'applied' ? 'success' : 'neutral'}>
+                        {row.status === 'applied' ? '已生效' : '已撤回'}
+                      </Badge>
+                    )
+                  },
+                  { id: 'kind', header: '类型', render: (row) => (row.kind === 'split' ? '拆分' : '合并') },
+                  {
+                    id: 'action',
+                    header: '决策',
+                    render: (row) => STRUCTURE_ACTION_LABELS[row.action] ?? row.action
+                  },
+                  {
+                    id: 'issue',
+                    header: '来源问题',
+                    render: (row) => <MonoId value={row.issueId} label="问题 ID" />
+                  },
+                  {
+                    id: 'source',
+                    header: 'Source',
+                    render: (row) => <MonoId value={row.sourceId} label="Source ID" />
+                  },
+                  {
+                    id: 'targetKey',
+                    header: '目标 sourceKey',
+                    render: (row) => row.targetSourceKey ?? <Absent />,
+                    wrap: true
+                  },
+                  { id: 'targetWork', header: '目标 Work', render: (row) => row.targetWorkId ?? <Absent /> },
+                  { id: 'version', header: 'version', render: (row) => row.version },
+                  { id: 'updated', header: '更新时间', render: (row) => formatDateTime(row.updatedAt) },
+                  {
+                    id: 'actions',
+                    header: '操作',
+                    render: (row) =>
+                      canWrite && row.status === 'applied' ? (
+                        <ConfirmAction
+                          label="撤回"
+                          dialogTitle="撤回结构决策"
+                          confirmLabel="确认撤回"
+                          description="只有尚未被扫描消费的决策才能撤回。若已被消费，服务端会返回 CONFLICT，并且不会反向执行已经发生的结构变化。"
+                          onConfirm={() => {
+                            undo.mutate(
+                              { decisionId: row.decisionId, version: row.version },
+                              {
+                                onSuccess: () => {
+                                  show({ title: '结构决策已撤回', tone: 'success' });
+                                }
+                              }
+                            );
+                          }}
+                        />
+                      ) : (
+                        <Absent />
+                      )
+                  }
+                ]}
+              />
+              {currentPageIndex > 0 || hasNextPage ? (
+                <div className="manage-form__actions">
+                  {currentPageIndex > 0 ? (
+                    <Button variant="secondary" onPress={() => setPageIndex(currentPageIndex - 1)}>
+                      上一页
+                    </Button>
+                  ) : null}
+                  {hasNextPage ? (
+                    <Button
+                      variant="secondary"
+                      isDisabled={!hasLoadedNextPage && decisions.isFetchingNextPage}
+                      onPress={showNextPage}
+                    >
+                      {!hasLoadedNextPage && decisions.isFetchingNextPage
+                        ? '正在载入下一页'
+                        : nextNeedsRetry
+                          ? '重试下一页'
+                          : '下一页'}
+                    </Button>
+                  ) : null}
+                </div>
+              ) : null}
+            </>
+          );
+        }}
       </AsyncPanel>
     </Section>
   );

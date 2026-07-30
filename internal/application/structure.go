@@ -4,10 +4,12 @@ import (
 	"context"
 	"crypto/sha256"
 	"database/sql"
+	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -473,6 +475,11 @@ type SourceStructureDecision struct {
 	UpdatedAt       time.Time
 }
 
+type SourceStructureDecisionPage struct {
+	Items      []SourceStructureDecision
+	NextCursor string
+}
+
 // structureActionKind 返回某决策动作所属的结构类别，非法动作返回空串。
 func structureActionKind(action string) string {
 	switch action {
@@ -604,8 +611,9 @@ FROM source_structure_decisions WHERE decision_id=?`, decisionID)
 	return decision, err
 }
 
-// ListSourceStructureDecisions 按 Source 与状态列出拆分/合并决策，供审查与运维查询。
-func (r *Resources) ListSourceStructureDecisions(ctx context.Context, sourceID, status string, limit int) ([]SourceStructureDecision, error) {
+// ListSourceStructureDecisions 按 Source 与状态列出拆分/合并决策，并以
+// (created_at, decision_id) newest-first keyset 分页，供审查与运维查询。
+func (r *Resources) ListSourceStructureDecisions(ctx context.Context, sourceID, status, cursor string, limit int) (SourceStructureDecisionPage, error) {
 	if limit <= 0 || limit > 200 {
 		limit = 50
 	}
@@ -613,36 +621,79 @@ func (r *Resources) ListSourceStructureDecisions(ctx context.Context, sourceID, 
 	args := []any{}
 	if sourceID != "" {
 		if _, err := domain.ParseID(domain.IDSource, sourceID); err != nil {
-			return nil, fault.WithField(fault.CodeValidation, "sourceId", nil)
+			return SourceStructureDecisionPage{}, fault.WithField(fault.CodeValidation, "sourceId", nil)
 		}
 		conditions = append(conditions, "source_id=?")
 		args = append(args, sourceID)
 	}
 	if status != "" {
 		if status != "applied" && status != "undone" {
-			return nil, fault.WithField(fault.CodeValidation, "status", nil)
+			return SourceStructureDecisionPage{}, fault.WithField(fault.CodeValidation, "status", nil)
 		}
 		conditions = append(conditions, "status=?")
 		args = append(args, status)
 	}
+	if cursor != "" {
+		createdAt, decisionID, err := decodeStructureDecisionCursor(cursor)
+		if err != nil {
+			return SourceStructureDecisionPage{}, err
+		}
+		conditions = append(conditions, "(created_at < ? OR (created_at = ? AND decision_id < ?))")
+		args = append(args, createdAt, createdAt, decisionID)
+	}
 	query := `SELECT decision_id, issue_id, source_id, kind, action, target_source_key, target_work_id,
 status, version, created_at, updated_at FROM source_structure_decisions WHERE ` +
 		strings.Join(conditions, " AND ") + ` ORDER BY created_at DESC, decision_id DESC LIMIT ?`
-	args = append(args, limit)
+	args = append(args, limit+1)
 	rows, err := r.control.QueryContext(ctx, query, args...)
 	if err != nil {
-		return nil, fault.New(fault.CodeInternal, true, err)
+		return SourceStructureDecisionPage{}, fault.New(fault.CodeInternal, true, err)
 	}
 	defer rows.Close()
-	result := make([]SourceStructureDecision, 0)
+	result := make([]SourceStructureDecision, 0, limit+1)
 	for rows.Next() {
 		decision, err := scanStructureDecision(rows)
 		if err != nil {
-			return nil, err
+			return SourceStructureDecisionPage{}, err
 		}
 		result = append(result, decision)
 	}
-	return result, rows.Err()
+	if err := rows.Err(); err != nil {
+		return SourceStructureDecisionPage{}, fault.New(fault.CodeInternal, true, err)
+	}
+	page := SourceStructureDecisionPage{Items: result}
+	if len(result) > limit {
+		last := result[limit-1]
+		page.Items = result[:limit]
+		page.NextCursor = encodeStructureDecisionCursor(last.CreatedAt.Unix(), last.DecisionID)
+	}
+	return page, nil
+}
+
+func encodeStructureDecisionCursor(createdAt int64, decisionID string) string {
+	return base64.RawURLEncoding.EncodeToString([]byte(strconv.FormatInt(createdAt, 10) + ":" + decisionID))
+}
+
+func decodeStructureDecisionCursor(cursor string) (int64, string, error) {
+	if len(cursor) > 4096 {
+		return 0, "", fault.New(fault.CodeCursorInvalid, false, nil)
+	}
+	raw, err := base64.RawURLEncoding.Strict().DecodeString(cursor)
+	if err != nil || base64.RawURLEncoding.EncodeToString(raw) != cursor {
+		return 0, "", fault.New(fault.CodeCursorInvalid, false, nil)
+	}
+	parts := strings.SplitN(string(raw), ":", 2)
+	if len(parts) != 2 {
+		return 0, "", fault.New(fault.CodeCursorInvalid, false, nil)
+	}
+	createdAt, err := strconv.ParseInt(parts[0], 10, 64)
+	if err != nil || strconv.FormatInt(createdAt, 10) != parts[0] {
+		return 0, "", fault.New(fault.CodeCursorInvalid, false, nil)
+	}
+	if _, err := domain.ParseID(domain.IDStructureDecision, parts[1]); err != nil {
+		return 0, "", fault.New(fault.CodeCursorInvalid, false, nil)
+	}
+	return createdAt, parts[1], nil
 }
 
 func scanStructureDecision(row rowScanner) (SourceStructureDecision, error) {
