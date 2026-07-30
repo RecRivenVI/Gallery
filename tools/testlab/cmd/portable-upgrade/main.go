@@ -5,6 +5,7 @@ package main
 
 import (
 	"context"
+	"crypto/sha256"
 	"encoding/json"
 	"errors"
 	"flag"
@@ -33,6 +34,7 @@ const (
 	afterFinalizeLibrary   = "Portable finalize resume current fact"
 	afterOutcomeLibrary    = "Portable outcome write current fact"
 	afterPendingLibrary    = "Portable pending delete current fact"
+	afterDoubleLibrary     = "Portable double rename current fact"
 	startupTimeout         = 60 * time.Second
 	jobTimeout             = 30 * time.Second
 )
@@ -75,10 +77,15 @@ type result struct {
 	PendingDeleteRetained     bool   `json:"pendingDeleteRetained"`
 	PendingDeleteRecovered    bool   `json:"pendingDeleteRecovered"`
 	PendingDeleteBlockedByOS  bool   `json:"pendingDeleteBlockedByOS"`
+	DoubleRenameFailedClosed  bool   `json:"doubleRenameFailedClosed"`
+	DoubleRenameRetained      bool   `json:"doubleRenameRetained"`
+	DoubleRenameRecovered     bool   `json:"doubleRenameRecovered"`
+	DoubleRenameBlockedByOS   bool   `json:"doubleRenameBlockedByOS"`
 	AllStopsExitedGracefully  bool   `json:"allStopsExitedGracefully"`
 }
 
 type pendingFileHold struct {
+	path    string
 	release func() error
 	err     error
 }
@@ -637,9 +644,191 @@ func run(previousBin, currentBin, previousVersion, currentVersion string) error 
 	if err := assertSuccessfulRestoreRecorded(appRoot, continuityBackup.BackupId); err != nil {
 		return fmt.Errorf("恢复 pending 删除解除阻断后的结果: %w", err)
 	}
+	doubleRenameBackup, err := createBackup(ctx, pendingClient)
+	if err != nil {
+		return fmt.Errorf("创建双 Rename 失败夹具备份: %w", err)
+	}
+	if err := createLibrary(ctx, pendingClient, afterDoubleLibrary); err != nil {
+		return err
+	}
+	if err := requestRestore(ctx, pendingClient, doubleRenameBackup.BackupId); err != nil {
+		return err
+	}
 	if outcome := active.Stop(); !outcome.ExitedGracefully || outcome.ForcedKill || outcome.Err != nil {
 		stopsGraceful = false
-		return fmt.Errorf("pending 删除恢复后当前版本未优雅停止：forced=%t err=%v", outcome.ForcedKill, outcome.Err)
+		return fmt.Errorf("双 Rename 失败前当前版本未优雅停止：forced=%t err=%v", outcome.ForcedKill, outcome.Err)
+	}
+	active = nil
+
+	controlPath = filepath.Join(appRoot, "data", "control.db")
+	currentDigest, err := digestFile(controlPath)
+	if err != nil {
+		return fmt.Errorf("封印双 Rename 失败前当前库: %w", err)
+	}
+	rotatedPattern := filepath.Join(appRoot, "data", "control.db.pre-restore-*.bak")
+	rotatedBefore, err := filepath.Glob(rotatedPattern)
+	if err != nil {
+		return fmt.Errorf("枚举双 Rename 失败前轮换副本: %w", err)
+	}
+	doubleCtx, cancelDouble := context.WithCancel(ctx)
+	incomingResults, stopIncomingWatcher, err := watchNextFileWithoutDeleteSharing(
+		doubleCtx,
+		controlPath+".incoming",
+	)
+	if err != nil {
+		cancelDouble()
+		return err
+	}
+	rollbackResults, stopRollbackWatcher, err := watchPathMissingThenReopenWithoutDeleteSharing(
+		doubleCtx,
+		controlPath,
+	)
+	if err != nil {
+		cancelDouble()
+		_ = stopIncomingWatcher()
+		releaseReadyPendingFileHold(incomingResults)
+		return err
+	}
+	doubleLog := filepath.Join(logs, "current-double-rename-fail-closed.log")
+	unexpected, startErr = testprocess.StartGallerydWithSourceRootsContext(
+		ctx, currentPath, appRoot, doubleLog, startupTimeout,
+	)
+	if unexpected != nil {
+		outcome := unexpected.Stop()
+		cancelDouble()
+		_ = stopIncomingWatcher()
+		_ = stopRollbackWatcher()
+		releaseReadyPendingFileHold(incomingResults)
+		releaseReadyPendingFileHold(rollbackResults)
+		return fmt.Errorf(
+			"双 Rename 失败时 galleryd 意外发布 descriptor：forced=%t err=%v",
+			outcome.ForcedKill,
+			outcome.Err,
+		)
+	}
+	incomingHold, err := awaitPendingFileHold(incomingResults, "恢复候选落位")
+	if err != nil {
+		cancelDouble()
+		_ = stopIncomingWatcher()
+		_ = stopRollbackWatcher()
+		releaseReadyPendingFileHold(incomingResults)
+		releaseReadyPendingFileHold(rollbackResults)
+		return err
+	}
+	rollbackHold, err := awaitPendingFileHold(rollbackResults, "旧库回滚")
+	if err != nil {
+		_ = incomingHold.release()
+		cancelDouble()
+		_ = stopIncomingWatcher()
+		_ = stopRollbackWatcher()
+		releaseReadyPendingFileHold(rollbackResults)
+		return err
+	}
+	cancelDouble()
+	incomingWatchErr := stopIncomingWatcher()
+	rollbackWatchErr := stopRollbackWatcher()
+	if startErr == nil || !strings.Contains(startErr.Error(), "descriptor 前提前退出") {
+		_ = incomingHold.release()
+		_ = rollbackHold.release()
+		return fmt.Errorf("双 Rename 失败时未在 descriptor 前 fail-closed: %v", startErr)
+	}
+	if incomingWatchErr != nil || rollbackWatchErr != nil {
+		_ = incomingHold.release()
+		_ = rollbackHold.release()
+		return fmt.Errorf("停止双 Rename 阻断监视: incoming=%v rollback=%v", incomingWatchErr, rollbackWatchErr)
+	}
+	doubleLogData, err := os.ReadFile(doubleLog)
+	if err != nil {
+		_ = incomingHold.release()
+		_ = rollbackHold.release()
+		return fmt.Errorf("读取双 Rename 失败进程日志: %w", err)
+	}
+	if !strings.Contains(string(doubleLogData), "RESTORE_FAILED:") ||
+		!strings.Contains(string(doubleLogData), "落位恢复候选") ||
+		!strings.Contains(string(doubleLogData), "回滚当前 control.db") {
+		_ = incomingHold.release()
+		_ = rollbackHold.release()
+		return fmt.Errorf("双 Rename 失败进程日志未记录两个精确失败阶段")
+	}
+	if err := assertContinuityRestoreRecorded(appRoot, doubleRenameBackup.BackupId, "落位恢复候选"); err != nil {
+		_ = incomingHold.release()
+		_ = rollbackHold.release()
+		return err
+	}
+	if err := assertContinuityRestoreRecorded(appRoot, doubleRenameBackup.BackupId, "回滚当前 control.db"); err != nil {
+		_ = incomingHold.release()
+		_ = rollbackHold.release()
+		return err
+	}
+	if _, err := os.Stat(controlPath); !errors.Is(err, os.ErrNotExist) {
+		_ = incomingHold.release()
+		_ = rollbackHold.release()
+		return fmt.Errorf("双 Rename 失败后 control.db 路径不应被重新创建")
+	}
+	rotatedPath, err := findOnlyNewPath(rotatedBefore, rotatedPattern)
+	if err != nil {
+		_ = incomingHold.release()
+		_ = rollbackHold.release()
+		return err
+	}
+	rotatedDigest, err := digestFile(rotatedPath)
+	if err != nil || rotatedDigest != currentDigest {
+		_ = incomingHold.release()
+		_ = rollbackHold.release()
+		return fmt.Errorf("双 Rename 失败后的旧库轮换副本未保持精确字节: %v", err)
+	}
+	if renameErr := os.Rename(incomingHold.path, controlPath); renameErr == nil || !isDeleteSharingViolation(renameErr) {
+		_ = incomingHold.release()
+		_ = rollbackHold.release()
+		return fmt.Errorf("候选落位未保持 Windows sharing violation: %v", renameErr)
+	}
+	if renameErr := os.Rename(rotatedPath, controlPath); renameErr == nil || !isDeleteSharingViolation(renameErr) {
+		_ = incomingHold.release()
+		_ = rollbackHold.release()
+		return fmt.Errorf("旧库回滚未保持 Windows sharing violation: %v", renameErr)
+	}
+	if err := incomingHold.release(); err != nil {
+		_ = rollbackHold.release()
+		return fmt.Errorf("释放候选落位阻断句柄: %w", err)
+	}
+	if err := rollbackHold.release(); err != nil {
+		return fmt.Errorf("释放旧库回滚阻断句柄: %w", err)
+	}
+
+	active, err = testprocess.StartGallerydWithSourceRootsContext(
+		ctx, currentPath, appRoot, filepath.Join(logs, "current-after-double-rename-recovery.log"), startupTimeout,
+	)
+	if err != nil {
+		return fmt.Errorf("解除双 Rename 阻断后重试恢复: %w", err)
+	}
+	doubleClient, err := pair(ctx, active.BaseURL)
+	if err != nil {
+		return fmt.Errorf("双 Rename 恢复后重新配对: %w", err)
+	}
+	if err := assertLibraries(ctx, doubleClient, map[string]bool{
+		beforeBackupLibrary:    true,
+		afterBackupLibrary:     false,
+		afterBadBackupLibrary:  true,
+		afterLockedLibrary:     true,
+		afterLandingLibrary:    true,
+		afterContinuityLibrary: false,
+		afterFinalizeLibrary:   true,
+		afterOutcomeLibrary:    true,
+		afterPendingLibrary:    true,
+		afterDoubleLibrary:     false,
+	}); err != nil {
+		return fmt.Errorf("双 Rename 解除阻断后的恢复事实: %w", err)
+	}
+	if err := assertSuccessfulRestoreRecorded(appRoot, doubleRenameBackup.BackupId); err != nil {
+		return fmt.Errorf("双 Rename 解除阻断后的恢复结果: %w", err)
+	}
+	retainedDigest, err := digestFile(rotatedPath)
+	if err != nil || retainedDigest != currentDigest {
+		return fmt.Errorf("双 Rename 恢复后轮换副本未保持当前事实字节: %v", err)
+	}
+	if outcome := active.Stop(); !outcome.ExitedGracefully || outcome.ForcedKill || outcome.Err != nil {
+		stopsGraceful = false
+		return fmt.Errorf("双 Rename 恢复后当前版本未优雅停止：forced=%t err=%v", outcome.ForcedKill, outcome.Err)
 	}
 	active = nil
 
@@ -674,6 +863,10 @@ func run(previousBin, currentBin, previousVersion, currentVersion string) error 
 		PendingDeleteRetained:     true,
 		PendingDeleteRecovered:    true,
 		PendingDeleteBlockedByOS:  true,
+		DoubleRenameFailedClosed:  true,
+		DoubleRenameRetained:      true,
+		DoubleRenameRecovered:     true,
+		DoubleRenameBlockedByOS:   true,
 		AllStopsExitedGracefully:  stopsGraceful,
 	}
 	encoded, err := json.Marshal(value)
@@ -774,6 +967,60 @@ func assertRestoreStartupFailed(ctx context.Context, binary, appRoot, logPath, r
 		return fmt.Errorf("恢复状态失败进程日志未记录精确 RESTORE_FAILED 阶段")
 	}
 	return nil
+}
+
+func awaitPendingFileHold(results <-chan pendingFileHold, label string) (pendingFileHold, error) {
+	select {
+	case hold := <-results:
+		if hold.err != nil {
+			return pendingFileHold{}, fmt.Errorf("建立%s阻断句柄: %w", label, hold.err)
+		}
+		if hold.release == nil || hold.path == "" {
+			return pendingFileHold{}, fmt.Errorf("%s阻断未返回完整句柄事实", label)
+		}
+		return hold, nil
+	case <-time.After(2 * time.Second):
+		return pendingFileHold{}, fmt.Errorf("未观察到%s的真实 Windows 阻断句柄", label)
+	}
+}
+
+func releaseReadyPendingFileHold(results <-chan pendingFileHold) {
+	select {
+	case hold := <-results:
+		if hold.release != nil {
+			_ = hold.release()
+		}
+	default:
+	}
+}
+
+func findOnlyNewPath(before []string, pattern string) (string, error) {
+	known := make(map[string]struct{}, len(before))
+	for _, path := range before {
+		known[path] = struct{}{}
+	}
+	after, err := filepath.Glob(pattern)
+	if err != nil {
+		return "", fmt.Errorf("枚举轮换副本: %w", err)
+	}
+	var found []string
+	for _, path := range after {
+		if _, ok := known[path]; !ok {
+			found = append(found, path)
+		}
+	}
+	if len(found) != 1 {
+		return "", fmt.Errorf("预期恰好一个新轮换副本，实际为 %d", len(found))
+	}
+	return found[0], nil
+}
+
+func digestFile(path string) ([sha256.Size]byte, error) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return [sha256.Size]byte{}, err
+	}
+	return sha256.Sum256(data), nil
 }
 
 func assertSessionInvalidated(ctx context.Context, client *pairedClient) error {

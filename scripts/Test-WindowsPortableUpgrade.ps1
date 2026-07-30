@@ -131,6 +131,10 @@ try {
             'pendingDeleteRetained',
             'pendingDeleteRecovered',
             'pendingDeleteBlockedByOS',
+            'doubleRenameFailedClosed',
+            'doubleRenameRetained',
+            'doubleRenameRecovered',
+            'doubleRenameBlockedByOS',
             'allStopsExitedGracefully'
         )) {
         if ($result.$field -ne $true) { throw "版本切换结果未通过：$field" }
@@ -171,6 +175,10 @@ try {
         PendingDeleteRetained = 'passed'
         PendingDeleteRecovered = 'passed'
         PendingDeleteBlockedByOS = 'passed'
+        DoubleRenameFailedClosed = 'passed'
+        DoubleRenameRetained = 'passed'
+        DoubleRenameRecovered = 'passed'
+        DoubleRenameBlockedByOS = 'passed'
         AllStopsExitedGracefully = 'passed'
     }
 } finally {

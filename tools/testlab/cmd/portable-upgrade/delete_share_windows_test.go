@@ -74,3 +74,44 @@ func TestWatchNextFileWithoutDeleteSharingBlocksRename(t *testing.T) {
 		t.Fatalf("释放句柄后仍不能落位恢复候选: %v", err)
 	}
 }
+
+func TestWatchPathMissingThenReopenBlocksRollbackRename(t *testing.T) {
+	root := t.TempDir()
+	current := filepath.Join(root, "control.db")
+	rotated := filepath.Join(root, "control.db.pre-restore-test.bak")
+	if err := os.WriteFile(current, []byte("current"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	results, stop, err := watchPathMissingThenReopenWithoutDeleteSharing(ctx, current)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer stop()
+	if err := os.Rename(current, rotated); err != nil {
+		t.Fatal(err)
+	}
+	var hold pendingFileHold
+	select {
+	case hold = <-results:
+	case <-ctx.Done():
+		t.Fatalf("等待旧库回滚阻断句柄: %v", ctx.Err())
+	}
+	if hold.err != nil || hold.release == nil {
+		t.Fatalf("旧库回滚阻断句柄无效: %v", hold.err)
+	}
+	if err := os.Rename(rotated, current); err == nil {
+		_ = hold.release()
+		t.Fatal("未阻止旧库回滚 Rename")
+	} else if !isDeleteSharingViolation(err) {
+		_ = hold.release()
+		t.Fatalf("旧库回滚 Rename 未返回 sharing violation: %v", err)
+	}
+	if err := hold.release(); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Rename(rotated, current); err != nil {
+		t.Fatalf("释放句柄后仍不能回滚旧库: %v", err)
+	}
+}
