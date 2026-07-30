@@ -26,6 +26,8 @@ EV-67 延续上述真实后端持续门禁：当前 primitive config 的 15 个 
 
 [EV-119](证据/验证记录.md) 再以两个真实 Windows handle 同时阻止候选落位与旧库回滚；两次实际 Rename 均返回 sharing violation，生产路径保留 pending、轮换副本和候选，记录两个失败阶段并返回 `RESTORE_FAILED`。这是包内真实 Win32 证据，不替代便携进程重启、磁盘满、权限/中断、正式签名或 RC Gate。
 
+[EV-121](证据/验证记录.md) 随后修复当前库缺失且恢复在候选生成前失败时仍会消费 pending、继续创建空库的 pre-placement fail-open；干净未签名便携双包以真实 Windows handle 持有 stale incoming，证明 `galleryd` 在 descriptor 前返回 `RESTORE_FAILED`，解除阻断并恢复已保全当前库后同一 pending 可成功重试。便携同进程双 Rename 失败、容量/权限/中断、正式签名及 RC Gate 仍未完成。
+
 [EV-111](证据/验证记录.md) 又在 Scanner 既有多目标语义上增加同源批量确认公共契约，保留原单媒体 API 与用户交互；真实 Pawchive 12 目标最终以一个 Job 在 74.003 秒确认 12/12，完整 Source guard 前后零变化。该切片关闭每目标重复完整 Source 处理，但没有触发或关闭真实活动 Hash 取消、HDD/SMB/NAS、完整语义、全量扫描、正式性能/API Freeze 或 RC Gate。
 
 [EV-112](证据/验证记录.md) 再为 `sourcelab` 增加默认关闭的真实活动 Hash 取消门禁：全新 Pawchive 隔离运行先从公共 Job API 观察到 `hash/running`，再取消父 Scan，4 ms 后观察父子都为 `cancelled`；完整 11,595 文件/2,353 目录/124,660,469,885 bytes 的 Source guard 增删改均为 0。该结果只关闭 Windows 本地 SSD/Pawchive 这一切片，HDD/SMB/NAS、publishing/崩溃恢复、全量与 RC Gate 仍未通过。
