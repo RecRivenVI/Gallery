@@ -17,10 +17,11 @@ import (
 )
 
 const (
-	restorePendingFile = "restore-pending.json"
-	restoreLastFile    = "restore-last.json"
-	incomingSuffix     = ".incoming"
-	preRestorePrefix   = "control.db.pre-restore-"
+	restorePendingFile   = "restore-pending.json"
+	restoreLastFile      = "restore-last.json"
+	restorePhaseFinalize = "placed_pending_finalize"
+	incomingSuffix       = ".incoming"
+	preRestorePrefix     = "control.db.pre-restore-"
 )
 
 // RestoreReport 是恢复前的验证结论（Dry Run）。它不修改任何状态，供高危恢复操作在实际执行前
@@ -48,6 +49,7 @@ type restoreRequest struct {
 	BackupID    string    `json:"backupId"`
 	RequestedBy string    `json:"requestedBy"`
 	RequestedAt time.Time `json:"requestedAt"`
+	Phase       string    `json:"phase,omitempty"`
 }
 
 type restoreLast struct {
@@ -102,7 +104,7 @@ func (s *Service) RequestRestore(ctx context.Context, requestedBy, backupID stri
 	if err := os.MkdirAll(s.dirs.State, 0o700); err != nil {
 		return report, fault.New(fault.CodeRestoreFailed, false, err)
 	}
-	if err := os.WriteFile(filepath.Join(s.dirs.State, restorePendingFile), data, 0o600); err != nil {
+	if err := writeStateFile(filepath.Join(s.dirs.State, restorePendingFile), data); err != nil {
 		return report, fault.New(fault.CodeRestoreFailed, false, err)
 	}
 	return report, nil
@@ -194,10 +196,12 @@ func openStageAndCheck(ctx context.Context, path string) error {
 }
 
 // ApplyPendingRestore 在 galleryd 启动、打开任何数据库之前调用。若存在待应用恢复请求，它在隔离
-// 临时目录验证并迁移备份，产出干净候选，再原子替换当前 control.db（旧库轮换保留）。恢复失败时，
-// 只有确认当前 control.db 仍是普通文件才允许消费 pending 并继续启动；当前库不可用时必须保留恢复
-// 请求并 fail-closed，禁止后续存储打开意外创建空库。它必须在持有 AppDirs 单写者锁、且当前
-// control.db 尚未被打开时调用。
+// 临时目录验证并迁移备份，产出干净候选，再原子替换当前 control.db（旧库轮换保留）。成功落位后
+// pending 会进入待 FinalizeRestore 阶段，只有恢复后安全收尾与结果记录都成功才消费，确保进程在
+// 落位与收尾之间中断时下次启动仍会继续收尾而不会重复应用备份。恢复失败时，只有确认当前
+// control.db 仍是普通文件才允许消费 pending 并继续启动；当前库不可用时必须保留恢复请求并
+// fail-closed，禁止后续存储打开意外创建空库。它必须在持有 AppDirs 单写者锁、且当前 control.db
+// 尚未被打开时调用。
 func ApplyPendingRestore(ctx context.Context, dirs appdirs.Dirs) (RestoreOutcome, error) {
 	markerPath := filepath.Join(dirs.State, restorePendingFile)
 	data, err := os.ReadFile(markerPath)
@@ -210,10 +214,22 @@ func ApplyPendingRestore(ctx context.Context, dirs appdirs.Dirs) (RestoreOutcome
 	var request restoreRequest
 	unmarshalErr := json.Unmarshal(data, &request)
 	_, idErr := domain.ParseID(domain.IDControlBackup, request.BackupID)
-	if unmarshalErr != nil || idErr != nil {
-		recordRestoreOutcome(dirs, request.BackupID, false, "恢复请求标记损坏")
-		_ = os.Remove(markerPath)
+	if unmarshalErr != nil || idErr != nil || (request.Phase != "" && request.Phase != restorePhaseFinalize) {
+		if err := handleRestoreApplyFailure(dirs, markerPath, request.BackupID, errors.New("恢复请求标记损坏")); err != nil {
+			return RestoreOutcome{}, err
+		}
 		return RestoreOutcome{}, nil
+	}
+	if request.Phase == restorePhaseFinalize {
+		controlInfo, controlErr := os.Stat(filepath.Join(dirs.Data, databaseFileName))
+		if controlErr != nil || !controlInfo.Mode().IsRegular() {
+			availabilityErr := describeControlAvailability(controlInfo, controlErr)
+			if recordErr := recordRestoreOutcome(dirs, request.BackupID, false, availabilityErr.Error()); recordErr != nil {
+				availabilityErr = errors.Join(availabilityErr, fmt.Errorf("记录恢复结果: %w", recordErr))
+			}
+			return RestoreOutcome{}, fault.New(fault.CodeRestoreFailed, false, availabilityErr)
+		}
+		return RestoreOutcome{Applied: true, BackupID: request.BackupID}, nil
 	}
 	outcome, applyErr := applyRestore(ctx, dirs, request.BackupID)
 	if applyErr != nil {
@@ -222,9 +238,30 @@ func ApplyPendingRestore(ctx context.Context, dirs appdirs.Dirs) (RestoreOutcome
 		}
 		return RestoreOutcome{}, nil // 保留当前库并继续启动。
 	}
-	recordRestoreOutcome(dirs, request.BackupID, true, "已原子替换 control.db")
-	_ = os.Remove(markerPath)
+	request.Phase = restorePhaseFinalize
+	data, err = json.MarshalIndent(request, "", "  ")
+	if err != nil {
+		return RestoreOutcome{}, fault.New(fault.CodeRestoreFailed, false, fmt.Errorf("编码恢复阶段: %w", err))
+	}
+	if err := writeStateFile(markerPath, data); err != nil {
+		return RestoreOutcome{}, fault.New(fault.CodeRestoreFailed, false, fmt.Errorf("持久化恢复阶段: %w", err))
+	}
 	return outcome, nil
+}
+
+// CompletePendingRestore 在 FinalizeRestore 成功提交后持久记录恢复结果并消费 pending。调用失败时
+// pending 保留，下一次启动会从待 finalize 阶段恢复；FinalizeRestore 的事务本身可重复执行。
+func CompletePendingRestore(dirs appdirs.Dirs, outcome RestoreOutcome) error {
+	if !outcome.Applied || outcome.BackupID == "" {
+		return fault.New(fault.CodeRestoreFailed, false, fmt.Errorf("恢复结果缺少已应用身份"))
+	}
+	if err := recordRestoreOutcome(dirs, outcome.BackupID, true, "已原子替换 control.db 并完成恢复后清理"); err != nil {
+		return fault.New(fault.CodeRestoreFailed, false, fmt.Errorf("记录恢复结果: %w", err))
+	}
+	if err := os.Remove(filepath.Join(dirs.State, restorePendingFile)); err != nil && !errors.Is(err, os.ErrNotExist) {
+		return fault.New(fault.CodeRestoreFailed, false, fmt.Errorf("消费恢复请求: %w", err))
+	}
+	return nil
 }
 
 func handleRestoreApplyFailure(dirs appdirs.Dirs, markerPath, backupID string, applyErr error) error {
@@ -232,28 +269,42 @@ func handleRestoreApplyFailure(dirs appdirs.Dirs, markerPath, backupID string, a
 	if errors.As(applyErr, &continuityErr) {
 		// 当前库可能只剩轮换副本；保留 pending 供修复文件系统条件后的下一次
 		// 启动重试，并 fail-closed 阻止 storage.Open 创建空 control.db。
-		recordRestoreOutcome(dirs, backupID, false, applyErr.Error())
+		if recordErr := recordRestoreOutcome(dirs, backupID, false, applyErr.Error()); recordErr != nil {
+			applyErr = errors.Join(applyErr, fmt.Errorf("记录恢复结果: %w", recordErr))
+		}
 		return fault.New(fault.CodeRestoreFailed, false, applyErr)
 	}
 	controlInfo, controlErr := os.Stat(filepath.Join(dirs.Data, databaseFileName))
 	if controlErr != nil || !controlInfo.Mode().IsRegular() {
-		availabilityErr := controlErr
-		if availabilityErr == nil {
-			availabilityErr = fmt.Errorf("当前 control.db 不是普通文件")
-		} else if errors.Is(availabilityErr, os.ErrNotExist) {
-			availabilityErr = fmt.Errorf("当前 control.db 不存在")
-		} else {
-			availabilityErr = fmt.Errorf("检查当前 control.db: %w", availabilityErr)
-		}
+		availabilityErr := describeControlAvailability(controlInfo, controlErr)
 		// 失败发生在轮换前也不能一概继续：若没有可证明可用的当前库，storage.Open
 		// 同样会在缺失路径创建空库。保留 pending，让文件系统条件修复后重试。
 		failClosedErr := errors.Join(applyErr, availabilityErr)
-		recordRestoreOutcome(dirs, backupID, false, failClosedErr.Error())
+		if recordErr := recordRestoreOutcome(dirs, backupID, false, failClosedErr.Error()); recordErr != nil {
+			failClosedErr = errors.Join(failClosedErr, fmt.Errorf("记录恢复结果: %w", recordErr))
+		}
 		return fault.New(fault.CodeRestoreFailed, false, failClosedErr)
 	}
-	recordRestoreOutcome(dirs, backupID, false, applyErr.Error())
-	_ = os.Remove(markerPath)
+	if err := recordRestoreOutcome(dirs, backupID, false, applyErr.Error()); err != nil {
+		return fault.New(fault.CodeRestoreFailed, false, errors.Join(applyErr, fmt.Errorf("记录恢复结果: %w", err)))
+	}
+	if err := os.Remove(markerPath); err != nil && !errors.Is(err, os.ErrNotExist) {
+		return fault.New(fault.CodeRestoreFailed, false, errors.Join(applyErr, fmt.Errorf("消费恢复请求: %w", err)))
+	}
 	return nil
+}
+
+func describeControlAvailability(info os.FileInfo, err error) error {
+	if err == nil && info != nil && !info.Mode().IsRegular() {
+		return fmt.Errorf("当前 control.db 不是普通文件")
+	}
+	if errors.Is(err, os.ErrNotExist) {
+		return fmt.Errorf("当前 control.db 不存在")
+	}
+	if err != nil {
+		return fmt.Errorf("检查当前 control.db: %w", err)
+	}
+	return fmt.Errorf("当前 control.db 不可用")
 }
 
 func applyRestore(ctx context.Context, dirs appdirs.Dirs, backupID string) (RestoreOutcome, error) {
@@ -390,12 +441,42 @@ WHERE status IN ('queued', 'running', 'publishing')`, now.UTC().Unix(), now.UTC(
 	return nil
 }
 
-func recordRestoreOutcome(dirs appdirs.Dirs, backupID string, applied bool, detail string) {
+func recordRestoreOutcome(dirs appdirs.Dirs, backupID string, applied bool, detail string) error {
 	data, err := json.MarshalIndent(restoreLast{BackupID: backupID, Applied: applied, Detail: detail, FinishedAt: time.Now().UTC()}, "", "  ")
 	if err != nil {
-		return
+		return err
 	}
-	_ = os.WriteFile(filepath.Join(dirs.State, restoreLastFile), data, 0o600)
+	return writeStateFile(filepath.Join(dirs.State, restoreLastFile), data)
+}
+
+func writeStateFile(path string, data []byte) (err error) {
+	temporary, err := os.CreateTemp(filepath.Dir(path), "."+filepath.Base(path)+"-")
+	if err != nil {
+		return err
+	}
+	temporaryPath := temporary.Name()
+	defer func() {
+		_ = temporary.Close()
+		if err != nil {
+			_ = os.Remove(temporaryPath)
+		}
+	}()
+	if err = temporary.Chmod(0o600); err != nil {
+		return err
+	}
+	if _, err = temporary.Write(data); err != nil {
+		return err
+	}
+	if err = temporary.Sync(); err != nil {
+		return err
+	}
+	if err = temporary.Close(); err != nil {
+		return err
+	}
+	if err = os.Rename(temporaryPath, path); err != nil {
+		return err
+	}
+	return nil
 }
 
 func copyFile(source, destination string) error {

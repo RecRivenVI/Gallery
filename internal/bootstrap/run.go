@@ -133,6 +133,9 @@ func run(ctx context.Context, cfg config.Config, logger *slog.Logger, ready chan
 		if err := backup.FinalizeRestore(ctx, store.Control, clock.System{}.Now()); err != nil {
 			return err
 		}
+		if err := backup.CompletePendingRestore(cfg.AppDirs, restoreOutcome); err != nil {
+			return err
+		}
 		logger.Info("control_restore_applied", "backup", restoreOutcome.BackupID)
 	}
 

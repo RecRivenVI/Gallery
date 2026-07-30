@@ -168,8 +168,8 @@ VALUES ('ses_after', 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
 	if !outcome.Applied || outcome.BackupID != manifest.BackupID {
 		t.Fatalf("恢复未应用: %+v", outcome)
 	}
-	if _, err := os.Stat(filepath.Join(h.dirs.State, "restore-pending.json")); !errors.Is(err, os.ErrNotExist) {
-		t.Fatalf("恢复应用后未清除待应用标记: %v", err)
+	if _, err := os.Stat(filepath.Join(h.dirs.State, "restore-pending.json")); err != nil {
+		t.Fatalf("恢复落位后未保留待 finalize 标记: %v", err)
 	}
 	if outcome.RotatedPath == "" {
 		t.Fatal("恢复未轮换保留旧 control.db")
@@ -185,6 +185,12 @@ VALUES ('ses_after', 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
 	defer reopened.Close()
 	if err := backup.FinalizeRestore(ctx, reopened.Control, time.Date(2026, 7, 17, 1, 0, 0, 0, time.UTC)); err != nil {
 		t.Fatalf("FinalizeRestore: %v", err)
+	}
+	if err := backup.CompletePendingRestore(h.dirs, outcome); err != nil {
+		t.Fatalf("CompletePendingRestore: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(h.dirs.State, "restore-pending.json")); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("恢复完成后未清除待应用标记: %v", err)
 	}
 
 	var backupWork, afterWork int
@@ -234,6 +240,86 @@ VALUES ('ses_after', 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
 	}
 	if jobStatus != "failed" || issue != "RESTORE_INVALIDATED" {
 		t.Fatalf("恢复后非终态 Job 未作废: status=%s issue=%s", jobStatus, issue)
+	}
+}
+
+func TestApplyPendingRestoreResumesFinalizeWithoutReapplyingBackup(t *testing.T) {
+	ctx := context.Background()
+	h := newHarness(t)
+	seedControl(t, h.store)
+	manifest := runBackup(t, h)
+	if _, err := h.store.Control.SQL().Exec(
+		`INSERT INTO canonical_works (work_id, title, created_at) VALUES ('wrk_after', '备份后作品', 2)`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := h.svc.RequestRestore(ctx, "personal-owner", manifest.BackupID); err != nil {
+		t.Fatal(err)
+	}
+	if err := h.store.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	first, err := backup.ApplyPendingRestore(ctx, h.dirs)
+	if err != nil || !first.Applied || first.RotatedPath == "" {
+		t.Fatalf("首次恢复落位失败: outcome=%+v err=%v", first, err)
+	}
+	markerData, err := os.ReadFile(filepath.Join(h.dirs.State, "restore-pending.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var marker map[string]any
+	if err := json.Unmarshal(markerData, &marker); err != nil || marker["phase"] != "placed_pending_finalize" {
+		t.Fatalf("pending 未持久化待 finalize 阶段: marker=%v err=%v", marker, err)
+	}
+	rotatedBefore, err := filepath.Glob(filepath.Join(h.dirs.Data, "control.db.pre-restore-*.bak"))
+	if err != nil || len(rotatedBefore) != 1 {
+		t.Fatalf("首次恢复轮换副本数量异常: files=%v err=%v", rotatedBefore, err)
+	}
+
+	// 模拟进程在落位后、FinalizeRestore 前中断：下一次启动只恢复安全收尾，不能再次应用备份。
+	resumed, err := backup.ApplyPendingRestore(ctx, h.dirs)
+	if err != nil || !resumed.Applied || resumed.BackupID != manifest.BackupID || resumed.RotatedPath != "" {
+		t.Fatalf("待 finalize 恢复阶段未正确续接: outcome=%+v err=%v", resumed, err)
+	}
+	rotatedAfter, err := filepath.Glob(filepath.Join(h.dirs.Data, "control.db.pre-restore-*.bak"))
+	if err != nil || len(rotatedAfter) != len(rotatedBefore) {
+		t.Fatalf("续接时重复应用了备份: before=%v after=%v err=%v", rotatedBefore, rotatedAfter, err)
+	}
+
+	reopened, err := storage.Open(ctx, h.dirs)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := backup.FinalizeRestore(ctx, reopened.Control, time.Date(2026, 7, 17, 2, 0, 0, 0, time.UTC)); err != nil {
+		t.Fatal(err)
+	}
+	if err := reopened.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	// 再模拟 FinalizeRestore 已提交但 pending 尚未消费时中断；重复收尾必须幂等。
+	resumedAfterFinalize, err := backup.ApplyPendingRestore(ctx, h.dirs)
+	if err != nil || !resumedAfterFinalize.Applied || resumedAfterFinalize.BackupID != manifest.BackupID {
+		t.Fatalf("finalize 后中断未能继续收尾: outcome=%+v err=%v", resumedAfterFinalize, err)
+	}
+	reopened, err = storage.Open(ctx, h.dirs)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer reopened.Close()
+	if err := backup.FinalizeRestore(ctx, reopened.Control, time.Date(2026, 7, 17, 3, 0, 0, 0, time.UTC)); err != nil {
+		t.Fatal(err)
+	}
+	if err := backup.CompletePendingRestore(h.dirs, resumedAfterFinalize); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(filepath.Join(h.dirs.State, "restore-pending.json")); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("续接完成后 pending 未消费: %v", err)
+	}
+	var afterWork int
+	if err := reopened.Control.SQL().QueryRow(
+		"SELECT count(*) FROM canonical_works WHERE work_id='wrk_after'").Scan(&afterWork); err != nil || afterWork != 0 {
+		t.Fatalf("续接恢复没有保持备份事实: count=%d err=%v", afterWork, err)
 	}
 }
 

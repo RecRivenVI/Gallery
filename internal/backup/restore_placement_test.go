@@ -1,6 +1,7 @@
 package backup
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"os"
@@ -222,5 +223,91 @@ func TestHandleRestoreApplyFailureKeepsPendingWhenCurrentDatabaseIsMissing(t *te
 		!strings.Contains(recorded.Detail, "候选生成前失败") ||
 		!strings.Contains(recorded.Detail, "当前 control.db 不存在") {
 		t.Fatalf("当前库缺失失败事实未完整记录: %+v err=%v", recorded, unmarshalErr)
+	}
+}
+
+func TestApplyPendingRestoreKeepsMalformedMarkerWhenCurrentDatabaseIsMissing(t *testing.T) {
+	root := t.TempDir()
+	dirs := appdirs.Dirs{Data: filepath.Join(root, "data"), State: filepath.Join(root, "state")}
+	if err := os.MkdirAll(dirs.Data, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(dirs.State, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	markerPath := filepath.Join(dirs.State, restorePendingFile)
+	if err := os.WriteFile(markerPath, []byte(`{"backupId":"../../outside"}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	outcome, err := ApplyPendingRestore(context.Background(), dirs)
+	var structured *fault.Error
+	if !errors.As(err, &structured) || structured.Code != fault.CodeRestoreFailed || outcome.Applied {
+		t.Fatalf("当前库缺失时损坏 marker 未 fail-closed: outcome=%+v err=%v", outcome, err)
+	}
+	if _, statErr := os.Stat(markerPath); statErr != nil {
+		t.Fatalf("当前库缺失时不应消费损坏 marker: %v", statErr)
+	}
+}
+
+func TestHandleRestoreApplyFailureKeepsPendingWhenOutcomeCannotBeRecorded(t *testing.T) {
+	root := t.TempDir()
+	dirs := appdirs.Dirs{Data: filepath.Join(root, "data"), State: filepath.Join(root, "state")}
+	if err := os.MkdirAll(dirs.Data, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(dirs.State, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dirs.Data, databaseFileName), []byte("current-user-facts"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	markerPath := filepath.Join(dirs.State, restorePendingFile)
+	if err := os.WriteFile(markerPath, []byte(`{"backupId":"test"}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	lastPath := filepath.Join(dirs.State, restoreLastFile)
+	if err := os.Mkdir(lastPath, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(lastPath, "block"), []byte("block"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	err := handleRestoreApplyFailure(dirs, markerPath, "cbak_test", errors.New("safe rollback"))
+	var structured *fault.Error
+	if !errors.As(err, &structured) || structured.Code != fault.CodeRestoreFailed || !strings.Contains(err.Error(), "记录恢复结果") {
+		t.Fatalf("恢复结果不可记录时未 fail-closed: %v", err)
+	}
+	if _, statErr := os.Stat(markerPath); statErr != nil {
+		t.Fatalf("恢复结果不可记录时不应消费 pending: %v", statErr)
+	}
+}
+
+func TestCompletePendingRestoreKeepsPendingWhenOutcomeCannotBeRecorded(t *testing.T) {
+	root := t.TempDir()
+	dirs := appdirs.Dirs{State: filepath.Join(root, "state")}
+	if err := os.MkdirAll(dirs.State, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	markerPath := filepath.Join(dirs.State, restorePendingFile)
+	if err := os.WriteFile(markerPath, []byte(`{"backupId":"cbak_test","phase":"placed_pending_finalize"}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	lastPath := filepath.Join(dirs.State, restoreLastFile)
+	if err := os.Mkdir(lastPath, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(lastPath, "block"), []byte("block"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	err := CompletePendingRestore(dirs, RestoreOutcome{Applied: true, BackupID: "cbak_test"})
+	var structured *fault.Error
+	if !errors.As(err, &structured) || structured.Code != fault.CodeRestoreFailed || !strings.Contains(err.Error(), "记录恢复结果") {
+		t.Fatalf("完成结果不可记录时未 fail-closed: %v", err)
+	}
+	if _, statErr := os.Stat(markerPath); statErr != nil {
+		t.Fatalf("完成结果不可记录时不应消费 pending: %v", statErr)
 	}
 }
