@@ -117,6 +117,10 @@ try {
             'landingRestoreKeptCurrent',
             'landingRestoreRecorded',
             'landingRestoreBlockedByOS',
+            'continuityFailedClosed',
+            'continuityPendingRetained',
+            'continuityRecovered',
+            'continuityBlockedByOS',
             'allStopsExitedGracefully'
         )) {
         if ($result.$field -ne $true) { throw "版本切换结果未通过：$field" }
@@ -143,6 +147,10 @@ try {
         LandingRestoreKeptCurrent = 'passed'
         LandingRestoreRecorded = 'passed'
         LandingRestoreBlockedByOS = 'passed'
+        ContinuityFailedClosed = 'passed'
+        ContinuityPendingRetained = 'passed'
+        ContinuityRecovered = 'passed'
+        ContinuityBlockedByOS = 'passed'
         AllStopsExitedGracefully = 'passed'
     }
 } finally {

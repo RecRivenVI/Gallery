@@ -24,13 +24,14 @@ import (
 )
 
 const (
-	beforeBackupLibrary   = "Portable upgrade persistent fact"
-	afterBackupLibrary    = "Portable upgrade restore sentinel"
-	afterBadBackupLibrary = "Portable failed restore current fact"
-	afterLockedLibrary    = "Portable locked restore current fact"
-	afterLandingLibrary   = "Portable landing restore current fact"
-	startupTimeout        = 60 * time.Second
-	jobTimeout            = 30 * time.Second
+	beforeBackupLibrary    = "Portable upgrade persistent fact"
+	afterBackupLibrary     = "Portable upgrade restore sentinel"
+	afterBadBackupLibrary  = "Portable failed restore current fact"
+	afterLockedLibrary     = "Portable locked restore current fact"
+	afterLandingLibrary    = "Portable landing restore current fact"
+	afterContinuityLibrary = "Portable continuity restore current fact"
+	startupTimeout         = 60 * time.Second
+	jobTimeout             = 30 * time.Second
 )
 
 type pairedClient struct {
@@ -56,6 +57,10 @@ type result struct {
 	LandingRestoreKeptCurrent bool   `json:"landingRestoreKeptCurrent"`
 	LandingRestoreRecorded    bool   `json:"landingRestoreRecorded"`
 	LandingRestoreBlockedByOS bool   `json:"landingRestoreBlockedByOS"`
+	ContinuityFailedClosed    bool   `json:"continuityFailedClosed"`
+	ContinuityPendingRetained bool   `json:"continuityPendingRetained"`
+	ContinuityRecovered       bool   `json:"continuityRecovered"`
+	ContinuityBlockedByOS     bool   `json:"continuityBlockedByOS"`
 	AllStopsExitedGracefully  bool   `json:"allStopsExitedGracefully"`
 }
 
@@ -366,9 +371,119 @@ func run(previousBin, currentBin, previousVersion, currentVersion string) error 
 	if err := assertFailedRestoreRecorded(appRoot, landingBackup.BackupId, "落位恢复候选"); err != nil {
 		return err
 	}
+	continuityBackup, err := createBackup(ctx, landingRestoreClient)
+	if err != nil {
+		return fmt.Errorf("创建连续性失败夹具备份: %w", err)
+	}
+	if err := createLibrary(ctx, landingRestoreClient, afterContinuityLibrary); err != nil {
+		return err
+	}
+	if err := requestRestore(ctx, landingRestoreClient, continuityBackup.BackupId); err != nil {
+		return err
+	}
 	if outcome := active.Stop(); !outcome.ExitedGracefully || outcome.ForcedKill || outcome.Err != nil {
 		stopsGraceful = false
-		return fmt.Errorf("候选落位拒绝恢复后当前版本未优雅停止：forced=%t err=%v", outcome.ForcedKill, outcome.Err)
+		return fmt.Errorf("连续性失败恢复前当前版本未优雅停止：forced=%t err=%v", outcome.ForcedKill, outcome.Err)
+	}
+	active = nil
+
+	controlPath := filepath.Join(appRoot, "data", "control.db")
+	preservedControl := filepath.Join(appRoot, "data", "control.db.continuity-current")
+	if err := os.Rename(controlPath, preservedControl); err != nil {
+		return fmt.Errorf("保全连续性失败前当前库: %w", err)
+	}
+	continuityWatchCtx, cancelContinuityWatch := context.WithCancel(ctx)
+	continuityHoldResults, stopContinuityWatcher, err := watchNextFileWithoutDeleteSharing(
+		continuityWatchCtx,
+		controlPath+".incoming",
+	)
+	if err != nil {
+		cancelContinuityWatch()
+		return err
+	}
+	continuityLog := filepath.Join(logs, "current-continuity-fail-closed.log")
+	unexpected, startErr := testprocess.StartGallerydWithSourceRootsContext(
+		ctx, currentPath, appRoot, continuityLog, startupTimeout,
+	)
+	if unexpected != nil {
+		outcome := unexpected.Stop()
+		cancelContinuityWatch()
+		_ = stopContinuityWatcher()
+		return fmt.Errorf(
+			"连续性未知时 galleryd 意外发布 descriptor：forced=%t err=%v",
+			outcome.ForcedKill,
+			outcome.Err,
+		)
+	}
+	var continuityHold pendingFileHold
+	select {
+	case continuityHold = <-continuityHoldResults:
+	case <-time.After(2 * time.Second):
+		cancelContinuityWatch()
+		_ = stopContinuityWatcher()
+		return fmt.Errorf("未观察到连续性失败候选的真实 Windows 阻断句柄")
+	}
+	cancelContinuityWatch()
+	continuityWatchStopErr := stopContinuityWatcher()
+	if continuityHold.err != nil {
+		return fmt.Errorf("建立连续性失败候选阻断句柄: %w", continuityHold.err)
+	}
+	if continuityHold.release == nil {
+		return fmt.Errorf("连续性失败候选阻断未返回可释放句柄")
+	}
+	continuityReleaseErr := continuityHold.release()
+	if continuityWatchStopErr != nil {
+		return fmt.Errorf("停止连续性失败候选目录监视: %w", continuityWatchStopErr)
+	}
+	if continuityReleaseErr != nil {
+		return fmt.Errorf("释放连续性失败候选阻断句柄: %w", continuityReleaseErr)
+	}
+	if startErr == nil || !strings.Contains(startErr.Error(), "descriptor 前提前退出") {
+		return fmt.Errorf("连续性未知时未在 descriptor 前 fail-closed: %v", startErr)
+	}
+	continuityLogData, err := os.ReadFile(continuityLog)
+	if err != nil {
+		return fmt.Errorf("读取连续性失败进程日志: %w", err)
+	}
+	if !strings.Contains(string(continuityLogData), "RESTORE_FAILED:") {
+		return fmt.Errorf("连续性未知进程日志未记录 RESTORE_FAILED")
+	}
+	if err := assertContinuityRestoreRecorded(appRoot, continuityBackup.BackupId, "落位恢复候选"); err != nil {
+		return err
+	}
+	if _, err := os.Stat(controlPath); !errors.Is(err, os.ErrNotExist) {
+		return fmt.Errorf("连续性未知失败后 control.db 路径不应被重新创建")
+	}
+	if err := os.Rename(preservedControl, controlPath); err != nil {
+		return fmt.Errorf("解除阻断后恢复已保全当前库: %w", err)
+	}
+
+	active, err = testprocess.StartGallerydWithSourceRootsContext(
+		ctx, currentPath, appRoot, filepath.Join(logs, "current-after-continuity-recovery.log"), startupTimeout,
+	)
+	if err != nil {
+		return fmt.Errorf("解除连续性阻断后重试恢复: %w", err)
+	}
+	continuityClient, err := pair(ctx, active.BaseURL)
+	if err != nil {
+		return fmt.Errorf("连续性恢复后重新配对: %w", err)
+	}
+	if err := assertLibraries(ctx, continuityClient, map[string]bool{
+		beforeBackupLibrary:    true,
+		afterBackupLibrary:     false,
+		afterBadBackupLibrary:  true,
+		afterLockedLibrary:     true,
+		afterLandingLibrary:    true,
+		afterContinuityLibrary: false,
+	}); err != nil {
+		return fmt.Errorf("解除连续性阻断后的恢复事实: %w", err)
+	}
+	if err := assertSuccessfulRestoreRecorded(appRoot, continuityBackup.BackupId); err != nil {
+		return err
+	}
+	if outcome := active.Stop(); !outcome.ExitedGracefully || outcome.ForcedKill || outcome.Err != nil {
+		stopsGraceful = false
+		return fmt.Errorf("连续性恢复后当前版本未优雅停止：forced=%t err=%v", outcome.ForcedKill, outcome.Err)
 	}
 	active = nil
 
@@ -389,6 +504,10 @@ func run(previousBin, currentBin, previousVersion, currentVersion string) error 
 		LandingRestoreKeptCurrent: true,
 		LandingRestoreRecorded:    true,
 		LandingRestoreBlockedByOS: true,
+		ContinuityFailedClosed:    true,
+		ContinuityPendingRetained: true,
+		ContinuityRecovered:       true,
+		ContinuityBlockedByOS:     true,
 		AllStopsExitedGracefully:  stopsGraceful,
 	}
 	encoded, err := json.Marshal(value)
@@ -564,6 +683,50 @@ func assertFailedRestoreRecorded(appRoot, backupID, requiredDetail string) error
 	if record.BackupID != backupID || record.Applied || strings.TrimSpace(record.Detail) == "" ||
 		(requiredDetail != "" && !strings.Contains(record.Detail, requiredDetail)) {
 		return fmt.Errorf("损坏备份恢复结果未精确记录")
+	}
+	return nil
+}
+
+func assertContinuityRestoreRecorded(appRoot, backupID, requiredDetail string) error {
+	pendingData, err := os.ReadFile(filepath.Join(appRoot, "state", "restore-pending.json"))
+	if err != nil {
+		return fmt.Errorf("读取连续性失败恢复标记: %w", err)
+	}
+	var pending struct {
+		BackupID string `json:"backupId"`
+	}
+	if err := json.Unmarshal(pendingData, &pending); err != nil || pending.BackupID != backupID {
+		return fmt.Errorf("连续性失败恢复标记未精确保留")
+	}
+	data, err := os.ReadFile(filepath.Join(appRoot, "state", "restore-last.json"))
+	if err != nil {
+		return fmt.Errorf("读取连续性失败恢复结果: %w", err)
+	}
+	var record restoreLastRecord
+	if err := json.Unmarshal(data, &record); err != nil {
+		return fmt.Errorf("解析连续性失败恢复结果: %w", err)
+	}
+	if record.BackupID != backupID || record.Applied || strings.TrimSpace(record.Detail) == "" ||
+		(requiredDetail != "" && !strings.Contains(record.Detail, requiredDetail)) {
+		return fmt.Errorf("连续性失败恢复结果未精确记录")
+	}
+	return nil
+}
+
+func assertSuccessfulRestoreRecorded(appRoot, backupID string) error {
+	if _, err := os.Stat(filepath.Join(appRoot, "state", "restore-pending.json")); !errors.Is(err, os.ErrNotExist) {
+		return fmt.Errorf("连续性恢复成功后 pending 未消费")
+	}
+	data, err := os.ReadFile(filepath.Join(appRoot, "state", "restore-last.json"))
+	if err != nil {
+		return fmt.Errorf("读取连续性恢复成功结果: %w", err)
+	}
+	var record restoreLastRecord
+	if err := json.Unmarshal(data, &record); err != nil {
+		return fmt.Errorf("解析连续性恢复成功结果: %w", err)
+	}
+	if record.BackupID != backupID || !record.Applied || !strings.Contains(record.Detail, "已原子替换 control.db") {
+		return fmt.Errorf("连续性恢复成功结果未精确记录")
 	}
 	return nil
 }

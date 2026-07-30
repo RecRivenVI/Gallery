@@ -90,3 +90,57 @@ func TestAssertFailedRestoreRecorded(t *testing.T) {
 		t.Fatal("未消费的恢复标记未被拒绝")
 	}
 }
+
+func TestAssertContinuityRestoreRecorded(t *testing.T) {
+	root := t.TempDir()
+	state := filepath.Join(root, "state")
+	if err := os.MkdirAll(state, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	backupID := "bkp_00000000-0000-7000-8000-000000000001"
+	if err := os.WriteFile(
+		filepath.Join(state, "restore-pending.json"),
+		[]byte(`{"backupId":"`+backupID+`"}`),
+		0o600,
+	); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(
+		filepath.Join(state, "restore-last.json"),
+		[]byte(`{"backupId":"`+backupID+`","applied":false,"detail":"落位恢复候选 failed"}`),
+		0o600,
+	); err != nil {
+		t.Fatal(err)
+	}
+	if err := assertContinuityRestoreRecorded(root, backupID, "落位恢复候选"); err != nil {
+		t.Fatal(err)
+	}
+	if err := assertContinuityRestoreRecorded(root, backupID, "回滚当前 control.db"); err == nil {
+		t.Fatal("不匹配的连续性失败阶段未被拒绝")
+	}
+}
+
+func TestAssertSuccessfulRestoreRecorded(t *testing.T) {
+	root := t.TempDir()
+	state := filepath.Join(root, "state")
+	if err := os.MkdirAll(state, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	backupID := "bkp_00000000-0000-7000-8000-000000000001"
+	if err := os.WriteFile(
+		filepath.Join(state, "restore-last.json"),
+		[]byte(`{"backupId":"`+backupID+`","applied":true,"detail":"已原子替换 control.db"}`),
+		0o600,
+	); err != nil {
+		t.Fatal(err)
+	}
+	if err := assertSuccessfulRestoreRecorded(root, backupID); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(state, "restore-pending.json"), []byte(`{}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := assertSuccessfulRestoreRecorded(root, backupID); err == nil {
+		t.Fatal("成功恢复后未消费的 pending 未被拒绝")
+	}
+}
