@@ -55,13 +55,13 @@ Gallery 是一个"本地优先"（数据主要放在自己电脑上，不依赖�
 | 阶段 0：契约骨架 | ✅ | ✅（限定范围内） | 建立了两个数据库、错误码、接口协议等基础设施 | 具体的数据库表结构当时未定死（属计划内安排，不算缺口） | 已完成，无需再动 |
 | Walking Skeleton（最小可跑通链路） | ✅ | ✅（限定范围内） | 用一个最简单的例子（一个作品、一个文件）证明整条链路从头到尾能跑通 | 只验证了单文件的最简单场景 | 已完成 |
 | Architecture Proof（架构验证切片） | ✅ | ✅（限定范围内，含 8 个强制中断模拟测试） | 证明了断电、进程被强制终止后系统能自行恢复，不会数据错乱 | 数据库最终表结构、完整接口范围仍未冻结（计划内安排，不算缺口） | 已完成 |
-| 阶段 1：领域和数据所有权 | ✅ | ✅（限定范围内） | 备份/恢复、目录库整体重建、作者合并/撤销合并、文件"孤儿"处理等全部完成并通过验证 | 真实网络共享盘（SMB/NAS）、Windows/Linux 底层文件身份识别等留待以后阶段 | 已完成 |
+| 阶段 1：领域和数据所有权 | ✅ | ✅（限定范围内） | 备份/恢复、目录库整体重建、作者合并/撤销合并、文件"孤儿"处理等全部完成并通过验证；Windows FileID/Unix `dev+inode` observation 已在阶段 7 接入 | 真实网络共享盘（SMB/NAS）、Linux 原生/重挂载身份稳定性与 FileLocation 最终唯一约束留待平台门禁 | 已完成 |
 | 阶段 2：规则系统 | ✅（正确性层面） | ✅（限定范围内） | 规则生命周期、编译执行、参数/绑定和影响调度已形成闭环 | 正式性能/平台测试尚未完成 | 已完成 |
 | 阶段 3：扫描、任务与目录库 | ✅（代码与模拟数据层面） | 🟡（真实大盘抽样与三平台有界链通过，全量未完成） | EV-92～EV-94 在真实 Pixiv 上完成 discovery 取消/恢复与零写入；EV-108/111 完成 Gank/Pawchive 确认链；EV-112 在 Pawchive 上观察真实 `hash/running` 后取消，4 ms 内观察父子终态且全树零变化 | Pixiv/真实盘全量扫描与哈希、HDD/SMB/NAS 取消、publishing/崩溃恢复、正式性能门禁和网络共享盘尚未完成 | 继续其它存储与异常切片，同时收口阶段 4 正式压力门禁 |
-| 阶段 4：查询与媒体 | 🟡（主线代码完成，部分参数未冻结） | 🟡（正确性已收口；500,000 publication 正式矩阵已越过 42/60、失败 0） | 搜索、排序、分页、显式规则/有效封面、媒体读取/下载、缩略图生成全部有代码闭环；EV-51/52 降低搜索与 publication 开销，EV-87/88 收窄聚合封面，EV-89/95 严格分页；EV-96～101 建立双关系、十目标来源、可续跑 publication 与 Query 正式入口，1%/10% 变化档各 20/20，50% 档持续运行 | publication 的 50% 变化档及 Query 并发/冷缓存、Degradation 仍未完成；超大合并图、排序权重、Total、租约、兼容版本策略和正式 API Freeze 尚未冻结 | 完成正式 500k 性能矩阵并冻结接口 |
+| 阶段 4：查询与媒体 | 🟡（主线代码完成，部分参数未冻结） | 🟡（正确性已收口；500,000 publication 正式矩阵已完成 44/60、失败 0） | 搜索、排序、分页、显式规则/有效封面、媒体读取/下载、缩略图生成全部有代码闭环；EV-51/52 降低搜索与 publication 开销，EV-87/88 收窄聚合封面，EV-89/95 严格分页；EV-96～101 建立双关系、十目标来源、可续跑 publication 与 Query 正式入口，1%/10% 变化档各 20/20，50% 档持续运行 | publication 的 50% 变化档及 Query 并发/冷缓存、Degradation 仍未完成；超大合并图、排序权重、Total、租约、兼容版本策略和正式 API Freeze 尚未冻结 | 完成正式 500k 性能矩阵并冻结接口 |
 | 阶段 5：账户、安全与多客户端 | 🟠（代码与合成安全收尾已实现；恶意输入缺陷已收口） | 🟡（Personal、同机 LAN、真实进程树/双工具/有界恶意媒体与 Windows OS 资源补证，正式 Gate 未通过） | EV-37/EV-38/EV-44/EV-48 的安全收口之外，EV-60 已把 Session、API Token、Share、allow/deny Grant、账户停用恢复和精确 Session 吊销接入隔离真实浏览器；EV-86 又让 Creator/Library 聚合封面遵守 deny、Token scope 与独立 `media.read`；EV-114～127 覆盖真实进程树、生产 ToolDiscovery 和 Windows CPU/内存硬限额，EV-128 再以 13 个合成样本和 pin 的真实 ffprobe/ffmpeg 完成 25 findings/0 failures | 真实 LAN 多设备、目标低端设备 Argon2id 及非 Windows 等价资源门禁仍未完成；同机 loopback/合成语料不能替代正式 Security Gate | 完成外部设备与其余平台门禁 |
 | 阶段 6：Web/PWA 界面 | 🟠（前端双入口、设计重构与主要真实业务链路已实现） | 🟡（隔离 Chromium/Firefox 真实 `galleryd` E2E 已建立，正式 Gate 未通过） | 共享设计系统、媒体优先画廊端与紧凑管理端；EV-54～EV-91 覆盖主要业务/治理/恢复与弱网切片，EV-102 部分采纳共享动效基座，EV-113～EV-118 建立全路由/关键状态可访问性组合，EV-129/132 清除 production 与 dev-only 依赖审计例外，full/production 均为 0 漏洞/0 例外 | 浏览器业务门禁仍使用合成 Source；EV-92 只补到独立 testlab 的真实 Pixiv 有界预检。真实存储浏览器链、其余弱网矩阵、真实缩放/系统高对比、触摸设备与屏幕阅读器未验证；画廊端无 DOM 虚拟化 | 扩大真实后端业务与可访问性 E2E，不进入桌面壳 |
-| 阶段 7：平台适配与正式发行 | 🟠（Windows 便携、恢复/回滚及连续历史升级范围已建立） | 🟡（当前双前端制品、schema 20～23→24/反向拒绝、包内、进程级及当前用户 ACL 恢复失败门禁通过，正式 Gate 未通过） | EV-103～105 完成便携、同源切换、正常/损坏备份；EV-106 建立相邻历史迁移，EV-133 扩展为 schema 20/21/22/23→24 连续矩阵并验证 API Token/Bearer 承接；EV-107/110 覆盖轮换/落位拒绝；EV-109/119 关闭落位后连续性缺口；EV-121～123 关闭当前库缺失、安全收尾和状态文件失败；EV-124/125 关闭便携同进程双 Rename 与 finalize 强杀续接；EV-131 覆盖真实 NTFS ACL；最终精确干净 `0.3.2-ev133` 包以 manifest v2 声明 current=24/minimum=20 | Authenticode、安装/更新、CredentialStore、schema 20 以前开发快照、磁盘满、低完整性/多账户/继承 ACL、其它恢复窗口强杀/真实断电、平台矩阵及桌面壳均未完成 | 先完成签名、其余失败回滚和 Windows RC 门禁 |
+| 阶段 7：平台适配与正式发行 | 🟠（Windows 便携、恢复/回滚、连续历史升级及真实 FileID 垂直链已建立） | 🟡（当前双前端制品、schema 20～23→24/反向拒绝、包内、进程级、当前用户 ACL 与 Windows FileID 门禁切片通过，正式 Gate 未通过） | EV-103～105 完成便携、同源切换、正常/损坏备份；EV-106 建立相邻历史迁移，EV-133 扩展为 schema 20/21/22/23→24 连续矩阵并验证 API Token/Bearer 承接；EV-107/110 覆盖轮换/落位拒绝；EV-109/119 关闭落位后连续性缺口；EV-121～123 关闭当前库缺失、安全收尾和状态文件失败；EV-124/125 关闭便携同进程双 Rename 与 finalize 强杀续接；EV-131 覆盖真实 NTFS ACL；EV-134 把 Windows 128-bit FileID/Unix dev+inode 接入真实扫描、Hash、observation 与确认；最终精确干净 `0.3.2-ev133` 包以 manifest v2 声明 current=24/minimum=20 | Authenticode、安装/更新、CredentialStore、schema 20 以前开发快照、磁盘满、低完整性/多账户/继承 ACL、其它恢复窗口强杀/真实断电、Linux 原生/SMB/NAS/重挂载身份、平台矩阵及桌面壳均未完成 | 先完成签名、其余失败回滚和 Windows RC 门禁 |
 
 **概览**：Gallery 已有正式后端和同源内嵌 Web/PWA 代码基线，Chrome/Edge 已验证主要认证与浏览器恢复路径，Chromium/Firefox 已通过隔离真实后端持续链；但真实大规模、真实多平台、真实网络硬盘、完整 Security/Web Gate 和正式发行仍未完成。2026-07-23 的独立审计（[验证记录 EV-39](Documents/证据/验证记录.md)）用真实浏览器探针发现阶段 6 的「业务闭环」此前被高估：实时 WebSocket 通道在真实浏览器中 100% 握手失败，网页端多数写入口因 capability 名不符而不渲染。这些阻断性缺陷已在同日的 [EV-40](Documents/证据/验证记录.md) 修复并经真实 Chrome/Edge 复验；[EV-54～EV-59](Documents/证据/验证记录.md) 随后把管理自举、publication-bound 画廊/媒体、CustomCover、规则生命周期/ParameterSet、无损文本与 Schema 表单接入隔离真实后端持续门禁，[EV-60](Documents/证据/验证记录.md) 再加入安全资源管理、独立 loopback LAN 账户/Grant/Session 和真实 WebSocket 断线 snapshot 恢复，[EV-61](Documents/证据/验证记录.md) 覆盖 control 备份、恢复验证/登记与 Catalog GC dry-run，[EV-62](Documents/证据/验证记录.md) 再覆盖规则绑定状态、作品人工解绑/撤销与 retry-backoff Job 取消/同 ID 重试，[EV-64](Documents/证据/验证记录.md) 又以同一隔离 AppDirs 的实际重启证明 control 恢复生效，[EV-65](Documents/证据/验证记录.md) 再把相同 Personal/LAN 链扩展到桌面 Firefox，[EV-66](Documents/证据/验证记录.md) 随后关闭显式扫描与 Watcher 状态脱节、扫描期间事件可能丢失和维护 Job 终态不触发任务快照刷新的缺口，[EV-67](Documents/证据/验证记录.md) 把 15 类现有 primitive config 接入权威 Schema 可视化字段，[EV-68](Documents/证据/验证记录.md) 打通当前草稿 Dry Run/Explain/Trace，[EV-69](Documents/证据/验证记录.md) 建立以本地精确基线为准的按字段撤销，[EV-70](Documents/证据/验证记录.md) 再补齐参数 Schema、tests、extensions 的无损结构化编辑，[EV-71](Documents/证据/验证记录.md) 覆盖真实单帧 sequence gap，[EV-72](Documents/证据/验证记录.md) 覆盖运行中 Scan/Hash 级联取消，[EV-73](Documents/证据/验证记录.md) 覆盖进程强杀后的启动接管、recovered Attempt 与 UI 治理，[EV-74](Documents/证据/验证记录.md) 建立首批治理链，[EV-75](Documents/证据/验证记录.md) 再覆盖 SourceWork merge、全部 orphan decision/实体类型与已消费决策冲突，[EV-76](Documents/证据/验证记录.md) 又补齐普通 Binding issue 三决定、真实生命周期、双标签页冲突与 51 条分页并修复活动唯一性，[EV-77](Documents/证据/验证记录.md) 最后补齐三种剩余结构 action 的消费、同 AppDirs 重启持久化和 Work/Creator/Media 孤儿重现身份语义。这些链路仍使用合成 Source；真实设备/可访问性仍未完成，阶段 6 Web Gate 依旧未通过。
 
@@ -118,6 +118,8 @@ EV-131 将当前用户真实 NTFS ACL 拒绝加入完整双便携恢复链。只
 EV-132 清除最后一条 OpenAPI 生成器 dev-only 审计例外。仓库私有 build-only `minimatch@5.1.9+gallery.1` 兼容层保持 Redocly 1.x 的可调用 CommonJS/v5 表面，实际委托精确锁定的 `minimatch@10.2.5` 与 `brace-expansion@5.0.8`；门禁锁定 package/lock、实际解析路径、8 个兼容行为及 894 个内部 `$ref`。精确实现提交 `a3420aa` 的干净安装、full/production 审计 0 漏洞/0 例外、12 项定向测试、15 文件 212 项 Web 测试、字节一致生成、生产资产同哈希构建和 684.6 秒根检查通过。该兼容层须在上游提供安全兼容版本时复审移除；本轮不改变运行时前端，也不关闭完整 Web/Security/RC Gate。
 
 EV-133 把 Windows 历史升级门禁从单一 schema 23→24 扩展为 schema 20/21/22/23→24 的连续清单矩阵。四个真实祖先二进制分别建立用户事实、control 备份和 API Token；最终 HEAD `b1b5ea8` 的真实 `galleryd` 对每条链都保留事实、Token 元数据与实际 Bearer 鉴权，旧程序拒绝 schema 24 且数据库字节不变，当前程序可复启。12,586,590-byte `0.3.2-ev133` ZIP 为 `dirty=false`、`unsigned`，SHA-256 `48315E220B8C3A47826BD359B04C05ABAA3FBBB5360FDB09E7BADADD4A534DBC`；manifest v2 声明 current=24/minimum=20/verified=20～23，独立 smoke、EV-131→EV-133 全恢复链和四基线矩阵通过。schema 20 以前开发快照、签名/安装更新及完整 Windows RC Gate 仍未完成。
+
+EV-134 把早先只具备契约测试的 `FileIdentityProvider` 接入生产 Scanner/Hash/Catalog：Windows 从同一只读句柄读取卷序列号与 128-bit FileID，受支持 Unix 使用 `dev+inode`，并以 versioned opaque 值进入 SourceMedia observation、Hash Job 请求/结果、同一父 Scan 幂等键和目标化确认。双方均有身份时不相等即文件级完整重哈希；不可用时显式回退，不伪造身份，也不把 FileID 当 ContentBlob。Windows NTFS 同 stat 路径替换、真实 `galleryd` 停启持久化、WSL2 DrvFS 三包 race 及 844.5 秒根级检查通过。Linux 原生、SMB/NAS/UNC、重挂载/跨卷稳定性和 FileLocation 最终唯一约束仍未冻结。
 
 EV-103 开始阶段 7 的窄 Windows x64 便携测试制品基线：SemVer 经 linker 注入两个 `CGO_ENABLED=0` 二进制，完整当前用户端/管理端随 `galleryd` 同源嵌入，两个 Go 与一个 Web CycloneDX SBOM、发行清单、包内/外 SHA-256、实际 Authenticode 状态及 GitHub 来源证明 workflow 已建立。精确干净提交 `ac92f57` 的 12,454,092-byte 本地 ZIP 通过独立版本/摘要/SBOM/内嵌 Web/同 AppDirs 强杀重启 smoke，清单为 `dirty=false`、`unsigned`。该包没有安装器、自动更新、CredentialStore、正式签名或真实升级/回滚，不能称为 RC；远端 workflow 也尚未由当前提交触发。
 
@@ -224,7 +226,7 @@ EV-112 用独立默认关闭的门禁关闭了上述“成功链没有触发取�
 | 媒体与派生资源（DerivedAsset，比如缩略图） | 提供原始文件的分段下载（Range 请求）、缩略图生成 | ✅ 支持标准的按字节范围下载协议，缩略图生成走完整的任务队列流程 |
 | 恢复/备份 | 程序崩溃或被强制终止后的自愈机制 | ✅ 已用真实进程强制终止模拟测试过多个关键时间点 |
 | API/WebSocket（接口与实时推送） | 对外的网络接口，以及"任务完成了"这类实时通知 | ✅ 100 条 OpenAPI 路径 / 120 条服务端路由，契约完整且有路由集合契约测试；`/ws/v1` 的浏览器握手缺陷已在 EV-40 修复并经真实 Chrome/Edge 验证 |
-| 平台适配层 | 让核心逻辑不用关心操作系统差异的隔离层 | 🟡 接口设计已完成，但真实 Windows 文件身份识别（FileID）、Linux 原生文件系统等具体对接尚未完成 |
+| 平台适配层 | 让核心逻辑不用关心操作系统差异的隔离层 | 🟡 Windows 128-bit FileID/Unix `dev+inode` 已通过端口接入扫描、Hash 和观察链；Linux 原生、SMB/NAS、重挂载及其它平台门禁尚未完成 |
 | Web/PWA 网页界面 | 用户实际会看到、操作的网页界面 | 🟠 已有隔离真实后端下的同快照画廊/媒体、CustomCover、规则、安全、维护和首条治理/任务管理链；完整 Web Gate 未通过 |
 | 桌面壳 / 多账户 / 局域网多用户 | 桌面客户端外壳，以及局域网内多人共用时的账号体系 | 🟠 多账户后端与合成安全收尾已实现；桌面壳、真实 LAN 多设备和完整安全门禁未完成 |
 | 正式发行（安装包、签名、跨平台） | 面向普通用户的安装、更新、签名流程 | 🟠 已有未签名 Windows x64 便携测试包/SBOM/smoke 与 schema 20～24 连续升级基线；正式发行未开始 |
@@ -282,7 +284,7 @@ EV-112 用独立默认关闭的门禁关闭了上述“成功链没有触发取�
 | `control.db` 备份/恢复 + 目录库整体重建恢复 | 需要 | 未变 | `internal/backup` | ✅ | 端到端恢复测试 | EV-19 | ✅ | 无 |
 | 作品拆分/合并检测 + 人工决定 + 有限撤销 | 需要 | 未变 | `internal/application/structure.go` | ✅ | 单元测试 | EV-20 | ✅ | "绑定已有对象"这个分支明确延后 |
 | 领域 Schema 冻结门禁（Schema Freeze Gate） | 需要在阶段 1 完成 | 未变 | `internal/storage/migrations/control/00016_schema_freeze_phase1.sql` | ✅ | 唯一性约束等固化测试 | EV-20 | ✅ | 文件唯一标识在网络共享盘环境下的最终约束仍未冻结（不阻塞阶段 1 收尾） |
-| 真实 Windows 文件 ID / Linux `dev+inode` 文件身份识别 | 需要，计划标注为后续阶段 | 未变，延后到阶段 7 | 平台端口已预留接口，未接入真实实现 | 🟠 | — | 验证记录 EV-29 | ⛔ 延后 | 明确延期到阶段 7 |
+| 真实 Windows 文件 ID / Unix `dev+inode` 文件身份识别 | 需要，计划标注为后续阶段 | 阶段 7 已完成适配与生产垂直链，跨文件系统可靠性继续后置 | `internal/platform/fileidentity` 经端口接入 Scanner/Hash/Catalog/目标确认 | 🟡 | Windows 同 stat 路径替换、真实 `galleryd` 停启、WSL2 DrvFS race | EV-134 | 🟡（实现完成、平台矩阵未封） | Linux 原生、SMB/NAS/UNC、重挂载与跨卷门禁 |
 
 ---
 
@@ -431,7 +433,7 @@ EV-112 用独立默认关闭的门禁关闭了上述“成功链没有触发取�
 | 分页游标有效期（cursor lease） | 5 分钟（暂定） | 阶段 4，需要并发游标垃圾回收和长查询的真实证据 |
 | 目录库发布只读租约（publication read lease） | 2 分钟（暂定，仅显式快照模式需要） | 阶段 4，需要大文件/慢速磁盘读取证据 |
 | 派生资源（缩略图）只读租约 | 5 分钟（暂定） | 阶段 4，同上 |
-| 文件身份识别（真实 Windows FileID / Linux dev+inode） | 接口已预留，尚未接入真实实现（临时占位） | 领域 Schema 最终冻结门禁 / 阶段 7 |
+| 文件身份识别（真实 Windows FileID / Unix dev+inode） | 已以 `gallery-file-identity:v1` opaque 值接入生产；双方可用时参与复用/目标确认，不可用显式回退；文件系统可靠性仍 PRE_FREEZE | 领域 Schema 最终冻结门禁 / 阶段 7 |
 | `container_signature`（容器签名，用于跳过判断的优化） | 已记录但尚未用于任何跳过判断（占位） | 领域 Schema 最终冻结门禁 |
 | 扫描档案（scanProfile）默认选择逻辑 | 已实现，标注"有条件接受" | 阶段 3 真实规模复测（目前只做了抽样，未做全量） |
 | 单一生效规则绑定（SourceRuleBinding） | 已实现，标注"兼容演进基线"，非最终冻结 | 出现多规则链/按来源路由需求时 |
@@ -477,7 +479,7 @@ EV-112 用独立默认关闭的门禁关闭了上述“成功链没有触发取�
 | 顺序 | 阶段 | 需要做的事 | 排序依据 |
 |---|---|---|---|
 | 0 | 缺陷收口（EV-39 登记项已全部关闭，见 EV-40、EV-44、EV-45、EV-46） | EV-40 关闭 6 项 P1 及 `SEC-4`/`TEST-1`/`BLD-1`/`A11Y-1` 键盘部分；EV-44 关闭 `AUTHZ-1`/`QRY-1`；EV-45 关闭 `TEST-2`；EV-46 关闭 `MED-1`、`SEC-3`，并新发现修复 `LINK-1`（Windows 目录联接被识别为普通文件）、`TX-1`（WAL 读后写事务过期读快照）与迁移预算门禁不可复现 | 阻断性缺陷优先；`MED-1` 由 ADR-010 裁决完整性证据分层，`SEC-3` 由规范 08 新增呈现策略裁决 |
-| 1 | 阶段 4 收尾 | 继续完成正在运行的 500k publication 50% 变化档，再分窗执行 Query 冷/热并发与 Degradation 性能门禁并完成 API 接口冻结 | 文档封印时已越过 42/60、失败 0；1%/10% 各 20/20，50% 档持续运行，正式多样本结果和接口数值仍未冻结；实时数值以 runner 报告为准 |
+| 1 | 阶段 4 收尾 | 继续完成正在运行的 500k publication 50% 变化档，再分窗执行 Query 冷/热并发与 Degradation 性能门禁并完成 API 接口冻结 | 文档封印时已完成 44/60、失败 0；1%/10% 各 20/20，50% 档持续运行，正式多样本结果和接口数值仍未冻结；实时数值以 runner 报告为准 |
 | 2 | 阶段 5 | 完成真实 LAN 多设备与目标低端设备 Argon2id 延迟/并发验证 | 同机 Chrome/Edge 和高性能工作站证据已取得，剩余缺口需要外部设备环境 |
 | 3 | 阶段 6 | EV-92～EV-94 已完成真实 Pixiv Source 只读有界预检，EV-112 已关闭 Pawchive/本地 SSD 活动 Hash 取消，EV-113/116 已建立当前全路由组合 axe，EV-117 已补五个关键交互状态，EV-118 又把其中的双入口配对与管理安全/维护状态接入真实后端，EV-129/132 已清除 production 与 dev-only 依赖审计例外，且 EV-129 重跑双浏览器完整真实链。下一步继续 HDD/SMB/NAS、publishing/崩溃恢复、其余弱网/交互状态、人工辅助技术、真实缩放/系统高对比与真实设备 | Pixiv 全量扫描保持低优先级，不能替代业务闭环和发布可用性门禁 |
 | 4 | 阶段 7 | 在 EV-103～133 的便携、恢复/回滚、schema 20～24 连续升级/凭据承接与当前用户 NTFS ACL 门禁上完成 Authenticode、磁盘满、低完整性/多账户/继承 ACL、其它恢复窗口强杀/真实断电及 Windows RC；随后推进 Linux 原生、macOS、Docker、SMB/NAS 和安装发行 | 当前已关闭制品编排、v1 已声明升级跨度、多条恢复失败、一个精确强杀窗口及当前用户本地 ACL 拒绝；签名、schema 20 以前策略、其余权限/异常和平台支持仍是正式发行阻断项 |

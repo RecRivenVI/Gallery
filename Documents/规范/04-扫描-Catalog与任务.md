@@ -45,7 +45,7 @@ content_verified     已通过完整 SHA-256 确认，ContentBlob/FileLocation �
 | `incremental`（默认） | 按 Source、规范化相对路径、大小、mtime（可用时含平台文件身份线索）组合证据，与既往 `content_verified` 观察比较；证据一致则复用既往摘要，不新增 Hash Job；新增或证据不一致的媒体建立 Hash Job 完整确认 | 仅新增/变化部分 |
 | `verify` | 忽略既往观察，对本次扫描到的媒体强制重新建立 Hash Job、重新完整哈希，用于显式、低频的完整性校验 | 是，全部 |
 
-`incremental` 复用只在满足下列全部条件时发生：同一 `source_id`；规范化相对路径相同；`size_bytes` 相同；`mtime_ns` 相同；既往 SourceMedia 处于 `content_verified`。任一条件不满足（含首次出现、`RuleVersion` 变化不影响此判断——digest 只描述字节内容）都视为需要重新确认。降级范围限定到具体文件，不因单个文件的证据变化而对整个 Source 强制完整重新哈希。
+`incremental` 复用只在满足下列全部条件时发生：同一 `source_id`；规范化相对路径相同；`size_bytes` 相同；`mtime_ns` 相同；既往 SourceMedia 处于 `content_verified`；当前与既往 observation 都具有完整 `platform_identity_kind`/`platform_identity_value` 时，两者必须精确相等。任一条件不满足（含首次出现、`RuleVersion` 变化不影响此判断——digest 只描述字节内容）都视为需要重新确认。任一侧的平台/文件系统不能提供稳定身份时，身份判据显式降级，仍按路径、大小和 mtime 的既有组合证据运行；降级范围和重新确认范围都限定到具体文件，不因单个文件的证据变化而对整个 Source 强制完整重新哈希。
 
 一条 SourceMedia observation（`size_bytes`、`mtime_ns`、location key 与可用的平台身份字段）必须来自同一次最终定位观察，不得把 discovery 阶段的旧 Stat 与准备发布前重新定位得到的新 Stat 拼接成混合记录：`index` 不承诺内容稳定、不计算 digest，但仍必须在最终 `LocateSourceFile` 成功后同步刷新全部这些字段；`incremental` 复用前重新定位发现证据已变化时，同样以这次重新定位的结果作为后续完整哈希的期望身份，不得混用已经过期的 discovery 观察。
 
@@ -61,7 +61,7 @@ content_verified     已通过完整 SHA-256 确认，ContentBlob/FileLocation �
 
 `index`/`incremental` 未确认媒体不写入 `content_blobs`/`file_locations`，只在 SourceMedia 记录发现时的观察证据（`mtime_ns`、`platform_identity_kind`/`platform_identity_value`、`container_signature`）与 `content_verification_state`；`MediaProjection` 同样携带独立的 `content_verification_state`（`located_unverified`/`content_verified`）和 `verified_at`，与只表达位置可用性的 `location_status`（`present`/`offline`/`missing`/`inaccessible`）是两个正交字段——内容未确认不得写进 `location_status`，位置在线但内容未确认时 `location_status` 仍为 `present`。媒体从 `located_unverified` 提升为 `content_verified` 只能通过持久 Hash Job 成功完成，绝不使用 mtime、size 或路径伪造 digest；`verified_at` 只在真正完成完整哈希时推进，`incremental` 复用既往摘要不得更新该时间。
 
-`platform_identity_kind`/`platform_identity_value` 是可选的平台文件身份线索槽位；当前实现尚未接入真实 Windows FileID 或 `dev+inode`（见 [跨平台与客户端](09-跨平台与客户端.md) 的 `FileIdentityProvider` 端口现状），只使用路径、大小、mtime 的组合证据，接入真实平台身份是后续文件身份门禁的一部分，不阻塞本节语义。`container_signature` 是为容器级（整个作品目录）跳过预留的版本化签名字段，本轮只记录、不作为复用判断的门槛，未来可在不改变实体边界的前提下扩展为目录级跳过优化。
+`platform_identity_kind`/`platform_identity_value` 是可选的平台文件身份线索槽位。生产 bootstrap 已通过 `FileIdentityProvider` 从 Scanner/Hash 已打开的同一个只读文件句柄读取 Windows `FILE_ID_128 + VolumeSerialNumber` 或 Unix `dev+inode`，以版本化 opaque 值写入 observation；不得重新按路径打开目标，也不得解析该值来建立平台业务分支。Hash Job 请求冻结预定位得到的身份并纳入同一父 Scan 内的幂等键，父扫描恢复或真正读取前发现同 stat 路径替换时必须重新发现/确认，不能复用旧结果。平台或文件系统不能提供要求强度的身份时保留空槽并显式降级，不使用较弱的 Windows 64-bit FileIndex 伪装强证据。平台身份永远不是内容身份，不能代替完整 SHA-256，也不改变 CanonicalMedia/ContentBlob/FileLocation 的实体边界；真实 SMB/NAS、重挂载与原生 Linux 文件系统上的稳定性仍由独立平台门禁决定。`container_signature` 是为容器级（整个作品目录）跳过预留的版本化签名字段，本轮只记录、不作为复用判断的门槛，未来可在不改变实体边界的前提下扩展为目录级跳过优化。
 
 ## 单媒体目标化按需内容确认
 
@@ -69,13 +69,13 @@ content_verified     已通过完整 SHA-256 确认，ContentBlob/FileLocation �
 
 按需确认是"当前 publication 操作"：省略 `queryPublicationId` 解析当前 active publication；显式提供时必须精确解析到当前 active publication，仍然存在但已经不是 active 的历史 publication 一律拒绝为结构化 `CONFLICT`，不创建 Job、不修改 Binding/Catalog/Overlay/Source。媒体身份（`mediaId`/`sourceId`/`relativePath`）与冻结 observation 必须来自同一个已确认为 active 的 publication，不得混用请求 publication 与执行时刻另行读取的 active publication。
 
-扫描请求快照新增可选 `verificationTargets` 列表，每项冻结 `mediaId`、`sourceId`、规范化 `relativePath`、实际使用的 `queryPublicationId` 与请求时刻的 `observationFingerprint`：
+扫描请求快照新增可选 `verificationTargets` 列表，每项冻结 `mediaId`、`sourceId`、规范化 `relativePath`、实际使用的 `queryPublicationId`、请求时刻的 `observationFingerprint`，以及当时可用的平台身份 kind/value：
 
 ```json
 {
   "scanProfile": "incremental",
   "verificationTargets": [
-    {"mediaId": "...", "sourceId": "...", "relativePath": "...", "queryPublicationId": "...", "observationFingerprint": "..."}
+    {"mediaId": "...", "sourceId": "...", "relativePath": "...", "queryPublicationId": "...", "observationFingerprint": "...", "platformIdentityKind": "gallery-file-identity:v1", "platformIdentityValue": "..."}
   ]
 }
 ```
@@ -87,7 +87,7 @@ content_verified     已通过完整 SHA-256 确认，ContentBlob/FileLocation �
 - **不在** `verificationTargets` 中、且既往观察仍是 `located_unverified` 的媒体，即使本次 `scanProfile` 是 `incremental`，也不得因为"这次扫描附带了 target"而被顺带强制哈希——它们按 `index` 档案的既有规则继续保持未确认、不产生 Hash Job；
 - 新增媒体或既往已确认但真实发生变化（size/mtime 不再匹配）的非目标媒体，仍按正常 `incremental` 规则处理（新增/变化即建立 Hash Job），不因为存在 target 而改变其余媒体的正确性；
 - 该扫描仍走同一条 discovery → candidate → publish 流水线，因此发布出的仍是一个完整、单一的新 `query_publication_id`，旧 publication 继续可读；
-- 冻结字段不只是持久化，执行阶段必须真正验证，且必须读取冻结的 `queryPublicationId` 对应的 publication，不得读取执行时刻恰好 active 的 publication：目标的 `observationFingerprint` 与执行时刻的新鲜观察不一致（文件在排队期间被替换/截断/改动，或冻结 publication 描述的确认状态已经过期）、目标未出现在本次 discovery 结果中（被移动、改名或删除）、目标相对路径实际解析出的 CanonicalMedia 与冻结的 `mediaId` 不一致，三者任一成立都必须让整个 Job 失败，不得静默确认成一个不是请求方原本指定的对象；多个 target 时任一验证失败都不得让 Job 整体成功。前两者是 Job 真正开始读取内容之前的前置身份校验，统一为不可重试的结构化 `VERIFICATION_TARGET_MISMATCH`（目标消失沿用既有 `CONTENT_DISAPPEARED`，同样不可重试）；`CONTENT_CHANGED_DURING_HASH`（retryable）保留给完整 Hash 读取过程中真正并发发生的内容变化，不用于此处的前置校验，避免对已经失效的请求快照做无意义的自动重试。
+- 冻结字段不只是持久化，执行阶段必须真正验证，且必须读取冻结的 `queryPublicationId` 对应的 publication，不得读取执行时刻恰好 active 的 publication：目标的 `observationFingerprint` 与执行时刻从同一只读句柄取得的新鲜 size/mtime/可用平台身份不一致（文件在排队期间被替换/截断/改动，或冻结 publication 描述的确认状态已经过期）、目标未出现在本次 discovery 结果中（被移动、改名或删除）、目标相对路径实际解析出的 CanonicalMedia 与冻结的 `mediaId` 不一致，三者任一成立都必须让整个 Job 失败，不得静默确认成一个不是请求方原本指定的对象；多个 target 时任一验证失败都不得让 Job 整体成功。前两者是 Job 真正开始读取内容之前的前置身份校验，统一为不可重试的结构化 `VERIFICATION_TARGET_MISMATCH`（目标消失沿用既有 `CONTENT_DISAPPEARED`，同样不可重试）；`CONTENT_CHANGED_DURING_HASH` 保留给完整 Hash 读取过程中真正并发发生的内容变化，不用于此处的前置校验。持久 Hash Job 会把当前冻结的 stat/FileID 快照判为失效并终止该 Attempt，由 Scanner 重新发现后建立新请求，不盲目重试已经失效的同一请求快照。升级前已持久化且没有平台身份字段的旧目标继续按旧 size/mtime 指纹恢复，不把后来观察到的 FileID 冒充为请求时已冻结的事实。
 
 调用前置条件：Source 必须已有 publication（单媒体确认只对已发布 Catalog 中的已知媒体有意义），因此该请求总是显式使用 `incremental` 档案，不落入 `index`/首次扫描判定；Source 尚无 publication 时返回结构化 `CONFLICT`，不创建 Job。
 
