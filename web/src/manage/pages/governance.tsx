@@ -24,6 +24,7 @@ import {
   useSources,
   useStructureDecisions,
   useUndoStructureDecision,
+  GOVERNANCE_PAGE_SIZE,
   type BindingActionKind,
   type BindingIssue,
   type OrphanCandidate
@@ -228,17 +229,19 @@ function BindingIssuesPanel() {
   const [status, setStatus] = useState<BindingIssue['status']>('open');
   const [entityType, setEntityType] = useState<string>('all');
   const [sourceId, setSourceId] = useState<string | null>(null);
+  const [pageIndex, setPageIndex] = useState(0);
   const sources = useSources();
   const issues = useBindingIssues({
     status,
     ...(entityType === 'all' ? {} : { entityType: entityType as BindingIssue['entityType'] }),
     ...(sourceId === null ? {} : { sourceId })
   });
+  // 追加页失败时保留当前 HTTP snapshot；InfiniteQuery 的 isError 不能让已有治理行
+  // 被整块错误态替换。错误和重试入口在当前页旁边单独呈现。
+  const issueSnapshotQuery = { ...issues, isError: issues.isError && !issues.isFetchNextPageError };
   const dismiss = useDismissBindingIssue();
   const reopen = useReopenBindingIssue();
   const canWrite = useCapability('bindings.write');
-
-  const rows = issues.data?.pages.flatMap((page) => page.issues) ?? [];
 
   return (
     <Section
@@ -251,7 +254,10 @@ function BindingIssuesPanel() {
             options={STATUS_FILTERS.map((item) => ({ id: item.id, label: item.label }))}
             selectedKey={status}
             onSelectionChange={(key) => {
-              if (key !== null) setStatus(key as BindingIssue['status']);
+              if (key !== null) {
+                setStatus(key as BindingIssue['status']);
+                setPageIndex(0);
+              }
             }}
           />
           <Select
@@ -259,7 +265,10 @@ function BindingIssuesPanel() {
             options={ENTITY_FILTERS.map((item) => ({ id: item.id, label: item.label }))}
             selectedKey={entityType}
             onSelectionChange={(key) => {
-              if (key !== null) setEntityType(key);
+              if (key !== null) {
+                setEntityType(key);
+                setPageIndex(0);
+              }
             }}
           />
           <AsyncPanel query={sources}>
@@ -275,7 +284,10 @@ function BindingIssuesPanel() {
                   }))
                 ]}
                 selectedKey={sourceId ?? ''}
-                onSelectionChange={(key) => setSourceId(key === null || key === '' ? null : key)}
+                onSelectionChange={(key) => {
+                  setSourceId(key === null || key === '' ? null : key);
+                  setPageIndex(0);
+                }}
               />
             )}
           </AsyncPanel>
@@ -283,119 +295,156 @@ function BindingIssuesPanel() {
       }
     >
       <ContractNoteList area="governance" />
-      <p className="manage-section__description">
-        已载入 {rows.length} 条{issues.hasNextPage ? '（还有更多未载入）' : ''}。逐条处理需要 {rows.length}{' '}
-        次独立请求——这是服务端契约决定的，不是界面偷懒。
-      </p>
       <InlineError error={dismiss.error} title="忽略未能完成" />
       <InlineError error={reopen.error} title="重新打开未能完成" />
-      <AsyncPanel query={issues}>
-        {() => (
-          <>
-            <DataTable
-              caption="绑定问题"
-              rows={rows}
-              rowKey={(row) => row.id}
-              emptyTitle="没有符合条件的绑定问题"
-              emptyDescription="切换状态筛选可以查看已修复或已忽略的历史记录。"
-              columns={[
-                {
-                  id: 'status',
-                  header: '状态',
-                  render: (row) => (
-                    <Badge tone={BINDING_ISSUE_STATUS_TONES[row.status]}>
-                      {BINDING_ISSUE_STATUS_LABELS[row.status]}
-                    </Badge>
-                  )
-                },
-                { id: 'entity', header: '实体', render: (row) => ENTITY_TYPE_LABELS[row.entityType] },
-                {
-                  id: 'structure',
-                  header: '结构',
-                  render: (row) =>
-                    row.structureKind === null || row.structureKind === undefined ? (
-                      <Absent />
-                    ) : (
-                      <Badge tone="warning">{row.structureKind === 'split' ? '拆分' : '合并'}</Badge>
+      <InlineError
+        error={issues.isFetchNextPageError ? issues.error : null}
+        title="下一页绑定问题暂时未能载入"
+      />
+      <AsyncPanel query={issueSnapshotQuery}>
+        {(data) => {
+          const currentPageIndex = Math.min(pageIndex, Math.max(0, data.pages.length - 1));
+          const rows = data.pages[currentPageIndex]?.issues ?? [];
+          const hasLoadedNextPage = currentPageIndex + 1 < data.pages.length;
+          const hasNextPage =
+            hasLoadedNextPage || (currentPageIndex === data.pages.length - 1 && issues.hasNextPage);
+          const nextNeedsRetry = !hasLoadedNextPage && issues.isFetchNextPageError;
+
+          const showNextPage = () => {
+            if (hasLoadedNextPage) {
+              setPageIndex(currentPageIndex + 1);
+              return;
+            }
+            void issues.fetchNextPage().then((result) => {
+              if (result.data?.pages[currentPageIndex + 1] !== undefined) {
+                setPageIndex(currentPageIndex + 1);
+              }
+            });
+          };
+
+          return (
+            <>
+              <p className="manage-section__description">
+                第 {currentPageIndex + 1} 页 · 本页 {rows.length} 条 · 每页最多 {GOVERNANCE_PAGE_SIZE} 条
+                {hasNextPage ? '（还有下一页）' : '（已到末页）'}。本页逐条处理需要 {rows.length}{' '}
+                次独立请求——这是服务端契约决定的，不是界面偷懒。
+              </p>
+              <DataTable
+                caption="绑定问题"
+                rows={rows}
+                rowKey={(row) => row.id}
+                emptyTitle="没有符合条件的绑定问题"
+                emptyDescription="切换状态筛选可以查看已修复或已忽略的历史记录。"
+                columns={[
+                  {
+                    id: 'status',
+                    header: '状态',
+                    render: (row) => (
+                      <Badge tone={BINDING_ISSUE_STATUS_TONES[row.status]}>
+                        {BINDING_ISSUE_STATUS_LABELS[row.status]}
+                      </Badge>
                     )
-                },
-                {
-                  id: 'code',
-                  header: '稳定 code',
-                  render: (row) => <Badge tone="neutral">{row.code}</Badge>
-                },
-                { id: 'sourceKey', header: 'sourceKey', render: (row) => row.sourceKey, wrap: true },
-                {
-                  id: 'source',
-                  header: 'Source',
-                  render: (row) => <MonoId value={row.sourceId} label="Source ID" />
-                },
-                { id: 'candidates', header: '候选数', render: (row) => row.candidateCount },
-                { id: 'version', header: 'version', render: (row) => row.version },
-                { id: 'updated', header: '更新时间', render: (row) => formatDateTime(row.updatedAt) },
-                {
-                  id: 'actions',
-                  header: '操作',
-                  render: (row) => (
-                    <span className="manage-cell-actions">
-                      {canWrite && row.status === 'open' ? (
-                        row.structureKind === null || row.structureKind === undefined ? (
-                          <ResolveIssueDialog issue={row} />
-                        ) : (
-                          <ResolveStructureDialog issue={row} />
-                        )
-                      ) : null}
-                      {canWrite && row.status === 'open' ? (
-                        <ConfirmAction
-                          label="忽略"
-                          variant="secondary"
-                          dialogTitle="忽略绑定问题"
-                          confirmLabel="确认忽略"
-                          description={`忽略后该问题不再出现在待处理列表里，但事实仍然保留，可以随时重新打开。version ${row.version}。`}
-                          onConfirm={() => {
-                            dismiss.mutate(
-                              { issueId: row.id, version: row.version },
-                              {
-                                onSuccess: () => {
-                                  show({ title: '已忽略', tone: 'success' });
+                  },
+                  { id: 'entity', header: '实体', render: (row) => ENTITY_TYPE_LABELS[row.entityType] },
+                  {
+                    id: 'structure',
+                    header: '结构',
+                    render: (row) =>
+                      row.structureKind === null || row.structureKind === undefined ? (
+                        <Absent />
+                      ) : (
+                        <Badge tone="warning">{row.structureKind === 'split' ? '拆分' : '合并'}</Badge>
+                      )
+                  },
+                  {
+                    id: 'code',
+                    header: '稳定 code',
+                    render: (row) => <Badge tone="neutral">{row.code}</Badge>
+                  },
+                  { id: 'sourceKey', header: 'sourceKey', render: (row) => row.sourceKey, wrap: true },
+                  {
+                    id: 'source',
+                    header: 'Source',
+                    render: (row) => <MonoId value={row.sourceId} label="Source ID" />
+                  },
+                  { id: 'candidates', header: '候选数', render: (row) => row.candidateCount },
+                  { id: 'version', header: 'version', render: (row) => row.version },
+                  { id: 'updated', header: '更新时间', render: (row) => formatDateTime(row.updatedAt) },
+                  {
+                    id: 'actions',
+                    header: '操作',
+                    render: (row) => (
+                      <span className="manage-cell-actions">
+                        {canWrite && row.status === 'open' ? (
+                          row.structureKind === null || row.structureKind === undefined ? (
+                            <ResolveIssueDialog issue={row} />
+                          ) : (
+                            <ResolveStructureDialog issue={row} />
+                          )
+                        ) : null}
+                        {canWrite && row.status === 'open' ? (
+                          <ConfirmAction
+                            label="忽略"
+                            variant="secondary"
+                            dialogTitle="忽略绑定问题"
+                            confirmLabel="确认忽略"
+                            description={`忽略后该问题不再出现在待处理列表里，但事实仍然保留，可以随时重新打开。version ${row.version}。`}
+                            onConfirm={() => {
+                              dismiss.mutate(
+                                { issueId: row.id, version: row.version },
+                                {
+                                  onSuccess: () => {
+                                    show({ title: '已忽略', tone: 'success' });
+                                  }
                                 }
-                              }
-                            );
-                          }}
-                        />
-                      ) : null}
-                      {canWrite &&
-                      (row.status === 'dismissed' ||
-                        row.status === 'stale' ||
-                        row.status === 'superseded') ? (
-                        <Button
-                          variant="secondary"
-                          onPress={() => {
-                            reopen.mutate({ issueId: row.id, version: row.version });
-                          }}
-                        >
-                          重新打开
-                        </Button>
-                      ) : null}
-                      {canWrite ? null : <Absent>无变更入口</Absent>}
-                    </span>
-                  )
-                }
-              ]}
-            />
-            {issues.hasNextPage ? (
-              <div className="manage-form__actions">
-                <Button
-                  variant="secondary"
-                  isPending={issues.isFetchingNextPage}
-                  onPress={() => void issues.fetchNextPage()}
-                >
-                  载入下一页
-                </Button>
-              </div>
-            ) : null}
-          </>
-        )}
+                              );
+                            }}
+                          />
+                        ) : null}
+                        {canWrite &&
+                        (row.status === 'dismissed' ||
+                          row.status === 'stale' ||
+                          row.status === 'superseded') ? (
+                          <Button
+                            variant="secondary"
+                            onPress={() => {
+                              reopen.mutate({ issueId: row.id, version: row.version });
+                            }}
+                          >
+                            重新打开
+                          </Button>
+                        ) : null}
+                        {canWrite ? null : <Absent>无变更入口</Absent>}
+                      </span>
+                    )
+                  }
+                ]}
+              />
+              {currentPageIndex > 0 || hasNextPage ? (
+                <div className="manage-form__actions">
+                  {currentPageIndex > 0 ? (
+                    <Button variant="secondary" onPress={() => setPageIndex(currentPageIndex - 1)}>
+                      上一页
+                    </Button>
+                  ) : null}
+                  {hasNextPage ? (
+                    <Button
+                      variant="secondary"
+                      isDisabled={!hasLoadedNextPage && issues.isFetchingNextPage}
+                      onPress={showNextPage}
+                    >
+                      {!hasLoadedNextPage && issues.isFetchingNextPage
+                        ? '正在载入下一页'
+                        : nextNeedsRetry
+                          ? '重试下一页'
+                          : '下一页'}
+                    </Button>
+                  ) : null}
+                </div>
+              ) : null}
+            </>
+          );
+        }}
       </AsyncPanel>
     </Section>
   );
@@ -564,11 +613,15 @@ function OrphanDecisionDialog({ candidate }: { candidate: OrphanCandidate }) {
 
 function OrphanCandidatesPanel() {
   const [entityType, setEntityType] = useState<string>('all');
+  const [pageIndex, setPageIndex] = useState(0);
   const candidates = useOrphanCandidates(
     entityType === 'all' ? {} : { entityType: entityType as OrphanCandidate['entityType'] }
   );
+  const candidateSnapshotQuery = {
+    ...candidates,
+    isError: candidates.isError && !candidates.isFetchNextPageError
+  };
   const canWrite = useCapability('bindings.write');
-  const rows = candidates.data?.pages.flatMap((page) => page.candidates) ?? [];
 
   return (
     <Section
@@ -580,59 +633,99 @@ function OrphanCandidatesPanel() {
           options={ENTITY_FILTERS.map((item) => ({ id: item.id, label: item.label }))}
           selectedKey={entityType}
           onSelectionChange={(key) => {
-            if (key !== null) setEntityType(key);
+            if (key !== null) {
+              setEntityType(key);
+              setPageIndex(0);
+            }
           }}
         />
       }
     >
-      <p className="manage-section__description">
-        已载入 {rows.length} 条{candidates.hasNextPage ? '（还有更多未载入）' : ''}。同样没有批量端点。
-      </p>
-      <AsyncPanel query={candidates}>
-        {() => (
-          <>
-            <DataTable
-              caption="孤儿候选"
-              rows={rows}
-              rowKey={(row) => row.bindingId}
-              emptyTitle="没有孤儿候选"
-              emptyDescription="所有 Binding 在最近的扫描中都被重新发现。"
-              columns={[
-                { id: 'entity', header: '实体', render: (row) => ENTITY_TYPE_LABELS[row.entityType] },
-                { id: 'label', header: '名称', render: (row) => row.canonicalLabel, wrap: true },
-                { id: 'sourceKey', header: 'sourceKey', render: (row) => row.sourceKey, wrap: true },
-                {
-                  id: 'source',
-                  header: 'Source',
-                  render: (row) => <MonoId value={row.sourceId} label="Source ID" />
-                },
-                {
-                  id: 'missed',
-                  header: '连续缺席',
-                  render: (row) => `${row.missedScans} / ${row.retentionThreshold}`
-                },
-                { id: 'updated', header: '更新时间', render: (row) => formatDateTime(row.updatedAt) },
-                {
-                  id: 'actions',
-                  header: '操作',
-                  render: (row) =>
-                    canWrite ? <OrphanDecisionDialog candidate={row} /> : <Absent>无变更入口</Absent>
-                }
-              ]}
-            />
-            {candidates.hasNextPage ? (
-              <div className="manage-form__actions">
-                <Button
-                  variant="secondary"
-                  isPending={candidates.isFetchingNextPage}
-                  onPress={() => void candidates.fetchNextPage()}
-                >
-                  载入下一页
-                </Button>
-              </div>
-            ) : null}
-          </>
-        )}
+      <InlineError
+        error={candidates.isFetchNextPageError ? candidates.error : null}
+        title="下一页孤儿候选暂时未能载入"
+      />
+      <AsyncPanel query={candidateSnapshotQuery}>
+        {(data) => {
+          const currentPageIndex = Math.min(pageIndex, Math.max(0, data.pages.length - 1));
+          const rows = data.pages[currentPageIndex]?.candidates ?? [];
+          const hasLoadedNextPage = currentPageIndex + 1 < data.pages.length;
+          const hasNextPage =
+            hasLoadedNextPage || (currentPageIndex === data.pages.length - 1 && candidates.hasNextPage);
+          const nextNeedsRetry = !hasLoadedNextPage && candidates.isFetchNextPageError;
+
+          const showNextPage = () => {
+            if (hasLoadedNextPage) {
+              setPageIndex(currentPageIndex + 1);
+              return;
+            }
+            void candidates.fetchNextPage().then((result) => {
+              if (result.data?.pages[currentPageIndex + 1] !== undefined) {
+                setPageIndex(currentPageIndex + 1);
+              }
+            });
+          };
+
+          return (
+            <>
+              <p className="manage-section__description">
+                第 {currentPageIndex + 1} 页 · 本页 {rows.length} 条 · 每页最多 {GOVERNANCE_PAGE_SIZE} 条
+                {hasNextPage ? '（还有下一页）' : '（已到末页）'}。同样没有批量端点。
+              </p>
+              <DataTable
+                caption="孤儿候选"
+                rows={rows}
+                rowKey={(row) => row.bindingId}
+                emptyTitle="没有孤儿候选"
+                emptyDescription="所有 Binding 在最近的扫描中都被重新发现。"
+                columns={[
+                  { id: 'entity', header: '实体', render: (row) => ENTITY_TYPE_LABELS[row.entityType] },
+                  { id: 'label', header: '名称', render: (row) => row.canonicalLabel, wrap: true },
+                  { id: 'sourceKey', header: 'sourceKey', render: (row) => row.sourceKey, wrap: true },
+                  {
+                    id: 'source',
+                    header: 'Source',
+                    render: (row) => <MonoId value={row.sourceId} label="Source ID" />
+                  },
+                  {
+                    id: 'missed',
+                    header: '连续缺席',
+                    render: (row) => `${row.missedScans} / ${row.retentionThreshold}`
+                  },
+                  { id: 'updated', header: '更新时间', render: (row) => formatDateTime(row.updatedAt) },
+                  {
+                    id: 'actions',
+                    header: '操作',
+                    render: (row) =>
+                      canWrite ? <OrphanDecisionDialog candidate={row} /> : <Absent>无变更入口</Absent>
+                  }
+                ]}
+              />
+              {currentPageIndex > 0 || hasNextPage ? (
+                <div className="manage-form__actions">
+                  {currentPageIndex > 0 ? (
+                    <Button variant="secondary" onPress={() => setPageIndex(currentPageIndex - 1)}>
+                      上一页
+                    </Button>
+                  ) : null}
+                  {hasNextPage ? (
+                    <Button
+                      variant="secondary"
+                      isDisabled={!hasLoadedNextPage && candidates.isFetchingNextPage}
+                      onPress={showNextPage}
+                    >
+                      {!hasLoadedNextPage && candidates.isFetchingNextPage
+                        ? '正在载入下一页'
+                        : nextNeedsRetry
+                          ? '重试下一页'
+                          : '下一页'}
+                    </Button>
+                  ) : null}
+                </div>
+              ) : null}
+            </>
+          );
+        }}
       </AsyncPanel>
     </Section>
   );

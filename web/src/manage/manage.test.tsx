@@ -168,6 +168,48 @@ function job(overrides: Record<string, unknown> = {}): Record<string, unknown> {
   };
 }
 
+function bindingIssue(overrides: Record<string, unknown> = {}): Record<string, unknown> {
+  return {
+    id: 'bissue_PAGE_1',
+    sourceId: 'src_01',
+    entityType: 'work',
+    structureKind: null,
+    sourceKey: 'work/page-1',
+    workSourceKey: null,
+    providerId: null,
+    externalId: null,
+    code: 'BINDING_REVIEW_REQUIRED',
+    candidateCount: 1,
+    status: 'open',
+    resolution: null,
+    resolvedTargetId: null,
+    resolvedBy: null,
+    version: 1,
+    createdAt: '2026-07-30T01:00:00Z',
+    updatedAt: '2026-07-30T01:00:00Z',
+    resolvedAt: null,
+    candidates: [],
+    ...overrides
+  };
+}
+
+function orphanCandidate(overrides: Record<string, unknown> = {}): Record<string, unknown> {
+  return {
+    bindingId: 'wb_PAGE_1',
+    sourceId: 'src_01',
+    sourceKey: 'work/orphan-page-1',
+    canonicalId: 'work_PAGE_1',
+    canonicalLabel: '孤儿第一页',
+    entityType: 'work',
+    missedScans: 3,
+    retentionThreshold: 3,
+    lastSeenGeneration: 7,
+    createdAt: '2026-07-30T01:00:00Z',
+    updatedAt: '2026-07-30T01:00:00Z',
+    ...overrides
+  };
+}
+
 const SOURCE = {
   id: 'src_01',
   libraryId: 'lib_01',
@@ -683,6 +725,111 @@ describe('任务状态的事实源', () => {
     expect(
       within(cancelledRow as HTMLElement).queryByRole('button', { name: '重试' })
     ).not.toBeInTheDocument();
+  });
+});
+
+describe('治理列表当前页窗口', () => {
+  it('绑定问题续页失败保留当前页，成功后前后复用且筛选回到第一页', async () => {
+    let nextAttempts = 0;
+    const seen: Array<{ status: string | null; cursor: string | null }> = [];
+    route('GET /api/v1/sources', () => jsonResponse({ sources: [SOURCE] }));
+    route('GET /api/v1/binding-issues', (_request, url) => {
+      const status = url.searchParams.get('status');
+      const cursor = url.searchParams.get('cursor');
+      seen.push({ status, cursor });
+      if (status === 'resolved') {
+        return jsonResponse({
+          issues: [bindingIssue({ id: 'bissue_RESOLVED', sourceKey: 'work/resolved', status: 'resolved' })]
+        });
+      }
+      if (cursor === null) {
+        return jsonResponse({ issues: [bindingIssue()], nextCursor: 'cursor-issue-page-2' });
+      }
+      nextAttempts += 1;
+      if (nextAttempts === 1) return faultResponse('VALIDATION_ERROR', 400, 'corr-issue-page-2');
+      return jsonResponse({
+        issues: [
+          bindingIssue({
+            id: 'bissue_PAGE_2',
+            sourceKey: 'work/page-2',
+            createdAt: '2026-07-30T02:00:00Z',
+            updatedAt: '2026-07-30T02:00:00Z'
+          })
+        ]
+      });
+    });
+
+    renderManage('/governance');
+    const table = await screen.findByRole('table', { name: '绑定问题' });
+    expect(within(table).getByText('work/page-1')).toBeInTheDocument();
+    expect(
+      screen.getByText(
+        '第 1 页 · 本页 1 条 · 每页最多 50 条（还有下一页）。本页逐条处理需要 1 次独立请求——这是服务端契约决定的，不是界面偷懒。'
+      )
+    ).toBeInTheDocument();
+
+    await userEvent.click(screen.getByRole('button', { name: '下一页' }));
+    await screen.findByText('下一页绑定问题暂时未能载入');
+    expect(within(table).getByText('work/page-1')).toBeInTheDocument();
+    expect(within(table).queryByText('work/page-2')).not.toBeInTheDocument();
+
+    await userEvent.click(screen.getByRole('button', { name: '重试下一页' }));
+    await within(table).findByText('work/page-2');
+    expect(within(table).queryByText('work/page-1')).not.toBeInTheDocument();
+    expect(screen.getByText(/第 2 页 · 本页 1 条 · 每页最多 50 条（已到末页）/)).toBeInTheDocument();
+    expect(seen.filter((entry) => entry.cursor === 'cursor-issue-page-2')).toHaveLength(2);
+
+    await userEvent.click(screen.getByRole('button', { name: '上一页' }));
+    await within(table).findByText('work/page-1');
+    await userEvent.click(screen.getByRole('button', { name: '下一页' }));
+    await within(table).findByText('work/page-2');
+    expect(seen.filter((entry) => entry.cursor === 'cursor-issue-page-2')).toHaveLength(2);
+
+    await selectOption(/状态/, '已修复');
+    await screen.findByText('work/resolved');
+    expect(screen.getByText(/第 1 页 · 本页 1 条 · 每页最多 50 条（已到末页）/)).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: '上一页' })).not.toBeInTheDocument();
+    expect(seen.some((entry) => entry.status === 'resolved' && entry.cursor === null)).toBe(true);
+  });
+
+  it('孤儿候选只渲染当前页，并复用已访问页', async () => {
+    const seenCursors: Array<string | null> = [];
+    route('GET /api/v1/sources', () => jsonResponse({ sources: [] }));
+    route('GET /api/v1/binding-issues', () => jsonResponse({ issues: [] }));
+    route('GET /api/v1/orphan-candidates', (_request, url) => {
+      const cursor = url.searchParams.get('cursor');
+      seenCursors.push(cursor);
+      if (cursor === null) {
+        return jsonResponse({ candidates: [orphanCandidate()], nextCursor: 'cursor-orphan-page-2' });
+      }
+      return jsonResponse({
+        candidates: [
+          orphanCandidate({
+            bindingId: 'wb_PAGE_2',
+            sourceKey: 'work/orphan-page-2',
+            canonicalId: 'work_PAGE_2',
+            canonicalLabel: '孤儿第二页'
+          })
+        ]
+      });
+    });
+
+    renderManage('/governance');
+    await userEvent.click(await screen.findByRole('tab', { name: '孤儿候选' }));
+    const table = await screen.findByRole('table', { name: '孤儿候选' });
+    expect(within(table).getByText('孤儿第一页')).toBeInTheDocument();
+    expect(screen.getByText(/第 1 页 · 本页 1 条 · 每页最多 50 条（还有下一页）/)).toBeInTheDocument();
+
+    await userEvent.click(screen.getByRole('button', { name: '下一页' }));
+    await within(table).findByText('孤儿第二页');
+    expect(within(table).queryByText('孤儿第一页')).not.toBeInTheDocument();
+    expect(screen.getByText(/第 2 页 · 本页 1 条 · 每页最多 50 条（已到末页）/)).toBeInTheDocument();
+
+    await userEvent.click(screen.getByRole('button', { name: '上一页' }));
+    await within(table).findByText('孤儿第一页');
+    await userEvent.click(screen.getByRole('button', { name: '下一页' }));
+    await within(table).findByText('孤儿第二页');
+    expect(seenCursors.filter((cursor) => cursor === 'cursor-orphan-page-2')).toHaveLength(1);
   });
 });
 

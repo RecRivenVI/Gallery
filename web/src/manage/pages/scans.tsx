@@ -705,10 +705,14 @@ function JobTable() {
                   {hasOlderPage ? (
                     <Button
                       variant="secondary"
-                      isPending={!hasLoadedOlderPage && jobs.isFetchingNextPage}
+                      isDisabled={!hasLoadedOlderPage && jobs.isFetchingNextPage}
                       onPress={showOlderPage}
                     >
-                      {nextNeedsRetry ? '重试下一页（更早）' : '下一页（更早）'}
+                      {!hasLoadedOlderPage && jobs.isFetchingNextPage
+                        ? '正在载入下一页（更早）'
+                        : nextNeedsRetry
+                          ? '重试下一页（更早）'
+                          : '下一页（更早）'}
                     </Button>
                   ) : null}
                 </div>

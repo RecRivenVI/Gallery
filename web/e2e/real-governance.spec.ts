@@ -1,4 +1,5 @@
 import { readFile } from 'node:fs/promises';
+import AxeBuilder from '@axe-core/playwright';
 import { expect, test, type Locator, type Page, type Response } from '@playwright/test';
 
 const realBaseURL = process.env.GALLERY_REAL_BASE_URL;
@@ -386,14 +387,21 @@ test('绑定问题、生命周期、分页、结构决策、孤儿与媒体解�
 
   await selectOption(page, page, /来源/, `${state.paginationSourceName} · ${state.paginationSourceId}`);
   await selectOption(page, page, /状态/, '待处理');
-  await expect(page.getByText(/已载入 50 条（还有更多未载入）/)).toBeVisible();
-  await expect(page.getByText(/逐条处理需要 50 次独立请求/)).toBeVisible();
+  await expect(page.getByText(/第 1 页 · 本页 50 条 · 每页最多 50 条（还有下一页）/)).toBeVisible();
+  await expect(page.getByText(/本页逐条处理需要 50 次独立请求/)).toBeVisible();
+  let cursorRequests = 0;
+  page.on('request', (request) => {
+    const url = new URL(request.url());
+    if (url.pathname === '/api/v1/binding-issues' && url.searchParams.has('cursor')) {
+      cursorRequests += 1;
+    }
+  });
   const nextPagePromise = page.waitForResponse((response) => {
     if (!pathIs(response, '/api/v1/binding-issues')) return false;
     const url = new URL(response.url());
     return url.searchParams.get('sourceId') === state.paginationSourceId && url.searchParams.has('cursor');
   });
-  await page.getByRole('button', { name: '载入下一页', exact: true }).click();
+  await page.getByRole('button', { name: '下一页', exact: true }).click();
   const nextPageResponse = await nextPagePromise;
   expect(nextPageResponse.status()).toBe(200);
   expect(new URL(nextPageResponse.url()).searchParams.get('limit')).toBe('50');
@@ -403,9 +411,17 @@ test('绑定问题、生命周期、分页、结构决策、孤儿与媒体解�
   };
   expect(nextPageBody.issues).toHaveLength(state.paginationIssueCount - 50);
   expect(nextPageBody.nextCursor).toBeUndefined();
-  await expect(page.getByText(`已载入 ${state.paginationIssueCount} 条`, { exact: false })).toBeVisible();
-  await expect(page.getByText(/逐条处理需要 51 次独立请求/)).toBeVisible();
-  await expect(page.getByRole('button', { name: '载入下一页', exact: true })).toHaveCount(0);
+  await expect(page.getByText(/第 2 页 · 本页 1 条 · 每页最多 50 条（已到末页）/)).toBeVisible();
+  await expect(page.getByText(/本页逐条处理需要 1 次独立请求/)).toBeVisible();
+  await expect(issuesTable.getByRole('row')).toHaveCount(2);
+  await expect(page.getByRole('button', { name: '下一页', exact: true })).toHaveCount(0);
+  await page.getByRole('button', { name: '上一页', exact: true }).click();
+  await expect(page.getByText(/第 1 页 · 本页 50 条 · 每页最多 50 条（还有下一页）/)).toBeVisible();
+  await page.getByRole('button', { name: '下一页', exact: true }).click();
+  await expect(page.getByText(/第 2 页 · 本页 1 条 · 每页最多 50 条（已到末页）/)).toBeVisible();
+  expect(cursorRequests).toBe(1);
+  const paginationAxe = await new AxeBuilder({ page }).withTags(['wcag2a', 'wcag2aa']).analyze();
+  expect(paginationAxe.violations).toEqual([]);
 
   await selectOption(page, page, /来源/, `${state.structureSourceName} · ${state.structureSourceId}`);
   await selectOption(page, page, /状态/, '待处理');

@@ -392,6 +392,13 @@ test('EV-59 真实规则参数、版本和回滚状态链 @real-rule-lifecycle',
   expect(v2.semanticHash).not.toBe(v1.semanticHash);
   expect(v2.status).toBe('published');
 
+  // publish 响应只证明写入已经提交；RulePackage current 与 RuleVersion 列表是两个独立
+  // HTTP snapshot，失效后会并行重取。必须先从可见表确认二者已经收敛到 v2，再打开
+  // React Aria Select；否则 Firefox 可能在旧 current 下冻结一次瞬态 option collection。
+  const versionTableAfterV2 = page.getByRole('table', { name: 'RuleVersion 列表', exact: true });
+  const v2RowAfterPublish = versionTableAfterV2.getByRole('row').filter({ hasText: v2.semanticHash });
+  await expect(v2RowAfterPublish.getByText('current', { exact: true })).toBeVisible();
+
   const versionInUseReason = '确认 active Binding 阻止弃用';
   await page.getByRole('button', { name: /要弃用的 RuleVersion/ }).click();
   await page
