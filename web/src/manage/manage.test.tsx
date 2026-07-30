@@ -25,6 +25,7 @@ import { faultResponse, jsonResponse, setFetchHandler } from '../../tests/http';
 import { ManageApp } from './app';
 import RULE_SCHEMA from '../../../internal/rules/rule-package.schema.json';
 import { DataTable, formatDateTime } from './ui';
+import { RULE_CONTAINER_DEPTH_LIMIT, ruleValueFitsContainerDepth } from './rules/RuleStructuredFields';
 
 /* ————————————————————————————— HTTP 桩 ————————————————————————————— */
 
@@ -1541,6 +1542,41 @@ describe('规则草稿', () => {
     await userEvent.click(await screen.findByRole('tab', { name: 'Schema 表单' }));
     await screen.findByTestId('rule-schema-form', {}, { timeout: 10_000 });
   };
+
+  const nestedJsonObject = (depth: number): unknown => {
+    let value: unknown = 'leaf';
+    for (let index = 0; index < depth; index += 1) value = { child: value };
+    return value;
+  };
+
+  it('规则容器深度守卫与后端 256 层边界一致且使用显式栈', () => {
+    expect(ruleValueFitsContainerDepth(nestedJsonObject(RULE_CONTAINER_DEPTH_LIMIT))).toBe(true);
+    expect(ruleValueFitsContainerDepth(nestedJsonObject(RULE_CONTAINER_DEPTH_LIMIT + 1))).toBe(false);
+    expect(ruleValueFitsContainerDepth(nestedJsonObject(253), 3)).toBe(true);
+    expect(ruleValueFitsContainerDepth(nestedJsonObject(254), 3)).toBe(false);
+  });
+
+  it('超深 Extension payload 暂停结构化挂载并保留无损原始 JSON 逃生路径', async () => {
+    await openWindowedRule(
+      windowedRuleText({
+        extensions: {
+          'gallery.deep': {
+            required: false,
+            semantic: false,
+            payload: nestedJsonObject(254)
+          }
+        }
+      })
+    );
+
+    expect(screen.getByRole('alert')).toHaveTextContent(
+      `结构化编辑已暂停：gallery.deep payload 会使规则容器嵌套超过 ${RULE_CONTAINER_DEPTH_LIMIT} 层`
+    );
+    expect(screen.queryByRole('button', { name: '对象 gallery.deep payload 类型' })).not.toBeInTheDocument();
+    expect(
+      (screen.getByRole('textbox', { name: 'extensions 原始 JSON' }) as HTMLTextAreaElement).value
+    ).toContain('"leaf"');
+  }, 20_000);
 
   it('RJSF 规则数组只挂载当前 20 项并可前后往返', async () => {
     await openWindowedRule(

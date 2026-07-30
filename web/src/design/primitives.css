@@ -468,40 +468,36 @@
 
 @keyframes ui-overlay-in {
   from {
-    opacity: 0;
+    background-color: transparent;
   }
 }
 
 @keyframes ui-overlay-out {
   to {
-    opacity: 0;
+    background-color: transparent;
   }
 }
 
 @keyframes ui-surface-in {
   from {
-    opacity: 0;
     transform: translate3d(0, var(--space-2), 0) scale(0.99);
   }
 }
 
 @keyframes ui-surface-out {
   to {
-    opacity: 0;
     transform: translate3d(0, var(--space-1), 0) scale(0.995);
   }
 }
 
 @keyframes ui-popover-in {
   from {
-    opacity: 0;
     transform: translate3d(0, calc(0rem - var(--space-1)), 0);
   }
 }
 
 @keyframes ui-popover-out {
   to {
-    opacity: 0;
     transform: translate3d(0, calc(0rem - var(--space-1)), 0);
   }
 }

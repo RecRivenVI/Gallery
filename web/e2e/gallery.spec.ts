@@ -697,8 +697,10 @@ test('五类安全资源只挂载当前 keyset 页并复用已访问页 @smoke',
   expect(results.violations).toEqual([]);
 });
 
-test('规则配置大数组只挂载当前 20 项且窄屏可往返 @smoke', async ({ page }) => {
+test('规则配置大数组窗口与超深 JSON 守卫在窄屏稳定 @smoke', async ({ page }) => {
   const ruleSetId = 'rset_00000000-0000-7000-8000-000000000001';
+  let deepPayload: unknown = 'deep-leaf';
+  for (let depth = 0; depth < 254; depth += 1) deepPayload = { child: deepPayload };
   const content = {
     rule_set_id: ruleSetId,
     version: '1.0.0',
@@ -720,6 +722,11 @@ test('规则配置大数组只挂载当前 20 项且窄屏可往返 @smoke', asy
         required: false,
         semantic: false,
         payload: Array.from({ length: 21 }, (_, index) => `payload-${String(index).padStart(2, '0')}`)
+      },
+      'gallery.deep': {
+        required: false,
+        semantic: false,
+        payload: deepPayload
       }
     }
   };
@@ -783,8 +790,12 @@ test('规则配置大数组只挂载当前 20 项且窄屏可往返 @smoke', asy
   await page.getByRole('button', { name: '下一页：gallery.window payload 数组', exact: true }).click();
   await expect(page.locator('input[value="payload-20"]')).toBeVisible();
   await expect(page.locator('input[value="payload-00"]')).toHaveCount(0);
+  await expect(page.getByRole('alert')).toContainText(
+    '结构化编辑已暂停：gallery.deep payload 会使规则容器嵌套超过 256 层'
+  );
+  await expect(page.getByRole('textbox', { name: 'extensions 原始 JSON' })).toHaveValue(/deep-leaf/);
 
-  await expectNoHorizontalOverflow(page, '规则配置大数组窄屏分页');
+  await expectNoHorizontalOverflow(page, '规则配置大数组与超深 JSON 窄屏边界');
   const results = await new AxeBuilder({ page }).withTags(['wcag2a', 'wcag2aa']).analyze();
   expect(results.violations).toEqual([]);
 });

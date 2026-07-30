@@ -16,6 +16,10 @@ export interface RuleFormContext extends FormContextType {
 type RuleFieldProps = RjsfFieldProps<unknown, RJSFSchema, RuleFormContext>;
 type JsonKind = 'object' | 'array' | 'string' | 'number' | 'boolean' | 'null';
 
+// 必须与 internal/rules.MaxRuleNestingDepth 保持一致。这个值是规则 JSON、Schema
+// 与导入格式共享的容器深度契约，不是前端自行设置的展示阈值。
+export const RULE_CONTAINER_DEPTH_LIMIT = 256;
+
 const JSON_KIND_OPTIONS = [
   { id: 'object', label: '对象' },
   { id: 'array', label: '数组' },
@@ -44,6 +48,31 @@ function isUnknownArray(value: unknown): value is unknown[] {
 
 function isJsonObject(value: unknown): value is Record<string, unknown> {
   return !isLosslessNumber(value) && isRecord(value);
+}
+
+// 使用显式栈检查容器深度，避免为了判断恶意超深草稿本身再次递归。initialDepth
+// 是该子树在完整 RulePackage 中的 JSON Pointer 深度；标量位于边界处仍合法，
+// 但 object/array 容器不得出现在 depth >= RULE_CONTAINER_DEPTH_LIMIT。
+export function ruleValueFitsContainerDepth(value: unknown, initialDepth = 0): boolean {
+  const pending: Array<{ value: unknown; depth: number }> = [{ value, depth: initialDepth }];
+  while (pending.length > 0) {
+    const current = pending.pop();
+    if (current === undefined) break;
+    if (isUnknownArray(current.value)) {
+      if (current.depth >= RULE_CONTAINER_DEPTH_LIMIT) return false;
+      for (const child of current.value) {
+        pending.push({ value: child, depth: current.depth + 1 });
+      }
+      continue;
+    }
+    if (isJsonObject(current.value)) {
+      if (current.depth >= RULE_CONTAINER_DEPTH_LIMIT) return false;
+      for (const child of Object.values(current.value)) {
+        pending.push({ value: child, depth: current.depth + 1 });
+      }
+    }
+  }
+  return true;
 }
 
 export function ruleFieldPointer(path: readonly (string | number)[]): string {
@@ -347,21 +376,28 @@ function RenameableKey({
   );
 }
 
-function JsonTreeEditor({
-  value,
-  label,
-  path,
-  isDisabled,
-  formContext,
-  onChange
-}: {
+interface JsonTreeEditorProps {
   value: unknown;
   label: string;
   path: readonly (string | number)[];
   isDisabled: boolean;
   formContext: RuleFormContext;
   onChange: (value: unknown) => void;
-}) {
+}
+
+function JsonTreeEditor(props: JsonTreeEditorProps) {
+  if (!ruleValueFitsContainerDepth(props.value, props.path.length)) {
+    return (
+      <p className="manage-inline-warning" role="alert">
+        结构化编辑已暂停：{props.label} 会使规则容器嵌套超过 {RULE_CONTAINER_DEPTH_LIMIT}{' '}
+        层，服务端同样会拒绝；请使用无损原始 JSON 减少嵌套。
+      </p>
+    );
+  }
+  return <JsonTreeEditorNode {...props} />;
+}
+
+function JsonTreeEditorNode({ value, label, path, isDisabled, formContext, onChange }: JsonTreeEditorProps) {
   const kind = jsonKind(value);
   const objectEntries = isJsonObject(value) ? Object.entries(value) : [];
   const objectWindow = useLocalCollectionWindow(objectEntries.length);
@@ -404,7 +440,7 @@ function JsonTreeEditor({
                     onChange(next);
                   }}
                 />
-                <JsonTreeEditor
+                <JsonTreeEditorNode
                   value={child}
                   label={`/${key}`}
                   path={[...path, key]}
@@ -447,7 +483,7 @@ function JsonTreeEditor({
             const index = arrayWindow.start + offset;
             return (
               <div className="manage-json-entry" key={index}>
-                <JsonTreeEditor
+                <JsonTreeEditorNode
                   value={child}
                   label={`项目 ${index + 1}`}
                   path={[...path, index]}
