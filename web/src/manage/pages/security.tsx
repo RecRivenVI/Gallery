@@ -9,7 +9,8 @@
  *    allow/deny 授权调整实际权限。界面不提供这两个并不存在的入口。
  */
 
-import { useState } from 'react';
+import { useState, type ReactNode } from 'react';
+import type { InfiniteData } from '@tanstack/react-query';
 import { Badge, Button, Checkbox, Select, Tabs, TextInput, useToast } from '../../design';
 import { CAPABILITIES, useCapability, useSession, type Capability } from '../../shared/session';
 import type { components } from '../../api/schema.gen';
@@ -25,6 +26,7 @@ import {
   useRevokeGrant,
   useRevokeSession,
   useRevokeShare,
+  SECURITY_RESOURCE_PAGE_SIZE,
   useSecurityAudits,
   useSessions,
   useSetUserStatus,
@@ -61,6 +63,102 @@ const ROLES: readonly { id: UserRole; label: string }[] = [
   { id: 'viewer', label: 'viewer' }
 ];
 
+interface SecurityPagedQuery<TPage> {
+  isPending: boolean;
+  isError: boolean;
+  error: unknown;
+  data: InfiniteData<TPage> | undefined;
+  fetchStatus: 'fetching' | 'paused' | 'idle';
+  refetch: () => unknown;
+  hasNextPage: boolean;
+  isFetchingNextPage: boolean;
+  isFetchNextPageError: boolean;
+  fetchNextPage: () => Promise<{ data?: InfiniteData<TPage> }>;
+}
+
+/**
+ * 安全资源共用的 live keyset 当前页窗口。追加页失败只影响下一页，不能把当前 HTTP
+ * snapshot 替换成整块错误；已访问页由 Query 缓存复用，界面不伪造总页数。
+ */
+function SecurityPageWindow<TPage>({
+  query,
+  label,
+  itemCount,
+  children
+}: {
+  query: SecurityPagedQuery<TPage>;
+  label: string;
+  itemCount: (page: TPage) => number;
+  children: (page: TPage) => ReactNode;
+}) {
+  const [pageIndex, setPageIndex] = useState(0);
+  const snapshotQuery = { ...query, isError: query.isError && !query.isFetchNextPageError };
+
+  return (
+    <>
+      <InlineError
+        error={query.isFetchNextPageError ? query.error : null}
+        title={`下一页${label}暂时未能载入`}
+      />
+      <AsyncPanel query={snapshotQuery}>
+        {(data) => {
+          const currentPageIndex = Math.min(pageIndex, Math.max(0, data.pages.length - 1));
+          const page = data.pages[currentPageIndex];
+          if (page === undefined) return null;
+          const hasLoadedNextPage = currentPageIndex + 1 < data.pages.length;
+          const hasNextPage =
+            hasLoadedNextPage || (currentPageIndex === data.pages.length - 1 && query.hasNextPage);
+          const nextNeedsRetry = !hasLoadedNextPage && query.isFetchNextPageError;
+
+          const showNextPage = () => {
+            if (hasLoadedNextPage) {
+              setPageIndex(currentPageIndex + 1);
+              return;
+            }
+            void query.fetchNextPage().then((result) => {
+              if (result.data?.pages[currentPageIndex + 1] !== undefined) {
+                setPageIndex(currentPageIndex + 1);
+              }
+            });
+          };
+
+          return (
+            <>
+              <p className="manage-section__description">
+                第 {currentPageIndex + 1} 页 · 本页 {itemCount(page)} 条 · 每页最多{' '}
+                {SECURITY_RESOURCE_PAGE_SIZE} 条{hasNextPage ? '（还有下一页）' : '（已到末页）'}。
+              </p>
+              {children(page)}
+              {currentPageIndex > 0 || hasNextPage ? (
+                <div className="manage-form__actions">
+                  {currentPageIndex > 0 ? (
+                    <Button variant="secondary" onPress={() => setPageIndex(currentPageIndex - 1)}>
+                      上一页
+                    </Button>
+                  ) : null}
+                  {hasNextPage ? (
+                    <Button
+                      variant="secondary"
+                      isDisabled={!hasLoadedNextPage && query.isFetchingNextPage}
+                      onPress={showNextPage}
+                    >
+                      {!hasLoadedNextPage && query.isFetchingNextPage
+                        ? '正在载入下一页'
+                        : nextNeedsRetry
+                          ? '重试下一页'
+                          : '下一页'}
+                    </Button>
+                  ) : null}
+                </div>
+              ) : null}
+            </>
+          );
+        }}
+      </AsyncPanel>
+    </>
+  );
+}
+
 function hoursFromNow(hours: number): string {
   return new Date(Date.now() + hours * 3_600_000).toISOString();
 }
@@ -79,11 +177,11 @@ function SessionsPanel() {
       description="会话 cookie 是 HttpOnly，浏览器脚本读不到它；这里列出的是服务端记录的活动会话。吊销后对应客户端的 WebSocket 会以 4401 终止且不再重连。"
     >
       <InlineError error={revoke.error} title="吊销未能完成" />
-      <AsyncPanel query={sessions}>
-        {(data) => (
+      <SecurityPageWindow query={sessions} label="会话" itemCount={(page) => page.sessions.length}>
+        {(page) => (
           <DataTable
             caption="活动会话"
-            rows={data.sessions}
+            rows={page.sessions}
             rowKey={(row) => row.id}
             emptyTitle="没有活动会话"
             columns={[
@@ -138,7 +236,7 @@ function SessionsPanel() {
             ]}
           />
         )}
-      </AsyncPanel>
+      </SecurityPageWindow>
     </Section>
   );
 }
@@ -294,11 +392,11 @@ function TokensPanel() {
       )}
 
       <InlineError error={revoke.error} title="吊销未能完成" />
-      <AsyncPanel query={tokens}>
-        {(data) => (
+      <SecurityPageWindow query={tokens} label="API Token" itemCount={(page) => page.tokens.length}>
+        {(page) => (
           <DataTable
             caption="API Token"
-            rows={data.tokens}
+            rows={page.tokens}
             rowKey={(row) => row.id}
             emptyTitle="还没有任何 API Token"
             columns={[
@@ -358,7 +456,7 @@ function TokensPanel() {
             ]}
           />
         )}
-      </AsyncPanel>
+      </SecurityPageWindow>
 
       <OneTimeSecret
         title="API Token 密文"
@@ -470,11 +568,11 @@ function SharesPanel() {
       )}
 
       <InlineError error={revoke.error} title="吊销未能完成" />
-      <AsyncPanel query={shares}>
-        {(data) => (
+      <SecurityPageWindow query={shares} label="分享" itemCount={(page) => page.shares.length}>
+        {(page) => (
           <DataTable
             caption="分享"
-            rows={data.shares}
+            rows={page.shares}
             rowKey={(row) => row.id}
             emptyTitle="还没有任何分享"
             columns={[
@@ -529,7 +627,7 @@ function SharesPanel() {
             ]}
           />
         )}
-      </AsyncPanel>
+      </SecurityPageWindow>
 
       <OneTimeSecret
         title="分享 credential"
@@ -638,11 +736,11 @@ function UsersPanel() {
         )}
 
         <InlineError error={setStatus.error} title="状态未能变更" />
-        <AsyncPanel query={users}>
-          {(data) => (
+        <SecurityPageWindow query={users} label="账户" itemCount={(page) => page.users.length}>
+          {(page) => (
             <DataTable
               caption="本地账户"
-              rows={data.users}
+              rows={page.users}
               rowKey={(row) => row.id}
               emptyTitle="还没有本地账户"
               emptyDescription="Personal 模式下用一次性配对访问即可；启用 LAN 前需要先初始化 Owner。"
@@ -711,7 +809,7 @@ function UsersPanel() {
               ]}
             />
           )}
-        </AsyncPanel>
+        </SecurityPageWindow>
       </Section>
 
       <GrantsPanel userId={selectedUser} />
@@ -804,11 +902,16 @@ function GrantsPanel({ userId }: { userId: string | null }) {
           ) : null}
 
           <InlineError error={revoke.error} title="授权未能撤销" />
-          <AsyncPanel query={grants}>
-            {(data) => (
+          <SecurityPageWindow
+            key={userId}
+            query={grants}
+            label="授权"
+            itemCount={(page) => page.grants.length}
+          >
+            {(page) => (
               <DataTable
                 caption="账户授权"
-                rows={data.grants}
+                rows={page.grants}
                 rowKey={(row) => row.id}
                 emptyTitle="该账户没有额外授权"
                 emptyDescription="它的权限完全来自创建时指定的角色预设。"
@@ -864,7 +967,7 @@ function GrantsPanel({ userId }: { userId: string | null }) {
                 ]}
               />
             )}
-          </AsyncPanel>
+          </SecurityPageWindow>
         </>
       )}
     </Section>

@@ -89,6 +89,17 @@ function useInvalidate(): (prefixes: readonly string[]) => void {
   );
 }
 
+/**
+ * 安全资源使用 live keyset；创建、吊销或状态变化可能改变排序键。重置整个安全查询族，
+ * 让活动页面从第一页重新取得 cursor，不能拿变更前的锚点继续 refetch 已加载页。
+ */
+function useResetSecurity(): () => void {
+  const queryClient = useQueryClient();
+  return useCallback(() => {
+    void queryClient.resetQueries({ queryKey: ['security'] });
+  }, [queryClient]);
+}
+
 /** 幂等键。扫描创建支持它，用来避免网络重发导致第二个扫描 Job。 */
 export function newIdempotencyKey(): string {
   if (typeof crypto.randomUUID === 'function') return crypto.randomUUID();
@@ -372,16 +383,31 @@ export function useRequestControlRestore(): UseMutationResult<
 
 /* ————————————————————————————— 安全 ————————————————————————————— */
 
+export const SECURITY_RESOURCE_PAGE_SIZE = 50;
+
 export function useSessions() {
-  return useQuery({
+  return useInfiniteQuery({
     queryKey: ['security', 'sessions'],
-    queryFn: async ({ signal }) => expectData(await api.GET('/api/v1/sessions', { signal }))
+    initialPageParam: undefined as string | undefined,
+    queryFn: async ({ signal, pageParam }) =>
+      expectData(
+        await api.GET('/api/v1/sessions', {
+          params: {
+            query: {
+              limit: SECURITY_RESOURCE_PAGE_SIZE,
+              ...(pageParam === undefined ? {} : { cursor: pageParam })
+            }
+          },
+          signal
+        })
+      ),
+    getNextPageParam: (lastPage) => lastPage.nextCursor
   });
 }
 
 export function useRevokeSession(): UseMutationResult<void, unknown, string> {
   const header = useCsrfHeaders();
-  const invalidate = useInvalidate();
+  const resetSecurity = useResetSecurity();
   return useMutation({
     mutationFn: async (sessionId: string) => {
       expectNoContent(
@@ -389,15 +415,28 @@ export function useRevokeSession(): UseMutationResult<void, unknown, string> {
       );
     },
     onSuccess: () => {
-      invalidate(['security']);
+      resetSecurity();
     }
   });
 }
 
 export function useApiTokens() {
-  return useQuery({
+  return useInfiniteQuery({
     queryKey: ['security', 'api-tokens'],
-    queryFn: async ({ signal }) => expectData(await api.GET('/api/v1/api-tokens', { signal }))
+    initialPageParam: undefined as string | undefined,
+    queryFn: async ({ signal, pageParam }) =>
+      expectData(
+        await api.GET('/api/v1/api-tokens', {
+          params: {
+            query: {
+              limit: SECURITY_RESOURCE_PAGE_SIZE,
+              ...(pageParam === undefined ? {} : { cursor: pageParam })
+            }
+          },
+          signal
+        })
+      ),
+    getNextPageParam: (lastPage) => lastPage.nextCursor
   });
 }
 
@@ -410,19 +449,19 @@ export interface CreateApiTokenInput {
 
 export function useCreateApiToken(): UseMutationResult<APITokenCreated, unknown, CreateApiTokenInput> {
   const header = useCsrfHeaders();
-  const invalidate = useInvalidate();
+  const resetSecurity = useResetSecurity();
   return useMutation({
     mutationFn: async (input: CreateApiTokenInput) =>
       expectData(await api.POST('/api/v1/api-tokens', { params: { header }, body: input })),
     onSuccess: () => {
-      invalidate(['security']);
+      resetSecurity();
     }
   });
 }
 
 export function useRevokeApiToken(): UseMutationResult<void, unknown, string> {
   const header = useCsrfHeaders();
-  const invalidate = useInvalidate();
+  const resetSecurity = useResetSecurity();
   return useMutation({
     mutationFn: async (tokenId: string) => {
       expectNoContent(
@@ -430,15 +469,28 @@ export function useRevokeApiToken(): UseMutationResult<void, unknown, string> {
       );
     },
     onSuccess: () => {
-      invalidate(['security']);
+      resetSecurity();
     }
   });
 }
 
 export function useShares() {
-  return useQuery({
+  return useInfiniteQuery({
     queryKey: ['security', 'shares'],
-    queryFn: async ({ signal }) => expectData(await api.GET('/api/v1/shares', { signal }))
+    initialPageParam: undefined as string | undefined,
+    queryFn: async ({ signal, pageParam }) =>
+      expectData(
+        await api.GET('/api/v1/shares', {
+          params: {
+            query: {
+              limit: SECURITY_RESOURCE_PAGE_SIZE,
+              ...(pageParam === undefined ? {} : { cursor: pageParam })
+            }
+          },
+          signal
+        })
+      ),
+    getNextPageParam: (lastPage) => lastPage.nextCursor
   });
 }
 
@@ -446,19 +498,19 @@ export type ShareCreateRequest = Schemas['ShareCreateRequest'];
 
 export function useCreateShare(): UseMutationResult<ShareCreated, unknown, ShareCreateRequest> {
   const header = useCsrfHeaders();
-  const invalidate = useInvalidate();
+  const resetSecurity = useResetSecurity();
   return useMutation({
     mutationFn: async (input: ShareCreateRequest) =>
       expectData(await api.POST('/api/v1/shares', { params: { header }, body: input })),
     onSuccess: () => {
-      invalidate(['security']);
+      resetSecurity();
     }
   });
 }
 
 export function useRevokeShare(): UseMutationResult<void, unknown, string> {
   const header = useCsrfHeaders();
-  const invalidate = useInvalidate();
+  const resetSecurity = useResetSecurity();
   return useMutation({
     mutationFn: async (shareId: string) => {
       expectNoContent(
@@ -466,15 +518,28 @@ export function useRevokeShare(): UseMutationResult<void, unknown, string> {
       );
     },
     onSuccess: () => {
-      invalidate(['security']);
+      resetSecurity();
     }
   });
 }
 
 export function useLocalUsers() {
-  return useQuery({
+  return useInfiniteQuery({
     queryKey: ['security', 'users'],
-    queryFn: async ({ signal }) => expectData(await api.GET('/api/v1/admin/users', { signal }))
+    initialPageParam: undefined as string | undefined,
+    queryFn: async ({ signal, pageParam }) =>
+      expectData(
+        await api.GET('/api/v1/admin/users', {
+          params: {
+            query: {
+              limit: SECURITY_RESOURCE_PAGE_SIZE,
+              ...(pageParam === undefined ? {} : { cursor: pageParam })
+            }
+          },
+          signal
+        })
+      ),
+    getNextPageParam: (lastPage) => lastPage.nextCursor
   });
 }
 
@@ -488,12 +553,12 @@ export type LocalUserCreateRequest = Schemas['LocalUserCreateRequest'];
  */
 export function useCreateLocalUser(): UseMutationResult<LocalUser, unknown, LocalUserCreateRequest> {
   const header = useCsrfHeaders();
-  const invalidate = useInvalidate();
+  const resetSecurity = useResetSecurity();
   return useMutation({
     mutationFn: async (input: LocalUserCreateRequest) =>
       expectData(await api.POST('/api/v1/admin/users', { params: { header }, body: input })),
     onSuccess: () => {
-      invalidate(['security']);
+      resetSecurity();
     }
   });
 }
@@ -505,7 +570,7 @@ export interface SetUserStatusInput {
 
 export function useSetUserStatus(): UseMutationResult<void, unknown, SetUserStatusInput> {
   const header = useCsrfHeaders();
-  const invalidate = useInvalidate();
+  const resetSecurity = useResetSecurity();
   return useMutation({
     mutationFn: async (input: SetUserStatusInput) => {
       expectNoContent(
@@ -516,22 +581,30 @@ export function useSetUserStatus(): UseMutationResult<void, unknown, SetUserStat
       );
     },
     onSuccess: () => {
-      invalidate(['security']);
+      resetSecurity();
     }
   });
 }
 
 export function useGrants(userId: string | null) {
-  return useQuery({
+  return useInfiniteQuery({
     queryKey: ['security', 'grants', userId],
     enabled: userId !== null,
-    queryFn: async ({ signal }) =>
+    initialPageParam: undefined as string | undefined,
+    queryFn: async ({ signal, pageParam }) =>
       expectData(
         await api.GET('/api/v1/admin/users/{userId}/grants', {
-          params: { path: { userId: userId ?? '' } },
+          params: {
+            path: { userId: userId ?? '' },
+            query: {
+              limit: SECURITY_RESOURCE_PAGE_SIZE,
+              ...(pageParam === undefined ? {} : { cursor: pageParam })
+            }
+          },
           signal
         })
-      )
+      ),
+    getNextPageParam: (lastPage) => lastPage.nextCursor
   });
 }
 
@@ -542,7 +615,7 @@ export interface CreateGrantInput {
 
 export function useCreateGrant(): UseMutationResult<AuthorizationGrant, unknown, CreateGrantInput> {
   const header = useCsrfHeaders();
-  const invalidate = useInvalidate();
+  const resetSecurity = useResetSecurity();
   return useMutation({
     mutationFn: async (input: CreateGrantInput) =>
       expectData(
@@ -552,14 +625,14 @@ export function useCreateGrant(): UseMutationResult<AuthorizationGrant, unknown,
         })
       ),
     onSuccess: () => {
-      invalidate(['security']);
+      resetSecurity();
     }
   });
 }
 
 export function useRevokeGrant(): UseMutationResult<void, unknown, string> {
   const header = useCsrfHeaders();
-  const invalidate = useInvalidate();
+  const resetSecurity = useResetSecurity();
   return useMutation({
     mutationFn: async (grantId: string) => {
       expectNoContent(
@@ -567,7 +640,7 @@ export function useRevokeGrant(): UseMutationResult<void, unknown, string> {
       );
     },
     onSuccess: () => {
-      invalidate(['security']);
+      resetSecurity();
     }
   });
 }

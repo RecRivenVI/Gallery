@@ -550,6 +550,149 @@ test('结构决策只挂载当前 keyset 页并复用已访问页 @smoke', async
   await expectNoHorizontalOverflow(page, '结构决策窄屏分页');
 });
 
+test('五类安全资源只挂载当前 keyset 页并复用已访问页 @smoke', async ({ page }) => {
+  const requested = new Map<string, Array<string | null>>();
+  const register = (
+    pattern: string,
+    key: string,
+    firstItems: Record<string, unknown>[],
+    secondItem: Record<string, unknown>
+  ) =>
+    page.route(pattern, (route) => {
+      const url = new URL(route.request().url());
+      const cursor = url.searchParams.get('cursor');
+      expect(url.searchParams.get('limit')).toBe('50');
+      requested.set(key, [...(requested.get(key) ?? []), cursor]);
+      return route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify({
+          [key]: cursor === null ? firstItems : [secondItem],
+          ...(cursor === null ? { nextCursor: `cursor-${key}` } : {})
+        })
+      });
+    });
+
+  const sessions = Array.from({ length: 50 }, (_, index) => ({
+    id: `ses_SECURITY_${index}`,
+    principalId: 'principal_test',
+    authMethod: 'password',
+    clientLabel: `安全会话 ${String(index).padStart(2, '0')}`,
+    createdAt: '2026-07-31T01:00:00Z',
+    lastSeenAt: '2026-07-31T01:01:00Z',
+    expiresAt: '2026-08-01T01:00:00Z',
+    revoked: false
+  }));
+  const tokens = Array.from({ length: 50 }, (_, index) => ({
+    id: `tok_SECURITY_${index}`,
+    principalId: 'principal_test',
+    name: `安全 Token ${String(index).padStart(2, '0')}`,
+    secretPrefix: `tp${String(index).padStart(2, '0')}`,
+    capabilities: ['library.read'],
+    scopes: [{ kind: 'global' }],
+    createdAt: '2026-07-31T01:00:00Z',
+    revoked: false
+  }));
+  const shares = Array.from({ length: 50 }, (_, index) => ({
+    id: `shr_SECURITY_${index}`,
+    createdBy: 'principal_test',
+    scopeKind: 'work',
+    scopeId: `安全分享目标 ${String(index).padStart(2, '0')}`,
+    permissions: ['view'],
+    secretPrefix: `sp${String(index).padStart(2, '0')}`,
+    createdAt: '2026-07-31T01:00:00Z',
+    expiresAt: '2026-08-01T01:00:00Z',
+    revoked: false
+  }));
+  const users = Array.from({ length: 50 }, (_, index) => ({
+    id: `usr_SECURITY_${index}`,
+    username: `security-user-${String(index).padStart(2, '0')}`,
+    displayName: `安全账户 ${String(index).padStart(2, '0')}`,
+    status: 'active',
+    roles: ['viewer'],
+    securityVersion: 1,
+    createdAt: '2026-07-31T01:00:00Z',
+    updatedAt: '2026-07-31T01:00:00Z'
+  }));
+  const grants = Array.from({ length: 50 }, (_, index) => ({
+    id: `grnt_SECURITY_${index}`,
+    principalId: 'usr_SECURITY_50',
+    effect: 'allow',
+    capability: `security.fixture.${String(index).padStart(2, '0')}`,
+    scope: { kind: 'global' },
+    revoked: false
+  }));
+
+  await register('**/api/v1/sessions?*', 'sessions', sessions, {
+    ...sessions[0],
+    id: 'ses_SECURITY_50',
+    clientLabel: '安全会话 50'
+  });
+  await register('**/api/v1/api-tokens?*', 'tokens', tokens, {
+    ...tokens[0],
+    id: 'tok_SECURITY_50',
+    name: '安全 Token 50'
+  });
+  await register('**/api/v1/shares?*', 'shares', shares, {
+    ...shares[0],
+    id: 'shr_SECURITY_50',
+    scopeId: '安全分享目标 50'
+  });
+  await register('**/api/v1/admin/users?*', 'users', users, {
+    ...users[0],
+    id: 'usr_SECURITY_50',
+    username: 'security-user-50',
+    displayName: '安全账户 50'
+  });
+  await register('**/api/v1/admin/users/usr_SECURITY_50/grants?*', 'grants', grants, {
+    ...grants[0],
+    id: 'grnt_SECURITY_50',
+    capability: 'security.fixture.50'
+  });
+
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.goto('/manage');
+  // 先让连接初始快照屏障完成，再挂载安全页；否则 onOpen 与首个 HTTP 查询的先后取决于
+  // 浏览器调度，语义正确的快照重置会被误计成分页缓存的重复请求。
+  // 窄屏下桌面侧栏本来就不在可见树中；DOM 文案切到“已连接”已经足以证明屏障完成。
+  await expect(page.getByText('实时通道：已连接', { exact: true })).toBeAttached();
+  await navigateWithinMountedEntry(page, '/manage/security');
+
+  const assertWindow = async (tableName: string, firstText: string, secondText: string) => {
+    const table = page.getByRole('table', { name: tableName, exact: true });
+    await expect(table.locator('tbody tr')).toHaveCount(50);
+    await expect(table.getByText(firstText, { exact: true })).toBeVisible();
+    await page.getByRole('button', { name: '下一页', exact: true }).click();
+    await expect(table.locator('tbody tr')).toHaveCount(1);
+    await expect(table.getByText(secondText, { exact: true })).toBeVisible();
+    await expect(table.getByText(firstText, { exact: true })).toHaveCount(0);
+  };
+
+  await assertWindow('活动会话', '安全会话 00', '安全会话 50');
+  await page.getByRole('button', { name: '上一页', exact: true }).click();
+  await page.getByRole('button', { name: '下一页', exact: true }).click();
+  await expect(page.getByText('安全会话 50', { exact: true })).toBeVisible();
+
+  await page.getByRole('tab', { name: 'API Token', exact: true }).click();
+  await assertWindow('API Token', '安全 Token 00', '安全 Token 50');
+  await page.getByRole('tab', { name: '分享', exact: true }).click();
+  await assertWindow('分享', 'work:安全分享目标 00', 'work:安全分享目标 50');
+  await page.getByRole('tab', { name: '账户与授权', exact: true }).click();
+  await assertWindow('本地账户', 'security-user-00', 'security-user-50');
+  const selectedRow = page.getByText('security-user-50', { exact: true }).locator('..').locator('..');
+  await selectedRow.getByRole('button', { name: '查看授权', exact: true }).click();
+  await assertWindow('账户授权', 'security.fixture.00', 'security.fixture.50');
+
+  expect(requested.get('sessions')).toEqual([null, 'cursor-sessions']);
+  expect(requested.get('tokens')).toEqual([null, 'cursor-tokens']);
+  expect(requested.get('shares')).toEqual([null, 'cursor-shares']);
+  expect(requested.get('users')).toEqual([null, 'cursor-users']);
+  expect(requested.get('grants')).toEqual([null, 'cursor-grants']);
+  await expectNoHorizontalOverflow(page, '安全资源窄屏分页');
+  const results = await new AxeBuilder({ page }).withTags(['wcag2a', 'wcag2aa']).analyze();
+  expect(results.violations).toEqual([]);
+});
+
 test('迟到的旧分页响应不会覆盖较新的搜索结果 @smoke', async ({ page }) => {
   let releaseOldPage: (() => void) | undefined;
   let oldPageSettled = false;

@@ -2222,6 +2222,169 @@ describe('规则生命周期与 ParameterSet', () => {
 
 /* ————————————————————————————— 7. 密文只显示一次 ————————————————————————————— */
 
+describe('安全资源分页窗口', () => {
+  it('五类资源只渲染当前 50 条，续页失败保留当前页且已访问页不重复请求', async () => {
+    const seen = new Map<string, Array<string | null>>();
+    const pagedRoute = (
+      key: string,
+      firstItems: Record<string, unknown>[],
+      lastItem: Record<string, unknown>,
+      options: { failFirstContinuation?: boolean } = {}
+    ) => {
+      let continuationAttempts = 0;
+      return (_request: Request, url: URL) => {
+        const cursor = url.searchParams.get('cursor');
+        const values = seen.get(key) ?? [];
+        values.push(cursor);
+        seen.set(key, values);
+        expect(url.searchParams.get('limit')).toBe('50');
+        if (cursor === null) {
+          return jsonResponse({ [key]: firstItems, nextCursor: `cursor-${key}` });
+        }
+        expect(cursor).toBe(`cursor-${key}`);
+        continuationAttempts += 1;
+        if (options.failFirstContinuation === true && continuationAttempts === 1) {
+          return faultResponse('RATE_LIMITED', 429, `corr-${key}-page`);
+        }
+        return jsonResponse({ [key]: [lastItem] });
+      };
+    };
+
+    const sessions = Array.from({ length: 50 }, (_, index) => ({
+      id: `ses_page_${index.toString().padStart(2, '0')}`,
+      principalId: 'principal_manage',
+      authMethod: 'password',
+      clientLabel: `session-${index.toString().padStart(2, '0')}`,
+      createdAt: '2026-07-31T01:00:00Z',
+      lastSeenAt: '2026-07-31T01:01:00Z',
+      expiresAt: '2026-08-01T01:00:00Z',
+      revoked: false
+    }));
+    const tokens = Array.from({ length: 50 }, (_, index) => ({
+      id: `tok_page_${index.toString().padStart(2, '0')}`,
+      principalId: 'principal_manage',
+      name: `token-${index.toString().padStart(2, '0')}`,
+      secretPrefix: `tp${index.toString().padStart(2, '0')}`,
+      capabilities: ['library.read'],
+      scopes: [{ kind: 'global' }],
+      createdAt: '2026-07-31T01:00:00Z',
+      revoked: false
+    }));
+    const shares = Array.from({ length: 50 }, (_, index) => ({
+      id: `shr_page_${index.toString().padStart(2, '0')}`,
+      createdBy: 'principal_manage',
+      scopeKind: 'work',
+      scopeId: `wrk_page_${index.toString().padStart(2, '0')}`,
+      permissions: ['view'],
+      secretPrefix: `sp${index.toString().padStart(2, '0')}`,
+      createdAt: '2026-07-31T01:00:00Z',
+      expiresAt: '2026-08-01T01:00:00Z',
+      revoked: false
+    }));
+    const users = Array.from({ length: 50 }, (_, index) => ({
+      id: `usr_page_${index.toString().padStart(2, '0')}`,
+      username: `user-${index.toString().padStart(2, '0')}`,
+      displayName: `User ${index.toString().padStart(2, '0')}`,
+      status: 'active',
+      roles: ['viewer'],
+      securityVersion: 1,
+      createdAt: '2026-07-31T01:00:00Z',
+      updatedAt: '2026-07-31T01:00:00Z'
+    }));
+    const grants = Array.from({ length: 50 }, (_, index) => ({
+      id: `grnt_page_${index.toString().padStart(2, '0')}`,
+      principalId: 'usr_page_50',
+      effect: 'allow',
+      capability: `fixture.capability.${index.toString().padStart(2, '0')}`,
+      scope: { kind: 'global' },
+      revoked: false
+    }));
+
+    route(
+      'GET /api/v1/sessions',
+      pagedRoute(
+        'sessions',
+        sessions,
+        { ...sessions[0], id: 'ses_page_50', clientLabel: 'session-50' },
+        { failFirstContinuation: true }
+      )
+    );
+    route(
+      'GET /api/v1/api-tokens',
+      pagedRoute('tokens', tokens, { ...tokens[0], id: 'tok_page_50', name: 'token-50' })
+    );
+    route(
+      'GET /api/v1/shares',
+      pagedRoute('shares', shares, { ...shares[0], id: 'shr_page_50', scopeId: 'wrk_page_50' })
+    );
+    route(
+      'GET /api/v1/admin/users',
+      pagedRoute('users', users, {
+        ...users[0],
+        id: 'usr_page_50',
+        username: 'user-50',
+        displayName: 'User 50'
+      })
+    );
+    route(
+      'GET /api/v1/admin/users/usr_page_50/grants',
+      pagedRoute('grants', grants, {
+        ...grants[0],
+        id: 'grnt_page_50',
+        capability: 'fixture.capability.50'
+      })
+    );
+    route('GET /api/v1/security-audits', () => jsonResponse({ audits: [] }));
+
+    renderManage('/security');
+
+    expect(await screen.findByText('session-00')).toBeVisible();
+    expect(within(screen.getByRole('table', { name: '活动会话' })).getAllByRole('row')).toHaveLength(51);
+    await userEvent.click(screen.getByRole('button', { name: '下一页' }));
+    expect(await screen.findByText('下一页会话暂时未能载入')).toBeVisible();
+    expect(screen.getByText('session-00')).toBeVisible();
+    await userEvent.click(screen.getByRole('button', { name: '重试下一页' }));
+    expect(await screen.findByText('session-50')).toBeVisible();
+    expect(screen.queryByText('session-00')).not.toBeInTheDocument();
+    await userEvent.click(screen.getByRole('button', { name: '上一页' }));
+    expect(await screen.findByText('session-00')).toBeVisible();
+    await userEvent.click(screen.getByRole('button', { name: '下一页' }));
+    expect(await screen.findByText('session-50')).toBeVisible();
+    expect(seen.get('sessions')).toEqual([null, 'cursor-sessions', 'cursor-sessions']);
+
+    await userEvent.click(screen.getByRole('tab', { name: 'API Token' }));
+    expect(await screen.findByText('token-00')).toBeVisible();
+    await userEvent.click(screen.getByRole('button', { name: '下一页' }));
+    expect(await screen.findByText('token-50')).toBeVisible();
+    expect(screen.queryByText('token-00')).not.toBeInTheDocument();
+
+    await userEvent.click(screen.getByRole('tab', { name: '分享' }));
+    expect(await screen.findByText('work:wrk_page_00')).toBeVisible();
+    await userEvent.click(screen.getByRole('button', { name: '下一页' }));
+    expect(await screen.findByText('work:wrk_page_50')).toBeVisible();
+    expect(screen.queryByText('work:wrk_page_00')).not.toBeInTheDocument();
+
+    await userEvent.click(screen.getByRole('tab', { name: '账户与授权' }));
+    expect(await screen.findByText('user-00')).toBeVisible();
+    await userEvent.click(screen.getByRole('button', { name: '下一页' }));
+    expect(await screen.findByText('user-50')).toBeVisible();
+    expect(screen.queryByText('user-00')).not.toBeInTheDocument();
+    const userRow = screen.getByText('user-50').closest('tr');
+    expect(userRow).not.toBeNull();
+    if (userRow === null) throw new Error('未找到第二页账户行');
+    await userEvent.click(within(userRow).getByRole('button', { name: '查看授权' }));
+    expect(await screen.findByText('fixture.capability.00')).toBeVisible();
+    await userEvent.click(screen.getByRole('button', { name: '下一页' }));
+    expect(await screen.findByText('fixture.capability.50')).toBeVisible();
+    expect(screen.queryByText('fixture.capability.00')).not.toBeInTheDocument();
+
+    expect(seen.get('tokens')).toEqual([null, 'cursor-tokens']);
+    expect(seen.get('shares')).toEqual([null, 'cursor-shares']);
+    expect(seen.get('users')).toEqual([null, 'cursor-users']);
+    expect(seen.get('grants')).toEqual([null, 'cursor-grants']);
+  }, 15_000);
+});
+
 describe('分享密文', () => {
   it('创建后只显示一次，关闭对话框即从界面消失且没有再次查看的入口', async () => {
     const secret = 'share_abcdefghijklmnopqrstuvwxyz012345';

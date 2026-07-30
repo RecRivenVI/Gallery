@@ -6,7 +6,7 @@
  * 真正的事实来自 HTTP 快照。
  */
 
-import { useCallback, useEffect } from 'react';
+import { useCallback, useEffect, useRef } from 'react';
 import type { ReactNode } from 'react';
 import { NavLink } from 'react-router';
 import { useQueryClient } from '@tanstack/react-query';
@@ -73,18 +73,24 @@ function realtimeTone(status: RealtimeStatus): 'success' | 'warning' | 'danger' 
  *
  * `shared/query.ts` 的 SNAPSHOT_QUERY_PREFIXES 里没有 `security`（会话、Token、分享、账户、
  * 授权、审计），因此实时层的自动失效覆盖不到它们。这里显式补上：会话或授权被吊销时，
- * 以及任何一次「必须重新拉快照」时，都失效 `['security']`。
+ * 以及任何一次「必须重新拉快照」时，都重置 `['security']`。安全列表使用 live keyset，
+ * 不能在外部写入后拿旧页锚点重新抓取后续页。
  */
 function useSecuritySnapshotSync(): void {
   const queryClient = useQueryClient();
   const { snapshotEpoch } = useRealtime();
-  const invalidate = useCallback(() => {
-    void queryClient.invalidateQueries({ queryKey: ['security'] });
+  const previousSnapshotEpoch = useRef(snapshotEpoch);
+  const reset = useCallback(() => {
+    void queryClient.resetQueries({ queryKey: ['security'] });
   }, [queryClient]);
 
-  useRealtimeEvent('session.revoked', invalidate);
-  useRealtimeEvent('grant.revoked', invalidate);
-  useEffect(invalidate, [snapshotEpoch, invalidate]);
+  useRealtimeEvent('session.revoked', reset);
+  useRealtimeEvent('grant.revoked', reset);
+  useEffect(() => {
+    if (previousSnapshotEpoch.current === snapshotEpoch) return;
+    previousSnapshotEpoch.current = snapshotEpoch;
+    reset();
+  }, [snapshotEpoch, reset]);
 }
 
 export function ManageLayout({ children }: { children: ReactNode }) {
@@ -103,7 +109,7 @@ export function ManageLayout({ children }: { children: ReactNode }) {
     for (const prefix of SNAPSHOT_QUERY_PREFIXES) {
       void queryClient.invalidateQueries({ queryKey: [prefix] });
     }
-    void queryClient.invalidateQueries({ queryKey: ['security'] });
+    void queryClient.resetQueries({ queryKey: ['security'] });
   }, [queryClient]);
 
   return (
