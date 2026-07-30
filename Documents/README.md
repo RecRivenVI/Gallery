@@ -34,6 +34,8 @@ EV-67 延续上述真实后端持续门禁：当前 primitive config 的 15 个 
 
 [EV-124](证据/验证记录.md) 又在同一真实便携恢复进程中让候选落位与旧库回滚两次 Rename 都收到实际 `ERROR_SHARING_VIOLATION`：服务在 descriptor 前 fail-closed，pending、候选与字节精确的旧库轮换副本保留；解除句柄后同一请求成功。磁盘满、ACL/低权限、实际强杀/断电、正式签名及 RC Gate 仍未完成。
 
+[EV-125](证据/验证记录.md) 随后在 `placed_pending_finalize` 已持久化、descriptor 尚未发布的窗口真实强杀未打测试 tag 的便携 `galleryd`：无目标文件句柄的 Win32 目录通知触发取消，运行器显式证明 OS Kill 成功；强杀后 pending、当前库轮换副本和无 descriptor 状态保持，同 AppDirs 重启只续接安全收尾并吊销旧 Session。该切片关闭一个精确进程中断窗口，不等于真实断电、其它指令窗口、磁盘满/ACL/低权限、签名或 RC。
+
 [EV-111](证据/验证记录.md) 又在 Scanner 既有多目标语义上增加同源批量确认公共契约，保留原单媒体 API 与用户交互；真实 Pawchive 12 目标最终以一个 Job 在 74.003 秒确认 12/12，完整 Source guard 前后零变化。该切片关闭每目标重复完整 Source 处理，但没有触发或关闭真实活动 Hash 取消、HDD/SMB/NAS、完整语义、全量扫描、正式性能/API Freeze 或 RC Gate。
 
 [EV-112](证据/验证记录.md) 再为 `sourcelab` 增加默认关闭的真实活动 Hash 取消门禁：全新 Pawchive 隔离运行先从公共 Job API 观察到 `hash/running`，再取消父 Scan，4 ms 后观察父子都为 `cancelled`；完整 11,595 文件/2,353 目录/124,660,469,885 bytes 的 Source guard 增删改均为 0。该结果只关闭 Windows 本地 SSD/Pawchive 这一切片，HDD/SMB/NAS、publishing/崩溃恢复、全量与 RC Gate 仍未通过。
