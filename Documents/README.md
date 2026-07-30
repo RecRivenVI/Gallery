@@ -2,6 +2,8 @@
 
 本目录是 Gallery（中文名“画廊”、代码代号 `gallery`）未来正式实现的唯一工程文档入口。这里保存当前规范、实施指南、验证证据、架构决策，以及集中待评审的前端设计材料，不保存分散的调研过程、阶段汇报或已完成任务清单。
 
+当前补充状态（2026-07-31）：[EV-145](证据/验证记录.md) 已在 EV-136～EV-144 的列表/配置窗口和 256 层深度门禁上，直接验证同一草稿的 4,096 个 primitive 与 10,000 个 test 均只挂载当前 20 项，切回无损 JSON 文本后末项仍完整存在。当前阶段 6 缺口已收窄为完整草稿解析/序列化/AJV/内存、无 Schema 项数上限的任意对象、同规模真实后端、真实设备与完整可访问性/弱网门禁；Web Gate 仍未通过。下文较早的 EV-136～EV-144 汇总应结合本段增量阅读。
+
 2026-07-28 的 [EV-65](证据/验证记录.md) 已把当时的 Personal 11/11、LAN 1/1、同 AppDirs 恢复重启和只读 Source guard 的隔离真实后端链从 Chromium 扩展到桌面 Firefox，并让 Chromium/Firefox smoke 与完整隔离链进入 CI；[EV-66](证据/验证记录.md) 又关闭显式扫描/Watcher 状态脱节、扫描期间事件丢失与维护 Job 终态不刷新的竞态；[EV-67](证据/验证记录.md) 再把全部 15 类现有 primitive config 接入权威 Schema 可视化字段；[EV-68](证据/验证记录.md) 让当前规范 JSON 草稿以无损参数和显式合成 Sample 执行 Dry Run、Explain、Trace；[EV-69](证据/验证记录.md) 补齐基于本地精确基线的按字段撤销；[EV-70](证据/验证记录.md) 继续为 `parameter_schema`、tests、extensions 建立无损结构化编辑和任意 JSON 树；[EV-71](证据/验证记录.md) 再用真实单帧丢失证明 sequence gap 会重取 jobs、libraries 与 sources HTTP snapshot；[EV-72](证据/验证记录.md) 又从双浏览器 UI 证明运行中 Scan、活动 Hash、Attempt 与 publication 的取消收敛；[EV-73](证据/验证记录.md) 继续以真实 `galleryd` 强杀、同 AppDirs 立即重启和未来租约不改表，证明启动期单写者能立即接管遗留 Attempt，并让 UI 解释和治理 `PROCESS_INTERRUPTED`；[EV-74](证据/验证记录.md) 建立首批治理链，[EV-75](证据/验证记录.md) 再覆盖 SourceWork merge、全部 orphan decision/实体类型与已消费决策冲突，[EV-76](证据/验证记录.md) 又补齐普通 Binding issue 三决定、真实生命周期、双标签页冲突与 51 条 keyset 分页并修复活动唯一性，[EV-77](证据/验证记录.md) 再实际消费三种剩余结构 action，并经同 AppDirs 重启验证 Work/Creator/Media 孤儿重现身份语义。阶段 6 Web Gate 仍因真实移动设备/屏幕阅读器、完整弱网矩阵与正式可用性门禁缺口而未通过。
 
 [EV-78](证据/验证记录.md) 又基于当前从零重写后的正式双入口 UI 建立 42rem 窄屏模态导航：宽屏常驻导航与窄屏触发器互斥进入可见/焦点树，React Aria Dialog 提供焦点陷阱、Escape 关闭与焦点返还，当前页经 `aria-current` 暴露。Chromium/Firefox 390×844 smoke 合计 10/10，并在两个打开的导航模态上执行未禁用 `color-contrast` 的 WCAG A/AA axe；这关闭当前代码的窄屏导航焦点缺口，但不代表真实移动设备、触控或人工屏幕阅读器门禁通过。
