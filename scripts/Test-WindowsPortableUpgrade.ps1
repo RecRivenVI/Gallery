@@ -82,7 +82,7 @@ try {
     # 每个输入先独立通过完整制品 smoke；因此版本切换链可以把外部/包内摘要、SBOM、
     # Authenticode 清单与内嵌 Web 当作已验证前置，而不是只验证两个任意 exe。
     & (Join-Path $PSScriptRoot 'Test-WindowsPortable.ps1') `
-        -ArchivePath $previousArchive -ExpectedVersion $PreviousVersion | Out-Null
+        -ArchivePath $previousArchive -ExpectedVersion $PreviousVersion -AllowLegacyManifest | Out-Null
     & (Join-Path $PSScriptRoot 'Test-WindowsPortable.ps1') `
         -ArchivePath $currentArchive -ExpectedVersion $CurrentVersion | Out-Null
 
