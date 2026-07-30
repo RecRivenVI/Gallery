@@ -30,14 +30,16 @@ const (
 	afterLockedLibrary     = "Portable locked restore current fact"
 	afterLandingLibrary    = "Portable landing restore current fact"
 	afterContinuityLibrary = "Portable continuity restore current fact"
+	afterFinalizeLibrary   = "Portable finalize resume current fact"
 	startupTimeout         = 60 * time.Second
 	jobTimeout             = 30 * time.Second
 )
 
 type pairedClient struct {
-	api    *api.ClientWithResponses
-	csrf   string
-	editor api.RequestEditorFn
+	api        *api.ClientWithResponses
+	httpClient *http.Client
+	csrf       string
+	editor     api.RequestEditorFn
 }
 
 type result struct {
@@ -61,6 +63,9 @@ type result struct {
 	ContinuityPendingRetained bool   `json:"continuityPendingRetained"`
 	ContinuityRecovered       bool   `json:"continuityRecovered"`
 	ContinuityBlockedByOS     bool   `json:"continuityBlockedByOS"`
+	FinalizeResumeKeptCurrent bool   `json:"finalizeResumeKeptCurrent"`
+	FinalizeResumeRevokedAuth bool   `json:"finalizeResumeRevokedAuth"`
+	FinalizeResumeCompleted   bool   `json:"finalizeResumeCompleted"`
 	AllStopsExitedGracefully  bool   `json:"allStopsExitedGracefully"`
 }
 
@@ -463,9 +468,54 @@ func run(previousBin, currentBin, previousVersion, currentVersion string) error 
 	if err := assertSuccessfulRestoreRecorded(appRoot, continuityBackup.BackupId); err != nil {
 		return err
 	}
+	if err := createLibrary(ctx, continuityClient, afterFinalizeLibrary); err != nil {
+		return err
+	}
 	if outcome := active.Stop(); !outcome.ExitedGracefully || outcome.ForcedKill || outcome.Err != nil {
 		stopsGraceful = false
-		return fmt.Errorf("连续性恢复后当前版本未优雅停止：forced=%t err=%v", outcome.ForcedKill, outcome.Err)
+		return fmt.Errorf("finalize 续接前当前版本未优雅停止：forced=%t err=%v", outcome.ForcedKill, outcome.Err)
+	}
+	active = nil
+	// 构造“control.db 已落位，但进程在恢复后安全收尾前中断”留下的持久阶段。这里不改数据库、
+	// 不复制备份，只登记生产状态机实际读取的阶段；随后必须由未打测试 tag 的便携 galleryd
+	// 在同一 AppDirs 中完成 FinalizeRestore，且不能再次应用备份覆盖刚创建的当前事实。
+	if err := writeFinalizeResumeMarker(appRoot, continuityBackup.BackupId); err != nil {
+		return err
+	}
+	active, err = testprocess.StartGallerydWithSourceRootsContext(
+		ctx, currentPath, appRoot, filepath.Join(logs, "current-finalize-resume.log"), startupTimeout,
+	)
+	if err != nil {
+		return fmt.Errorf("启动待 finalize 恢复阶段: %w", err)
+	}
+	staleClient, err := rebindPairedClient(active.BaseURL, continuityClient)
+	if err != nil {
+		return fmt.Errorf("重绑定恢复前 Session: %w", err)
+	}
+	if err := assertSessionInvalidated(ctx, staleClient); err != nil {
+		return err
+	}
+	finalizeClient, err := pair(ctx, active.BaseURL)
+	if err != nil {
+		return fmt.Errorf("finalize 续接后重新配对: %w", err)
+	}
+	if err := assertLibraries(ctx, finalizeClient, map[string]bool{
+		beforeBackupLibrary:    true,
+		afterBackupLibrary:     false,
+		afterBadBackupLibrary:  true,
+		afterLockedLibrary:     true,
+		afterLandingLibrary:    true,
+		afterContinuityLibrary: false,
+		afterFinalizeLibrary:   true,
+	}); err != nil {
+		return fmt.Errorf("finalize 续接后的当前事实: %w", err)
+	}
+	if err := assertSuccessfulRestoreRecorded(appRoot, continuityBackup.BackupId); err != nil {
+		return fmt.Errorf("finalize 续接结果: %w", err)
+	}
+	if outcome := active.Stop(); !outcome.ExitedGracefully || outcome.ForcedKill || outcome.Err != nil {
+		stopsGraceful = false
+		return fmt.Errorf("finalize 续接后当前版本未优雅停止：forced=%t err=%v", outcome.ForcedKill, outcome.Err)
 	}
 	active = nil
 
@@ -490,6 +540,9 @@ func run(previousBin, currentBin, previousVersion, currentVersion string) error 
 		ContinuityPendingRetained: true,
 		ContinuityRecovered:       true,
 		ContinuityBlockedByOS:     true,
+		FinalizeResumeKeptCurrent: true,
+		FinalizeResumeRevokedAuth: true,
+		FinalizeResumeCompleted:   true,
 		AllStopsExitedGracefully:  stopsGraceful,
 	}
 	encoded, err := json.Marshal(value)
@@ -497,6 +550,40 @@ func run(previousBin, currentBin, previousVersion, currentVersion string) error 
 		return err
 	}
 	fmt.Println(string(encoded))
+	return nil
+}
+
+func writeFinalizeResumeMarker(appRoot, backupID string) error {
+	marker := struct {
+		BackupID    string    `json:"backupId"`
+		RequestedBy string    `json:"requestedBy"`
+		RequestedAt time.Time `json:"requestedAt"`
+		Phase       string    `json:"phase"`
+	}{
+		BackupID:    backupID,
+		RequestedBy: "portable-upgrade-crash-fixture",
+		RequestedAt: time.Now().UTC(),
+		Phase:       "placed_pending_finalize",
+	}
+	data, err := json.MarshalIndent(marker, "", "  ")
+	if err != nil {
+		return fmt.Errorf("编码待 finalize 恢复阶段: %w", err)
+	}
+	path := filepath.Join(appRoot, "state", "restore-pending.json")
+	if err := os.WriteFile(path, data, 0o600); err != nil {
+		return fmt.Errorf("写入待 finalize 恢复阶段: %w", err)
+	}
+	return nil
+}
+
+func assertSessionInvalidated(ctx context.Context, client *pairedClient) error {
+	response, err := client.api.ListLibrariesWithResponse(ctx, client.editor)
+	if err != nil {
+		return fmt.Errorf("验证恢复前 Session 失效: %w", err)
+	}
+	if statusCode(response) != http.StatusUnauthorized {
+		return fmt.Errorf("恢复前 Session 未失效：status=%d", statusCode(response))
+	}
 	return nil
 }
 
@@ -516,7 +603,8 @@ func pair(ctx context.Context, baseURL string) (*pairedClient, error) {
 	if err != nil {
 		return nil, err
 	}
-	client, err := api.NewClientWithResponses(baseURL, api.WithHTTPClient(&http.Client{Jar: jar}))
+	httpClient := &http.Client{Jar: jar}
+	client, err := api.NewClientWithResponses(baseURL, api.WithHTTPClient(httpClient))
 	if err != nil {
 		return nil, err
 	}
@@ -546,7 +634,28 @@ func pair(ctx context.Context, baseURL string) (*pairedClient, error) {
 	if err != nil || exchange.JSON201 == nil {
 		return nil, fmt.Errorf("交换配对凭据：status=%d err=%v", statusCode(exchange), err)
 	}
-	return &pairedClient{api: client, csrf: exchange.JSON201.CsrfToken, editor: editor}, nil
+	return &pairedClient{api: client, httpClient: httpClient, csrf: exchange.JSON201.CsrfToken, editor: editor}, nil
+}
+
+func rebindPairedClient(baseURL string, existing *pairedClient) (*pairedClient, error) {
+	if existing == nil || existing.httpClient == nil {
+		return nil, fmt.Errorf("缺少可复用的恢复前 HTTP client")
+	}
+	client, err := api.NewClientWithResponses(baseURL, api.WithHTTPClient(existing.httpClient))
+	if err != nil {
+		return nil, err
+	}
+	editor := func(_ context.Context, request *http.Request) error {
+		request.Header.Set("Origin", baseURL)
+		request.Header.Set("Sec-Fetch-Site", "same-origin")
+		return nil
+	}
+	return &pairedClient{
+		api:        client,
+		httpClient: existing.httpClient,
+		csrf:       existing.csrf,
+		editor:     editor,
+	}, nil
 }
 
 func createLibrary(ctx context.Context, client *pairedClient, name string) error {

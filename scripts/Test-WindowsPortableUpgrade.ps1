@@ -121,6 +121,9 @@ try {
             'continuityPendingRetained',
             'continuityRecovered',
             'continuityBlockedByOS',
+            'finalizeResumeKeptCurrent',
+            'finalizeResumeRevokedAuth',
+            'finalizeResumeCompleted',
             'allStopsExitedGracefully'
         )) {
         if ($result.$field -ne $true) { throw "版本切换结果未通过：$field" }
@@ -151,6 +154,9 @@ try {
         ContinuityPendingRetained = 'passed'
         ContinuityRecovered = 'passed'
         ContinuityBlockedByOS = 'passed'
+        FinalizeResumeKeptCurrent = 'passed'
+        FinalizeResumeRevokedAuth = 'passed'
+        FinalizeResumeCompleted = 'passed'
         AllStopsExitedGracefully = 'passed'
     }
 } finally {

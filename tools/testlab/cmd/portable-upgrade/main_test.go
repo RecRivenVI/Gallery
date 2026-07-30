@@ -1,6 +1,7 @@
 package main
 
 import (
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"testing"
@@ -142,5 +143,30 @@ func TestAssertSuccessfulRestoreRecorded(t *testing.T) {
 	}
 	if err := assertSuccessfulRestoreRecorded(root, backupID); err == nil {
 		t.Fatal("成功恢复后未消费的 pending 未被拒绝")
+	}
+}
+
+func TestWriteFinalizeResumeMarker(t *testing.T) {
+	root := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(root, "state"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	backupID := "bkp_00000000-0000-7000-8000-000000000001"
+	if err := writeFinalizeResumeMarker(root, backupID); err != nil {
+		t.Fatal(err)
+	}
+	data, err := os.ReadFile(filepath.Join(root, "state", "restore-pending.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var marker struct {
+		BackupID string `json:"backupId"`
+		Phase    string `json:"phase"`
+	}
+	if err := json.Unmarshal(data, &marker); err != nil {
+		t.Fatal(err)
+	}
+	if marker.BackupID != backupID || marker.Phase != "placed_pending_finalize" {
+		t.Fatalf("待 finalize marker 不精确: %+v", marker)
 	}
 }
