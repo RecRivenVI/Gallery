@@ -407,7 +407,13 @@ export function SignInPanel() {
       {mode === 'personal' ? (
         <>
           <p>本机个人模式：完成一次性配对后即可浏览。</p>
-          <Button variant="primary" isPending={actions.isPending} onPress={() => void actions.pairPersonal()}>
+          {/* 配对成功会立即换壳；显式 status 在下方播报，不让按钮使用会引用即将卸载节点的
+              RAC pending live-announcer。 */}
+          <Button
+            variant="primary"
+            isDisabled={actions.isPending}
+            onPress={() => void actions.pairPersonal()}
+          >
             配对本机浏览器
           </Button>
         </>

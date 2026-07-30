@@ -24,32 +24,16 @@ function pathIs(response: Response, path: string, method = 'GET'): boolean {
   return response.request().method() === method && new URL(response.url()).pathname === path;
 }
 
-async function pairViaSameOriginAPI(page: Page): Promise<void> {
+async function pairFromVisibleUI(page: Page): Promise<void> {
   await page.goto('/manage/security');
   await expect(page.getByRole('heading', { name: '管理需要认证', exact: true })).toBeVisible();
-  const exchangeStatus = await page.evaluate(async () => {
-    const bootstrapResponse = await fetch('/api/v1/bootstrap', { credentials: 'same-origin' });
-    if (!bootstrapResponse.ok) throw new Error(`读取 bootstrap 失败: ${bootstrapResponse.status}`);
-    const bootstrap = (await bootstrapResponse.json()) as { csrfToken: string };
-    const headers = { 'X-Gallery-CSRF': bootstrap.csrfToken };
-    const attemptResponse = await fetch('/api/v1/personal/pairing-attempts', {
-      method: 'POST',
-      headers,
-      credentials: 'same-origin'
-    });
-    if (!attemptResponse.ok) throw new Error(`创建配对凭据失败: ${attemptResponse.status}`);
-    const attempt = (await attemptResponse.json()) as { credential: string };
-    const exchangeResponse = await fetch('/api/v1/personal/pair', {
-      method: 'POST',
-      headers: { ...headers, 'Content-Type': 'application/json' },
-      credentials: 'same-origin',
-      body: JSON.stringify({ credential: attempt.credential })
-    });
-    return exchangeResponse.status;
-  });
-  expect(exchangeStatus).toBe(201);
-  await page.reload();
+  const exchange = page.waitForResponse((response) => pathIs(response, '/api/v1/personal/pair', 'POST'));
+  await page.getByRole('button', { name: '开始配对', exact: true }).click();
+  expect((await exchange).status()).toBe(201);
   await expect(page.getByRole('heading', { name: '连接与安全', exact: true })).toBeVisible();
+  // 配对完成会立即换壳。生产按钮不得让 React Aria pending live-announcer 留下引用已卸载按钮的
+  // role=img，否则目标交互尚未开始就会出现无替代文本的瞬态节点。
+  await expect(page.locator('[data-live-announcer="true"] div[role="img"]')).toHaveCount(0);
 }
 
 async function installTextSpacingStylesheet(page: Page): Promise<void> {
@@ -115,16 +99,14 @@ async function expectDialogFocusContained(page: Page, dialogName: string): Promi
   }
 }
 
-test('真实 Session 下的校验、确认与一次性密文保持可访问 @real-accessibility', async ({ page }) => {
+test('双入口可见配对及真实 Session 下的关键交互保持可访问 @real-accessibility', async ({ page, browser }) => {
   await page.addInitScript(() => window.localStorage.setItem('gallery.theme', 'high-contrast'));
   await page.emulateMedia({ forcedColors: 'active', contrast: 'more' });
   await page.setViewportSize({ width: 320, height: 800 });
   // 真实 galleryd 的 style-src 不允许测试插入 inline <style>。改写同源 CSS 响应可在不放宽
   // 生产 CSP 的前提下施加 WCAG 文本间距，并让页面继续走真实外部样式加载路径。
   await installTextSpacingStylesheet(page);
-  // 配对按钮 pending 的 React Aria live-announcer 会引用即将卸载的按钮并保留约 7 秒；
-  // 配对 UI 已由其它真实链覆盖，本切片改走同源真实 API，避免固定等待污染目标交互的 axe 结论。
-  await pairViaSameOriginAPI(page);
+  await pairFromVisibleUI(page);
   await applyAccessibilityEnvironment(page);
 
   await page.getByRole('tab', { name: 'API Token', exact: true }).click();
@@ -198,4 +180,26 @@ test('真实 Session 下的校验、确认与一次性密文保持可访问 @rea
       exact: true
     })
     .click();
+
+  const galleryContext = await browser.newContext();
+  try {
+    await galleryContext.addInitScript(() => window.localStorage.setItem('gallery.theme', 'high-contrast'));
+    const galleryPage = await galleryContext.newPage();
+    await galleryPage.emulateMedia({ forcedColors: 'active', contrast: 'more' });
+    await galleryPage.setViewportSize({ width: 320, height: 800 });
+    await installTextSpacingStylesheet(galleryPage);
+    await galleryPage.goto('/');
+    await expect(galleryPage.getByRole('heading', { name: '画廊', exact: true })).toBeVisible();
+    const exchange = galleryPage.waitForResponse((response) =>
+      pathIs(response, '/api/v1/personal/pair', 'POST')
+    );
+    await galleryPage.getByRole('button', { name: '配对本机浏览器', exact: true }).click();
+    expect((await exchange).status()).toBe(201);
+    await expect(galleryPage.getByRole('button', { name: '配对本机浏览器', exact: true })).toBeHidden();
+    await expect(galleryPage.locator('[data-live-announcer="true"] div[role="img"]')).toHaveCount(0);
+    await applyAccessibilityEnvironment(galleryPage);
+    await expectAccessible(galleryPage, '真实用户端配对后首页');
+  } finally {
+    await galleryContext.close();
+  }
 });

@@ -8,7 +8,7 @@
 
 import { Route, Routes } from 'react-router-dom';
 import { useState } from 'react';
-import { Button, EmptyState, TextInput } from '../design';
+import { Button, EmptyState, Spinner, TextInput } from '../design';
 import { AuthGate, useAuthActions, useSession } from '../shared/session';
 import { ManageLayout } from './layout';
 import { DiagnosticsPage } from './pages/diagnostics';
@@ -47,10 +47,13 @@ function ManageSignIn() {
           description="仅在 loopback 上可用。配对分两步：创建一次性凭据，再用它换取 HttpOnly 会话。"
         >
           <div className="manage-form__actions">
-            <Button variant="primary" isPending={isPending} onPress={() => void pairPersonal()}>
+            {/* 成功后认证壳会立即卸载。这里用稳定 status 播报，避免 RAC pending live-announcer
+                在触发按钮消失后短暂留下失去 aria-labelledby 目标的 role=img。 */}
+            <Button variant="primary" isDisabled={isPending} onPress={() => void pairPersonal()}>
               开始配对
             </Button>
           </div>
+          {isPending ? <Spinner label="正在配对本机浏览器" /> : null}
           <InlineError error={error} title="配对未能完成" />
         </Section>
       ) : bootstrap.lanInitialized ? (
