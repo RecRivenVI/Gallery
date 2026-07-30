@@ -1,61 +1,14 @@
 {
   "auditReportVersion": 2,
-  "vulnerabilities": {
-    "@redocly/openapi-core": {
-      "name": "@redocly/openapi-core",
-      "severity": "high",
-      "isDirect": false,
-      "via": ["minimatch"],
-      "effects": ["openapi-typescript"],
-      "range": "<=1.34.17",
-      "nodes": ["node_modules/@redocly/openapi-core"]
-    },
-    "brace-expansion": {
-      "name": "brace-expansion",
-      "severity": "high",
-      "isDirect": false,
-      "via": [
-        {
-          "source": 1124334,
-          "name": "brace-expansion",
-          "dependency": "brace-expansion",
-          "title": "brace-expansion memory exhaustion",
-          "url": "https://github.com/advisories/GHSA-mh99-v99m-4gvg",
-          "severity": "high",
-          "range": "<=5.0.7"
-        }
-      ],
-      "effects": ["minimatch"],
-      "range": "<=5.0.7",
-      "nodes": ["node_modules/@redocly/openapi-core/node_modules/brace-expansion"]
-    },
-    "minimatch": {
-      "name": "minimatch",
-      "severity": "high",
-      "isDirect": false,
-      "via": ["brace-expansion"],
-      "effects": ["@redocly/openapi-core"],
-      "range": "2.0.0 - 10.0.2",
-      "nodes": ["node_modules/@redocly/openapi-core/node_modules/minimatch"]
-    },
-    "openapi-typescript": {
-      "name": "openapi-typescript",
-      "severity": "high",
-      "isDirect": true,
-      "via": ["@redocly/openapi-core"],
-      "effects": [],
-      "range": ">=7.0.0-next.0",
-      "nodes": ["node_modules/openapi-typescript"]
-    }
-  },
+  "vulnerabilities": {},
   "metadata": {
     "vulnerabilities": {
       "info": 0,
       "low": 0,
       "moderate": 0,
-      "high": 4,
+      "high": 0,
       "critical": 0,
-      "total": 4
+      "total": 0
     }
   }
 }

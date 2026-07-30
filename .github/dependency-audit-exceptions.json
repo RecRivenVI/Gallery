@@ -1,47 +1,5 @@
 {
   "schemaVersion": 1,
   "manifest": "web/package-lock.json",
-  "exceptions": [
-    {
-      "advisory": "GHSA-mh99-v99m-4gvg",
-      "scope": "dev",
-      "expiresOn": "2026-08-09",
-      "reason": "openapi-typescript 只读取仓库内固定 OpenAPI 文件，当前全部 $ref 均为内部引用；已发布的强制修复会破坏生成器依赖契约。",
-      "premises": ["openapi-internal-refs-only"],
-      "fullPackages": [
-        "@redocly/openapi-core",
-        "brace-expansion",
-        "minimatch",
-        "openapi-typescript"
-      ],
-      "productionPackages": [],
-      "rootDependency": {
-        "name": "openapi-typescript",
-        "section": "devDependencies",
-        "specifier": "7.13.0"
-      },
-      "lockChain": [
-        {
-          "name": "openapi-typescript",
-          "path": "node_modules/openapi-typescript",
-          "version": "7.13.0"
-        },
-        {
-          "name": "@redocly/openapi-core",
-          "path": "node_modules/@redocly/openapi-core",
-          "version": "1.34.17"
-        },
-        {
-          "name": "minimatch",
-          "path": "node_modules/@redocly/openapi-core/node_modules/minimatch",
-          "version": "5.1.9"
-        },
-        {
-          "name": "brace-expansion",
-          "path": "node_modules/@redocly/openapi-core/node_modules/brace-expansion",
-          "version": "2.1.2"
-        }
-      ]
-    }
-  ]
+  "exceptions": []
 }

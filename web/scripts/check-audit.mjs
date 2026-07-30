@@ -1,6 +1,7 @@
 import { spawnSync } from 'node:child_process';
 import { Console } from 'node:console';
 import { readdir, readFile } from 'node:fs/promises';
+import { createRequire } from 'node:module';
 import path from 'node:path';
 import process from 'node:process';
 import { fileURLToPath } from 'node:url';
@@ -14,6 +15,9 @@ const repoRoot = path.resolve(webRoot, '..');
 const POLICY_PATH = path.join(repoRoot, '.github', 'dependency-audit-exceptions.json');
 const LOCK_PATH = path.join(webRoot, 'package-lock.json');
 const PACKAGE_PATH = path.join(webRoot, 'package.json');
+const MINIMATCH_ADAPTER_ROOT = path.join(webRoot, 'vendor', 'minimatch-legacy-adapter');
+const MINIMATCH_ADAPTER_PACKAGE_PATH = path.join(MINIMATCH_ADAPTER_ROOT, 'package.json');
+const MINIMATCH_ADAPTER_ENTRY_PATH = path.join(MINIMATCH_ADAPTER_ROOT, 'index.cjs');
 const OPENAPI_PATH = path.join(repoRoot, 'internal', 'contract', 'api', 'openapi.yaml');
 const SOURCE_ROOT = path.join(webRoot, 'src');
 // 双入口：画廊与管理是两个独立 SPA，纯客户端入口约束必须对**每一个**入口成立。
@@ -23,11 +27,17 @@ const ENTRY_PATHS = [
   path.join(SOURCE_ROOT, 'manage', 'main.tsx')
 ];
 const VITE_CONFIG_PATH = path.join(webRoot, 'vite.config.ts');
-const MAX_EXCEPTION_EXPIRY = '2026-08-09';
+const permittedExceptions = new Map();
 
-const permittedExceptions = new Map([
-  ['GHSA-mh99-v99m-4gvg', { scope: 'dev', premises: ['openapi-internal-refs-only'] }]
-]);
+const openApiToolchain = Object.freeze({
+  generatorVersion: '7.13.0',
+  redoclyVersion: '1.34.17',
+  adapterSpecifier: 'file:vendor/minimatch-legacy-adapter',
+  adapterVersion: '5.1.9+gallery.1',
+  modernSpecifier: 'npm:minimatch@10.2.5',
+  modernVersion: '10.2.5',
+  braceExpansionVersion: '5.0.8'
+});
 
 const sourceExtensions = new Set(['.cjs', '.js', '.jsx', '.mjs', '.ts', '.tsx']);
 
@@ -106,10 +116,6 @@ export function validatePolicy(policy, now = new Date()) {
     assertGate(
       /^\d{4}-\d{2}-\d{2}$/.test(exception.expiresOn),
       `${exception.advisory} 的 expiresOn 必须是 YYYY-MM-DD`
-    );
-    assertGate(
-      exception.expiresOn === MAX_EXCEPTION_EXPIRY,
-      `${exception.advisory} 的 expiresOn 不得偏离代码级上限 ${MAX_EXCEPTION_EXPIRY}`
     );
     assertGate(
       currentDate <= exception.expiresOn,
@@ -210,6 +216,122 @@ export function validateLockState(policy, lock) {
       }
     }
   }
+}
+
+export function validateOpenApiToolchain(packageJson, adapterPackage, lock) {
+  assertGate(
+    packageJson.devDependencies?.['openapi-typescript'] === openApiToolchain.generatorVersion,
+    `openapi-typescript 必须锁定为 ${openApiToolchain.generatorVersion}`
+  );
+  assertGate(
+    packageJson.devDependencies?.minimatch === openApiToolchain.adapterSpecifier,
+    `minimatch 兼容层必须锁定为 ${openApiToolchain.adapterSpecifier}`
+  );
+  assertGate(adapterPackage.name === 'minimatch', 'minimatch 兼容层 package name 必须保持 minimatch');
+  assertGate(
+    adapterPackage.version === openApiToolchain.adapterVersion,
+    `minimatch 兼容层版本必须为 ${openApiToolchain.adapterVersion}`
+  );
+  assertGate(adapterPackage.private === true, 'minimatch 兼容层必须保持 private');
+  assertGate(adapterPackage.type === 'commonjs', 'minimatch 兼容层必须保持 CommonJS');
+  assertGate(adapterPackage.main === 'index.cjs', 'minimatch 兼容层入口必须保持 index.cjs');
+  assertGate(
+    adapterPackage.dependencies?.['minimatch-modern'] === openApiToolchain.modernSpecifier,
+    `minimatch-modern 必须锁定为 ${openApiToolchain.modernSpecifier}`
+  );
+
+  const packages = lock.packages;
+  const root = packages[''];
+  assertGate(
+    root.devDependencies?.minimatch === openApiToolchain.adapterSpecifier,
+    'package-lock 根 minimatch 兼容层声明已漂移'
+  );
+  const generator = packages['node_modules/openapi-typescript'];
+  assertGate(
+    generator?.version === openApiToolchain.generatorVersion,
+    'package-lock openapi-typescript 版本已漂移'
+  );
+  const redocly = packages['node_modules/@redocly/openapi-core'];
+  assertGate(redocly?.version === openApiToolchain.redoclyVersion, 'package-lock Redocly 版本已漂移');
+  assertGate(redocly?.dependencies?.minimatch === '5.1.9', 'Redocly 不再请求 minimatch 5.1.9');
+
+  const adapterLink = packages['node_modules/minimatch'];
+  assertGate(
+    adapterLink?.link === true && adapterLink.resolved === 'vendor/minimatch-legacy-adapter',
+    'package-lock minimatch 未解析到仓库内兼容层'
+  );
+  const adapter = packages['vendor/minimatch-legacy-adapter'];
+  assertGate(adapter?.name === 'minimatch', 'package-lock 缺少 minimatch 兼容层实体');
+  assertGate(adapter?.version === openApiToolchain.adapterVersion, 'package-lock minimatch 兼容层版本已漂移');
+  assertGate(
+    adapter?.dependencies?.['minimatch-modern'] === openApiToolchain.modernSpecifier,
+    'package-lock minimatch-modern specifier 已漂移'
+  );
+
+  const modern = packages['node_modules/minimatch-modern'];
+  assertGate(modern?.name === 'minimatch', 'package-lock minimatch-modern alias 身份已漂移');
+  assertGate(modern?.version === openApiToolchain.modernVersion, 'package-lock minimatch-modern 版本已漂移');
+  const braceExpansion = packages['node_modules/brace-expansion'];
+  assertGate(
+    braceExpansion?.version === openApiToolchain.braceExpansionVersion,
+    'package-lock brace-expansion 修复版本已漂移'
+  );
+  assertGate(
+    !packages['node_modules/@redocly/openapi-core/node_modules/minimatch'] &&
+      !packages['node_modules/@redocly/openapi-core/node_modules/brace-expansion'],
+    'Redocly 重新引入了嵌套旧 minimatch/brace-expansion'
+  );
+
+  return openApiToolchain;
+}
+
+export function validateMinimatchCompatibility(minimatch) {
+  assertGate(typeof minimatch === 'function', 'Redocly 解析到的 minimatch 不再是可调用 CommonJS 导出');
+  for (const key of [
+    'GLOBSTAR',
+    'Minimatch',
+    'braceExpand',
+    'defaults',
+    'filter',
+    'makeRe',
+    'match',
+    'sep'
+  ]) {
+    assertGate(key in minimatch, `minimatch 兼容层缺少 v5 表面：${key}`);
+  }
+
+  const cases = [
+    ['api.yaml', '*.yaml', {}, true],
+    ['schemas/work.yaml', '**/*.yaml', {}, true],
+    ['schemas/.hidden.yaml', '**/*.yaml', {}, false],
+    ['README.MD', '*.md', { nocase: true }, true],
+    ['src/a.test.ts', 'src/!(*.spec).ts', {}, true],
+    ['src/a.spec.ts', 'src/!(*.spec).ts', {}, false],
+    ['a/b/c', 'a/**/c', {}, true],
+    ['abc', 'a{b,c}c', {}, true]
+  ];
+  for (const [candidate, pattern, options, expected] of cases) {
+    assertGate(
+      minimatch(candidate, pattern, options) === expected,
+      `minimatch 兼容行为失败：${candidate} / ${pattern}`
+    );
+  }
+  assertGate(minimatch.defaults({ nocase: true })('README.MD', '*.md'), 'minimatch.defaults 兼容失败');
+  assertGate(new minimatch.Minimatch('**/*.yaml').match('schemas/work.yaml'), 'Minimatch 构造器兼容失败');
+  assertGate(
+    JSON.stringify(['a.ts', 'a.js'].filter(minimatch.filter('*.ts'))) === JSON.stringify(['a.ts']),
+    'minimatch.filter 兼容失败'
+  );
+  assertGate(minimatch.makeRe('*.ts').test('a.ts'), 'minimatch.makeRe 兼容失败');
+  assertGate(
+    JSON.stringify(minimatch.match(['a.ts', 'a.js'], '*.ts')) === JSON.stringify(['a.ts']),
+    'minimatch.match 兼容失败'
+  );
+  assertGate(
+    JSON.stringify(minimatch.braceExpand('a{b,c}d')) === JSON.stringify(['abd', 'acd']),
+    'minimatch.braceExpand 兼容失败'
+  );
+  return cases.length;
 }
 
 function validateAuditReportShape(report, label) {
@@ -480,12 +602,26 @@ export async function runAuditGate({ now = new Date(), auditRunner = runNpmAudit
   const policy = validatePolicy(await readJson(POLICY_PATH, '依赖审计例外文件'), now);
   const lock = await readJson(LOCK_PATH, 'web/package-lock.json');
   const packageJson = await readJson(PACKAGE_PATH, 'web/package.json');
+  const adapterPackage = await readJson(
+    MINIMATCH_ADAPTER_PACKAGE_PATH,
+    'web/vendor/minimatch-legacy-adapter/package.json'
+  );
   validateLockState(policy, lock);
+  validateOpenApiToolchain(packageJson, adapterPackage, lock);
+  const redoclyRequire = createRequire(
+    path.join(webRoot, 'node_modules', '@redocly', 'openapi-core', 'lib', 'utils.js')
+  );
+  const resolvedMinimatch = redoclyRequire.resolve('minimatch');
+  assertGate(
+    path.resolve(resolvedMinimatch) === path.resolve(MINIMATCH_ADAPTER_ENTRY_PATH),
+    `Redocly minimatch 未解析到仓库兼容层：${resolvedMinimatch}`
+  );
+  const minimatchCaseCount = validateMinimatchCompatibility(redoclyRequire('minimatch'));
   const premises = await validateRepositoryPremises(packageJson);
   const fullReport = parseAuditProcessResult(auditRunner([]), 'full');
   const productionReport = parseAuditProcessResult(auditRunner(['--omit=dev']), 'production-only');
   const exceptions = validateAuditReports(policy, fullReport, productionReport);
-  return { exceptions, premises };
+  return { exceptions, premises, minimatchCaseCount };
 }
 
 const invokedPath = process.argv[1] ? path.resolve(process.argv[1]) : '';
@@ -493,7 +629,7 @@ if (invokedPath === scriptPath) {
   try {
     const result = await runAuditGate();
     output.log(
-      `依赖审计通过：${result.exceptions.length} 条有期限例外；OpenAPI 内部引用 ${result.premises.internalRefCount} 个；Web source ${result.premises.sourceFileCount} 个。`
+      `依赖审计通过：full/production 0 漏洞、${result.exceptions.length} 条例外；OpenAPI 内部引用 ${result.premises.internalRefCount} 个；minimatch 兼容用例 ${result.minimatchCaseCount} 个；Web source ${result.premises.sourceFileCount} 个。`
     );
     for (const exception of result.exceptions) {
       output.log(`- ${exception.advisory}: ${exception.scope}, expires ${exception.expiresOn}`);

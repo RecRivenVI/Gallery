@@ -1,4 +1,5 @@
 import { readFile } from 'node:fs/promises';
+import { createRequire } from 'node:module';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
@@ -7,7 +8,9 @@ import {
   parseAuditProcessResult,
   validateAuditReports,
   validateLockState,
+  validateMinimatchCompatibility,
   validateOpenApiPremise,
+  validateOpenApiToolchain,
   validatePolicy,
   validateWebPremise
 } from './check-audit.mjs';
@@ -19,32 +22,32 @@ const repoRoot = path.resolve(webRoot, '..');
 const readJson = async (filePath) => JSON.parse(await readFile(filePath, 'utf8'));
 const clone = (value) => JSON.parse(JSON.stringify(value));
 
-const [policyFixture, lockFixture, fullFixture, productionFixture] = await Promise.all([
-  readJson(path.join(repoRoot, '.github', 'dependency-audit-exceptions.json')),
-  readJson(path.join(webRoot, 'package-lock.json')),
-  readJson(path.join(scriptDir, 'fixtures', 'npm-audit-full.json')),
-  readJson(path.join(scriptDir, 'fixtures', 'npm-audit-production.json'))
-]);
+const [policyFixture, lockFixture, packageFixture, adapterFixture, fullFixture, productionFixture] =
+  await Promise.all([
+    readJson(path.join(repoRoot, '.github', 'dependency-audit-exceptions.json')),
+    readJson(path.join(webRoot, 'package-lock.json')),
+    readJson(path.join(webRoot, 'package.json')),
+    readJson(path.join(webRoot, 'vendor', 'minimatch-legacy-adapter', 'package.json')),
+    readJson(path.join(scriptDir, 'fixtures', 'npm-audit-full.json')),
+    readJson(path.join(scriptDir, 'fixtures', 'npm-audit-production.json'))
+  ]);
 
 describe('dependency audit policy', () => {
-  it('accepts only the locked reports, versions and scopes before expiry', () => {
-    const policy = validatePolicy(clone(policyFixture), new Date('2026-07-26T00:00:00Z'));
+  it('accepts only the zero-exception reports and locked safe OpenAPI toolchain', () => {
+    const policy = validatePolicy(clone(policyFixture), new Date('2030-01-01T00:00:00Z'));
     expect(() => validateLockState(policy, clone(lockFixture))).not.toThrow();
-    expect(validateAuditReports(policy, clone(fullFixture), clone(productionFixture))).toEqual([
-      { advisory: 'GHSA-mh99-v99m-4gvg', scope: 'dev', expiresOn: '2026-08-09' }
-    ]);
-  });
-
-  it('fails when the exception expires', () => {
-    expect(() => validatePolicy(clone(policyFixture), new Date('2026-08-10T00:00:00Z'))).toThrow(
-      /已于 2026-08-09 到期/
-    );
+    expect(
+      validateOpenApiToolchain(clone(packageFixture), clone(adapterFixture), clone(lockFixture))
+    ).toMatchObject({ modernVersion: '10.2.5', braceExpansionVersion: '5.0.8' });
+    expect(validateAuditReports(policy, clone(fullFixture), clone(productionFixture))).toEqual([]);
   });
 
   it('fails when a locked dependency version changes', () => {
     const lock = clone(lockFixture);
-    lock.packages['node_modules/openapi-typescript'].version = '7.13.1';
-    expect(() => validateLockState(policyFixture, lock)).toThrow(/openapi-typescript 已变化/);
+    lock.packages['node_modules/minimatch-modern'].version = '10.2.4';
+    expect(() => validateOpenApiToolchain(packageFixture, adapterFixture, lock)).toThrow(
+      /minimatch-modern 版本已漂移/
+    );
   });
 
   it('fails on an unknown advisory', () => {
@@ -74,23 +77,39 @@ describe('dependency audit policy', () => {
 
   it('never permits critical findings', () => {
     const report = clone(fullFixture);
-    report.vulnerabilities['brace-expansion'].severity = 'critical';
+    report.vulnerabilities['critical-package'] = {
+      name: 'critical-package',
+      severity: 'critical',
+      isDirect: false,
+      via: [
+        {
+          source: 2,
+          name: 'critical-package',
+          url: 'https://github.com/advisories/GHSA-dddd-eeee-ffff',
+          severity: 'critical'
+        }
+      ],
+      effects: [],
+      range: '<1.0.0',
+      nodes: ['node_modules/critical-package']
+    };
     report.metadata.vulnerabilities.critical = 1;
+    report.metadata.vulnerabilities.total = 1;
     expect(() => analyzeAuditReport(report, 'fixture')).toThrow(/critical/);
   });
 
-  it('fails when a dev-only advisory reaches production', () => {
-    expect(() => validateAuditReports(policyFixture, fullFixture, fullFixture)).toThrow(
-      /production package 传播范围已变化/
-    );
+  it('fails when an exception is added back without code authorization', () => {
+    const policy = clone(policyFixture);
+    policy.exceptions.push({ advisory: 'GHSA-aaaa-bbbb-cccc' });
+    expect(() => validatePolicy(policy)).toThrow(/允许的 advisory 集合已变化/);
   });
 });
 
 describe('npm audit process boundary', () => {
-  it('accepts exit code 1 only for a structurally valid vulnerability report', () => {
+  it('accepts exit code 0 for a structurally valid zero-finding report', () => {
     expect(
       parseAuditProcessResult(
-        { status: 1, signal: null, error: null, stdout: JSON.stringify(fullFixture), stderr: '' },
+        { status: 0, signal: null, error: null, stdout: JSON.stringify(fullFixture), stderr: '' },
         'fixture'
       )
     ).toEqual(fullFixture);
@@ -111,6 +130,14 @@ describe('npm audit process boundary', () => {
     ]
   ])('fails closed for npm/network/non-JSON errors', (result, expected) => {
     expect(() => parseAuditProcessResult(result, 'fixture')).toThrow(expected);
+  });
+});
+
+describe('minimatch legacy adapter', () => {
+  it('preserves the callable v5 surface over the audited modern implementation', () => {
+    const require = createRequire(import.meta.url);
+    const minimatch = require('../vendor/minimatch-legacy-adapter');
+    expect(validateMinimatchCompatibility(minimatch)).toBe(8);
   });
 });
 
