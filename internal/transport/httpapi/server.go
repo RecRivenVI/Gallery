@@ -640,16 +640,21 @@ func (s *Server) listUsers(w http.ResponseWriter, r *http.Request) {
 		s.writeRequestError(w, err)
 		return
 	}
-	users, err := s.auth.ListUsers(r.Context())
+	limit, err := parseOptionalListLimit(r)
 	if err != nil {
 		s.writeRequestError(w, err)
 		return
 	}
-	items := make([]map[string]any, 0, len(users))
-	for _, user := range users {
+	page, err := s.auth.ListUsers(r.Context(), r.URL.Query().Get("cursor"), limit)
+	if err != nil {
+		s.writeRequestError(w, err)
+		return
+	}
+	items := make([]map[string]any, 0, len(page.Items))
+	for _, user := range page.Items {
 		items = append(items, userDTO(user))
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"users": items})
+	writeJSON(w, http.StatusOK, listResponse("users", items, page.NextCursor))
 }
 
 func (s *Server) createUser(w http.ResponseWriter, r *http.Request) {
@@ -767,16 +772,22 @@ func (s *Server) listGrants(w http.ResponseWriter, r *http.Request) {
 		s.writeRequestError(w, err)
 		return
 	}
-	items, err := s.auth.ListGrants(r.Context(), session.PrincipalID, r.PathValue("userId"))
+	limit, err := parseOptionalListLimit(r)
 	if err != nil {
 		s.writeRequestError(w, err)
 		return
 	}
-	result := make([]map[string]any, 0, len(items))
-	for _, item := range items {
+	page, err := s.auth.ListGrants(r.Context(), session.PrincipalID, r.PathValue("userId"),
+		r.URL.Query().Get("cursor"), limit)
+	if err != nil {
+		s.writeRequestError(w, err)
+		return
+	}
+	result := make([]map[string]any, 0, len(page.Items))
+	for _, item := range page.Items {
 		result = append(result, grantDTO(item))
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"grants": result})
+	writeJSON(w, http.StatusOK, listResponse("grants", result, page.NextCursor))
 }
 
 func (s *Server) revokeGrant(w http.ResponseWriter, r *http.Request) {
@@ -808,16 +819,21 @@ func (s *Server) listAPITokens(w http.ResponseWriter, r *http.Request) {
 		s.writeRequestError(w, err)
 		return
 	}
-	tokens, err := s.auth.ListAPITokens(r.Context(), actor.PrincipalID)
+	limit, err := parseOptionalListLimit(r)
 	if err != nil {
 		s.writeRequestError(w, err)
 		return
 	}
-	items := make([]map[string]any, 0, len(tokens))
-	for _, token := range tokens {
+	page, err := s.auth.ListAPITokens(r.Context(), actor.PrincipalID, r.URL.Query().Get("cursor"), limit)
+	if err != nil {
+		s.writeRequestError(w, err)
+		return
+	}
+	items := make([]map[string]any, 0, len(page.Items))
+	for _, token := range page.Items {
 		items = append(items, tokenDTO(token))
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"tokens": items})
+	writeJSON(w, http.StatusOK, listResponse("tokens", items, page.NextCursor))
 }
 
 func (s *Server) createAPIToken(w http.ResponseWriter, r *http.Request) {
@@ -875,16 +891,21 @@ func (s *Server) listShares(w http.ResponseWriter, r *http.Request) {
 		s.writeRequestError(w, err)
 		return
 	}
-	shares, err := s.auth.ListShares(r.Context(), actor.PrincipalID)
+	limit, err := parseOptionalListLimit(r)
 	if err != nil {
 		s.writeRequestError(w, err)
 		return
 	}
-	items := make([]map[string]any, 0, len(shares))
-	for _, share := range shares {
+	page, err := s.auth.ListShares(r.Context(), actor.PrincipalID, r.URL.Query().Get("cursor"), limit)
+	if err != nil {
+		s.writeRequestError(w, err)
+		return
+	}
+	items := make([]map[string]any, 0, len(page.Items))
+	for _, share := range page.Items {
 		items = append(items, shareDTO(share))
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"shares": items})
+	writeJSON(w, http.StatusOK, listResponse("shares", items, page.NextCursor))
 }
 
 func (s *Server) createShare(w http.ResponseWriter, r *http.Request) {
@@ -1187,21 +1208,46 @@ func nullableString(value string) any {
 	return value
 }
 
+func parseOptionalListLimit(r *http.Request) (int, error) {
+	raw := r.URL.Query().Get("limit")
+	if raw == "" {
+		return 0, nil
+	}
+	limit, err := strconv.Atoi(raw)
+	if err != nil || limit < 1 || limit > 200 {
+		return 0, fault.WithField(fault.CodeValidation, "limit", err)
+	}
+	return limit, nil
+}
+
+func listResponse(key string, items any, nextCursor string) map[string]any {
+	response := map[string]any{key: items}
+	if nextCursor != "" {
+		response["nextCursor"] = nextCursor
+	}
+	return response
+}
+
 func (s *Server) listSessions(w http.ResponseWriter, r *http.Request) {
 	if _, err := s.requireCapability(r, "clients.manage"); err != nil {
 		writeFault(w, asFault(err), statusForFault(err))
 		return
 	}
-	sessions, err := s.auth.ListSessions(r.Context())
+	limit, err := parseOptionalListLimit(r)
 	if err != nil {
 		writeFault(w, asFault(err), statusForFault(err))
 		return
 	}
-	items := make([]api.SessionSummary, 0, len(sessions))
-	for _, session := range sessions {
+	page, err := s.auth.ListSessions(r.Context(), r.URL.Query().Get("cursor"), limit)
+	if err != nil {
+		writeFault(w, asFault(err), statusForFault(err))
+		return
+	}
+	items := make([]api.SessionSummary, 0, len(page.Items))
+	for _, session := range page.Items {
 		items = append(items, sessionSummary(session))
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"sessions": items})
+	writeJSON(w, http.StatusOK, listResponse("sessions", items, page.NextCursor))
 }
 
 func (s *Server) revokeSession(w http.ResponseWriter, r *http.Request) {

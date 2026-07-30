@@ -15,6 +15,7 @@ import (
 
 	"github.com/RecRivenVI/gallery/internal/auth"
 	"github.com/RecRivenVI/gallery/internal/contract/fault"
+	"github.com/RecRivenVI/gallery/internal/domain"
 	"github.com/RecRivenVI/gallery/internal/platform/appdirs"
 	"github.com/RecRivenVI/gallery/internal/platform/clock"
 	"github.com/RecRivenVI/gallery/internal/platform/filesystem"
@@ -145,9 +146,9 @@ func TestLANOwnerUserGrantTokenAndRevocationLifecycle(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	grants, err := manager.ListGrants(ctx, owner.ID, viewer.ID)
-	if err != nil || len(grants) != 2 {
-		t.Fatalf("Viewer Grant 集合无效: count=%d err=%v", len(grants), err)
+	grantPage, err := manager.ListGrants(ctx, owner.ID, viewer.ID, "", 50)
+	if err != nil || len(grantPage.Items) != 2 {
+		t.Fatalf("Viewer Grant 集合无效: count=%d err=%v", len(grantPage.Items), err)
 	}
 	viewerSession, viewerCookie, err := manager.Login(ctx, "VIEWER", "viewer-password-strong", "browser", "loopback")
 	if err != nil {
@@ -374,6 +375,182 @@ func TestAPITokenConcurrentAuthenticationAndRevocationConverges(t *testing.T) {
 		if _, err := manager.AuthenticateAPIToken(ctx, created.Secret); faultCode(err) != fault.CodeTokenInvalid {
 			t.Fatalf("吊销返回后 Token 仍可认证: %v", err)
 		}
+	}
+}
+
+func TestSecurityResourceListsUseBoundedStableKeysets(t *testing.T) {
+	ctx := context.Background()
+	manager, store, manual := newSecurityManager(t)
+	db := store.Control.SQL()
+	generator := identity.NewGenerator(manual)
+	tx, err := db.BeginTx(ctx, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer tx.Rollback()
+
+	var targetUserID string
+	for index := range 55 {
+		sessionID, err := generator.New(domain.IDSession)
+		if err != nil {
+			t.Fatal(err)
+		}
+		tokenID, err := generator.New(domain.IDAPIToken)
+		if err != nil {
+			t.Fatal(err)
+		}
+		shareID, err := generator.New(domain.IDShare)
+		if err != nil {
+			t.Fatal(err)
+		}
+		userID, err := generator.New(domain.IDUser)
+		if err != nil {
+			t.Fatal(err)
+		}
+		createdAt := manual.Now().Unix()
+		secretHash := fmt.Sprintf("%064x", index+1)
+		if _, err := tx.ExecContext(ctx, `INSERT INTO sessions
+(session_id, secret_hash, principal_id, csrf_hash, auth_method, client_label,
+ principal_security_version, created_at, absolute_expires_at, idle_expires_at, last_seen_at)
+VALUES (?, ?, ?, ?, 'personal_pairing', ?, 1, ?, ?, ?, ?)`, sessionID.String(), secretHash,
+			auth.PersonalOwnerID, fmt.Sprintf("%064x", index+101), fmt.Sprintf("session-%02d", index),
+			createdAt, createdAt+7200, createdAt+3600, createdAt); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := tx.ExecContext(ctx, `INSERT INTO api_tokens
+(token_id, principal_id, secret_hash, secret_prefix, name, capabilities_json, scopes_json,
+ principal_security_version, created_by, created_at)
+VALUES (?, ?, ?, ?, ?, '["library.read"]', '[{"kind":"global"}]', 1, ?, ?)`, tokenID.String(),
+			auth.PersonalOwnerID, fmt.Sprintf("%064x", index+201), fmt.Sprintf("tok%02d", index),
+			fmt.Sprintf("token-%02d", index), auth.PersonalOwnerID, createdAt); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := tx.ExecContext(ctx, `INSERT INTO shares
+(share_id, secret_hash, secret_prefix, created_by, scope_kind, scope_id, permissions_json,
+ created_at, expires_at)
+VALUES (?, ?, ?, ?, 'library', 'lib_00000000-0000-7000-8000-000000000001', '["view"]', ?, ?)`,
+			shareID.String(), fmt.Sprintf("%064x", index+301), fmt.Sprintf("shr%02d", index),
+			auth.PersonalOwnerID, createdAt, createdAt+3600); err != nil {
+			t.Fatal(err)
+		}
+		username := fmt.Sprintf("user-%02d", index)
+		if _, err := tx.ExecContext(ctx, `INSERT INTO security_principals
+(principal_id, principal_kind, display_name, status, security_version, created_at, updated_at)
+VALUES (?, 'local_user', ?, 'active', 1, ?, ?)`, userID.String(), username, createdAt, createdAt); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := tx.ExecContext(ctx, `INSERT INTO local_users
+(user_id, username, username_normalized, password_hash, password_algorithm,
+ password_parameters_version, password_changed_at, created_by, created_at, updated_at)
+VALUES (?, ?, ?, 'fixture', 'argon2id', 1, ?, ?, ?, ?)`, userID.String(), username, username,
+			createdAt, auth.PersonalOwnerID, createdAt, createdAt); err != nil {
+			t.Fatal(err)
+		}
+		if targetUserID == "" {
+			targetUserID = userID.String()
+		}
+	}
+	for index := range 55 {
+		grantID, err := generator.New(domain.IDGrant)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := tx.ExecContext(ctx, `INSERT INTO authorization_grants
+(grant_id, principal_id, effect, capability, scope_kind, scope_id, created_by, created_at)
+VALUES (?, ?, 'allow', ?, 'global', '', ?, ?)`, grantID.String(), targetUserID,
+			fmt.Sprintf("fixture.capability.%02d", index), auth.PersonalOwnerID, manual.Now().Unix()); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := tx.Commit(); err != nil {
+		t.Fatal(err)
+	}
+
+	sessionIDs, sessionCursor := collectSecurityPages(t, func(cursor string) (auth.ListPage[auth.Session], error) {
+		return manager.ListSessions(ctx, cursor, 20)
+	}, func(item auth.Session) string { return item.ID })
+	assertUniqueSecurityIDs(t, "Session", sessionIDs, 55)
+	tokenIDs, tokenCursor := collectSecurityPages(t, func(cursor string) (auth.ListPage[auth.APIToken], error) {
+		return manager.ListAPITokens(ctx, auth.PersonalOwnerID, cursor, 20)
+	}, func(item auth.APIToken) string { return item.ID })
+	assertUniqueSecurityIDs(t, "API Token", tokenIDs, 55)
+	shareIDs, _ := collectSecurityPages(t, func(cursor string) (auth.ListPage[auth.Share], error) {
+		return manager.ListShares(ctx, auth.PersonalOwnerID, cursor, 20)
+	}, func(item auth.Share) string { return item.ID })
+	assertUniqueSecurityIDs(t, "Share", shareIDs, 55)
+	userIDs, _ := collectSecurityPages(t, func(cursor string) (auth.ListPage[auth.User], error) {
+		return manager.ListUsers(ctx, cursor, 20)
+	}, func(item auth.User) string { return item.ID })
+	assertUniqueSecurityIDs(t, "User", userIDs, 55)
+	grantIDs, _ := collectSecurityPages(t, func(cursor string) (auth.ListPage[auth.Grant], error) {
+		return manager.ListGrants(ctx, auth.PersonalOwnerID, targetUserID, cursor, 20)
+	}, func(item auth.Grant) string { return item.ID })
+	assertUniqueSecurityIDs(t, "Grant", grantIDs, 55)
+
+	if _, err := manager.ListSessions(ctx, "%%%", 20); faultCode(err) != fault.CodeCursorInvalid {
+		t.Fatalf("破坏的安全列表 cursor 未返回 CURSOR_INVALID: %v", err)
+	}
+	if _, err := manager.ListAPITokens(ctx, auth.PersonalOwnerID, sessionCursor, 20); faultCode(err) != fault.CodeCursorExpired {
+		t.Fatalf("跨资源 cursor 未返回 CURSOR_EXPIRED: %v", err)
+	}
+	if _, err := manager.ListAPITokens(ctx, "other-principal", tokenCursor, 20); faultCode(err) != fault.CodeCursorExpired {
+		t.Fatalf("跨 Principal cursor 未返回 CURSOR_EXPIRED: %v", err)
+	}
+
+	for _, indexName := range []string{
+		"sessions_list_idx", "api_tokens_principal_list_idx", "shares_creator_list_idx",
+		"local_users_list_idx", "authorization_grants_principal_list_idx",
+	} {
+		var found int
+		if err := db.QueryRowContext(ctx,
+			"SELECT COUNT(*) FROM sqlite_master WHERE type='index' AND name=?", indexName).Scan(&found); err != nil || found != 1 {
+			t.Fatalf("安全列表索引 %s 不存在: found=%d err=%v", indexName, found, err)
+		}
+	}
+}
+
+func collectSecurityPages[T any](t *testing.T, list func(string) (auth.ListPage[T], error), id func(T) string) ([]string, string) {
+	t.Helper()
+	cursor := ""
+	firstCursor := ""
+	result := make([]string, 0, 55)
+	wantPageSizes := []int{20, 20, 15}
+	for pageIndex, wantSize := range wantPageSizes {
+		page, err := list(cursor)
+		if err != nil {
+			t.Fatalf("第 %d 页读取失败: %v", pageIndex+1, err)
+		}
+		if len(page.Items) != wantSize {
+			t.Fatalf("第 %d 页数量=%d，期望 %d", pageIndex+1, len(page.Items), wantSize)
+		}
+		for _, item := range page.Items {
+			result = append(result, id(item))
+		}
+		if pageIndex < len(wantPageSizes)-1 && page.NextCursor == "" {
+			t.Fatalf("第 %d 页缺少 nextCursor", pageIndex+1)
+		}
+		if pageIndex == len(wantPageSizes)-1 && page.NextCursor != "" {
+			t.Fatalf("末页不应返回 nextCursor: %q", page.NextCursor)
+		}
+		if pageIndex == 0 {
+			firstCursor = page.NextCursor
+		}
+		cursor = page.NextCursor
+	}
+	return result, firstCursor
+}
+
+func assertUniqueSecurityIDs(t *testing.T, label string, ids []string, want int) {
+	t.Helper()
+	seen := make(map[string]struct{}, len(ids))
+	for _, id := range ids {
+		if _, exists := seen[id]; exists {
+			t.Fatalf("%s 分页出现重复 ID: %s", label, id)
+		}
+		seen[id] = struct{}{}
+	}
+	if len(ids) != want {
+		t.Fatalf("%s 分页总数=%d，期望 %d", label, len(ids), want)
 	}
 }
 

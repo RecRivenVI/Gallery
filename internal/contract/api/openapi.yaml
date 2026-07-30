@@ -150,6 +150,9 @@ paths:
     get:
       operationId: listLocalUsers
       summary: 列出本地账户
+      parameters:
+        - {name: limit, in: query, required: false, schema: {type: integer, minimum: 1, maximum: 200, default: 50}}
+        - {name: cursor, in: query, required: false, schema: {type: string, minLength: 1, maxLength: 4096}}
       responses:
         "200":
           description: 本地账户列表
@@ -157,7 +160,9 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/LocalUserListResponse"
+        "400": {$ref: "#/components/responses/ValidationError"}
         "403": {$ref: "#/components/responses/ForbiddenError"}
+        "409": {$ref: "#/components/responses/ConflictError"}
     post:
       operationId: createLocalUser
       summary: 创建本地账户及初始角色和授权
@@ -213,13 +218,17 @@ paths:
       summary: 列出账户的显式 allow/deny Grant，包含已吊销记录
       parameters:
         - {name: userId, in: path, required: true, schema: {$ref: "#/components/schemas/UserId"}}
+        - {name: limit, in: query, required: false, schema: {type: integer, minimum: 1, maximum: 200, default: 50}}
+        - {name: cursor, in: query, required: false, schema: {type: string, minLength: 1, maxLength: 4096}}
       responses:
         "200":
           description: Grant 列表
           content:
             application/json:
               schema: {$ref: "#/components/schemas/AuthorizationGrantListResponse"}
+        "400": {$ref: "#/components/responses/ValidationError"}
         "403": {$ref: "#/components/responses/ForbiddenError"}
+        "409": {$ref: "#/components/responses/ConflictError"}
         "404": {$ref: "#/components/responses/NotFoundError"}
     post:
       operationId: createAuthorizationGrant
@@ -255,13 +264,18 @@ paths:
     get:
       operationId: listAPITokens
       summary: 列出当前主体的 API Token 摘要；永不返回 secret
+      parameters:
+        - {name: limit, in: query, required: false, schema: {type: integer, minimum: 1, maximum: 200, default: 50}}
+        - {name: cursor, in: query, required: false, schema: {type: string, minLength: 1, maxLength: 4096}}
       responses:
         "200":
           description: API Token 列表
           content:
             application/json:
               schema: {$ref: "#/components/schemas/APITokenListResponse"}
+        "400": {$ref: "#/components/responses/ValidationError"}
         "403": {$ref: "#/components/responses/ForbiddenError"}
+        "409": {$ref: "#/components/responses/ConflictError"}
     post:
       operationId: createAPIToken
       summary: 创建 API Token；secret 仅在本响应返回一次
@@ -294,13 +308,18 @@ paths:
     get:
       operationId: listShares
       summary: 列出当前主体创建的分享摘要
+      parameters:
+        - {name: limit, in: query, required: false, schema: {type: integer, minimum: 1, maximum: 200, default: 50}}
+        - {name: cursor, in: query, required: false, schema: {type: string, minLength: 1, maxLength: 4096}}
       responses:
         "200":
           description: 分享列表
           content:
             application/json:
               schema: {$ref: "#/components/schemas/ShareListResponse"}
+        "400": {$ref: "#/components/responses/ValidationError"}
         "403": {$ref: "#/components/responses/ForbiddenError"}
+        "409": {$ref: "#/components/responses/ConflictError"}
     post:
       operationId: createShare
       summary: 创建有界分享；credential 仅在本响应返回一次
@@ -410,6 +429,9 @@ paths:
     get:
       operationId: listSessions
       summary: 列出服务端 Session
+      parameters:
+        - {name: limit, in: query, required: false, schema: {type: integer, minimum: 1, maximum: 200, default: 50}}
+        - {name: cursor, in: query, required: false, schema: {type: string, minLength: 1, maxLength: 4096}}
       responses:
         "200":
           description: Session 列表
@@ -424,10 +446,17 @@ paths:
                     type: array
                     items:
                       $ref: "#/components/schemas/SessionSummary"
+                  nextCursor:
+                    type: string
+                    description: 继续读取下一页 Session 的 live keyset cursor
         "401":
           $ref: "#/components/responses/UnauthenticatedError"
+        "400":
+          $ref: "#/components/responses/ValidationError"
         "403":
           $ref: "#/components/responses/ForbiddenError"
+        "409":
+          $ref: "#/components/responses/ConflictError"
   /api/v1/sessions/{sessionId}:
     delete:
       operationId: revokeSession
@@ -5109,6 +5138,9 @@ components:
         grants:
           type: array
           items: {$ref: "#/components/schemas/AuthorizationGrant"}
+        nextCursor:
+          type: string
+          description: 继续读取下一页 Grant 的 live keyset cursor
     LANOwnerInitializeRequest:
       type: object
       additionalProperties: false
@@ -5163,6 +5195,9 @@ components:
         users:
           type: array
           items: {$ref: "#/components/schemas/LocalUser"}
+        nextCursor:
+          type: string
+          description: 继续读取下一页本地账户的 live keyset cursor
     UserStatusRequest:
       type: object
       additionalProperties: false
@@ -5227,6 +5262,9 @@ components:
         tokens:
           type: array
           items: {$ref: "#/components/schemas/APIToken"}
+        nextCursor:
+          type: string
+          description: 继续读取下一页 API Token 的 live keyset cursor
     Share:
       type: object
       additionalProperties: false
@@ -5280,6 +5318,9 @@ components:
         shares:
           type: array
           items: {$ref: "#/components/schemas/Share"}
+        nextCursor:
+          type: string
+          description: 继续读取下一页 Share 的 live keyset cursor
     PublicShareResource:
       type: object
       additionalProperties: false

@@ -2973,6 +2973,8 @@ export interface components {
         };
         AuthorizationGrantListResponse: {
             grants: components["schemas"]["AuthorizationGrant"][];
+            /** @description 继续读取下一页 Grant 的 live keyset cursor */
+            nextCursor?: string;
         };
         LANOwnerInitializeRequest: {
             username: string;
@@ -3004,6 +3006,8 @@ export interface components {
         };
         LocalUserListResponse: {
             users: components["schemas"]["LocalUser"][];
+            /** @description 继续读取下一页本地账户的 live keyset cursor */
+            nextCursor?: string;
         };
         UserStatusRequest: {
             /** @enum {string} */
@@ -3040,6 +3044,8 @@ export interface components {
         };
         APITokenListResponse: {
             tokens: components["schemas"]["APIToken"][];
+            /** @description 继续读取下一页 API Token 的 live keyset cursor */
+            nextCursor?: string;
         };
         Share: {
             id: components["schemas"]["ShareId"];
@@ -3077,6 +3083,8 @@ export interface components {
         };
         ShareListResponse: {
             shares: components["schemas"]["Share"][];
+            /** @description 继续读取下一页 Share 的 live keyset cursor */
+            nextCursor?: string;
         };
         PublicShareResource: {
             /** @enum {string} */
@@ -3409,7 +3417,10 @@ export interface operations {
     };
     listLocalUsers: {
         parameters: {
-            query?: never;
+            query?: {
+                limit?: number;
+                cursor?: string;
+            };
             header?: never;
             path?: never;
             cookie?: never;
@@ -3425,7 +3436,9 @@ export interface operations {
                     "application/json": components["schemas"]["LocalUserListResponse"];
                 };
             };
+            400: components["responses"]["ValidationError"];
             403: components["responses"]["ForbiddenError"];
+            409: components["responses"]["ConflictError"];
         };
     };
     createLocalUser: {
@@ -3512,7 +3525,10 @@ export interface operations {
     };
     listAuthorizationGrants: {
         parameters: {
-            query?: never;
+            query?: {
+                limit?: number;
+                cursor?: string;
+            };
             header?: never;
             path: {
                 userId: components["schemas"]["UserId"];
@@ -3530,8 +3546,10 @@ export interface operations {
                     "application/json": components["schemas"]["AuthorizationGrantListResponse"];
                 };
             };
+            400: components["responses"]["ValidationError"];
             403: components["responses"]["ForbiddenError"];
             404: components["responses"]["NotFoundError"];
+            409: components["responses"]["ConflictError"];
         };
     };
     createAuthorizationGrant: {
@@ -3590,7 +3608,10 @@ export interface operations {
     };
     listAPITokens: {
         parameters: {
-            query?: never;
+            query?: {
+                limit?: number;
+                cursor?: string;
+            };
             header?: never;
             path?: never;
             cookie?: never;
@@ -3606,7 +3627,9 @@ export interface operations {
                     "application/json": components["schemas"]["APITokenListResponse"];
                 };
             };
+            400: components["responses"]["ValidationError"];
             403: components["responses"]["ForbiddenError"];
+            409: components["responses"]["ConflictError"];
         };
     };
     createAPIToken: {
@@ -3662,7 +3685,10 @@ export interface operations {
     };
     listShares: {
         parameters: {
-            query?: never;
+            query?: {
+                limit?: number;
+                cursor?: string;
+            };
             header?: never;
             path?: never;
             cookie?: never;
@@ -3678,7 +3704,9 @@ export interface operations {
                     "application/json": components["schemas"]["ShareListResponse"];
                 };
             };
+            400: components["responses"]["ValidationError"];
             403: components["responses"]["ForbiddenError"];
+            409: components["responses"]["ConflictError"];
         };
     };
     createShare: {
@@ -3876,7 +3904,10 @@ export interface operations {
     };
     listSessions: {
         parameters: {
-            query?: never;
+            query?: {
+                limit?: number;
+                cursor?: string;
+            };
             header?: never;
             path?: never;
             cookie?: never;
@@ -3891,11 +3922,15 @@ export interface operations {
                 content: {
                     "application/json": {
                         sessions: components["schemas"]["SessionSummary"][];
+                        /** @description 继续读取下一页 Session 的 live keyset cursor */
+                        nextCursor?: string;
                     };
                 };
             };
+            400: components["responses"]["ValidationError"];
             401: components["responses"]["UnauthenticatedError"];
             403: components["responses"]["ForbiddenError"];
+            409: components["responses"]["ConflictError"];
         };
     };
     revokeSession: {

@@ -463,41 +463,83 @@ func (p *Personal) RevokeGrant(ctx context.Context, actor, grantID string) error
 	return tx.Commit()
 }
 
-func (p *Personal) ListGrants(ctx context.Context, actor, principalID string) ([]Grant, error) {
+func (p *Personal) ListGrants(ctx context.Context, actor, principalID, cursorToken string, limit int) (ListPage[Grant], error) {
 	if err := p.requirePrincipalCapability(ctx, actor, "users.manage"); err != nil {
-		return nil, err
+		return ListPage[Grant]{}, err
 	}
 	if _, err := domain.ParseID(domain.IDUser, principalID); err != nil {
-		return nil, fault.New(fault.CodeNotFound, false, nil)
+		return ListPage[Grant]{}, fault.New(fault.CodeNotFound, false, nil)
 	}
 	var exists int
 	if err := p.db.QueryRowContext(ctx, "SELECT COUNT(*) FROM security_principals WHERE principal_id=?", principalID).Scan(&exists); err != nil {
-		return nil, fault.New(fault.CodeInternal, true, err)
+		return ListPage[Grant]{}, fault.New(fault.CodeInternal, true, err)
 	}
 	if exists == 0 {
-		return nil, fault.New(fault.CodeNotFound, false, nil)
+		return ListPage[Grant]{}, fault.New(fault.CodeNotFound, false, nil)
 	}
+	limit = normalizeSecurityListLimit(limit)
+	args := []any{principalID}
+	keyset := ""
+	if cursorToken != "" {
+		cursor, err := decodeSecurityListCursor(cursorToken, "grants", principalID)
+		if err != nil {
+			return ListPage[Grant]{}, err
+		}
+		if cursor.CreatedAt != 0 || cursor.Username != "" || cursor.Capability == "" || len(cursor.Capability) > 128 ||
+			!validResourceScope(ResourceScope{Kind: cursor.ScopeKind, ID: cursor.ScopeID}) {
+			return ListPage[Grant]{}, invalidSecurityListCursor(nil)
+		}
+		if _, err := domain.ParseID(domain.IDGrant, cursor.ID); err != nil {
+			return ListPage[Grant]{}, invalidSecurityListCursor(err)
+		}
+		keyset = ` AND ((revoked_at IS NOT NULL) > ?
+OR ((revoked_at IS NOT NULL) = ? AND capability > ?)
+OR ((revoked_at IS NOT NULL) = ? AND capability = ? AND scope_kind > ?)
+OR ((revoked_at IS NOT NULL) = ? AND capability = ? AND scope_kind = ? AND scope_id > ?)
+OR ((revoked_at IS NOT NULL) = ? AND capability = ? AND scope_kind = ? AND scope_id = ? AND grant_id > ?))`
+		revoked := 0
+		if cursor.Revoked {
+			revoked = 1
+		}
+		args = append(args,
+			revoked,
+			revoked, cursor.Capability,
+			revoked, cursor.Capability, cursor.ScopeKind,
+			revoked, cursor.Capability, cursor.ScopeKind, cursor.ScopeID,
+			revoked, cursor.Capability, cursor.ScopeKind, cursor.ScopeID, cursor.ID,
+		)
+	}
+	args = append(args, limit+1)
 	rows, err := p.db.QueryContext(ctx, `SELECT grant_id, principal_id, effect, capability,
 scope_kind, scope_id, created_by, revoked_at IS NOT NULL
 FROM authorization_grants WHERE principal_id=?
-ORDER BY revoked_at IS NOT NULL, capability, scope_kind, scope_id, grant_id`, principalID)
+`+keyset+` ORDER BY revoked_at IS NOT NULL, capability, scope_kind, scope_id, grant_id LIMIT ?`, args...)
 	if err != nil {
-		return nil, fault.New(fault.CodeInternal, true, err)
+		return ListPage[Grant]{}, fault.New(fault.CodeInternal, true, err)
 	}
 	defer rows.Close()
-	result := make([]Grant, 0)
+	result := make([]Grant, 0, limit+1)
 	for rows.Next() {
 		var item Grant
 		if err := rows.Scan(&item.ID, &item.PrincipalID, &item.Effect, &item.Capability,
 			&item.Scope.Kind, &item.Scope.ID, &item.CreatedBy, &item.Revoked); err != nil {
-			return nil, fault.New(fault.CodeInternal, true, err)
+			return ListPage[Grant]{}, fault.New(fault.CodeInternal, true, err)
 		}
 		result = append(result, item)
 	}
 	if err := rows.Err(); err != nil {
-		return nil, fault.New(fault.CodeInternal, true, err)
+		return ListPage[Grant]{}, fault.New(fault.CodeInternal, true, err)
 	}
-	return result, nil
+	page := ListPage[Grant]{Items: result}
+	if len(result) > limit {
+		last := result[limit-1]
+		page.Items = result[:limit]
+		page.NextCursor = encodeSecurityListCursor(securityListCursor{
+			Kind: "grants", Scope: principalID, ID: last.ID, Revoked: last.Revoked,
+			Capability: last.Capability, ScopeKind: last.Scope.Kind, ScopeID: last.Scope.ID,
+		})
+	}
+	return page, nil
 }
 
 func invalidatePrincipalCredentialsTx(ctx context.Context, tx *sql.Tx, principalID string, now time.Time) error {
@@ -514,42 +556,76 @@ SET security_version=security_version+1, updated_at=? WHERE principal_id=?`, now
 	return nil
 }
 
-func (p *Personal) ListUsers(ctx context.Context) ([]User, error) {
-	rows, err := p.db.QueryContext(ctx, `SELECT u.user_id, u.username, p.display_name, p.status,
+func (p *Personal) ListUsers(ctx context.Context, cursorToken string, limit int) (ListPage[User], error) {
+	limit = normalizeSecurityListLimit(limit)
+	args := make([]any, 0, 3)
+	keyset := ""
+	if cursorToken != "" {
+		cursor, err := decodeSecurityListCursor(cursorToken, "users", "")
+		if err != nil {
+			return ListPage[User]{}, err
+		}
+		normalized, err := NormalizeUsername(cursor.Username)
+		if err != nil || normalized != cursor.Username || cursor.CreatedAt != 0 || cursor.Revoked ||
+			cursor.Capability != "" || cursor.ScopeKind != "" || cursor.ScopeID != "" {
+			return ListPage[User]{}, invalidSecurityListCursor(err)
+		}
+		if _, err := domain.ParseID(domain.IDUser, cursor.ID); err != nil {
+			return ListPage[User]{}, invalidSecurityListCursor(err)
+		}
+		keyset = "WHERE (u.username_normalized > ? OR (u.username_normalized = ? AND u.user_id > ?))"
+		args = append(args, cursor.Username, cursor.Username, cursor.ID)
+	}
+	args = append(args, limit+1)
+	rows, err := p.db.QueryContext(ctx, `SELECT u.user_id, u.username, u.username_normalized, p.display_name, p.status,
 p.security_version, p.created_at, p.updated_at
 FROM local_users u JOIN security_principals p ON p.principal_id=u.user_id
-ORDER BY u.username_normalized, u.user_id`)
+`+keyset+` ORDER BY u.username_normalized, u.user_id LIMIT ?`, args...)
 	if err != nil {
-		return nil, fault.New(fault.CodeInternal, true, err)
+		return ListPage[User]{}, fault.New(fault.CodeInternal, true, err)
 	}
 	defer rows.Close()
-	var result []User
+	result := make([]User, 0, limit+1)
+	normalizedKeys := make([]string, 0, limit+1)
 	for rows.Next() {
 		var user User
+		var usernameNormalized string
 		var createdAt, updatedAt int64
-		if err := rows.Scan(&user.ID, &user.Username, &user.DisplayName, &user.Status, &user.SecurityVersion, &createdAt, &updatedAt); err != nil {
-			return nil, fault.New(fault.CodeInternal, true, err)
+		if err := rows.Scan(&user.ID, &user.Username, &usernameNormalized, &user.DisplayName, &user.Status, &user.SecurityVersion, &createdAt, &updatedAt); err != nil {
+			return ListPage[User]{}, fault.New(fault.CodeInternal, true, err)
 		}
 		user.CreatedAt = time.Unix(createdAt, 0).UTC()
 		user.UpdatedAt = time.Unix(updatedAt, 0).UTC()
 		roleRows, err := p.db.QueryContext(ctx, "SELECT role_id FROM principal_roles WHERE principal_id=? ORDER BY role_id", user.ID)
 		if err != nil {
-			return nil, fault.New(fault.CodeInternal, true, err)
+			return ListPage[User]{}, fault.New(fault.CodeInternal, true, err)
 		}
 		for roleRows.Next() {
 			var role string
 			if err := roleRows.Scan(&role); err != nil {
 				roleRows.Close()
-				return nil, fault.New(fault.CodeInternal, true, err)
+				return ListPage[User]{}, fault.New(fault.CodeInternal, true, err)
 			}
 			user.Roles = append(user.Roles, role)
 		}
 		if err := roleRows.Close(); err != nil {
-			return nil, fault.New(fault.CodeInternal, true, err)
+			return ListPage[User]{}, fault.New(fault.CodeInternal, true, err)
 		}
 		result = append(result, user)
+		normalizedKeys = append(normalizedKeys, usernameNormalized)
 	}
-	return result, rows.Err()
+	if err := rows.Err(); err != nil {
+		return ListPage[User]{}, fault.New(fault.CodeInternal, true, err)
+	}
+	page := ListPage[User]{Items: result}
+	if len(result) > limit {
+		last := result[limit-1]
+		page.Items = result[:limit]
+		page.NextCursor = encodeSecurityListCursor(securityListCursor{
+			Kind: "users", ID: last.ID, Username: normalizedKeys[limit-1],
+		})
+	}
+	return page, nil
 }
 
 func (p *Personal) insertGrantTx(ctx context.Context, tx *sql.Tx, actor, principalID string, input GrantInput, now time.Time) (Grant, error) {

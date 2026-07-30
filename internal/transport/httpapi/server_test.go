@@ -557,7 +557,7 @@ func TestPersonalPairingIsSingleUseAndRevocationInvalidatesREST(t *testing.T) {
 	if err != nil || len(temporaryEntries) != 0 {
 		t.Fatalf("媒体临时快照未清理: %v entries=%d", err, len(temporaryEntries))
 	}
-	sessions, err := client.ListSessionsWithResponse(context.Background())
+	sessions, err := client.ListSessionsWithResponse(context.Background(), nil)
 	if err != nil || sessions.JSON200 == nil || len(sessions.JSON200.Sessions) != 1 {
 		t.Fatalf("Session 列表失败: %v status=%d", err, sessions.StatusCode())
 	}
@@ -574,7 +574,7 @@ func TestPersonalPairingIsSingleUseAndRevocationInvalidatesREST(t *testing.T) {
 	if _, _, err := websocketConnection.Read(context.Background()); websocket.CloseStatus(err) != websocket.StatusCode(4401) {
 		t.Fatalf("已吊销 WebSocket close status = %d err=%v", websocket.CloseStatus(err), err)
 	}
-	afterRevoke, err := client.ListSessionsWithResponse(context.Background())
+	afterRevoke, err := client.ListSessionsWithResponse(context.Background(), nil)
 	if err != nil || afterRevoke.JSON401 == nil {
 		t.Fatalf("已吊销 Session 仍可访问 REST: %v status=%d", err, afterRevoke.StatusCode())
 	}

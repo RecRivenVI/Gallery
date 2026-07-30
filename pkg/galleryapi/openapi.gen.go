@@ -2293,7 +2293,9 @@ type APITokenId = string
 
 // APITokenListResponse defines model for APITokenListResponse.
 type APITokenListResponse struct {
-	Tokens []APIToken `json:"tokens"`
+	// NextCursor 继续读取下一页 API Token 的 live keyset cursor
+	NextCursor *string    `json:"nextCursor,omitempty"`
+	Tokens     []APIToken `json:"tokens"`
 }
 
 // AuthorizationGrant defines model for AuthorizationGrant.
@@ -2322,6 +2324,9 @@ type AuthorizationGrantInputEffect string
 // AuthorizationGrantListResponse defines model for AuthorizationGrantListResponse.
 type AuthorizationGrantListResponse struct {
 	Grants []AuthorizationGrant `json:"grants"`
+
+	// NextCursor 继续读取下一页 Grant 的 live keyset cursor
+	NextCursor *string `json:"nextCursor,omitempty"`
 }
 
 // Badge 规则派生的作品角标。它是 Source-derived 展示事实：出现条件与配色都由规则裁决， 随重扫重新计算，不属于用户 Overlay。客户端按 position 渲染，不得自行推导条件或颜色。
@@ -2912,7 +2917,9 @@ type LocalUserCreateRequestRoles string
 
 // LocalUserListResponse defines model for LocalUserListResponse.
 type LocalUserListResponse struct {
-	Users []LocalUser `json:"users"`
+	// NextCursor 继续读取下一页本地账户的 live keyset cursor
+	NextCursor *string     `json:"nextCursor,omitempty"`
+	Users      []LocalUser `json:"users"`
 }
 
 // LoginRequest defines model for LoginRequest.
@@ -3699,7 +3706,9 @@ type ShareId = string
 
 // ShareListResponse defines model for ShareListResponse.
 type ShareListResponse struct {
-	Shares []Share `json:"shares"`
+	// NextCursor 继续读取下一页 Share 的 live keyset cursor
+	NextCursor *string `json:"nextCursor,omitempty"`
+	Shares     []Share `json:"shares"`
 }
 
 // Source defines model for Source.
@@ -4097,9 +4106,21 @@ type CreateCatalogVacuumJobParams struct {
 	XGalleryCSRF CSRFHeader `json:"X-Gallery-CSRF"`
 }
 
+// ListLocalUsersParams defines parameters for ListLocalUsers.
+type ListLocalUsersParams struct {
+	Limit  *int    `form:"limit,omitempty" json:"limit,omitempty"`
+	Cursor *string `form:"cursor,omitempty" json:"cursor,omitempty"`
+}
+
 // CreateLocalUserParams defines parameters for CreateLocalUser.
 type CreateLocalUserParams struct {
 	XGalleryCSRF CSRFHeader `json:"X-Gallery-CSRF"`
+}
+
+// ListAuthorizationGrantsParams defines parameters for ListAuthorizationGrants.
+type ListAuthorizationGrantsParams struct {
+	Limit  *int    `form:"limit,omitempty" json:"limit,omitempty"`
+	Cursor *string `form:"cursor,omitempty" json:"cursor,omitempty"`
 }
 
 // CreateAuthorizationGrantParams defines parameters for CreateAuthorizationGrant.
@@ -4110,6 +4131,12 @@ type CreateAuthorizationGrantParams struct {
 // SetLocalUserStatusParams defines parameters for SetLocalUserStatus.
 type SetLocalUserStatusParams struct {
 	XGalleryCSRF CSRFHeader `json:"X-Gallery-CSRF"`
+}
+
+// ListAPITokensParams defines parameters for ListAPITokens.
+type ListAPITokensParams struct {
+	Limit  *int    `form:"limit,omitempty" json:"limit,omitempty"`
+	Cursor *string `form:"cursor,omitempty" json:"cursor,omitempty"`
 }
 
 // CreateAPITokenParams defines parameters for CreateAPIToken.
@@ -4522,9 +4549,21 @@ type ValidateRulePackageParams struct {
 	XGalleryCSRF CSRFHeader `json:"X-Gallery-CSRF"`
 }
 
+// ListSessionsParams defines parameters for ListSessions.
+type ListSessionsParams struct {
+	Limit  *int    `form:"limit,omitempty" json:"limit,omitempty"`
+	Cursor *string `form:"cursor,omitempty" json:"cursor,omitempty"`
+}
+
 // RevokeSessionParams defines parameters for RevokeSession.
 type RevokeSessionParams struct {
 	XGalleryCSRF CSRFHeader `json:"X-Gallery-CSRF"`
+}
+
+// ListSharesParams defines parameters for ListShares.
+type ListSharesParams struct {
+	Limit  *int    `form:"limit,omitempty" json:"limit,omitempty"`
+	Cursor *string `form:"cursor,omitempty" json:"cursor,omitempty"`
 }
 
 // CreateShareParams defines parameters for CreateShare.
@@ -5391,7 +5430,7 @@ type ClientInterface interface {
 	ListSecurityAudits(ctx context.Context, reqEditors ...RequestEditorFn) (*http.Response, error)
 
 	// ListLocalUsers request
-	ListLocalUsers(ctx context.Context, reqEditors ...RequestEditorFn) (*http.Response, error)
+	ListLocalUsers(ctx context.Context, params *ListLocalUsersParams, reqEditors ...RequestEditorFn) (*http.Response, error)
 
 	// CreateLocalUserWithBody request with any body
 	CreateLocalUserWithBody(ctx context.Context, params *CreateLocalUserParams, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*http.Response, error)
@@ -5399,7 +5438,7 @@ type ClientInterface interface {
 	CreateLocalUser(ctx context.Context, params *CreateLocalUserParams, body CreateLocalUserJSONRequestBody, reqEditors ...RequestEditorFn) (*http.Response, error)
 
 	// ListAuthorizationGrants request
-	ListAuthorizationGrants(ctx context.Context, userId UserId, reqEditors ...RequestEditorFn) (*http.Response, error)
+	ListAuthorizationGrants(ctx context.Context, userId UserId, params *ListAuthorizationGrantsParams, reqEditors ...RequestEditorFn) (*http.Response, error)
 
 	// CreateAuthorizationGrantWithBody request with any body
 	CreateAuthorizationGrantWithBody(ctx context.Context, userId UserId, params *CreateAuthorizationGrantParams, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*http.Response, error)
@@ -5412,7 +5451,7 @@ type ClientInterface interface {
 	SetLocalUserStatus(ctx context.Context, userId UserId, params *SetLocalUserStatusParams, body SetLocalUserStatusJSONRequestBody, reqEditors ...RequestEditorFn) (*http.Response, error)
 
 	// ListAPITokens request
-	ListAPITokens(ctx context.Context, reqEditors ...RequestEditorFn) (*http.Response, error)
+	ListAPITokens(ctx context.Context, params *ListAPITokensParams, reqEditors ...RequestEditorFn) (*http.Response, error)
 
 	// CreateAPITokenWithBody request with any body
 	CreateAPITokenWithBody(ctx context.Context, params *CreateAPITokenParams, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*http.Response, error)
@@ -5734,13 +5773,13 @@ type ClientInterface interface {
 	ValidateRulePackage(ctx context.Context, params *ValidateRulePackageParams, body ValidateRulePackageJSONRequestBody, reqEditors ...RequestEditorFn) (*http.Response, error)
 
 	// ListSessions request
-	ListSessions(ctx context.Context, reqEditors ...RequestEditorFn) (*http.Response, error)
+	ListSessions(ctx context.Context, params *ListSessionsParams, reqEditors ...RequestEditorFn) (*http.Response, error)
 
 	// RevokeSession request
 	RevokeSession(ctx context.Context, sessionId SessionId, params *RevokeSessionParams, reqEditors ...RequestEditorFn) (*http.Response, error)
 
 	// ListShares request
-	ListShares(ctx context.Context, reqEditors ...RequestEditorFn) (*http.Response, error)
+	ListShares(ctx context.Context, params *ListSharesParams, reqEditors ...RequestEditorFn) (*http.Response, error)
 
 	// CreateShareWithBody request with any body
 	CreateShareWithBody(ctx context.Context, params *CreateShareParams, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*http.Response, error)
@@ -5997,8 +6036,8 @@ func (c *Client) ListSecurityAudits(ctx context.Context, reqEditors ...RequestEd
 	return c.Client.Do(req)
 }
 
-func (c *Client) ListLocalUsers(ctx context.Context, reqEditors ...RequestEditorFn) (*http.Response, error) {
-	req, err := NewListLocalUsersRequest(c.Server)
+func (c *Client) ListLocalUsers(ctx context.Context, params *ListLocalUsersParams, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewListLocalUsersRequest(c.Server, params)
 	if err != nil {
 		return nil, err
 	}
@@ -6033,8 +6072,8 @@ func (c *Client) CreateLocalUser(ctx context.Context, params *CreateLocalUserPar
 	return c.Client.Do(req)
 }
 
-func (c *Client) ListAuthorizationGrants(ctx context.Context, userId UserId, reqEditors ...RequestEditorFn) (*http.Response, error) {
-	req, err := NewListAuthorizationGrantsRequest(c.Server, userId)
+func (c *Client) ListAuthorizationGrants(ctx context.Context, userId UserId, params *ListAuthorizationGrantsParams, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewListAuthorizationGrantsRequest(c.Server, userId, params)
 	if err != nil {
 		return nil, err
 	}
@@ -6093,8 +6132,8 @@ func (c *Client) SetLocalUserStatus(ctx context.Context, userId UserId, params *
 	return c.Client.Do(req)
 }
 
-func (c *Client) ListAPITokens(ctx context.Context, reqEditors ...RequestEditorFn) (*http.Response, error) {
-	req, err := NewListAPITokensRequest(c.Server)
+func (c *Client) ListAPITokens(ctx context.Context, params *ListAPITokensParams, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewListAPITokensRequest(c.Server, params)
 	if err != nil {
 		return nil, err
 	}
@@ -7533,8 +7572,8 @@ func (c *Client) ValidateRulePackage(ctx context.Context, params *ValidateRulePa
 	return c.Client.Do(req)
 }
 
-func (c *Client) ListSessions(ctx context.Context, reqEditors ...RequestEditorFn) (*http.Response, error) {
-	req, err := NewListSessionsRequest(c.Server)
+func (c *Client) ListSessions(ctx context.Context, params *ListSessionsParams, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewListSessionsRequest(c.Server, params)
 	if err != nil {
 		return nil, err
 	}
@@ -7557,8 +7596,8 @@ func (c *Client) RevokeSession(ctx context.Context, sessionId SessionId, params 
 	return c.Client.Do(req)
 }
 
-func (c *Client) ListShares(ctx context.Context, reqEditors ...RequestEditorFn) (*http.Response, error) {
-	req, err := NewListSharesRequest(c.Server)
+func (c *Client) ListShares(ctx context.Context, params *ListSharesParams, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewListSharesRequest(c.Server, params)
 	if err != nil {
 		return nil, err
 	}
@@ -8361,7 +8400,7 @@ func NewListSecurityAuditsRequest(server string) (*http.Request, error) {
 }
 
 // NewListLocalUsersRequest generates requests for ListLocalUsers
-func NewListLocalUsersRequest(server string) (*http.Request, error) {
+func NewListLocalUsersRequest(server string, params *ListLocalUsersParams) (*http.Request, error) {
 	var err error
 
 	serverURL, err := url.Parse(server)
@@ -8377,6 +8416,45 @@ func NewListLocalUsersRequest(server string) (*http.Request, error) {
 	queryURL, err := serverURL.Parse(operationPath)
 	if err != nil {
 		return nil, err
+	}
+
+	if params != nil {
+		// queryValues collects non-styled parameters (passthrough, JSON)
+		// that are safe to round-trip through url.Values.Encode().
+		queryValues := queryURL.Query()
+		// rawQueryFragments collects pre-encoded query fragments from
+		// styled parameters, preserving literal commas as delimiters
+		// per the OpenAPI spec (e.g. "color=blue,black,brown").
+		var rawQueryFragments []string
+
+		if params.Limit != nil {
+
+			if queryFrag, err := runtime.StyleParamWithOptions("form", true, "limit", *params.Limit, runtime.StyleParamOptions{ParamLocation: runtime.ParamLocationQuery, Type: "integer", Format: ""}); err != nil {
+				return nil, err
+			} else {
+				for _, qp := range strings.Split(queryFrag, "&") {
+					rawQueryFragments = append(rawQueryFragments, qp)
+				}
+			}
+
+		}
+
+		if params.Cursor != nil {
+
+			if queryFrag, err := runtime.StyleParamWithOptions("form", true, "cursor", *params.Cursor, runtime.StyleParamOptions{ParamLocation: runtime.ParamLocationQuery, Type: "string", Format: ""}); err != nil {
+				return nil, err
+			} else {
+				for _, qp := range strings.Split(queryFrag, "&") {
+					rawQueryFragments = append(rawQueryFragments, qp)
+				}
+			}
+
+		}
+
+		if encoded := queryValues.Encode(); encoded != "" {
+			rawQueryFragments = append(rawQueryFragments, encoded)
+		}
+		queryURL.RawQuery = strings.Join(rawQueryFragments, "&")
 	}
 
 	req, err := http.NewRequest(http.MethodGet, queryURL.String(), nil)
@@ -8441,7 +8519,7 @@ func NewCreateLocalUserRequestWithBody(server string, params *CreateLocalUserPar
 }
 
 // NewListAuthorizationGrantsRequest generates requests for ListAuthorizationGrants
-func NewListAuthorizationGrantsRequest(server string, userId UserId) (*http.Request, error) {
+func NewListAuthorizationGrantsRequest(server string, userId UserId, params *ListAuthorizationGrantsParams) (*http.Request, error) {
 	var err error
 
 	var pathParam0 string
@@ -8464,6 +8542,45 @@ func NewListAuthorizationGrantsRequest(server string, userId UserId) (*http.Requ
 	queryURL, err := serverURL.Parse(operationPath)
 	if err != nil {
 		return nil, err
+	}
+
+	if params != nil {
+		// queryValues collects non-styled parameters (passthrough, JSON)
+		// that are safe to round-trip through url.Values.Encode().
+		queryValues := queryURL.Query()
+		// rawQueryFragments collects pre-encoded query fragments from
+		// styled parameters, preserving literal commas as delimiters
+		// per the OpenAPI spec (e.g. "color=blue,black,brown").
+		var rawQueryFragments []string
+
+		if params.Limit != nil {
+
+			if queryFrag, err := runtime.StyleParamWithOptions("form", true, "limit", *params.Limit, runtime.StyleParamOptions{ParamLocation: runtime.ParamLocationQuery, Type: "integer", Format: ""}); err != nil {
+				return nil, err
+			} else {
+				for _, qp := range strings.Split(queryFrag, "&") {
+					rawQueryFragments = append(rawQueryFragments, qp)
+				}
+			}
+
+		}
+
+		if params.Cursor != nil {
+
+			if queryFrag, err := runtime.StyleParamWithOptions("form", true, "cursor", *params.Cursor, runtime.StyleParamOptions{ParamLocation: runtime.ParamLocationQuery, Type: "string", Format: ""}); err != nil {
+				return nil, err
+			} else {
+				for _, qp := range strings.Split(queryFrag, "&") {
+					rawQueryFragments = append(rawQueryFragments, qp)
+				}
+			}
+
+		}
+
+		if encoded := queryValues.Encode(); encoded != "" {
+			rawQueryFragments = append(rawQueryFragments, encoded)
+		}
+		queryURL.RawQuery = strings.Join(rawQueryFragments, "&")
 	}
 
 	req, err := http.NewRequest(http.MethodGet, queryURL.String(), nil)
@@ -8595,7 +8712,7 @@ func NewSetLocalUserStatusRequestWithBody(server string, userId UserId, params *
 }
 
 // NewListAPITokensRequest generates requests for ListAPITokens
-func NewListAPITokensRequest(server string) (*http.Request, error) {
+func NewListAPITokensRequest(server string, params *ListAPITokensParams) (*http.Request, error) {
 	var err error
 
 	serverURL, err := url.Parse(server)
@@ -8611,6 +8728,45 @@ func NewListAPITokensRequest(server string) (*http.Request, error) {
 	queryURL, err := serverURL.Parse(operationPath)
 	if err != nil {
 		return nil, err
+	}
+
+	if params != nil {
+		// queryValues collects non-styled parameters (passthrough, JSON)
+		// that are safe to round-trip through url.Values.Encode().
+		queryValues := queryURL.Query()
+		// rawQueryFragments collects pre-encoded query fragments from
+		// styled parameters, preserving literal commas as delimiters
+		// per the OpenAPI spec (e.g. "color=blue,black,brown").
+		var rawQueryFragments []string
+
+		if params.Limit != nil {
+
+			if queryFrag, err := runtime.StyleParamWithOptions("form", true, "limit", *params.Limit, runtime.StyleParamOptions{ParamLocation: runtime.ParamLocationQuery, Type: "integer", Format: ""}); err != nil {
+				return nil, err
+			} else {
+				for _, qp := range strings.Split(queryFrag, "&") {
+					rawQueryFragments = append(rawQueryFragments, qp)
+				}
+			}
+
+		}
+
+		if params.Cursor != nil {
+
+			if queryFrag, err := runtime.StyleParamWithOptions("form", true, "cursor", *params.Cursor, runtime.StyleParamOptions{ParamLocation: runtime.ParamLocationQuery, Type: "string", Format: ""}); err != nil {
+				return nil, err
+			} else {
+				for _, qp := range strings.Split(queryFrag, "&") {
+					rawQueryFragments = append(rawQueryFragments, qp)
+				}
+			}
+
+		}
+
+		if encoded := queryValues.Encode(); encoded != "" {
+			rawQueryFragments = append(rawQueryFragments, encoded)
+		}
+		queryURL.RawQuery = strings.Join(rawQueryFragments, "&")
 	}
 
 	req, err := http.NewRequest(http.MethodGet, queryURL.String(), nil)
@@ -13112,7 +13268,7 @@ func NewValidateRulePackageRequestWithBody(server string, params *ValidateRulePa
 }
 
 // NewListSessionsRequest generates requests for ListSessions
-func NewListSessionsRequest(server string) (*http.Request, error) {
+func NewListSessionsRequest(server string, params *ListSessionsParams) (*http.Request, error) {
 	var err error
 
 	serverURL, err := url.Parse(server)
@@ -13128,6 +13284,45 @@ func NewListSessionsRequest(server string) (*http.Request, error) {
 	queryURL, err := serverURL.Parse(operationPath)
 	if err != nil {
 		return nil, err
+	}
+
+	if params != nil {
+		// queryValues collects non-styled parameters (passthrough, JSON)
+		// that are safe to round-trip through url.Values.Encode().
+		queryValues := queryURL.Query()
+		// rawQueryFragments collects pre-encoded query fragments from
+		// styled parameters, preserving literal commas as delimiters
+		// per the OpenAPI spec (e.g. "color=blue,black,brown").
+		var rawQueryFragments []string
+
+		if params.Limit != nil {
+
+			if queryFrag, err := runtime.StyleParamWithOptions("form", true, "limit", *params.Limit, runtime.StyleParamOptions{ParamLocation: runtime.ParamLocationQuery, Type: "integer", Format: ""}); err != nil {
+				return nil, err
+			} else {
+				for _, qp := range strings.Split(queryFrag, "&") {
+					rawQueryFragments = append(rawQueryFragments, qp)
+				}
+			}
+
+		}
+
+		if params.Cursor != nil {
+
+			if queryFrag, err := runtime.StyleParamWithOptions("form", true, "cursor", *params.Cursor, runtime.StyleParamOptions{ParamLocation: runtime.ParamLocationQuery, Type: "string", Format: ""}); err != nil {
+				return nil, err
+			} else {
+				for _, qp := range strings.Split(queryFrag, "&") {
+					rawQueryFragments = append(rawQueryFragments, qp)
+				}
+			}
+
+		}
+
+		if encoded := queryValues.Encode(); encoded != "" {
+			rawQueryFragments = append(rawQueryFragments, encoded)
+		}
+		queryURL.RawQuery = strings.Join(rawQueryFragments, "&")
 	}
 
 	req, err := http.NewRequest(http.MethodGet, queryURL.String(), nil)
@@ -13186,7 +13381,7 @@ func NewRevokeSessionRequest(server string, sessionId SessionId, params *RevokeS
 }
 
 // NewListSharesRequest generates requests for ListShares
-func NewListSharesRequest(server string) (*http.Request, error) {
+func NewListSharesRequest(server string, params *ListSharesParams) (*http.Request, error) {
 	var err error
 
 	serverURL, err := url.Parse(server)
@@ -13202,6 +13397,45 @@ func NewListSharesRequest(server string) (*http.Request, error) {
 	queryURL, err := serverURL.Parse(operationPath)
 	if err != nil {
 		return nil, err
+	}
+
+	if params != nil {
+		// queryValues collects non-styled parameters (passthrough, JSON)
+		// that are safe to round-trip through url.Values.Encode().
+		queryValues := queryURL.Query()
+		// rawQueryFragments collects pre-encoded query fragments from
+		// styled parameters, preserving literal commas as delimiters
+		// per the OpenAPI spec (e.g. "color=blue,black,brown").
+		var rawQueryFragments []string
+
+		if params.Limit != nil {
+
+			if queryFrag, err := runtime.StyleParamWithOptions("form", true, "limit", *params.Limit, runtime.StyleParamOptions{ParamLocation: runtime.ParamLocationQuery, Type: "integer", Format: ""}); err != nil {
+				return nil, err
+			} else {
+				for _, qp := range strings.Split(queryFrag, "&") {
+					rawQueryFragments = append(rawQueryFragments, qp)
+				}
+			}
+
+		}
+
+		if params.Cursor != nil {
+
+			if queryFrag, err := runtime.StyleParamWithOptions("form", true, "cursor", *params.Cursor, runtime.StyleParamOptions{ParamLocation: runtime.ParamLocationQuery, Type: "string", Format: ""}); err != nil {
+				return nil, err
+			} else {
+				for _, qp := range strings.Split(queryFrag, "&") {
+					rawQueryFragments = append(rawQueryFragments, qp)
+				}
+			}
+
+		}
+
+		if encoded := queryValues.Encode(); encoded != "" {
+			rawQueryFragments = append(rawQueryFragments, encoded)
+		}
+		queryURL.RawQuery = strings.Join(rawQueryFragments, "&")
 	}
 
 	req, err := http.NewRequest(http.MethodGet, queryURL.String(), nil)
@@ -14452,7 +14686,7 @@ type ClientWithResponsesInterface interface {
 	ListSecurityAuditsWithResponse(ctx context.Context, reqEditors ...RequestEditorFn) (*ListSecurityAuditsResponse, error)
 
 	// ListLocalUsersWithResponse request
-	ListLocalUsersWithResponse(ctx context.Context, reqEditors ...RequestEditorFn) (*ListLocalUsersResponse, error)
+	ListLocalUsersWithResponse(ctx context.Context, params *ListLocalUsersParams, reqEditors ...RequestEditorFn) (*ListLocalUsersResponse, error)
 
 	// CreateLocalUserWithBodyWithResponse request with any body
 	CreateLocalUserWithBodyWithResponse(ctx context.Context, params *CreateLocalUserParams, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*CreateLocalUserResponse, error)
@@ -14460,7 +14694,7 @@ type ClientWithResponsesInterface interface {
 	CreateLocalUserWithResponse(ctx context.Context, params *CreateLocalUserParams, body CreateLocalUserJSONRequestBody, reqEditors ...RequestEditorFn) (*CreateLocalUserResponse, error)
 
 	// ListAuthorizationGrantsWithResponse request
-	ListAuthorizationGrantsWithResponse(ctx context.Context, userId UserId, reqEditors ...RequestEditorFn) (*ListAuthorizationGrantsResponse, error)
+	ListAuthorizationGrantsWithResponse(ctx context.Context, userId UserId, params *ListAuthorizationGrantsParams, reqEditors ...RequestEditorFn) (*ListAuthorizationGrantsResponse, error)
 
 	// CreateAuthorizationGrantWithBodyWithResponse request with any body
 	CreateAuthorizationGrantWithBodyWithResponse(ctx context.Context, userId UserId, params *CreateAuthorizationGrantParams, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*CreateAuthorizationGrantResponse, error)
@@ -14473,7 +14707,7 @@ type ClientWithResponsesInterface interface {
 	SetLocalUserStatusWithResponse(ctx context.Context, userId UserId, params *SetLocalUserStatusParams, body SetLocalUserStatusJSONRequestBody, reqEditors ...RequestEditorFn) (*SetLocalUserStatusResponse, error)
 
 	// ListAPITokensWithResponse request
-	ListAPITokensWithResponse(ctx context.Context, reqEditors ...RequestEditorFn) (*ListAPITokensResponse, error)
+	ListAPITokensWithResponse(ctx context.Context, params *ListAPITokensParams, reqEditors ...RequestEditorFn) (*ListAPITokensResponse, error)
 
 	// CreateAPITokenWithBodyWithResponse request with any body
 	CreateAPITokenWithBodyWithResponse(ctx context.Context, params *CreateAPITokenParams, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*CreateAPITokenResponse, error)
@@ -14795,13 +15029,13 @@ type ClientWithResponsesInterface interface {
 	ValidateRulePackageWithResponse(ctx context.Context, params *ValidateRulePackageParams, body ValidateRulePackageJSONRequestBody, reqEditors ...RequestEditorFn) (*ValidateRulePackageResponse, error)
 
 	// ListSessionsWithResponse request
-	ListSessionsWithResponse(ctx context.Context, reqEditors ...RequestEditorFn) (*ListSessionsResponse, error)
+	ListSessionsWithResponse(ctx context.Context, params *ListSessionsParams, reqEditors ...RequestEditorFn) (*ListSessionsResponse, error)
 
 	// RevokeSessionWithResponse request
 	RevokeSessionWithResponse(ctx context.Context, sessionId SessionId, params *RevokeSessionParams, reqEditors ...RequestEditorFn) (*RevokeSessionResponse, error)
 
 	// ListSharesWithResponse request
-	ListSharesWithResponse(ctx context.Context, reqEditors ...RequestEditorFn) (*ListSharesResponse, error)
+	ListSharesWithResponse(ctx context.Context, params *ListSharesParams, reqEditors ...RequestEditorFn) (*ListSharesResponse, error)
 
 	// CreateShareWithBodyWithResponse request with any body
 	CreateShareWithBodyWithResponse(ctx context.Context, params *CreateShareParams, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*CreateShareResponse, error)
@@ -15242,7 +15476,9 @@ type ListLocalUsersResponse struct {
 	Body         []byte
 	HTTPResponse *http.Response
 	JSON200      *LocalUserListResponse
+	JSON400      *ValidationError
 	JSON403      *ForbiddenError
+	JSON409      *ConflictError
 }
 
 // Status returns HTTPResponse.Status
@@ -15305,8 +15541,10 @@ type ListAuthorizationGrantsResponse struct {
 	Body         []byte
 	HTTPResponse *http.Response
 	JSON200      *AuthorizationGrantListResponse
+	JSON400      *ValidationError
 	JSON403      *ForbiddenError
 	JSON404      *NotFoundError
+	JSON409      *ConflictError
 }
 
 // Status returns HTTPResponse.Status
@@ -15400,7 +15638,9 @@ type ListAPITokensResponse struct {
 	Body         []byte
 	HTTPResponse *http.Response
 	JSON200      *APITokenListResponse
+	JSON400      *ValidationError
 	JSON403      *ForbiddenError
+	JSON409      *ConflictError
 }
 
 // Status returns HTTPResponse.Status
@@ -18148,10 +18388,14 @@ type ListSessionsResponse struct {
 	Body         []byte
 	HTTPResponse *http.Response
 	JSON200      *struct {
-		Sessions []SessionSummary `json:"sessions"`
+		// NextCursor 继续读取下一页 Session 的 live keyset cursor
+		NextCursor *string          `json:"nextCursor,omitempty"`
+		Sessions   []SessionSummary `json:"sessions"`
 	}
+	JSON400 *ValidationError
 	JSON401 *UnauthenticatedError
 	JSON403 *ForbiddenError
+	JSON409 *ConflictError
 }
 
 // Status returns HTTPResponse.Status
@@ -18214,7 +18458,9 @@ type ListSharesResponse struct {
 	Body         []byte
 	HTTPResponse *http.Response
 	JSON200      *ShareListResponse
+	JSON400      *ValidationError
 	JSON403      *ForbiddenError
+	JSON409      *ConflictError
 }
 
 // Status returns HTTPResponse.Status
@@ -19044,8 +19290,8 @@ func (c *ClientWithResponses) ListSecurityAuditsWithResponse(ctx context.Context
 }
 
 // ListLocalUsersWithResponse request returning *ListLocalUsersResponse
-func (c *ClientWithResponses) ListLocalUsersWithResponse(ctx context.Context, reqEditors ...RequestEditorFn) (*ListLocalUsersResponse, error) {
-	rsp, err := c.ListLocalUsers(ctx, reqEditors...)
+func (c *ClientWithResponses) ListLocalUsersWithResponse(ctx context.Context, params *ListLocalUsersParams, reqEditors ...RequestEditorFn) (*ListLocalUsersResponse, error) {
+	rsp, err := c.ListLocalUsers(ctx, params, reqEditors...)
 	if err != nil {
 		return nil, err
 	}
@@ -19070,8 +19316,8 @@ func (c *ClientWithResponses) CreateLocalUserWithResponse(ctx context.Context, p
 }
 
 // ListAuthorizationGrantsWithResponse request returning *ListAuthorizationGrantsResponse
-func (c *ClientWithResponses) ListAuthorizationGrantsWithResponse(ctx context.Context, userId UserId, reqEditors ...RequestEditorFn) (*ListAuthorizationGrantsResponse, error) {
-	rsp, err := c.ListAuthorizationGrants(ctx, userId, reqEditors...)
+func (c *ClientWithResponses) ListAuthorizationGrantsWithResponse(ctx context.Context, userId UserId, params *ListAuthorizationGrantsParams, reqEditors ...RequestEditorFn) (*ListAuthorizationGrantsResponse, error) {
+	rsp, err := c.ListAuthorizationGrants(ctx, userId, params, reqEditors...)
 	if err != nil {
 		return nil, err
 	}
@@ -19113,8 +19359,8 @@ func (c *ClientWithResponses) SetLocalUserStatusWithResponse(ctx context.Context
 }
 
 // ListAPITokensWithResponse request returning *ListAPITokensResponse
-func (c *ClientWithResponses) ListAPITokensWithResponse(ctx context.Context, reqEditors ...RequestEditorFn) (*ListAPITokensResponse, error) {
-	rsp, err := c.ListAPITokens(ctx, reqEditors...)
+func (c *ClientWithResponses) ListAPITokensWithResponse(ctx context.Context, params *ListAPITokensParams, reqEditors ...RequestEditorFn) (*ListAPITokensResponse, error) {
+	rsp, err := c.ListAPITokens(ctx, params, reqEditors...)
 	if err != nil {
 		return nil, err
 	}
@@ -20155,8 +20401,8 @@ func (c *ClientWithResponses) ValidateRulePackageWithResponse(ctx context.Contex
 }
 
 // ListSessionsWithResponse request returning *ListSessionsResponse
-func (c *ClientWithResponses) ListSessionsWithResponse(ctx context.Context, reqEditors ...RequestEditorFn) (*ListSessionsResponse, error) {
-	rsp, err := c.ListSessions(ctx, reqEditors...)
+func (c *ClientWithResponses) ListSessionsWithResponse(ctx context.Context, params *ListSessionsParams, reqEditors ...RequestEditorFn) (*ListSessionsResponse, error) {
+	rsp, err := c.ListSessions(ctx, params, reqEditors...)
 	if err != nil {
 		return nil, err
 	}
@@ -20173,8 +20419,8 @@ func (c *ClientWithResponses) RevokeSessionWithResponse(ctx context.Context, ses
 }
 
 // ListSharesWithResponse request returning *ListSharesResponse
-func (c *ClientWithResponses) ListSharesWithResponse(ctx context.Context, reqEditors ...RequestEditorFn) (*ListSharesResponse, error) {
-	rsp, err := c.ListShares(ctx, reqEditors...)
+func (c *ClientWithResponses) ListSharesWithResponse(ctx context.Context, params *ListSharesParams, reqEditors ...RequestEditorFn) (*ListSharesResponse, error) {
+	rsp, err := c.ListShares(ctx, params, reqEditors...)
 	if err != nil {
 		return nil, err
 	}
@@ -20934,12 +21180,26 @@ func ParseListLocalUsersResponse(rsp *http.Response) (*ListLocalUsersResponse, e
 		}
 		response.JSON200 = &dest
 
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 400:
+		var dest ValidationError
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON400 = &dest
+
 	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 403:
 		var dest ForbiddenError
 		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
 			return nil, err
 		}
 		response.JSON403 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 409:
+		var dest ConflictError
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON409 = &dest
 
 	}
 
@@ -21007,6 +21267,13 @@ func ParseListAuthorizationGrantsResponse(rsp *http.Response) (*ListAuthorizatio
 		}
 		response.JSON200 = &dest
 
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 400:
+		var dest ValidationError
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON400 = &dest
+
 	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 403:
 		var dest ForbiddenError
 		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
@@ -21020,6 +21287,13 @@ func ParseListAuthorizationGrantsResponse(rsp *http.Response) (*ListAuthorizatio
 			return nil, err
 		}
 		response.JSON404 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 409:
+		var dest ConflictError
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON409 = &dest
 
 	}
 
@@ -21120,12 +21394,26 @@ func ParseListAPITokensResponse(rsp *http.Response) (*ListAPITokensResponse, err
 		}
 		response.JSON200 = &dest
 
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 400:
+		var dest ValidationError
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON400 = &dest
+
 	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 403:
 		var dest ForbiddenError
 		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
 			return nil, err
 		}
 		response.JSON403 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 409:
+		var dest ConflictError
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON409 = &dest
 
 	}
 
@@ -25215,12 +25503,21 @@ func ParseListSessionsResponse(rsp *http.Response) (*ListSessionsResponse, error
 	switch {
 	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 200:
 		var dest struct {
-			Sessions []SessionSummary `json:"sessions"`
+			// NextCursor 继续读取下一页 Session 的 live keyset cursor
+			NextCursor *string          `json:"nextCursor,omitempty"`
+			Sessions   []SessionSummary `json:"sessions"`
 		}
 		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
 			return nil, err
 		}
 		response.JSON200 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 400:
+		var dest ValidationError
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON400 = &dest
 
 	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 401:
 		var dest UnauthenticatedError
@@ -25235,6 +25532,13 @@ func ParseListSessionsResponse(rsp *http.Response) (*ListSessionsResponse, error
 			return nil, err
 		}
 		response.JSON403 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 409:
+		var dest ConflictError
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON409 = &dest
 
 	}
 
@@ -25302,12 +25606,26 @@ func ParseListSharesResponse(rsp *http.Response) (*ListSharesResponse, error) {
 		}
 		response.JSON200 = &dest
 
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 400:
+		var dest ValidationError
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON400 = &dest
+
 	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 403:
 		var dest ForbiddenError
 		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
 			return nil, err
 		}
 		response.JSON403 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 409:
+		var dest ConflictError
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON409 = &dest
 
 	}
 

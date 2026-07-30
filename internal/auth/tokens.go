@@ -168,15 +168,34 @@ FROM api_tokens t JOIN security_principals p ON p.principal_id=t.principal_id WH
 		SecurityVersion: tokenSecurityVersion, TokenScopes: scopes}, nil
 }
 
-func (p *Personal) ListAPITokens(ctx context.Context, principalID string) ([]APIToken, error) {
+func (p *Personal) ListAPITokens(ctx context.Context, principalID, cursorToken string, limit int) (ListPage[APIToken], error) {
+	limit = normalizeSecurityListLimit(limit)
+	args := []any{principalID}
+	keyset := ""
+	if cursorToken != "" {
+		cursor, err := decodeSecurityListCursor(cursorToken, "api-tokens", principalID)
+		if err != nil {
+			return ListPage[APIToken]{}, err
+		}
+		if cursor.CreatedAt < 0 || cursor.Username != "" || cursor.Revoked || cursor.Capability != "" ||
+			cursor.ScopeKind != "" || cursor.ScopeID != "" {
+			return ListPage[APIToken]{}, invalidSecurityListCursor(nil)
+		}
+		if _, err := domain.ParseID(domain.IDAPIToken, cursor.ID); err != nil {
+			return ListPage[APIToken]{}, invalidSecurityListCursor(err)
+		}
+		keyset = " AND (created_at > ? OR (created_at = ? AND token_id > ?))"
+		args = append(args, cursor.CreatedAt, cursor.CreatedAt, cursor.ID)
+	}
+	args = append(args, limit+1)
 	rows, err := p.db.QueryContext(ctx, `SELECT token_id, principal_id, name, secret_prefix, capabilities_json,
 scopes_json, created_at, expires_at, last_used_at, revoked_at
-FROM api_tokens WHERE principal_id=? ORDER BY created_at, token_id`, principalID)
+FROM api_tokens WHERE principal_id=?`+keyset+` ORDER BY created_at, token_id LIMIT ?`, args...)
 	if err != nil {
-		return nil, fault.New(fault.CodeInternal, true, err)
+		return ListPage[APIToken]{}, fault.New(fault.CodeInternal, true, err)
 	}
 	defer rows.Close()
-	var result []APIToken
+	result := make([]APIToken, 0, limit+1)
 	for rows.Next() {
 		var token APIToken
 		var capabilitiesJSON, scopesJSON string
@@ -184,10 +203,10 @@ FROM api_tokens WHERE principal_id=? ORDER BY created_at, token_id`, principalID
 		var expiresAt, lastUsedAt, revokedAt sql.NullInt64
 		if err := rows.Scan(&token.ID, &token.PrincipalID, &token.Name, &token.SecretPrefix, &capabilitiesJSON,
 			&scopesJSON, &createdAt, &expiresAt, &lastUsedAt, &revokedAt); err != nil {
-			return nil, fault.New(fault.CodeInternal, true, err)
+			return ListPage[APIToken]{}, fault.New(fault.CodeInternal, true, err)
 		}
 		if json.Unmarshal([]byte(capabilitiesJSON), &token.Capabilities) != nil || json.Unmarshal([]byte(scopesJSON), &token.Scopes) != nil {
-			return nil, fault.New(fault.CodeInternal, false, nil)
+			return ListPage[APIToken]{}, fault.New(fault.CodeInternal, false, nil)
 		}
 		token.CreatedAt = time.Unix(createdAt, 0).UTC()
 		token.ExpiresAt = nullableTime(expiresAt)
@@ -195,7 +214,18 @@ FROM api_tokens WHERE principal_id=? ORDER BY created_at, token_id`, principalID
 		token.RevokedAt = nullableTime(revokedAt)
 		result = append(result, token)
 	}
-	return result, rows.Err()
+	if err := rows.Err(); err != nil {
+		return ListPage[APIToken]{}, fault.New(fault.CodeInternal, true, err)
+	}
+	page := ListPage[APIToken]{Items: result}
+	if len(result) > limit {
+		last := result[limit-1]
+		page.Items = result[:limit]
+		page.NextCursor = encodeSecurityListCursor(securityListCursor{
+			Kind: "api-tokens", Scope: principalID, CreatedAt: last.CreatedAt.Unix(), ID: last.ID,
+		})
+	}
+	return page, nil
 }
 
 func (p *Personal) RevokeAPIToken(ctx context.Context, actor, tokenID string) error {

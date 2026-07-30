@@ -304,23 +304,42 @@ WHERE s.session_id = ?`, id).Scan(
 	return session, nil
 }
 
-func (p *Personal) ListSessions(ctx context.Context) ([]Session, error) {
+func (p *Personal) ListSessions(ctx context.Context, cursorToken string, limit int) (ListPage[Session], error) {
+	limit = normalizeSecurityListLimit(limit)
+	args := make([]any, 0, 3)
+	keyset := ""
+	if cursorToken != "" {
+		cursor, err := decodeSecurityListCursor(cursorToken, "sessions", "")
+		if err != nil {
+			return ListPage[Session]{}, err
+		}
+		if cursor.CreatedAt < 0 || cursor.Username != "" || cursor.Revoked || cursor.Capability != "" ||
+			cursor.ScopeKind != "" || cursor.ScopeID != "" {
+			return ListPage[Session]{}, invalidSecurityListCursor(nil)
+		}
+		if _, err := domain.ParseID(domain.IDSession, cursor.ID); err != nil {
+			return ListPage[Session]{}, invalidSecurityListCursor(err)
+		}
+		keyset = "WHERE (created_at > ? OR (created_at = ? AND session_id > ?))"
+		args = append(args, cursor.CreatedAt, cursor.CreatedAt, cursor.ID)
+	}
+	args = append(args, limit+1)
 	rows, err := p.db.QueryContext(ctx, `
 SELECT session_id, principal_id, auth_method, client_label, principal_security_version,
        created_at, absolute_expires_at, last_seen_at, revoked_at
-FROM sessions ORDER BY created_at, session_id`)
+FROM sessions `+keyset+` ORDER BY created_at, session_id LIMIT ?`, args...)
 	if err != nil {
-		return nil, fault.New(fault.CodeInternal, true, err)
+		return ListPage[Session]{}, fault.New(fault.CodeInternal, true, err)
 	}
 	defer rows.Close()
-	var result []Session
+	result := make([]Session, 0, limit+1)
 	for rows.Next() {
 		var session Session
 		var createdAt, expiresAt, lastSeenAt int64
 		var revokedAt sql.NullInt64
 		if err := rows.Scan(&session.ID, &session.PrincipalID, &session.AuthMethod, &session.ClientLabel,
 			&session.SecurityVersion, &createdAt, &expiresAt, &lastSeenAt, &revokedAt); err != nil {
-			return nil, fault.New(fault.CodeInternal, true, err)
+			return ListPage[Session]{}, fault.New(fault.CodeInternal, true, err)
 		}
 		session.CreatedAt = time.Unix(createdAt, 0).UTC()
 		session.ExpiresAt = time.Unix(expiresAt, 0).UTC()
@@ -332,9 +351,17 @@ FROM sessions ORDER BY created_at, session_id`)
 		result = append(result, session)
 	}
 	if err := rows.Err(); err != nil {
-		return nil, fault.New(fault.CodeInternal, true, err)
+		return ListPage[Session]{}, fault.New(fault.CodeInternal, true, err)
 	}
-	return result, nil
+	page := ListPage[Session]{Items: result}
+	if len(result) > limit {
+		last := result[limit-1]
+		page.Items = result[:limit]
+		page.NextCursor = encodeSecurityListCursor(securityListCursor{
+			Kind: "sessions", CreatedAt: last.CreatedAt.Unix(), ID: last.ID,
+		})
+	}
+	return page, nil
 }
 
 func (p *Personal) Revoke(ctx context.Context, actor, id string) error {

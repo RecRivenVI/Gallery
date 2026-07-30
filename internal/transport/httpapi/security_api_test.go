@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
 	"io"
 	"log/slog"
 	"net/http"
@@ -251,6 +252,147 @@ func TestAccountAndGrantManagement(t *testing.T) {
 		t.Fatalf("新口令登录失败: status=%d body=%s", newLogin.StatusCode, readAndClose(t, newLogin))
 	}
 	_ = newLogin.Body.Close()
+}
+
+func TestSecurityResourceHTTPListsExposeBoundedKeysetPages(t *testing.T) {
+	server, _ := newLANSecurityServer(t, false)
+	client, csrf := establishLANOwner(t, server)
+	libraryID := createLibrary(t, client, server, csrf, "Paged Security")
+
+	var firstUserID string
+	for index := range 2 {
+		create := requestJSON(t, client, http.MethodPost, server.URL+"/api/v1/admin/users", server.URL, csrf,
+			map[string]any{
+				"username": fmt.Sprintf("paged-user-%d", index), "displayName": fmt.Sprintf("Paged User %d", index),
+				"password": "paged-user-password-strong", "roles": []string{"viewer"}, "grants": []any{},
+			})
+		body := readAndClose(t, create)
+		if create.StatusCode != http.StatusCreated {
+			t.Fatalf("创建分页账户 %d status=%d body=%s", index, create.StatusCode, body)
+		}
+		var user struct {
+			ID string `json:"id"`
+		}
+		if err := json.Unmarshal(body, &user); err != nil || user.ID == "" {
+			t.Fatalf("分页账户响应无 ID: %v body=%s", err, body)
+		}
+		if firstUserID == "" {
+			firstUserID = user.ID
+		}
+	}
+
+	for index, capability := range []string{"library.read", "media.read"} {
+		grant := requestJSON(t, client, http.MethodPost,
+			server.URL+"/api/v1/admin/users/"+firstUserID+"/grants", server.URL, csrf,
+			map[string]any{
+				"effect": "allow", "capability": capability,
+				"scope": map[string]any{"kind": "library", "id": libraryID},
+			})
+		if body := readAndClose(t, grant); grant.StatusCode != http.StatusCreated {
+			t.Fatalf("创建分页 Grant %d status=%d body=%s", index, grant.StatusCode, body)
+		}
+	}
+
+	for index := range 2 {
+		token := requestJSON(t, client, http.MethodPost, server.URL+"/api/v1/api-tokens", server.URL, csrf,
+			map[string]any{
+				"name": fmt.Sprintf("paged-token-%d", index), "capabilities": []string{"library.read"},
+				"scopes": []map[string]string{{"kind": "global"}},
+			})
+		if body := readAndClose(t, token); token.StatusCode != http.StatusCreated {
+			t.Fatalf("创建分页 Token %d status=%d body=%s", index, token.StatusCode, body)
+		}
+		share := requestJSON(t, client, http.MethodPost, server.URL+"/api/v1/shares", server.URL, csrf,
+			map[string]any{
+				"scopeKind": "library", "scopeId": libraryID, "permissions": []string{"view"},
+				"expiresAt": time.Now().UTC().Add(time.Duration(index+1) * time.Hour),
+			})
+		if body := readAndClose(t, share); share.StatusCode != http.StatusCreated {
+			t.Fatalf("创建分页 Share %d status=%d body=%s", index, share.StatusCode, body)
+		}
+	}
+
+	for index := range 2 {
+		jar, _ := cookiejar.New(nil)
+		loginClient := &http.Client{Jar: jar}
+		loginCSRF := bootstrapCSRF(t, loginClient, server.URL)
+		login := requestJSON(t, loginClient, http.MethodPost, server.URL+"/api/v1/auth/login", server.URL,
+			loginCSRF, map[string]any{
+				"username": "owner", "password": "owner-password-strong",
+				"clientLabel": fmt.Sprintf("paged-session-%d", index),
+			})
+		if body := readAndClose(t, login); login.StatusCode != http.StatusCreated {
+			t.Fatalf("创建分页 Session %d status=%d body=%s", index, login.StatusCode, body)
+		}
+	}
+
+	for _, testCase := range []struct {
+		path string
+		key  string
+	}{
+		{"/api/v1/sessions", "sessions"},
+		{"/api/v1/api-tokens", "tokens"},
+		{"/api/v1/shares", "shares"},
+		{"/api/v1/admin/users", "users"},
+		{"/api/v1/admin/users/" + firstUserID + "/grants", "grants"},
+	} {
+		assertHTTPKeysetPage(t, client, server.URL+testCase.path, testCase.key)
+	}
+
+	invalid := requestJSON(t, client, http.MethodGet,
+		server.URL+"/api/v1/sessions?limit=1&cursor="+url.QueryEscape("%%%"), "", "", nil)
+	invalidBody := readAndClose(t, invalid)
+	if invalid.StatusCode != http.StatusBadRequest || !bytes.Contains(invalidBody, []byte(`"CURSOR_INVALID"`)) {
+		t.Fatalf("非法安全 cursor 未被稳定拒绝: status=%d body=%s", invalid.StatusCode, invalidBody)
+	}
+	for _, rawLimit := range []string{"0", "-1", "201", "invalid"} {
+		invalidLimit := requestJSON(t, client, http.MethodGet,
+			server.URL+"/api/v1/sessions?limit="+url.QueryEscape(rawLimit), "", "", nil)
+		invalidLimitBody := readAndClose(t, invalidLimit)
+		if invalidLimit.StatusCode != http.StatusBadRequest ||
+			!bytes.Contains(invalidLimitBody, []byte(`"VALIDATION_ERROR"`)) {
+			t.Fatalf("非法安全列表 limit=%q 未被稳定拒绝: status=%d body=%s",
+				rawLimit, invalidLimit.StatusCode, invalidLimitBody)
+		}
+	}
+}
+
+func assertHTTPKeysetPage(t *testing.T, client *http.Client, endpoint, key string) {
+	t.Helper()
+	first := requestJSON(t, client, http.MethodGet, endpoint+"?limit=1", "", "", nil)
+	firstBody := readAndClose(t, first)
+	if first.StatusCode != http.StatusOK {
+		t.Fatalf("%s 第一页 status=%d body=%s", key, first.StatusCode, firstBody)
+	}
+	var firstPayload map[string]json.RawMessage
+	if err := json.Unmarshal(firstBody, &firstPayload); err != nil {
+		t.Fatalf("%s 第一页 JSON 无效: %v body=%s", key, err, firstBody)
+	}
+	var firstItems []map[string]any
+	var cursor string
+	if err := json.Unmarshal(firstPayload[key], &firstItems); err != nil || len(firstItems) != 1 {
+		t.Fatalf("%s 第一页数量错误: count=%d err=%v body=%s", key, len(firstItems), err, firstBody)
+	}
+	if err := json.Unmarshal(firstPayload["nextCursor"], &cursor); err != nil || cursor == "" {
+		t.Fatalf("%s 第一页缺少 nextCursor: %v body=%s", key, err, firstBody)
+	}
+	second := requestJSON(t, client, http.MethodGet,
+		endpoint+"?limit=1&cursor="+url.QueryEscape(cursor), "", "", nil)
+	secondBody := readAndClose(t, second)
+	if second.StatusCode != http.StatusOK {
+		t.Fatalf("%s 第二页 status=%d body=%s", key, second.StatusCode, secondBody)
+	}
+	var secondPayload map[string]json.RawMessage
+	var secondItems []map[string]any
+	if err := json.Unmarshal(secondBody, &secondPayload); err != nil {
+		t.Fatalf("%s 第二页 JSON 无效: %v body=%s", key, err, secondBody)
+	}
+	if err := json.Unmarshal(secondPayload[key], &secondItems); err != nil || len(secondItems) != 1 {
+		t.Fatalf("%s 第二页数量错误: count=%d err=%v body=%s", key, len(secondItems), err, secondBody)
+	}
+	if firstItems[0]["id"] == secondItems[0]["id"] {
+		t.Fatalf("%s 两页重复同一 ID: %v", key, firstItems[0]["id"])
+	}
 }
 
 func TestShareManagementLifecycle(t *testing.T) {

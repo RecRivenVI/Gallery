@@ -364,7 +364,7 @@ func createPersistentToken(ctx context.Context, client *pairedClient) (persisten
 }
 
 func assertPersistentToken(ctx context.Context, baseURL string, client *pairedClient, expected persistentToken) error {
-	response, err := client.api.ListAPITokensWithResponse(ctx, client.editor)
+	response, err := client.api.ListAPITokensWithResponse(ctx, nil, client.editor)
 	if err != nil || response.JSON200 == nil {
 		return fmt.Errorf("列出 API Token：status=%d err=%v", statusCode(response), err)
 	}
