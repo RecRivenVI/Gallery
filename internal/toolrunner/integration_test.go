@@ -146,6 +146,8 @@ type binaryResolver struct {
 	heartbeat string
 }
 
+func (binaryResolver) Available(string) bool { return true }
+
 func (r binaryResolver) Resolve(_ context.Context, _ string, _ []string, _ string) (ports.Command, error) {
 	executable, err := os.Executable()
 	if err != nil {

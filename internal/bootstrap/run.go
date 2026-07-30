@@ -33,6 +33,7 @@ import (
 	"github.com/RecRivenVI/gallery/internal/platform/identity"
 	"github.com/RecRivenVI/gallery/internal/platform/lock"
 	platformprocess "github.com/RecRivenVI/gallery/internal/platform/process"
+	"github.com/RecRivenVI/gallery/internal/platform/tooldiscovery"
 	platformwatcher "github.com/RecRivenVI/gallery/internal/platform/watcher"
 	"github.com/RecRivenVI/gallery/internal/recovery"
 	"github.com/RecRivenVI/gallery/internal/scanner"
@@ -116,6 +117,22 @@ func run(ctx context.Context, cfg config.Config, logger *slog.Logger, ready chan
 	}
 	defer ownership.Release()
 
+	processController := platformprocess.Controller{}
+	toolDeclarations := make([]tooldiscovery.Declaration, 0, len(cfg.ExternalTools))
+	for _, declaration := range cfg.ExternalTools {
+		toolDeclarations = append(toolDeclarations, tooldiscovery.Declaration{
+			ID: declaration.ID, Path: declaration.Path, Version: declaration.Version, SHA256: declaration.SHA256,
+		})
+	}
+	toolDiscovery, err := tooldiscovery.New(ctx, toolDeclarations, processController)
+	if err != nil {
+		return err
+	}
+	for _, capability := range toolDiscovery.Capabilities() {
+		logger.Info("external_tool_ready", "tool", capability.ID, "version", capability.Version,
+			"sha256Prefix", capability.SHA256[:12])
+	}
+
 	// 待应用恢复请求必须在打开任何数据库之前、于单写者锁保护下执行原子替换。恢复失败保留当前库
 	// 并继续启动。
 	restoreOutcome, err := backup.ApplyPendingRestore(ctx, cfg.AppDirs)
@@ -196,7 +213,7 @@ func run(ctx context.Context, cfg config.Config, logger *slog.Logger, ready chan
 		return err
 	}
 	derivedJobService.SetBlobLeaser(store.Catalog.SQL(), systemClock)
-	toolService, err := toolrunner.New(jobStore, platformprocess.Controller{}, nil)
+	toolService, err := toolrunner.New(jobStore, processController, toolDiscovery)
 	if err != nil {
 		return err
 	}

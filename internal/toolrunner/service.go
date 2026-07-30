@@ -29,6 +29,7 @@ type Request struct {
 }
 
 type Resolver interface {
+	Available(toolID string) bool
 	Resolve(ctx context.Context, toolID string, args []string, workingDir string) (ports.Command, error)
 }
 
@@ -59,7 +60,8 @@ func New(jobStore *jobs.Store, controller ports.ProcessController, resolver Reso
 }
 
 func (s *Service) Create(ctx context.Context, request Request, createdBy string) (jobs.Job, error) {
-	if strings.TrimSpace(request.ToolID) == "" || strings.TrimSpace(createdBy) == "" || request.TimeoutSeconds <= 0 || request.TimeoutSeconds > 3600 {
+	if strings.TrimSpace(request.ToolID) == "" || request.ToolID != strings.TrimSpace(request.ToolID) ||
+		strings.TrimSpace(createdBy) == "" || request.TimeoutSeconds <= 0 || request.TimeoutSeconds > 3600 {
 		return jobs.Job{}, fault.New(fault.CodeValidation, false, nil)
 	}
 	if request.MaxOutputBytes <= 0 {
@@ -68,7 +70,7 @@ func (s *Service) Create(ctx context.Context, request Request, createdBy string)
 	if request.MaxOutputBytes > 64<<20 {
 		return jobs.Job{}, fault.New(fault.CodeValidation, false, nil)
 	}
-	if s.resolver == nil {
+	if s.resolver == nil || !s.resolver.Available(request.ToolID) {
 		return jobs.Job{}, fault.New(fault.CodeExternalToolUnavailable, false, nil)
 	}
 	if s.space != nil {
@@ -111,8 +113,11 @@ func (s *Service) Execute(ctx context.Context, jobID string) error {
 		request.WorkingDir = workingDirectory
 	}
 	command, err := s.resolver.Resolve(ctx, request.ToolID, request.Args, request.WorkingDir)
-	if err != nil || command.Path == "" {
-		return s.fail(ctx, jobID, fault.New(fault.CodeExternalToolFailed, false, err))
+	if err != nil {
+		return s.fail(ctx, jobID, err)
+	}
+	if command.Path == "" {
+		return s.fail(ctx, jobID, fault.New(fault.CodeExternalToolFailed, false, errors.New("ToolDiscovery 返回空路径")))
 	}
 	limit := request.MaxOutputBytes
 	if limit <= 0 {

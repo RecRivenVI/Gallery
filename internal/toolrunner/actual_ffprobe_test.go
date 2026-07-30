@@ -26,6 +26,10 @@ type explicitFFprobeResolver struct {
 	path string
 }
 
+func (r explicitFFprobeResolver) Available(toolID string) bool {
+	return toolID == "ffprobe" && r.path != ""
+}
+
 func (r explicitFFprobeResolver) Resolve(_ context.Context, toolID string, args []string, workingDir string) (ports.Command, error) {
 	if toolID != "ffprobe" {
 		return ports.Command{}, fmt.Errorf("测试 Resolver 只允许 ffprobe")

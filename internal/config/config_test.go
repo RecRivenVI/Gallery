@@ -3,6 +3,7 @@ package config_test
 import (
 	"errors"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/RecRivenVI/gallery/internal/config"
@@ -18,6 +19,69 @@ func TestPersonalModeOnlyAcceptsLoopback(t *testing.T) {
 	var structured *fault.Error
 	if !errors.As(err, &structured) || structured.Code != fault.CodeConfigInvalid {
 		t.Fatalf("非 loopback 错误 = %v", err)
+	}
+}
+
+func TestExternalToolDeclarationsRequireCompleteExplicitPins(t *testing.T) {
+	root := t.TempDir()
+	toolPath := filepath.Join(root, "ffprobe.exe")
+	digest := strings.Repeat("a", 64)
+	cfg, err := config.Parse([]string{
+		"--app-root", filepath.Join(root, "app"),
+		"--external-tool-path", "ffprobe=" + toolPath,
+		"--external-tool-version", "ffprobe=7.1.1",
+		"--external-tool-sha256", "ffprobe=" + strings.ToUpper(digest),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(cfg.ExternalTools) != 1 {
+		t.Fatalf("工具声明数量 = %d", len(cfg.ExternalTools))
+	}
+	tool := cfg.ExternalTools[0]
+	if tool.ID != "ffprobe" || tool.Path != toolPath || tool.Version != "7.1.1" || tool.SHA256 != digest {
+		t.Fatalf("工具声明未精确保留/规范化: %+v", tool)
+	}
+
+	for name, args := range map[string][]string{
+		"缺少摘要": {
+			"--external-tool-path", "ffprobe=" + toolPath,
+			"--external-tool-version", "ffprobe=7.1.1",
+		},
+		"相对路径": {
+			"--external-tool-path", "ffprobe=ffprobe.exe",
+			"--external-tool-version", "ffprobe=7.1.1",
+			"--external-tool-sha256", "ffprobe=" + digest,
+		},
+		"未知工具": {
+			"--external-tool-path", "custom=" + toolPath,
+			"--external-tool-version", "custom=1.0",
+			"--external-tool-sha256", "custom=" + digest,
+		},
+		"非法版本": {
+			"--external-tool-path", "ffprobe=" + toolPath,
+			"--external-tool-version", "ffprobe=7.1 with spaces",
+			"--external-tool-sha256", "ffprobe=" + digest,
+		},
+		"非法摘要": {
+			"--external-tool-path", "ffprobe=" + toolPath,
+			"--external-tool-version", "ffprobe=7.1.1",
+			"--external-tool-sha256", "ffprobe=not-a-digest",
+		},
+		"重复路径": {
+			"--external-tool-path", "ffprobe=" + toolPath,
+			"--external-tool-path", "ffprobe=" + toolPath,
+			"--external-tool-version", "ffprobe=7.1.1",
+			"--external-tool-sha256", "ffprobe=" + digest,
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			_, err := config.Parse(append([]string{"--app-root", filepath.Join(root, "app-"+name)}, args...))
+			var structured *fault.Error
+			if !errors.As(err, &structured) || structured.Code != fault.CodeConfigInvalid {
+				t.Fatalf("错误 = %v，期望 CONFIG_INVALID", err)
+			}
+		})
 	}
 }
 

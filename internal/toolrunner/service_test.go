@@ -13,6 +13,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/RecRivenVI/gallery/internal/contract/fault"
 	"github.com/RecRivenVI/gallery/internal/jobs"
 	"github.com/RecRivenVI/gallery/internal/platform/appdirs"
 	"github.com/RecRivenVI/gallery/internal/platform/clock"
@@ -25,15 +26,33 @@ import (
 
 type resolver struct{}
 
+func (resolver) Available(string) bool { return true }
+
 func (resolver) Resolve(context.Context, string, []string, string) (ports.Command, error) {
 	return ports.Command{Path: "allowed-tool", Args: []string{"--version"}}, nil
 }
 
 type capturingResolver struct{ workingDir string }
 
+func (*capturingResolver) Available(string) bool { return true }
+
 func (r *capturingResolver) Resolve(_ context.Context, _ string, _ []string, workingDir string) (ports.Command, error) {
 	r.workingDir = workingDir
 	return ports.Command{Path: "allowed-tool", Args: []string{"--version"}}, nil
+}
+
+type selectiveResolver struct{ available string }
+
+func (r selectiveResolver) Available(toolID string) bool { return toolID == r.available }
+func (selectiveResolver) Resolve(context.Context, string, []string, string) (ports.Command, error) {
+	return ports.Command{Path: "allowed-tool"}, nil
+}
+
+type unavailableAtResolve struct{}
+
+func (unavailableAtResolve) Available(string) bool { return true }
+func (unavailableAtResolve) Resolve(context.Context, string, []string, string) (ports.Command, error) {
+	return ports.Command{}, fault.New(fault.CodeExternalToolUnavailable, false, errors.New("工具摘要已变化"))
 }
 
 // exitingController 模拟正常退出的工具：写出少量输出后进程结束。
@@ -421,6 +440,10 @@ func TestToolAvailabilityAndOwnedWorkingDirectory(t *testing.T) {
 	if _, err := unavailable.Create(ctx, toolrunner.Request{ToolID: "ffprobe", TimeoutSeconds: 2}, "owner"); err == nil {
 		t.Fatal("未配置 ToolDiscovery 仍创建了必然失败的 Job")
 	}
+	selective, _ := toolrunner.New(jobStore, exitingController{}, selectiveResolver{available: "ffprobe"})
+	if _, err := selective.Create(ctx, toolrunner.Request{ToolID: "ffmpeg", TimeoutSeconds: 2}, "owner"); err == nil {
+		t.Fatal("未通过 ToolDiscovery 的具体工具仍创建了必然失败的 Job")
+	}
 	var count int
 	if err := store.Control.SQL().QueryRowContext(ctx, "SELECT COUNT(*) FROM jobs").Scan(&count); err != nil || count != 0 {
 		t.Fatalf("不可用请求污染了 Job 表: count=%d err=%v", count, err)
@@ -443,5 +466,30 @@ func TestToolAvailabilityAndOwnedWorkingDirectory(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(resolver.workingDir, "manifest.json")); err != nil {
 		t.Fatalf("外部工具工作目录缺少 manifest: %v", err)
+	}
+}
+
+func TestExecutePreservesToolDiscoveryUnavailableCode(t *testing.T) {
+	ctx := context.Background()
+	jobStore, _, _ := newJobStore(t, 12)
+	service, err := toolrunner.New(jobStore, exitingController{}, unavailableAtResolve{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	job, err := service.Create(ctx, toolrunner.Request{ToolID: "ffprobe", TimeoutSeconds: 2}, "owner")
+	if err != nil {
+		t.Fatal(err)
+	}
+	err = service.Execute(ctx, job.ID)
+	var structured *fault.Error
+	if !errors.As(err, &structured) || structured.Code != fault.CodeExternalToolUnavailable {
+		t.Fatalf("执行期工具替换错误 = %v", err)
+	}
+	failed, err := jobStore.Get(ctx, job.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if failed.Status != jobs.StatusFailed || failed.IssueCode != string(fault.CodeExternalToolUnavailable) {
+		t.Fatalf("Job 终态 = %s / %s", failed.Status, failed.IssueCode)
 	}
 }

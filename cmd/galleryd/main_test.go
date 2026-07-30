@@ -1,6 +1,8 @@
 package main
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -26,6 +28,10 @@ import (
 // 少一次链接就少一次不可复现的失败。
 const gallerydArgsEnv = "GALLERY_TEST_GALLERYD_ARGS"
 
+// toolVersionEnv 让当前测试二进制在 ToolDiscovery 以固定 `-version` 参数重新执行它时，扮演
+// 一个只报告版本的 ffprobe。它只存在于测试进程，不进入生产二进制。
+const toolVersionEnv = "GALLERY_TEST_TOOL_VERSION"
+
 // startupBudget 是等待 runtime descriptor 出现的上限。启动包含两库迁移、恢复与全部服务
 // 装配，在慢盘上可能需要数秒。
 const startupBudget = 60 * time.Second
@@ -35,6 +41,10 @@ const startupBudget = 60 * time.Second
 const shutdownBudget = 10 * time.Second
 
 func TestMain(m *testing.M) {
+	if toolVersion, ok := os.LookupEnv(toolVersionEnv); ok && len(os.Args) == 2 && os.Args[1] == "-version" {
+		fmt.Printf("ffprobe version %s test-build\n", toolVersion)
+		os.Exit(0)
+	}
 	if raw, ok := os.LookupEnv(gallerydArgsEnv); ok {
 		var args []string
 		if err := json.Unmarshal([]byte(raw), &args); err != nil {
@@ -82,9 +92,10 @@ type gallerydProcess struct {
 
 // startGalleryd 以 Personal 模式、loopback 自动端口启动 galleryd，并等待 runtime descriptor
 // 出现后返回。
-func startGalleryd(t *testing.T, appRoot string) *gallerydProcess {
+func startGalleryd(t *testing.T, appRoot string, extraArgs ...string) *gallerydProcess {
 	t.Helper()
 	args := []string{"-mode=personal", "-listen=127.0.0.1:0", "-app-root=" + appRoot}
+	args = append(args, extraArgs...)
 	encoded, err := json.Marshal(args)
 	if err != nil {
 		t.Fatal(err)
@@ -130,6 +141,32 @@ func startGalleryd(t *testing.T, appRoot string) *gallerydProcess {
 		<-process.exited
 	})
 	return process
+}
+
+func currentExecutablePin(t *testing.T) (string, string) {
+	t.Helper()
+	path, err := os.Executable()
+	if err != nil {
+		t.Fatal(err)
+	}
+	file, err := os.Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer file.Close()
+	digest := sha256.New()
+	if _, err := io.Copy(digest, file); err != nil {
+		t.Fatal(err)
+	}
+	return path, hex.EncodeToString(digest.Sum(nil))
+}
+
+func externalToolArgs(path, version, digest string) []string {
+	return []string{
+		"-external-tool-path=ffprobe=" + path,
+		"-external-tool-version=ffprobe=" + version,
+		"-external-tool-sha256=ffprobe=" + digest,
+	}
 }
 
 func (p *gallerydProcess) descriptorPath() string {
@@ -228,6 +265,59 @@ func TestHelpExitsZero(t *testing.T) {
 	_, _, code := runToCompletion(t, "-h")
 	if code != 0 {
 		t.Fatalf("-h 的退出码为 %d，期望 0", code)
+	}
+}
+
+func TestExplicitPinnedToolStartsAndReportsPathFreeCapability(t *testing.T) {
+	t.Setenv(toolVersionEnv, "7.1.1")
+	path, digest := currentExecutablePin(t)
+	process := startGalleryd(t, t.TempDir(), externalToolArgs(path, "7.1.1", digest)...)
+	process.awaitDescriptor(t)
+	logs := process.logs(t)
+	if !strings.Contains(logs, `"msg":"external_tool_ready"`) ||
+		!strings.Contains(logs, `"tool":"ffprobe"`) || !strings.Contains(logs, `"version":"7.1.1"`) {
+		t.Fatalf("启动日志缺少外部工具能力报告：\n%s", logs)
+	}
+	if strings.Contains(logs, path) {
+		t.Fatalf("外部工具能力日志泄漏了配置路径：\n%s", logs)
+	}
+	if err := requestGracefulStop(process.command); err != nil {
+		t.Skipf("当前环境无法向子进程投递中断信号: %v", err)
+	}
+	select {
+	case <-process.exited:
+	case <-time.After(shutdownBudget):
+		t.Fatalf("启用 ToolDiscovery 的 galleryd 未在预算内停止：\n%s", process.logs(t))
+	}
+	if process.exitCode != 0 {
+		t.Fatalf("启用 ToolDiscovery 的 galleryd 退出码 = %d：\n%s", process.exitCode, process.logs(t))
+	}
+}
+
+func TestExplicitToolPinMismatchFailsBeforeDescriptor(t *testing.T) {
+	t.Setenv(toolVersionEnv, "7.1.1")
+	path, digest := currentExecutablePin(t)
+	for name, args := range map[string][]string{
+		"版本不匹配": externalToolArgs(path, "7.2.0", digest),
+		"摘要不匹配": externalToolArgs(path, "7.1.1", strings.Repeat("0", 64)),
+	} {
+		t.Run(name, func(t *testing.T) {
+			appRoot := t.TempDir()
+			_, stderr, code := runToCompletion(t, append(args, "-app-root="+appRoot)...)
+			if code != 1 {
+				t.Fatalf("工具 pin 不匹配退出码 = %d，期望运行时失败 1：\n%s", code, stderr)
+			}
+			if !strings.Contains(stderr, "EXTERNAL_TOOL_UNAVAILABLE") ||
+				!strings.Contains(stderr, `"msg":"galleryd_failed"`) {
+				t.Fatalf("工具 pin 不匹配缺少稳定失败语义：\n%s", stderr)
+			}
+			if strings.Contains(stderr, path) {
+				t.Fatalf("工具 pin 失败日志泄漏了配置路径：\n%s", stderr)
+			}
+			if _, err := os.Stat(filepath.Join(appRoot, "run", "galleryd.json")); !os.IsNotExist(err) {
+				t.Fatal("工具 pin 不匹配仍发布了 runtime descriptor")
+			}
+		})
 	}
 }
 
