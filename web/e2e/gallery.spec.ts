@@ -345,15 +345,24 @@ test('平台创作者按有效身份游标分页且窄屏无溢出 @smoke', asyn
     });
     const cursor = url.searchParams.get('cursor');
     return json(route, {
-      creators: [
-        {
-          id: cursor === null ? 'creator_b' : 'creator_a',
-          name: cursor === null ? '画师乙' : '画师甲',
-          effectiveId: cursor === null ? 'creator_b' : 'creator_a',
-          sourceCount: 1,
-          createdAt: '2026-07-01T00:00:00Z'
-        }
-      ],
+      creators:
+        cursor === null
+          ? Array.from({ length: 48 }, (_, index) => ({
+              id: index === 0 ? 'creator_b' : `creator_b_${String(index).padStart(2, '0')}`,
+              name: index === 0 ? '画师乙' : `画师乙 ${String(index).padStart(2, '0')}`,
+              effectiveId: index === 0 ? 'creator_b' : `creator_b_${String(index).padStart(2, '0')}`,
+              sourceCount: 1,
+              createdAt: '2026-07-01T00:00:00Z'
+            }))
+          : [
+              {
+                id: 'creator_a',
+                name: '画师甲',
+                effectiveId: 'creator_a',
+                sourceCount: 1,
+                createdAt: '2026-07-01T00:00:00Z'
+              }
+            ],
       ...(cursor === null ? { nextCursor: 'page-two' } : {})
     });
   });
@@ -383,8 +392,18 @@ test('平台创作者按有效身份游标分页且窄屏无溢出 @smoke', asyn
   await page.goto('/creators?sourceId=src_pixiv');
   await expect(page.getByRole('heading', { name: 'pixiv · 画师' })).toBeVisible();
   await expect(page.getByText('画师乙', { exact: true })).toBeVisible();
-  await page.getByRole('button', { name: '加载更多画师', exact: true }).click();
+  await expect(page.locator('.gal-tile')).toHaveCount(48);
+  await page.getByRole('button', { name: '下一页画师', exact: true }).click();
   await expect(page.getByText('画师甲', { exact: true })).toBeVisible();
+  await expect(page.getByText('画师乙', { exact: true })).toHaveCount(0);
+  await expect(page.locator('.gal-tile')).toHaveCount(1);
+  await page.getByRole('button', { name: '上一页画师', exact: true }).click();
+  await expect(page.getByText('画师乙', { exact: true })).toBeVisible();
+  await expect(page.locator('.gal-tile')).toHaveCount(48);
+  await page.getByRole('button', { name: '下一页画师', exact: true }).click();
+  await expect(page.getByText('画师甲', { exact: true })).toBeVisible();
+  await page.getByRole('button', { name: '上一页画师', exact: true }).click();
+  await expect(page.getByText('画师乙', { exact: true })).toBeVisible();
   expect(requested).toEqual([
     { sourceId: 'src_pixiv', includeMerged: 'false', sort: 'name_desc', limit: '48', cursor: null },
     {
@@ -395,6 +414,8 @@ test('平台创作者按有效身份游标分页且窄屏无溢出 @smoke', asyn
       cursor: 'page-two'
     }
   ]);
+  const listResults = await new AxeBuilder({ page }).withTags(['wcag2a', 'wcag2aa']).analyze();
+  expect(listResults.violations).toEqual([]);
   await page.getByText('画师乙', { exact: true }).click();
   await expect(page).toHaveURL(/\/creators\/creator_b\?sourceId=src_pixiv$/);
   await expect(page.getByRole('heading', { name: '画师乙' })).toBeVisible();
@@ -405,6 +426,60 @@ test('平台创作者按有效身份游标分页且窄屏无溢出 @smoke', asyn
       filter: JSON.stringify({ field: 'creator.id', op: 'eq', value: 'creator_b' }),
       sort: 'title_asc'
     });
+  await expectNoHorizontalOverflow(page);
+  const results = await new AxeBuilder({ page }).withTags(['wcag2a', 'wcag2aa']).analyze();
+  expect(results.violations).toEqual([]);
+});
+
+test('实时文件目录只挂载当前批并复用已访问批次 @smoke', async ({ page }) => {
+  const requestedAfter: Array<string | null> = [];
+  await page.route('**/api/v1/file-roots/root_window/entries*', (route) => {
+    const url = new URL(route.request().url());
+    const after = url.searchParams.get('after');
+    requestedAfter.push(after);
+    const entries =
+      after === null
+        ? Array.from({ length: 500 }, (_, index) => {
+            const label = String(index + 1).padStart(3, '0');
+            return {
+              name: `窗口文件 ${label}.jpg`,
+              relativePath: `窗口文件 ${label}.jpg`,
+              kind: 'file',
+              sizeBytes: index + 1
+            };
+          })
+        : [
+            {
+              name: '窗口文件 501.jpg',
+              relativePath: '窗口文件 501.jpg',
+              kind: 'file',
+              sizeBytes: 501
+            }
+          ];
+    return route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({
+        rootId: 'root_window',
+        entries,
+        ...(after === null ? { nextAfter: 'page-two' } : {})
+      })
+    });
+  });
+
+  await page.goto('/files/root_window');
+  await expect(page.getByText('窗口文件 001.jpg', { exact: true })).toBeVisible();
+  await expect(page.locator('.gal-entry')).toHaveCount(500);
+  await page.getByRole('button', { name: '下一批', exact: true }).click();
+  await expect(page.getByText('窗口文件 501.jpg', { exact: true })).toBeVisible();
+  await expect(page.getByText('窗口文件 001.jpg', { exact: true })).toHaveCount(0);
+  await expect(page.locator('.gal-entry')).toHaveCount(1);
+  await page.getByRole('button', { name: '上一批', exact: true }).click();
+  await expect(page.getByText('窗口文件 001.jpg', { exact: true })).toBeVisible();
+  await expect(page.locator('.gal-entry')).toHaveCount(500);
+  await page.getByRole('button', { name: '下一批', exact: true }).click();
+  await expect(page.getByText('窗口文件 501.jpg', { exact: true })).toBeVisible();
+  expect(requestedAfter).toEqual([null, 'page-two']);
   await expectNoHorizontalOverflow(page);
   const results = await new AxeBuilder({ page }).withTags(['wcag2a', 'wcag2aa']).analyze();
   expect(results.violations).toEqual([]);

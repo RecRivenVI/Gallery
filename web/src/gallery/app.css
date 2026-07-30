@@ -650,6 +650,15 @@
   padding: var(--space-5);
 }
 
+.gal-page-window {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: center;
+  gap: var(--space-3);
+  padding-block: var(--space-5);
+}
+
 .gal-notice {
   display: flex;
   flex-wrap: wrap;

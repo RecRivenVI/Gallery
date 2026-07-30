@@ -10,6 +10,7 @@
  *   把它并入 file 会显示成一个 0 字节的普通文件，那是错误信息。
  */
 
+import { useEffect, useState } from 'react';
 import { Link, useParams, useSearchParams } from 'react-router';
 import { Badge, Button, EmptyState, ErrorState, Spinner } from '../../design';
 import { describeError, errorCode, errorCorrelationId } from '../../shared/errors';
@@ -105,7 +106,28 @@ export function FileBrowserPage() {
   const path = searchParams.get('path') ?? '';
   const entries = useFileEntries(rootId, path);
   const pages = entries.data?.pages ?? [];
-  const items = pages.flatMap((page) => page.entries);
+  const [requestedPageIndex, setRequestedPageIndex] = useState(0);
+  const currentPageIndex = Math.min(requestedPageIndex, Math.max(0, pages.length - 1));
+  const items = pages[currentPageIndex]?.entries ?? [];
+
+  useEffect(() => {
+    setRequestedPageIndex(0);
+  }, [rootId, path]);
+
+  const hasLoadedNextPage = currentPageIndex + 1 < pages.length;
+  const hasNextPage = hasLoadedNextPage || (currentPageIndex === pages.length - 1 && entries.hasNextPage);
+  const showNextPage = () => {
+    if (hasLoadedNextPage) {
+      setRequestedPageIndex(currentPageIndex + 1);
+      return;
+    }
+    if (!entries.hasNextPage || entries.isFetchingNextPage) return;
+    void entries.fetchNextPage().then((result) => {
+      if (!result.isError && (result.data?.pages.length ?? 0) > currentPageIndex + 1) {
+        setRequestedPageIndex(currentPageIndex + 1);
+      }
+    });
+  };
 
   const linkTo = (target: string) =>
     target === ''
@@ -134,7 +156,7 @@ export function FileBrowserPage() {
 
       {entries.isPending ? (
         <Spinner label="正在读取目录" />
-      ) : entries.error !== null ? (
+      ) : entries.error !== null && items.length === 0 ? (
         <ErrorState
           description={describeError(entries.error)}
           code={errorCode(entries.error)}
@@ -144,32 +166,54 @@ export function FileBrowserPage() {
       ) : items.length === 0 ? (
         <EmptyState title="这个目录是空的" description="它当前没有可见的条目。" />
       ) : (
-        <ul className="gal-list gal-list--entries">
-          {items.map((entry) => (
-            <li key={entry.relativePath} className="gal-entry">
-              {kindBadge(entry.kind)}
-              {entry.kind === 'directory' ? (
-                <Link className="gal-link" to={linkTo(entry.relativePath)}>
-                  {entry.name}
-                </Link>
-              ) : (
-                <span>{entry.name}</span>
-              )}
-              <span className="gal-muted">{formatBytes(entry.sizeBytes)}</span>
-              {entry.kind === 'link' ? <span className="gal-muted">链接不可进入</span> : null}
-            </li>
-          ))}
-        </ul>
+        <>
+          <p className="gal-browser__summary" role="status">
+            第 {currentPageIndex + 1} 批，本批 {items.length} 个条目
+            {hasNextPage ? '（还有下一批）' : '（已到当前目录末尾）'}。批次来自实时目录，不是可重复读快照。
+          </p>
+          <ul className="gal-list gal-list--entries">
+            {items.map((entry) => (
+              <li key={entry.relativePath} className="gal-entry">
+                {kindBadge(entry.kind)}
+                {entry.kind === 'directory' ? (
+                  <Link className="gal-link" to={linkTo(entry.relativePath)}>
+                    {entry.name}
+                  </Link>
+                ) : (
+                  <span>{entry.name}</span>
+                )}
+                <span className="gal-muted">{formatBytes(entry.sizeBytes)}</span>
+                {entry.kind === 'link' ? <span className="gal-muted">链接不可进入</span> : null}
+              </li>
+            ))}
+          </ul>
+        </>
       )}
 
-      {entries.hasNextPage ? (
-        <Button
-          variant="secondary"
-          isPending={entries.isFetchingNextPage}
-          onPress={() => void entries.fetchNextPage()}
-        >
-          继续加载
-        </Button>
+      {entries.isFetchNextPageError ? (
+        <ErrorState
+          title="下一批目录条目加载失败"
+          description={describeError(entries.error)}
+          code={errorCode(entries.error)}
+          correlationId={errorCorrelationId(entries.error)}
+          onRetry={showNextPage}
+          retryLabel="重试下一批"
+        />
+      ) : null}
+
+      {currentPageIndex > 0 || hasNextPage ? (
+        <nav className="gal-page-window" aria-label="目录分页">
+          {currentPageIndex > 0 ? (
+            <Button variant="secondary" onPress={() => setRequestedPageIndex(currentPageIndex - 1)}>
+              上一批
+            </Button>
+          ) : null}
+          {hasNextPage ? (
+            <Button variant="secondary" isDisabled={entries.isFetchingNextPage} onPress={showNextPage}>
+              {entries.isFetchingNextPage ? '正在载入下一批' : '下一批'}
+            </Button>
+          ) : null}
+        </nav>
       ) : null}
     </div>
   );

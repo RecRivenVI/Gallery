@@ -6,6 +6,7 @@
  * 差异的唯一解释入口，在界面里硬编码平台特例会绕开它。
  */
 
+import { useEffect, useState } from 'react';
 import { Link, useParams, useSearchParams } from 'react-router';
 import { Badge, Button, EmptyState, ErrorState, Select, Spinner } from '../../design';
 import { describeError, errorCode, errorCorrelationId } from '../../shared/errors';
@@ -279,8 +280,30 @@ export function CreatorsPage() {
   // Source 下发的 authorDefault 决定首个请求的排序。Source 尚未解析时先暂停 Creator
   // 查询，避免用全局默认发出一条随即废弃的第一页请求。
   const creators = useCreators(sourceId, sort, sourceId === undefined || source !== undefined);
-  const items = creators.data?.pages.flatMap((page) => page.creators) ?? [];
+  const pages = creators.data?.pages ?? [];
+  const [requestedPageIndex, setRequestedPageIndex] = useState(0);
+  const currentPageIndex = Math.min(requestedPageIndex, Math.max(0, pages.length - 1));
+  const items = pages[currentPageIndex]?.creators ?? [];
   const authorLabel = source?.presentation?.authorLabel ?? '创作者';
+
+  useEffect(() => {
+    setRequestedPageIndex(0);
+  }, [sourceId, sort]);
+
+  const hasLoadedNextPage = currentPageIndex + 1 < pages.length;
+  const hasNextPage = hasLoadedNextPage || (currentPageIndex === pages.length - 1 && creators.hasNextPage);
+  const showNextPage = () => {
+    if (hasLoadedNextPage) {
+      setRequestedPageIndex(currentPageIndex + 1);
+      return;
+    }
+    if (!creators.hasNextPage || creators.isFetchingNextPage) return;
+    void creators.fetchNextPage().then((result) => {
+      if (!result.isError && (result.data?.pages.length ?? 0) > currentPageIndex + 1) {
+        setRequestedPageIndex(currentPageIndex + 1);
+      }
+    });
+  };
 
   if (sourceId !== undefined && sources.error !== null) {
     return (
@@ -357,6 +380,10 @@ export function CreatorsPage() {
         />
       ) : (
         <>
+          <p className="gal-browser__summary" role="status">
+            第 {currentPageIndex + 1} 页，本页 {items.length} 位{authorLabel}
+            {hasNextPage ? '（还有下一页）' : '（已到末页）'}。
+          </p>
           <div className="gal-tiles">
             {items.map((creator) => (
               <CreatorTile key={creator.id} creator={creator} sourceId={sourceId} />
@@ -364,18 +391,27 @@ export function CreatorsPage() {
           </div>
           {creators.isFetchNextPageError ? (
             <ErrorState
-              title={`更多${authorLabel}加载失败`}
+              title={`下一页${authorLabel}加载失败`}
               description={describeError(creators.error)}
               code={errorCode(creators.error)}
               correlationId={errorCorrelationId(creators.error)}
-              onRetry={() => void creators.fetchNextPage()}
+              onRetry={showNextPage}
+              retryLabel={`重试下一页${authorLabel}`}
             />
-          ) : creators.hasNextPage ? (
-            <div className="gal-browser__more">
-              <Button onPress={() => void creators.fetchNextPage()} isDisabled={creators.isFetchingNextPage}>
-                {creators.isFetchingNextPage ? `正在加载更多${authorLabel}` : `加载更多${authorLabel}`}
-              </Button>
-            </div>
+          ) : null}
+          {currentPageIndex > 0 || hasNextPage ? (
+            <nav className="gal-page-window" aria-label={`${authorLabel}分页`}>
+              {currentPageIndex > 0 ? (
+                <Button variant="secondary" onPress={() => setRequestedPageIndex(currentPageIndex - 1)}>
+                  上一页{authorLabel}
+                </Button>
+              ) : null}
+              {hasNextPage ? (
+                <Button variant="secondary" isDisabled={creators.isFetchingNextPage} onPress={showNextPage}>
+                  {creators.isFetchingNextPage ? `正在载入下一页${authorLabel}` : `下一页${authorLabel}`}
+                </Button>
+              ) : null}
+            </nav>
           ) : null}
         </>
       )}

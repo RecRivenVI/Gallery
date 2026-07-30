@@ -27,6 +27,7 @@ import { MediaImage, MediaLoaderProvider } from './components/media';
 import { MediaLoader } from './media';
 import { WorkPage } from './pages/work';
 import { CreatorsPage } from './pages/discover';
+import { FileBrowserPage } from './pages/files';
 
 const PUBLICATION = 'qpub_test';
 
@@ -235,7 +236,7 @@ describe('服务端排序协议', () => {
 });
 
 describe('创作者浏览分页', () => {
-  it('继承平台作者称谓，并以显式 Source 范围和游标连续加载', async () => {
+  it('继承平台作者称谓，并以显式 Source 范围和游标按当前页浏览', async () => {
     const requests: Array<Record<string, string | null>> = [];
     setFetchHandler((request) => {
       const url = new URL(request.url);
@@ -290,7 +291,13 @@ describe('创作者浏览分页', () => {
     expect(await screen.findByRole('heading', { name: 'pixiv · 画师' })).toBeInTheDocument();
     const firstCreator = await screen.findByText('画师甲');
     expect(firstCreator.closest('a')).toHaveAttribute('href', '/creators/creator_a?sourceId=src_pixiv');
-    await userEvent.click(screen.getByRole('button', { name: '加载更多画师' }));
+    await userEvent.click(screen.getByRole('button', { name: '下一页画师' }));
+    expect(await screen.findByText('画师乙')).toBeInTheDocument();
+    expect(screen.queryByText('画师甲')).not.toBeInTheDocument();
+    await userEvent.click(screen.getByRole('button', { name: '上一页画师' }));
+    expect(await screen.findByText('画师甲')).toBeInTheDocument();
+    expect(screen.queryByText('画师乙')).not.toBeInTheDocument();
+    await userEvent.click(screen.getByRole('button', { name: '下一页画师' }));
     expect(await screen.findByText('画师乙')).toBeInTheDocument();
     expect(requests).toEqual([
       { sourceId: 'src_pixiv', includeMerged: 'false', sort: 'name_asc', limit: '48', cursor: null },
@@ -302,6 +309,63 @@ describe('创作者浏览分页', () => {
         cursor: 'next-page'
       }
     ]);
+  });
+});
+
+describe('实时文件目录分页', () => {
+  it('续页失败保留当前批，重试后切换并复用已访问批次', async () => {
+    const cursors: Array<string | null> = [];
+    let nextAttempts = 0;
+    setFetchHandler((request) => {
+      const url = new URL(request.url);
+      if (url.pathname === '/api/v1/bootstrap') {
+        return jsonResponse({
+          ...BOOTSTRAP,
+          availableCapabilities: [...BOOTSTRAP.availableCapabilities, 'files.browse'],
+          effectiveCapabilities: [...BOOTSTRAP.effectiveCapabilities, 'files.browse']
+        });
+      }
+      if (url.pathname === '/api/v1/file-roots/root_a/entries') {
+        const after = url.searchParams.get('after');
+        cursors.push(after);
+        if (after === null) {
+          return jsonResponse({
+            rootId: 'root_a',
+            entries: [
+              { name: '第一页文件.jpg', relativePath: '第一页文件.jpg', kind: 'file', sizeBytes: 10 }
+            ],
+            nextAfter: 'page-two'
+          });
+        }
+        nextAttempts += 1;
+        if (nextAttempts === 1) return faultResponse('FORBIDDEN', 403);
+        return jsonResponse({
+          rootId: 'root_a',
+          entries: [{ name: '第二页文件.jpg', relativePath: '第二页文件.jpg', kind: 'file', sizeBytes: 20 }]
+        });
+      }
+      return faultResponse('NOT_FOUND', 404);
+    });
+
+    renderGallery(
+      <Routes>
+        <Route path="/files/:rootId" element={<FileBrowserPage />} />
+      </Routes>,
+      '/files/root_a'
+    );
+
+    expect(await screen.findByText('第一页文件.jpg')).toBeInTheDocument();
+    await userEvent.click(screen.getByRole('button', { name: '下一批' }));
+    expect(await screen.findByRole('heading', { name: '下一批目录条目加载失败' })).toBeInTheDocument();
+    expect(screen.getByText('第一页文件.jpg')).toBeInTheDocument();
+    await userEvent.click(screen.getByRole('button', { name: '重试下一批' }));
+    expect(await screen.findByText('第二页文件.jpg')).toBeInTheDocument();
+    expect(screen.queryByText('第一页文件.jpg')).not.toBeInTheDocument();
+    await userEvent.click(screen.getByRole('button', { name: '上一批' }));
+    expect(await screen.findByText('第一页文件.jpg')).toBeInTheDocument();
+    await userEvent.click(screen.getByRole('button', { name: '下一批' }));
+    expect(await screen.findByText('第二页文件.jpg')).toBeInTheDocument();
+    expect(cursors).toEqual([null, 'page-two', 'page-two']);
   });
 });
 
