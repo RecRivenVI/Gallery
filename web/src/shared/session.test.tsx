@@ -5,12 +5,13 @@
  * token 发变更会收到 CSRF_INVALID；因此每个认证动作成功后都必须重新拉 bootstrap。
  */
 
-import { QueryClientProvider } from '@tanstack/react-query';
+import { QueryClientProvider, useMutation, useQuery } from '@tanstack/react-query';
 import { act, render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { beforeEach, describe, expect, it } from 'vitest';
 import type { ReactNode } from 'react';
 import { faultResponse, jsonResponse, setFetchHandler } from '../../tests/http';
+import { api, csrfHeaders, expectData, expectNoContent } from '../api/client';
 import { createQueryClient } from './query';
 import {
   SessionProvider,
@@ -121,6 +122,35 @@ function renderSession() {
   );
 }
 
+function InvalidatedQueryProbe() {
+  const { authenticated } = useSession();
+  const query = useQuery({
+    queryKey: ['protected-probe'],
+    queryFn: async () => expectData(await api.GET('/api/v1/libraries')),
+    enabled: authenticated
+  });
+  return (
+    <div>
+      <span data-testid="invalidated-authenticated">{String(authenticated)}</span>
+      <span data-testid="invalidated-query-state">{query.status}</span>
+    </div>
+  );
+}
+
+function InvalidatedMutationProbe() {
+  const { authenticated, csrfToken } = useSession();
+  const mutation = useMutation({
+    mutationFn: async () =>
+      expectNoContent(await api.POST('/api/v1/auth/logout', { params: { header: csrfHeaders(csrfToken) } }))
+  });
+  return (
+    <div>
+      <span data-testid="mutation-authenticated">{String(authenticated)}</span>
+      <button onClick={() => mutation.mutate()}>触发失效变更</button>
+    </div>
+  );
+}
+
 describe('SessionProvider', () => {
   it('bootstrap 是唯一状态来源', async () => {
     renderSession();
@@ -202,6 +232,72 @@ describe('SessionProvider', () => {
     );
     expect(recorded.find((entry) => entry.path === '/api/v1/personal/pair')?.csrf).toBe(ANONYMOUS.csrfToken);
     expect(screen.getByTestId('csrf')).toHaveTextContent(AUTHENTICATED.csrfToken);
+  });
+
+  it('任一查询返回 UNAUTHENTICATED 时撤下旧主体缓存并重新拉取 bootstrap', async () => {
+    bootstrapBody = AUTHENTICATED;
+    let releaseProtected: (() => void) | undefined;
+    setFetchHandler((request) => {
+      const path = new URL(request.url).pathname;
+      recorded.push({ path, csrf: request.headers.get('X-Gallery-CSRF') });
+      if (path === '/api/v1/bootstrap') return jsonResponse(bootstrapBody);
+      if (path === '/api/v1/libraries') {
+        return new Promise<Response>((resolve) => {
+          releaseProtected = () => {
+            bootstrapBody = ANONYMOUS;
+            resolve(faultResponse('UNAUTHENTICATED', 401));
+          };
+        });
+      }
+      return faultResponse('NOT_FOUND', 404);
+    });
+    const queryClient = createQueryClient();
+    queryClient.setQueryData(['sensitive-cache'], { owner: 'principal_1' });
+    render(
+      <QueryClientProvider client={queryClient}>
+        <SessionProvider>
+          <InvalidatedQueryProbe />
+        </SessionProvider>
+      </QueryClientProvider>
+    );
+
+    expect(await screen.findByTestId('invalidated-authenticated')).toHaveTextContent('true');
+    expect(releaseProtected).toBeTypeOf('function');
+    act(() => releaseProtected?.());
+
+    await waitFor(() => {
+      expect(screen.getByTestId('invalidated-authenticated')).toHaveTextContent('false');
+    });
+    expect(queryClient.getQueryData(['sensitive-cache'])).toBeUndefined();
+    expect(recorded.filter((entry) => entry.path === '/api/v1/bootstrap')).toHaveLength(2);
+  });
+
+  it('任一变更返回 CSRF_INVALID 时也重新确认会话', async () => {
+    bootstrapBody = AUTHENTICATED;
+    setFetchHandler((request) => {
+      const path = new URL(request.url).pathname;
+      recorded.push({ path, csrf: request.headers.get('X-Gallery-CSRF') });
+      if (path === '/api/v1/bootstrap') return jsonResponse(bootstrapBody);
+      if (path === '/api/v1/auth/logout') {
+        bootstrapBody = ANONYMOUS;
+        return faultResponse('CSRF_INVALID', 403);
+      }
+      return faultResponse('NOT_FOUND', 404);
+    });
+    render(
+      <Wrapper>
+        <SessionProvider>
+          <InvalidatedMutationProbe />
+        </SessionProvider>
+      </Wrapper>
+    );
+
+    expect(await screen.findByTestId('mutation-authenticated')).toHaveTextContent('true');
+    await userEvent.click(screen.getByRole('button', { name: '触发失效变更' }));
+    await waitFor(() => {
+      expect(screen.getByTestId('mutation-authenticated')).toHaveTextContent('false');
+    });
+    expect(recorded.filter((entry) => entry.path === '/api/v1/bootstrap')).toHaveLength(2);
   });
 });
 

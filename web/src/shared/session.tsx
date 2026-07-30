@@ -17,13 +17,14 @@
  */
 
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { createContext, useCallback, useContext, useMemo } from 'react';
+import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react';
 import type { ReactNode } from 'react';
 import { api, csrfHeaders, expectData, expectNoContent, type Bootstrap } from '../api/client';
 // capability 词表事实源在 `internal/auth`，前端副本由 Go 的
 // TestWebCapabilityVocabularyMatchesBackend 逐项比对。这里只是转发，不要在别处另抄一份。
 import { CAPABILITIES, JOB_MUTATION_CAPABILITIES, type Capability } from '../auth/capabilities';
 import { describeError, errorCode, errorCorrelationId } from './errors';
+import { isSessionInvalidated } from './query';
 import { Button, ErrorState, Spinner } from '../design';
 
 export { CAPABILITIES, JOB_MUTATION_CAPABILITIES };
@@ -47,6 +48,12 @@ const SessionContext = createContext<SessionValue | null>(null);
 
 const BOOTSTRAP_QUERY_KEY = ['bootstrap'] as const;
 
+function isBootstrapQueryKey(value: unknown): boolean {
+  if (!Array.isArray(value)) return false;
+  const queryKey: unknown[] = value;
+  return queryKey[0] === 'bootstrap';
+}
+
 export interface SessionProviderProps {
   children: ReactNode;
   /** 首次拉取 bootstrap 期间的占位内容。默认是一个居中的加载指示。 */
@@ -55,6 +62,10 @@ export interface SessionProviderProps {
 
 export function SessionProvider({ children, fallback }: SessionProviderProps) {
   const queryClient = useQueryClient();
+  const [reconciliation, setReconciliation] = useState<
+    { status: 'idle' | 'pending'; error?: never } | { status: 'error'; error: unknown }
+  >({ status: 'idle' });
+  const reconciliationRef = useRef<Promise<void> | null>(null);
   const bootstrapQuery = useQuery({
     queryKey: BOOTSTRAP_QUERY_KEY,
     queryFn: async ({ signal }) => expectData(await api.GET('/api/v1/bootstrap', { signal })),
@@ -66,6 +77,57 @@ export function SessionProvider({ children, fallback }: SessionProviderProps) {
   const refresh = useCallback(async () => {
     await queryClient.refetchQueries({ queryKey: BOOTSTRAP_QUERY_KEY });
   }, [queryClient]);
+
+  const reconcileInvalidatedSession = useCallback(() => {
+    if (reconciliationRef.current !== null) return;
+
+    setReconciliation({ status: 'pending' });
+    const task = (async () => {
+      // 一旦服务端判定当前主体无效，旧主体的响应和缓存都不能继续留在界面上。
+      // bootstrap 本身保留为活动查询，用它取得新的匿名/认证状态和 CSRF token。
+      await queryClient.cancelQueries({ predicate: (query) => query.queryKey[0] !== 'bootstrap' });
+      queryClient.removeQueries({ predicate: (query) => query.queryKey[0] !== 'bootstrap' });
+      await queryClient.refetchQueries(
+        { queryKey: BOOTSTRAP_QUERY_KEY, type: 'active' },
+        { throwOnError: true }
+      );
+    })();
+    reconciliationRef.current = task;
+    void task
+      .then(
+        () => setReconciliation({ status: 'idle' }),
+        (error: unknown) => setReconciliation({ status: 'error', error })
+      )
+      .finally(() => {
+        if (reconciliationRef.current === task) reconciliationRef.current = null;
+      });
+  }, [queryClient]);
+
+  useEffect(() => {
+    const unsubscribeQueries = queryClient.getQueryCache().subscribe((event) => {
+      if (
+        event.type === 'updated' &&
+        event.action.type === 'error' &&
+        !isBootstrapQueryKey(event.query.queryKey) &&
+        isSessionInvalidated(event.query.state.error)
+      ) {
+        reconcileInvalidatedSession();
+      }
+    });
+    const unsubscribeMutations = queryClient.getMutationCache().subscribe((event) => {
+      if (
+        event.type === 'updated' &&
+        event.action.type === 'error' &&
+        isSessionInvalidated(event.mutation.state.error)
+      ) {
+        reconcileInvalidatedSession();
+      }
+    });
+    return () => {
+      unsubscribeQueries();
+      unsubscribeMutations();
+    };
+  }, [queryClient, reconcileInvalidatedSession]);
 
   const bootstrap = bootstrapQuery.data;
   const value = useMemo<SessionValue | null>(() => {
@@ -85,6 +147,26 @@ export function SessionProvider({ children, fallback }: SessionProviderProps) {
       refresh
     };
   }, [bootstrap, refresh]);
+
+  if (reconciliation.status === 'pending') {
+    return (
+      <div className="ui-state">
+        <Spinner label="正在重新确认会话…" />
+      </div>
+    );
+  }
+
+  if (reconciliation.status === 'error') {
+    return (
+      <ErrorState
+        title="无法重新确认会话"
+        description={describeError(reconciliation.error)}
+        code={errorCode(reconciliation.error)}
+        correlationId={errorCorrelationId(reconciliation.error)}
+        onRetry={reconcileInvalidatedSession}
+      />
+    );
+  }
 
   if (bootstrapQuery.isPending) {
     return (
