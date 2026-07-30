@@ -10,7 +10,7 @@
  *   把它并入 file 会显示成一个 0 字节的普通文件，那是错误信息。
  */
 
-import { Link, useParams, useSearchParams } from 'react-router-dom';
+import { Link, useParams, useSearchParams } from 'react-router';
 import { Badge, Button, EmptyState, ErrorState, Spinner } from '../../design';
 import { describeError, errorCode, errorCorrelationId } from '../../shared/errors';
 import { useCapability } from '../../shared/session';

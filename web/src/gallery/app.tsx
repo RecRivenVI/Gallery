@@ -9,7 +9,7 @@
  * 与已加载的页数由 ScrollRestoration 与 TanStack 缓存共同恢复。
  */
 
-import { Link, Route, Routes } from 'react-router-dom';
+import { Link, Route, Routes } from 'react-router';
 import { EmptyState } from '../design';
 import { AuthGate } from '../shared/session';
 import { ConnectionStatus, ScrollRestoration, SignInPanel, TopBar } from './components/chrome';

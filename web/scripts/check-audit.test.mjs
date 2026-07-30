@@ -31,8 +31,7 @@ describe('dependency audit policy', () => {
     const policy = validatePolicy(clone(policyFixture), new Date('2026-07-26T00:00:00Z'));
     expect(() => validateLockState(policy, clone(lockFixture))).not.toThrow();
     expect(validateAuditReports(policy, clone(fullFixture), clone(productionFixture))).toEqual([
-      { advisory: 'GHSA-mh99-v99m-4gvg', scope: 'dev', expiresOn: '2026-08-09' },
-      { advisory: 'GHSA-qwww-vcr4-c8h2', scope: 'production', expiresOn: '2026-08-09' }
+      { advisory: 'GHSA-mh99-v99m-4gvg', scope: 'dev', expiresOn: '2026-08-09' }
     ]);
   });
 
@@ -44,8 +43,8 @@ describe('dependency audit policy', () => {
 
   it('fails when a locked dependency version changes', () => {
     const lock = clone(lockFixture);
-    lock.packages['node_modules/react-router'].version = '7.18.2';
-    expect(() => validateLockState(policyFixture, lock)).toThrow(/react-router 已变化/);
+    lock.packages['node_modules/openapi-typescript'].version = '7.13.1';
+    expect(() => validateLockState(policyFixture, lock)).toThrow(/openapi-typescript 已变化/);
   });
 
   it('fails on an unknown advisory', () => {
@@ -75,7 +74,7 @@ describe('dependency audit policy', () => {
 
   it('never permits critical findings', () => {
     const report = clone(fullFixture);
-    report.vulnerabilities['react-router'].severity = 'critical';
+    report.vulnerabilities['brace-expansion'].severity = 'critical';
     report.metadata.vulnerabilities.critical = 1;
     expect(() => analyzeAuditReport(report, 'fixture')).toThrow(/critical/);
   });
@@ -117,10 +116,11 @@ describe('npm audit process boundary', () => {
 
 describe('local reachability premises', () => {
   const packageJson = {
+    engines: { node: '>=22.22.0' },
     scripts: {
       'generate:api': 'openapi-typescript ../internal/contract/api/openapi.yaml -o src/api/schema.gen.ts'
     },
-    dependencies: { 'react-router-dom': '7.18.1' },
+    dependencies: { 'react-router': '8.3.0' },
     devDependencies: {}
   };
 
@@ -138,7 +138,7 @@ describe('local reachability premises', () => {
 
   it('accepts the SPA entrypoint and rejects RSC or SSR APIs', () => {
     const spaEntry =
-      "import { BrowserRouter } from 'react-router-dom';\ncreateRoot(root).render(<BrowserRouter />);";
+      "import { BrowserRouter } from 'react-router';\ncreateRoot(root).render(<BrowserRouter />);";
     const valid = {
       packageJson,
       // 双入口：画廊与管理各是一个独立 SPA，前提必须对每一个都成立。
@@ -147,9 +147,24 @@ describe('local reachability premises', () => {
         { path: 'src/manage/main.tsx', content: spaEntry }
       ],
       viteConfig: 'export default { build: {} };',
-      sourceFiles: [{ path: 'src/gallery/main.tsx', content: "import { Link } from 'react-router-dom';" }]
+      sourceFiles: [{ path: 'src/gallery/main.tsx', content: "import { Link } from 'react-router';" }]
     };
     expect(() => validateWebPremise(valid)).not.toThrow();
+    expect(() =>
+      validateWebPremise({
+        ...valid,
+        packageJson: {
+          ...packageJson,
+          dependencies: { ...packageJson.dependencies, 'react-router-dom': '7.18.2' }
+        }
+      })
+    ).toThrow(/RSC\/SSR 依赖/);
+    expect(() =>
+      validateWebPremise({
+        ...valid,
+        packageJson: { ...packageJson, engines: { node: '>=22.12.0' } }
+      })
+    ).toThrow(/Node baseline/);
     expect(() =>
       validateWebPremise({
         ...valid,

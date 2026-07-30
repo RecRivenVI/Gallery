@@ -12,7 +12,7 @@
  */
 
 import type { ReactNode } from 'react';
-import { Link } from 'react-router-dom';
+import { Link } from 'react-router';
 import { Badge, IconButton, useKeyedLayoutMotion, useToast } from '../../design';
 import { describeError } from '../../shared/errors';
 import { useCapability } from '../../shared/session';

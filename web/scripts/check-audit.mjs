@@ -16,8 +16,8 @@ const LOCK_PATH = path.join(webRoot, 'package-lock.json');
 const PACKAGE_PATH = path.join(webRoot, 'package.json');
 const OPENAPI_PATH = path.join(repoRoot, 'internal', 'contract', 'api', 'openapi.yaml');
 const SOURCE_ROOT = path.join(webRoot, 'src');
-// 双入口：画廊与管理是两个独立 SPA，`web-spa-no-rsc-ssr` 这条静态前提必须对**每一个**入口
-// 成立。只检查其中一个等于给另一个开了后门。
+// 双入口：画廊与管理是两个独立 SPA，纯客户端入口约束必须对**每一个**入口成立。
+// 只检查其中一个等于给另一个开了后门。
 const ENTRY_PATHS = [
   path.join(SOURCE_ROOT, 'gallery', 'main.tsx'),
   path.join(SOURCE_ROOT, 'manage', 'main.tsx')
@@ -26,8 +26,7 @@ const VITE_CONFIG_PATH = path.join(webRoot, 'vite.config.ts');
 const MAX_EXCEPTION_EXPIRY = '2026-08-09';
 
 const permittedExceptions = new Map([
-  ['GHSA-mh99-v99m-4gvg', { scope: 'dev', premises: ['openapi-internal-refs-only'] }],
-  ['GHSA-qwww-vcr4-c8h2', { scope: 'production', premises: ['web-spa-no-rsc-ssr'] }]
+  ['GHSA-mh99-v99m-4gvg', { scope: 'dev', premises: ['openapi-internal-refs-only'] }]
 ]);
 
 const sourceExtensions = new Set(['.cjs', '.js', '.jsx', '.mjs', '.ts', '.tsx']);
@@ -378,10 +377,8 @@ const forbiddenWebPatterns = [
 ];
 
 export function validateWebPremise({ packageJson, entrySources, viteConfig, sourceFiles }) {
-  assertGate(
-    packageJson.dependencies?.['react-router-dom'] === '7.18.1',
-    'react-router-dom 不再锁定为 7.18.1'
-  );
+  assertGate(packageJson.engines?.node === '>=22.22.0', 'Web Node baseline 不再锁定为 >=22.22.0');
+  assertGate(packageJson.dependencies?.['react-router'] === '8.3.0', 'react-router 不再锁定为 8.3.0');
   const allDependencies = {
     ...(packageJson.dependencies ?? {}),
     ...(packageJson.devDependencies ?? {})
@@ -389,6 +386,7 @@ export function validateWebPremise({ packageJson, entrySources, viteConfig, sour
   const forbiddenDependencies = Object.keys(allDependencies).filter(
     (name) =>
       name.startsWith('@react-router/') ||
+      name === 'react-router-dom' ||
       name === 'react-server-dom-webpack' ||
       name === 'react-server-dom-parcel' ||
       name === 'react-server-dom-turbopack'
@@ -407,7 +405,7 @@ export function validateWebPremise({ packageJson, entrySources, viteConfig, sour
     assertString(entry?.path, 'entrySources[].path');
     assertString(entry?.content, `${entry?.path} 入口内容`);
     assertGate(
-      entry.content.includes("import { BrowserRouter } from 'react-router-dom';"),
+      entry.content.includes("import { BrowserRouter } from 'react-router';"),
       `${entry.path} 不再使用 BrowserRouter SPA`
     );
     assertGate(

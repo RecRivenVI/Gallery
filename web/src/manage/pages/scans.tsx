@@ -10,7 +10,7 @@
  */
 
 import { useState } from 'react';
-import { Link } from 'react-router-dom';
+import { Link } from 'react-router';
 import { Badge, Button, Select, TextInput, useToast } from '../../design';
 import { errorCode } from '../../shared/errors';
 import { useAnyCapability, useCapability, JOB_MUTATION_CAPABILITIES } from '../../shared/session';

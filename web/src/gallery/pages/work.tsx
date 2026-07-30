@@ -12,7 +12,7 @@
  */
 
 import { useRef } from 'react';
-import { Link, useParams, useSearchParams } from 'react-router-dom';
+import { Link, useParams, useSearchParams } from 'react-router';
 import { Badge, Button, EmptyState, ErrorState, Spinner, useToast } from '../../design';
 import { describeError, errorCode, errorCorrelationId } from '../../shared/errors';
 import { useCapability, useSession } from '../../shared/session';

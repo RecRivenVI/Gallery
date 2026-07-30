@@ -9,7 +9,7 @@
  */
 
 import { useCallback, useEffect, useState, type FormEvent, type ReactNode } from 'react';
-import { Link, NavLink, NavigationType, useLocation, useNavigate, useNavigationType } from 'react-router-dom';
+import { Link, NavLink, NavigationType, useLocation, useNavigate, useNavigationType } from 'react-router';
 import { Button, Dialog, Icon, Menu, Spinner, TextInput, type IconName } from '../../design';
 import { describeError } from '../../shared/errors';
 import { useRealtime } from '../../shared/realtime';

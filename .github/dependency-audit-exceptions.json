@@ -42,32 +42,6 @@
           "version": "2.1.2"
         }
       ]
-    },
-    {
-      "advisory": "GHSA-qwww-vcr4-c8h2",
-      "scope": "production",
-      "expiresOn": "2026-08-09",
-      "reason": "该公告只影响 unstable RSC API；Gallery Web 当前是 BrowserRouter SPA，不含 RSC、SSR 或 Server Action。",
-      "premises": ["web-spa-no-rsc-ssr"],
-      "fullPackages": ["react-router", "react-router-dom"],
-      "productionPackages": ["react-router", "react-router-dom"],
-      "rootDependency": {
-        "name": "react-router-dom",
-        "section": "dependencies",
-        "specifier": "7.18.1"
-      },
-      "lockChain": [
-        {
-          "name": "react-router-dom",
-          "path": "node_modules/react-router-dom",
-          "version": "7.18.1"
-        },
-        {
-          "name": "react-router",
-          "path": "node_modules/react-router",
-          "version": "7.18.1"
-        }
-      ]
     }
   ]
 }

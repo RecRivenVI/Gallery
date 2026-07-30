@@ -6,7 +6,7 @@
  * 差异的唯一解释入口，在界面里硬编码平台特例会绕开它。
  */
 
-import { Link, useParams, useSearchParams } from 'react-router-dom';
+import { Link, useParams, useSearchParams } from 'react-router';
 import { Badge, Button, EmptyState, ErrorState, Select, Spinner } from '../../design';
 import { describeError, errorCode, errorCorrelationId } from '../../shared/errors';
 import { useCapability } from '../../shared/session';

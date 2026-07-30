@@ -6,7 +6,7 @@
  * 管理端与画廊共享会话语义但入口独立：未认证时它渲染自己的认证界面，而不是把人送去画廊。
  */
 
-import { Route, Routes } from 'react-router-dom';
+import { Route, Routes } from 'react-router';
 import { useState } from 'react';
 import { Button, EmptyState, Spinner, TextInput } from '../design';
 import { AuthGate, useAuthActions, useSession } from '../shared/session';

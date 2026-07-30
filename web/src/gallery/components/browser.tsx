@@ -9,7 +9,7 @@
  */
 
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
-import { useSearchParams } from 'react-router-dom';
+import { useSearchParams } from 'react-router';
 import { Button, EmptyState, ErrorState, Select, Spinner, Switch, TextInput } from '../../design';
 import { describeError, errorCode, errorCopy, errorCorrelationId } from '../../shared/errors';
 import { useCapability } from '../../shared/session';

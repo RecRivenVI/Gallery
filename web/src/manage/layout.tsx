@@ -8,7 +8,7 @@
 
 import { useCallback, useEffect } from 'react';
 import type { ReactNode } from 'react';
-import { NavLink } from 'react-router-dom';
+import { NavLink } from 'react-router';
 import { useQueryClient } from '@tanstack/react-query';
 import { Badge, Button, Dialog, Icon, Menu, type IconName } from '../design';
 import { SNAPSHOT_QUERY_PREFIXES } from '../shared/query';

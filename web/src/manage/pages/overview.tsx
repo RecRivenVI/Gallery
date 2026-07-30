@@ -5,7 +5,7 @@
  * 服务端没有指标接口，任何看起来像趋势图的东西都会是编造的。
  */
 
-import { Link } from 'react-router-dom';
+import { Link } from 'react-router';
 import { Badge } from '../../design';
 import { useSession } from '../../shared/session';
 import {

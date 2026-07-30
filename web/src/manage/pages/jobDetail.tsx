@@ -5,7 +5,7 @@
  * 每次失败的稳定 code 是什么」只能在这里看到——任务列表只显示当前 Attempt。
  */
 
-import { Link, useParams } from 'react-router-dom';
+import { Link, useParams } from 'react-router';
 import { Badge } from '../../design';
 import { useJob, useJobAttempts } from '../api';
 import { JOB_MUTATION_CAPABILITY, JOB_STATUS_LABELS, JOB_STATUS_TONES, JOB_TYPE_LABELS } from '../labels';
