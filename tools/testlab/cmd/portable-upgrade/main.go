@@ -430,7 +430,7 @@ func run(previousBin, currentBin, previousVersion, currentVersion string) error 
 	if !strings.Contains(string(continuityLogData), "RESTORE_FAILED:") {
 		return fmt.Errorf("连续性未知进程日志未记录 RESTORE_FAILED")
 	}
-	if err := assertContinuityRestoreRecorded(appRoot, continuityBackup.BackupId, "落位恢复候选"); err != nil {
+	if err := assertContinuityRestoreRecorded(appRoot, continuityBackup.BackupId, "当前 control.db 不存在"); err != nil {
 		return err
 	}
 	if _, err := os.Stat(controlPath); !errors.Is(err, os.ErrNotExist) {
