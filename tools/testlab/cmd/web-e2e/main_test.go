@@ -29,6 +29,29 @@ func TestValidateBrowserProject(t *testing.T) {
 	}
 }
 
+func TestValidateRunModes(t *testing.T) {
+	for _, modes := range [][]bool{
+		{false, false, false},
+		{true, false, false},
+		{false, true, false},
+		{false, false, true},
+	} {
+		if err := validateRunModes(modes...); err != nil {
+			t.Fatalf("合法模式 %v 被拒绝: %v", modes, err)
+		}
+	}
+	for _, modes := range [][]bool{
+		{true, true, false},
+		{true, false, true},
+		{false, true, true},
+		{true, true, true},
+	} {
+		if err := validateRunModes(modes...); err == nil {
+			t.Fatalf("冲突模式 %v 未被拒绝", modes)
+		}
+	}
+}
+
 func TestRetainDiagnosticsPreservesDistinctLogNames(t *testing.T) {
 	logsRoot := t.TempDir()
 	diagnosticsRoot := t.TempDir()

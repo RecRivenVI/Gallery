@@ -53,6 +53,12 @@ Cursor 与 20 项媒体/DerivedAsset finding；`creator.id` 使用另一个真�
 双库身份后逐 ID 验证。测试使用临时 AppDirs 和合成 Source，锁定完整 finding 名集合、
 脱敏报告，以及首次 index scan 后至按需确认/Derived 完成期间的 Source 零写入；不运行性能矩阵，也不替代 500,000 Reference、HDD/SMB/NAS 或真实 Source 门禁。
 
+`cmd/web-e2e` 的完整模式顺序驱动 Chromium/Firefox 与真实 `galleryd` 完成业务、治理、恢复和 LAN 链。
+开发高对比交互状态时可用 `-accessibility-only`：它只建立临时 AppDirs、动态 loopback 服务与真实
+Personal Session，执行 320px/forced-colors/文本间距下的 Token 校验、一次性密文、吊销确认、维护校验和
+维护确认，并在退出前核对合成 Source guard。该模式仍使用真实后端，不会把密文写入截图、录像、trace
+或 axe 失败详情；它不替代完整模式，也不代表物理系统高对比、实际浏览器缩放或人工辅助技术验收。
+
 ## 规模分级
 
 见 `Documents/指南/02-测试与发布门禁.md`「正式验证规模分级」：`smoke`(1k)/`integration`(10k)/
