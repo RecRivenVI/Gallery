@@ -18,9 +18,10 @@ import (
 	"github.com/RecRivenVI/gallery/internal/toolrunner"
 )
 
-// 这组用例默认关闭。它只接受显式绝对 ffprobe 路径，不从 PATH 猜测工具，也不改变生产 Resolver
-// 仍为 nil 的 fail-closed 行为。发布门禁可用本机或受控制品中的真实 ffprobe 补充“实际工具进程”证据；
-// 普通单元测试仍只依赖仓库自己的测试二进制。
+// 这组用例默认关闭。它只接受显式绝对 ffprobe 路径，不从 PATH 猜测工具，也不改变生产
+// ToolDiscovery 默认关闭的 fail-closed 行为。发布门禁可用本机或受控制品中的真实 ffprobe
+// 补充“实际工具进程”证据；普通单元测试仍只依赖仓库自己的测试二进制。显式版本/摘要 pin
+// 与多容器恶意语料由 tools/testlab/stages/stage5/security 的独立门禁覆盖。
 const actualFFprobePathEnv = "GALLERY_TEST_FFPROBE_PATH"
 
 type explicitFFprobeResolver struct {
