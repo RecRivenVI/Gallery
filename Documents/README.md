@@ -32,6 +32,8 @@ EV-67 延续上述真实后端持续门禁：当前 primitive config 的 15 个 
 
 [EV-116](证据/验证记录.md) 再把同一 19 条路由放入 320×800、应用高对比主题、模拟 forced-colors/prefers-contrast 和 WCAG 文本间距组合，修复强制颜色层叠、Firefox 按钮/链接系统色语义与管理 Grid 溢出；双浏览器完整 mock smoke 24/24、15 文件 212 项 Vitest 及根级检查通过。320 CSS px 是 400% 的等效重排宽度而非实际浏览器缩放，forced-colors 也不是物理操作系统高对比验收，Web Gate 仍未通过。
 
+[EV-117](证据/验证记录.md) 继续在相同组合下覆盖作品封面选单、维护校验/确认、Token 校验及一次性密文五个交互状态；Chromium/Firefox 完整 mock smoke 26/26、根级检查通过。该证据使用合成 API，不替代真实安全写链，也不代表交互状态穷举、真实设备或人工辅助技术，Web Gate 仍未通过。
+
 [EV-114](证据/验证记录.md) 纠正外部工具测试状态的文档漂移：既有提交 `2af146a` 已让 1,024-byte 输出溢出与 3 秒执行超时实际驱动父子孙 OS 进程树终止；Windows 各 5 轮重复和 WSL2 race 复验通过。生产 Resolver、真实 ffmpeg/恶意媒体容器及 CPU/内存硬限额仍未验证，Security Gate 不因此通过。
 
 [EV-115](证据/验证记录.md) 再增加默认关闭的显式真实 `ffprobe` 门禁：版本输出基线先证明 stdout 超过 128 bytes，再验证 128-byte 输出溢出、3 秒 loopback 输入超时与纯合成截断 MP4；Windows 最终 5 轮和 WSL2 默认跳过路径 race 通过。仓库未记录本机工具路径，生产 ToolDiscovery/允许列表没有启用；恶意语料库与 CPU/内存硬限额仍缺，Security Gate 状态不变。
