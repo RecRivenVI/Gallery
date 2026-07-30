@@ -1601,6 +1601,37 @@ describe('规则草稿', () => {
     expect(await screen.findByDisplayValue('primitive_00')).toBeInTheDocument();
   }, 20_000);
 
+  it('正式 4,096 个 primitive 与 10,000 个 test 只挂载当前窗口且完整草稿不丢项', async () => {
+    await openWindowedRule(
+      windowedRuleText({
+        primitives: Array.from({ length: 4096 }, (_, index) => ({
+          id: `primitive_limit_${String(index).padStart(4, '0')}`,
+          kind: 'metadata_map',
+          config: { fields: {} }
+        })),
+        tests: Array.from({ length: 10_000 }, (_, index) => ({
+          id: `test-limit-${String(index).padStart(5, '0')}`
+        }))
+      })
+    );
+
+    expect(
+      screen.getByText('规则原语 · 第 1 / 205 页 · 本页 20 项 · 共 4096 项 · 每页最多 20 项。')
+    ).toBeInTheDocument();
+    expect(
+      screen.getByText('规则测试 · 第 1 / 500 页 · 本页 20 项 · 共 10000 项 · 每页最多 20 项。')
+    ).toBeInTheDocument();
+    expect(document.querySelectorAll('input[value^="primitive_limit_"]')).toHaveLength(20);
+    expect(document.querySelectorAll('input[value^="test-limit-"]')).toHaveLength(20);
+    expect(screen.queryByDisplayValue('primitive_limit_4095')).not.toBeInTheDocument();
+    expect(screen.queryByDisplayValue('test-limit-09999')).not.toBeInTheDocument();
+
+    await userEvent.click(screen.getByRole('tab', { name: 'JSON 文本' }));
+    const text = (screen.getByRole('textbox', { name: '草稿内容' }) as HTMLTextAreaElement).value;
+    expect(text).toContain('"primitive_limit_4095"');
+    expect(text).toContain('"test-limit-09999"');
+  }, 60_000);
+
   it('参数属性与完整对象结构分别只挂载当前 20 项', async () => {
     const properties = Object.fromEntries(
       Array.from({ length: 21 }, (_, index) => [

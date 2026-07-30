@@ -710,13 +710,15 @@ test('规则配置大数组窗口与超深 JSON 守卫在窄屏稳定 @smoke', a
     cel_profile_version: 'gallery-cel-v1',
     parameter_schema: { type: 'object', additionalProperties: false },
     provider_namespaces: [],
-    primitives: Array.from({ length: 21 }, (_, index) => ({
-      id: `primitive_${String(index).padStart(2, '0')}`,
+    primitives: Array.from({ length: 4096 }, (_, index) => ({
+      id: `primitive_limit_${String(index).padStart(4, '0')}`,
       kind: 'metadata_map',
       config: { fields: {} }
     })),
     cel_expressions: [],
-    tests: [{ id: 'base-test' }],
+    tests: Array.from({ length: 10_000 }, (_, index) => ({
+      id: `test-limit-${String(index).padStart(5, '0')}`
+    })),
     extensions: {
       'gallery.window': {
         required: false,
@@ -775,15 +777,20 @@ test('规则配置大数组窗口与超深 JSON 守卫在窄屏稳定 @smoke', a
   await expect(page.getByTestId('rule-schema-form')).toBeVisible();
 
   await expect(
-    page.getByText('规则原语 · 第 1 / 2 页 · 本页 20 项 · 共 21 项 · 每页最多 20 项。')
+    page.getByText('规则原语 · 第 1 / 205 页 · 本页 20 项 · 共 4096 项 · 每页最多 20 项。')
   ).toBeVisible();
-  await expect(page.locator('input[value="primitive_00"]')).toBeVisible();
-  await expect(page.locator('input[value="primitive_20"]')).toHaveCount(0);
+  await expect(
+    page.getByText('规则测试 · 第 1 / 500 页 · 本页 20 项 · 共 10000 项 · 每页最多 20 项。')
+  ).toBeVisible();
+  await expect(page.locator('input[value^="primitive_limit_"]')).toHaveCount(20);
+  await expect(page.locator('input[value^="test-limit-"]')).toHaveCount(20);
+  await expect(page.locator('input[value="primitive_limit_0000"]')).toBeVisible();
+  await expect(page.locator('input[value="primitive_limit_0020"]')).toHaveCount(0);
   await page.getByRole('button', { name: '下一页：规则原语', exact: true }).click();
-  await expect(page.locator('input[value="primitive_20"]')).toBeVisible();
-  await expect(page.locator('input[value="primitive_00"]')).toHaveCount(0);
+  await expect(page.locator('input[value="primitive_limit_0020"]')).toBeVisible();
+  await expect(page.locator('input[value="primitive_limit_0000"]')).toHaveCount(0);
   await page.getByRole('button', { name: '上一页：规则原语', exact: true }).click();
-  await expect(page.locator('input[value="primitive_00"]')).toBeVisible();
+  await expect(page.locator('input[value="primitive_limit_0000"]')).toBeVisible();
 
   await expect(page.locator('input[value="payload-00"]')).toBeVisible();
   await expect(page.locator('input[value="payload-20"]')).toHaveCount(0);
@@ -798,6 +805,11 @@ test('规则配置大数组窗口与超深 JSON 守卫在窄屏稳定 @smoke', a
   await expectNoHorizontalOverflow(page, '规则配置大数组与超深 JSON 窄屏边界');
   const results = await new AxeBuilder({ page }).withTags(['wcag2a', 'wcag2aa']).analyze();
   expect(results.violations).toEqual([]);
+  await expect(page.getByRole('textbox', { name: 'tests 原始 JSON' })).toHaveValue(/test-limit-09999/);
+  await page.getByRole('tab', { name: 'JSON 文本', exact: true }).click();
+  const completeDraft = page.getByRole('textbox', { name: '草稿内容', exact: true });
+  await expect(completeDraft).toHaveValue(/primitive_limit_4095/);
+  await expect(completeDraft).toHaveValue(/test-limit-09999/);
 });
 
 test('迟到的旧分页响应不会覆盖较新的搜索结果 @smoke', async ({ page }) => {
