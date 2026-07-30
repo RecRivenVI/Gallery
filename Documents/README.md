@@ -58,6 +58,8 @@ EV-67 延续上述真实后端持续门禁：当前 primitive config 的 15 个 
 
 [EV-128](证据/验证记录.md) 再建立 Windows 恶意媒体有界语料门禁：13 个纯合成样本覆盖尺寸/解压炸弹、异常长度和深度、高压缩比附件及外部引用；显式版本/摘要 pin 的真实 `ffprobe`/`ffmpeg` 经生产 ToolDiscovery、协议/格式白名单和 Job Object 预算串行执行，最终 25 findings/0 failures，HLS 外部引用未建立连接且语料前后零变化。该证据不是 coverage-guided fuzz、第三方 CVE 全集、真实媒体或非 Windows 门禁，Security Gate 仍未通过。
 
+[EV-129](证据/验证记录.md) 将双入口从 `react-router-dom@7.18.1` 迁移到 `react-router@8.3.0` 并把 Node 基线提高到 22.22.0，删除 RSC 公告的 production 审计例外；当前 production-only 审计为 0，full 审计只剩 OpenAPI 生成器链的 4 个 high/1 条 dev-only 限时例外。精确生产资产在 Chromium/Firefox mock smoke 26/26 和隔离真实 `galleryd` 完整链各 23/23 通过，合成 Source 零变化。该证据不关闭 dev-only 例外，也不替代真实设备、真实存储或完整 Web/Security Gate。
+
 2026-07-26 的 [EV-42](证据/验证记录.md#ev-42规则封面customcover-与-work-快照封面闭环e1) 又补齐规则 `CoverPath` → SourceMedia/CanonicalMedia → publication 有效封面的显式链路：同 Work 有效 CustomCover 优先，失效事实保留并回退规则封面，媒体顺序不再借用 `ordinal=-1`；`PublishedWork.coverMediaId` 为 required nullable，作品详情支持 `queryPublicationId`，Web 浏览、详情、封面与媒体沿用同一快照并提供 CustomCover 编辑。该轮通过根级 `Check.ps1`、WSL2 Debian 定向 race、合成 migration 与 Web Vitest/Chromium mock，未使用真实 Source/媒体，也没有真实后端浏览器证据；阶段 4 Reference Performance/API Freeze、阶段 5 Security Gate 与阶段 6 Web Gate 状态不变。
 
 ## 如何使用
