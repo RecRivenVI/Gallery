@@ -38,6 +38,9 @@ jobs:
       - name: 完整根级门禁
         shell: pwsh
         run: ./scripts/Check.ps1
+      - name: 验证真实历史 Schema 支持矩阵与降级拒绝
+        shell: pwsh
+        run: ./scripts/Test-WindowsHistoricalUpgrade.ps1
       - name: 安装固定版本 CycloneDX Go 工具
         shell: pwsh
         run: go install github.com/CycloneDX/cyclonedx-gomod/cmd/cyclonedx-gomod@v1.10.0

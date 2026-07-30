@@ -22,6 +22,7 @@
 - 媒体 Source 永久只读。不要把 AppDirs 放进 Source，也不要把 Source 放进 AppDirs。
 - `galleryd.exe -h` 可查看启动参数；`galleryd.exe version` 与 `galleryctl.exe version` 可核对制品版本。
 - `release-manifest.json` 记录目标平台、提交、Web/契约版本、签名状态和文件摘要；包内 `SHA256SUMS` 与 ZIP 旁的 `.sha256` 可用于离线完整性核对。
+- 本制品的 control schema 为 {{CURRENT_CONTROL_SCHEMA}}；真实历史二进制门禁连续覆盖 schema {{MINIMUM_CONTROL_SCHEMA}} 到当前版本的前向迁移。更早的开发快照不在本制品已验证的升级范围内。
 
 ## 覆盖升级与回退
 

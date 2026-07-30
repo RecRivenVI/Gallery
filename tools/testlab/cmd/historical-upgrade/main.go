@@ -27,6 +27,7 @@ import (
 const (
 	beforeUpgradeLibrary = "Historical upgrade persistent fact"
 	afterUpgradeLibrary  = "Historical upgrade current fact"
+	historicalTokenName  = "Historical upgrade persistent credential"
 	startupTimeout       = 60 * time.Second
 	jobTimeout           = 30 * time.Second
 )
@@ -46,10 +47,17 @@ type result struct {
 	CurrentBackupSchemaVersion     int64  `json:"currentBackupSchemaVersion"`
 	RestoreWillMigrate             bool   `json:"restoreWillMigrate"`
 	UpgradePreservedFacts          bool   `json:"upgradePreservedFacts"`
+	UpgradePreservedCredential     bool   `json:"upgradePreservedCredential"`
 	DowngradeRejected              bool   `json:"downgradeRejected"`
 	DowngradeLeftDatabaseUntouched bool   `json:"downgradeLeftDatabaseUntouched"`
+	DowngradePreservedCredential   bool   `json:"downgradePreservedCredential"`
 	CurrentRestartedAfterDowngrade bool   `json:"currentRestartedAfterDowngrade"`
 	AllNormalStopsExitedGracefully bool   `json:"allNormalStopsExitedGracefully"`
+}
+
+type persistentToken struct {
+	ID     string
+	Secret string
 }
 
 type controlFileFact struct {
@@ -118,6 +126,10 @@ func run(historicalBin, currentBin, historicalCommit, currentCommit string, hist
 	if err := createLibrary(ctx, historicalClient, beforeUpgradeLibrary); err != nil {
 		return err
 	}
+	historicalToken, err := createPersistentToken(ctx, historicalClient)
+	if err != nil {
+		return fmt.Errorf("历史版本创建 API Token: %w", err)
+	}
 	historicalBackup, err := createBackup(ctx, historicalClient)
 	if err != nil {
 		return fmt.Errorf("历史版本创建 control 备份: %w", err)
@@ -143,6 +155,9 @@ func run(historicalBin, currentBin, historicalCommit, currentCommit string, hist
 	}
 	if err := assertLibraries(ctx, currentClient, map[string]bool{beforeUpgradeLibrary: true}); err != nil {
 		return fmt.Errorf("迁移后的历史用户事实: %w", err)
+	}
+	if err := assertPersistentToken(ctx, active.BaseURL, currentClient, historicalToken); err != nil {
+		return fmt.Errorf("迁移后的历史凭据: %w", err)
 	}
 	verify, err := verifyBackup(ctx, currentClient, historicalBackup.BackupId)
 	if err != nil {
@@ -211,6 +226,9 @@ func run(historicalBin, currentBin, historicalCommit, currentCommit string, hist
 	}); err != nil {
 		return fmt.Errorf("拒绝降级后的用户事实: %w", err)
 	}
+	if err := assertPersistentToken(ctx, active.BaseURL, restartedClient, historicalToken); err != nil {
+		return fmt.Errorf("拒绝降级后的历史凭据: %w", err)
+	}
 	if outcome := active.Stop(); !outcome.ExitedGracefully || outcome.ForcedKill || outcome.Err != nil {
 		stopsGraceful = false
 		return fmt.Errorf("拒绝降级后当前版本未优雅停止：forced=%t err=%v", outcome.ForcedKill, outcome.Err)
@@ -226,8 +244,10 @@ func run(historicalBin, currentBin, historicalCommit, currentCommit string, hist
 		CurrentBackupSchemaVersion:     currentBackup.SchemaVersion,
 		RestoreWillMigrate:             true,
 		UpgradePreservedFacts:          true,
+		UpgradePreservedCredential:     true,
 		DowngradeRejected:              true,
 		DowngradeLeftDatabaseUntouched: true,
+		DowngradePreservedCredential:   true,
 		CurrentRestartedAfterDowngrade: true,
 		AllNormalStopsExitedGracefully: stopsGraceful,
 	})
@@ -322,6 +342,67 @@ func createLibrary(ctx context.Context, client *pairedClient, name string) error
 	)
 	if err != nil || response.JSON201 == nil || response.JSON201.Name != name {
 		return fmt.Errorf("创建 Library %q：status=%d err=%v", name, statusCode(response), err)
+	}
+	return nil
+}
+
+func createPersistentToken(ctx context.Context, client *pairedClient) (persistentToken, error) {
+	response, err := client.api.CreateAPITokenWithResponse(
+		ctx,
+		&api.CreateAPITokenParams{XGalleryCSRF: client.csrf},
+		api.APITokenCreateRequest{
+			Name:         historicalTokenName,
+			Capabilities: []string{"library.read"},
+			Scopes:       []api.ResourceScope{{Kind: api.ResourceScopeKindGlobal}},
+		},
+		client.editor,
+	)
+	if err != nil || response.JSON201 == nil || response.JSON201.Id == "" || response.JSON201.Secret == "" {
+		return persistentToken{}, fmt.Errorf("创建 API Token：status=%d err=%v", statusCode(response), err)
+	}
+	return persistentToken{ID: response.JSON201.Id, Secret: response.JSON201.Secret}, nil
+}
+
+func assertPersistentToken(ctx context.Context, baseURL string, client *pairedClient, expected persistentToken) error {
+	response, err := client.api.ListAPITokensWithResponse(ctx, client.editor)
+	if err != nil || response.JSON200 == nil {
+		return fmt.Errorf("列出 API Token：status=%d err=%v", statusCode(response), err)
+	}
+	found := false
+	for _, token := range response.JSON200.Tokens {
+		if token.Id != expected.ID {
+			continue
+		}
+		if token.Name != historicalTokenName || token.Revoked ||
+			!reflect.DeepEqual(token.Capabilities, []string{"library.read"}) ||
+			len(token.Scopes) != 1 || token.Scopes[0].Kind != api.ResourceScopeKindGlobal || token.Scopes[0].Id != nil {
+			return fmt.Errorf("API Token 持久事实不一致")
+		}
+		found = true
+	}
+	if !found {
+		return fmt.Errorf("没有找到历史 API Token")
+	}
+
+	request, err := http.NewRequestWithContext(ctx, http.MethodGet, baseURL+"/api/v1/bootstrap", nil)
+	if err != nil {
+		return err
+	}
+	request.Header.Set("Authorization", "Bearer "+expected.Secret)
+	bearerResponse, err := http.DefaultClient.Do(request)
+	if err != nil {
+		return fmt.Errorf("Bearer Token 请求: %w", err)
+	}
+	defer bearerResponse.Body.Close()
+	if bearerResponse.StatusCode != http.StatusOK {
+		return fmt.Errorf("Bearer Token status=%d", bearerResponse.StatusCode)
+	}
+	var bootstrap api.BootstrapResponse
+	if err := json.NewDecoder(bearerResponse.Body).Decode(&bootstrap); err != nil {
+		return fmt.Errorf("解码 Bearer bootstrap: %w", err)
+	}
+	if !bootstrap.Authenticated {
+		return fmt.Errorf("历史 API Token 未通过真实 Bearer 认证")
 	}
 	return nil
 }

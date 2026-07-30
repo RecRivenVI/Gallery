@@ -4,11 +4,15 @@ param(
     [string]$ArchivePath,
     [Parameter(Mandatory)]
     [string]$ExpectedVersion,
-    [switch]$RequireAuthenticode
+    [switch]$RequireAuthenticode,
+    [switch]$AllowLegacyManifest
 )
 
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
+$repoRoot = (Resolve-Path -LiteralPath (Join-Path $PSScriptRoot '..')).Path
+. (Join-Path $PSScriptRoot 'WindowsHistoricalCompatibility.ps1')
+$historicalCompatibility = Get-GalleryHistoricalCompatibility $repoRoot
 
 if (-not [System.Runtime.InteropServices.RuntimeInformation]::IsOSPlatform(
         [System.Runtime.InteropServices.OSPlatform]::Windows)) {
@@ -118,9 +122,26 @@ try {
 
     Assert-Checksums $packageRoot
     $manifest = Get-Content -Raw -LiteralPath (Join-Path $packageRoot 'release-manifest.json') | ConvertFrom-Json -Depth 100
-    if ($manifest.schemaVersion -ne 1 -or $manifest.version -ne $ExpectedVersion) { throw '发行清单版本不匹配' }
+    if ($manifest.version -ne $ExpectedVersion) { throw '发行清单版本不匹配' }
+    $isLegacyManifest = $manifest.schemaVersion -eq 1
+    if ($manifest.schemaVersion -ne 2 -and (-not $isLegacyManifest -or -not $AllowLegacyManifest)) {
+        throw '发行清单 schemaVersion 不受支持；旧版 schemaVersion=1 仅可通过 -AllowLegacyManifest 显式复验'
+    }
     if ($manifest.target.os -ne 'windows' -or $manifest.target.arch -ne 'amd64' -or -not $manifest.web.embedded) {
         throw '发行清单目标或 Web 嵌入声明不正确'
+    }
+    $manifestCurrentControlSchema = $null
+    $manifestMinimumSupportedControlSchema = $null
+    if (-not $isLegacyManifest) {
+        $expectedHistoricalSchemas = @($historicalCompatibility.Baselines | ForEach-Object { $_.Schema })
+        $manifestHistoricalSchemas = @($manifest.dataCompatibility.verifiedHistoricalControlSchemas)
+        if ($manifest.dataCompatibility.currentControlSchema -ne $historicalCompatibility.CurrentControlSchema -or
+            $manifest.dataCompatibility.minimumSupportedControlSchema -ne $historicalCompatibility.MinimumSupportedControlSchema -or
+            ($manifestHistoricalSchemas -join ',') -ne ($expectedHistoricalSchemas -join ',')) {
+            throw '发行清单的 control schema 支持矩阵与当前门禁不一致'
+        }
+        $manifestCurrentControlSchema = $manifest.dataCompatibility.currentControlSchema
+        $manifestMinimumSupportedControlSchema = $manifest.dataCompatibility.minimumSupportedControlSchema
     }
     if (@($manifest.sboms).Count -ne 3) { throw '发行清单必须登记两个 Go 与一个 Web SBOM' }
     foreach ($sbom in $manifest.sboms) {
@@ -193,6 +214,8 @@ try {
         ArchivePath = $archive
         Version = $manifest.version
         Commit = $manifest.source.commit
+        CurrentControlSchema = $manifestCurrentControlSchema
+        MinimumSupportedControlSchema = $manifestMinimumSupportedControlSchema
         Authenticode = $manifest.signature.status
         Checksums = 'passed'
         EmbeddedWeb = 'passed'

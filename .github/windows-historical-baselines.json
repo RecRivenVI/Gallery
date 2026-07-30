@@ -1,0 +1,26 @@
+{
+  "schemaVersion": 1,
+  "minimumSupportedControlSchema": 20,
+  "baselines": [
+    {
+      "controlSchemaVersion": 20,
+      "commit": "5768bed372795c6476d2a9e601a4a0fbfafa94a9",
+      "label": "phase5-security"
+    },
+    {
+      "controlSchemaVersion": 21,
+      "commit": "5ccc934d6458acba7e0f52a625eb48f03baf1538",
+      "label": "file-browse"
+    },
+    {
+      "controlSchemaVersion": 22,
+      "commit": "13a630284cb3c671499ef4231ef9b17ab833ddf8",
+      "label": "rule-audit-subjects"
+    },
+    {
+      "controlSchemaVersion": 23,
+      "commit": "60dbdd986272d5a18a0a056ead46fac2feb18f2e",
+      "label": "creator-natural-sort"
+    }
+  ]
+}

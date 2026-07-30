@@ -30,6 +30,8 @@ if (-not [System.Runtime.InteropServices.RuntimeInformation]::IsOSPlatform(
 }
 
 $repoRoot = (Resolve-Path -LiteralPath (Join-Path $PSScriptRoot '..')).Path
+. (Join-Path $PSScriptRoot 'WindowsHistoricalCompatibility.ps1')
+$historicalCompatibility = Get-GalleryHistoricalCompatibility $repoRoot
 $outputRoot = [System.IO.Path]::GetFullPath($OutputDirectory, $repoRoot)
 $safeVersion = $Version -replace '[^0-9A-Za-z._-]', '_'
 $artifactBase = "Gallery-$safeVersion-windows-x64"
@@ -237,7 +239,9 @@ try {
 
     $portableReadme = Get-Content -Raw -LiteralPath (Join-Path $repoRoot 'packaging\windows-portable\README.zh-CN.md')
     $portableReadme = $portableReadme.Replace('{{VERSION}}', $Version).Replace('{{COMMIT}}', $commit).Replace(
-        '{{RELEASE_STATUS}}', $releaseStatus).Replace('{{AUTHENTICODE_STATUS}}', $overallSignature)
+        '{{RELEASE_STATUS}}', $releaseStatus).Replace('{{AUTHENTICODE_STATUS}}', $overallSignature).Replace(
+        '{{MINIMUM_CONTROL_SCHEMA}}', [string]$historicalCompatibility.MinimumSupportedControlSchema).Replace(
+        '{{CURRENT_CONTROL_SCHEMA}}', [string]$historicalCompatibility.CurrentControlSchema)
     $portableReadme | Set-Content -LiteralPath (Join-Path $packageRoot 'README.zh-CN.md') -Encoding utf8NoBOM
 
     $manifestArtifacts = foreach ($binary in @($gallerydPath, $galleryctlPath)) {
@@ -249,7 +253,7 @@ try {
         }
     }
     $manifest = [ordered]@{
-        schemaVersion = 1
+        schemaVersion = 2
         product = 'Gallery'
         version = $Version
         target = [ordered]@{ os = 'windows'; arch = 'amd64'; format = 'portable-zip'; cgoEnabled = $false }
@@ -260,6 +264,11 @@ try {
             contractVersion = $webManifest.contractVersion
             apiVersion = $webManifest.apiVersion
             embedded = $true
+        }
+        dataCompatibility = [ordered]@{
+            currentControlSchema = $historicalCompatibility.CurrentControlSchema
+            minimumSupportedControlSchema = $historicalCompatibility.MinimumSupportedControlSchema
+            verifiedHistoricalControlSchemas = @($historicalCompatibility.Baselines | ForEach-Object { $_.Schema })
         }
         signature = [ordered]@{ status = $overallSignature; required = [bool]$RequireAuthenticode }
         artifacts = @($manifestArtifacts)

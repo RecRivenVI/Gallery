@@ -42,6 +42,7 @@ if ($badEol) { throw "以下 tracked 文件的换行不是 LF，请检查 .gitat
 # 发行脚本只在 Windows 制品 Job 中真实执行，但 PowerShell 语法必须进入所有平台的普通门禁，
 # 否则脚本改坏后要等人工 workflow_dispatch 才能发现。这里不运行任何打包/签名动作。
 $releaseScripts = @(
+    (Join-Path $PSScriptRoot 'WindowsHistoricalCompatibility.ps1'),
     (Join-Path $PSScriptRoot 'Build-WindowsPortable.ps1'),
     (Join-Path $PSScriptRoot 'Test-WindowsPortable.ps1'),
     (Join-Path $PSScriptRoot 'Test-WindowsPortableUpgrade.ps1'),

@@ -1,6 +1,6 @@
 [CmdletBinding()]
 param(
-    [string]$HistoricalCommit = '60dbdd986272d5a18a0a056ead46fac2feb18f2e',
+    [string]$BaselineManifest,
     [string]$GoExecutable = $env:GALLERY_GO,
     [ValidateRange(1, 64)]
     [int]$MaxProcessors = 2,
@@ -41,27 +41,6 @@ function Remove-SafeTemp([string]$Path, [string]$Parent) {
     Remove-Item -LiteralPath $full -Recurse -Force
 }
 
-function Get-ControlSchemaVersion([string]$SourceRoot) {
-    $migrationRoot = Join-Path $SourceRoot 'internal\storage\migrations\control'
-    $versions = @(
-        Get-ChildItem -LiteralPath $migrationRoot -Filter '*.sql' -File |
-            ForEach-Object {
-                if ($_.Name -notmatch '^(?<version>[0-9]{5})_.+\.sql$') {
-                    throw "control migration 文件名不规范：$($_.Name)"
-                }
-                [int]$Matches.version
-            } |
-            Sort-Object
-    )
-    if ($versions.Count -eq 0) { throw '没有找到 control migration' }
-    for ($index = 0; $index -lt $versions.Count; $index++) {
-        if ($versions[$index] -ne ($index + 1)) {
-            throw "control migration 版本不连续：index=$index version=$($versions[$index])"
-        }
-    }
-    return $versions[-1]
-}
-
 function Assert-BuildProvenance(
     [string]$Binary,
     [string]$ExpectedCommit,
@@ -95,6 +74,7 @@ function Get-ProgramSeal([string[]]$Paths) {
 }
 
 $repoRoot = (Resolve-Path -LiteralPath (Join-Path $PSScriptRoot '..')).Path
+. (Join-Path $PSScriptRoot 'WindowsHistoricalCompatibility.ps1')
 $git = Resolve-Executable '' 'git'
 $go = Resolve-Executable $GoExecutable 'go'
 $goVersion = (& $go version).Trim()
@@ -102,19 +82,25 @@ if ($LASTEXITCODE -ne 0 -or $goVersion -notmatch '\bgo1\.26\.5\b') {
     throw "真实历史升级门禁要求 Go 1.26.5，实际为：$goVersion"
 }
 
-$currentCommit = (& $git -C $repoRoot rev-parse HEAD).Trim()
-$resolvedHistoricalCommit = (& $git -C $repoRoot rev-parse "$HistoricalCommit`^{commit}").Trim()
-if ($LASTEXITCODE -ne 0 -or $resolvedHistoricalCommit -notmatch '^[0-9a-f]{40}$') {
-    throw '无法解析完整历史 commit；CI 必须 checkout 完整历史'
-}
-if ($resolvedHistoricalCommit -eq $currentCommit) { throw '历史与当前 commit 必须不同' }
-& $git -C $repoRoot merge-base --is-ancestor $resolvedHistoricalCommit $currentCommit
-if ($LASTEXITCODE -ne 0) { throw '历史 commit 不是当前 HEAD 的祖先' }
-
 $dirty = @(& $git -C $repoRoot status --porcelain=v1 --untracked-files=all)
 if ($LASTEXITCODE -ne 0) { throw '无法读取当前工作树状态' }
 if ($dirty.Count -gt 0 -and -not $AllowDirty) {
     throw '正式历史升级门禁只允许从干净当前工作树执行；开发验证可显式使用 -AllowDirty'
+}
+
+$currentCommit = (& $git -C $repoRoot rev-parse HEAD).Trim()
+$compatibility = Get-GalleryHistoricalCompatibility $repoRoot $BaselineManifest
+$currentSchema = $compatibility.CurrentControlSchema
+$resolvedBaselines = @()
+foreach ($baseline in $compatibility.Baselines) {
+    $resolvedCommit = (& $git -C $repoRoot rev-parse "$($baseline.Commit)`^{commit}").Trim()
+    if ($LASTEXITCODE -ne 0 -or $resolvedCommit -ne $baseline.Commit) {
+        throw "无法解析精确历史 commit $($baseline.Commit)；CI 必须 checkout 完整历史"
+    }
+    if ($resolvedCommit -eq $currentCommit) { throw '历史与当前 commit 必须不同' }
+    & $git -C $repoRoot merge-base --is-ancestor $resolvedCommit $currentCommit
+    if ($LASTEXITCODE -ne 0) { throw "历史 commit $resolvedCommit 不是当前 HEAD 的祖先" }
+    $resolvedBaselines += $baseline
 }
 
 $tempParent = [System.IO.Path]::GetTempPath()
@@ -141,31 +127,8 @@ try {
     Invoke-Checked '克隆本地历史对象' {
         & $git clone --local --no-hardlinks --no-checkout $repoRoot $historicalRoot
     }
-    Invoke-Checked '检出 detached 历史提交' {
-        & $git -C $historicalRoot checkout --detach $resolvedHistoricalCommit
-    }
-    if ((& $git -C $historicalRoot rev-parse HEAD).Trim() -ne $resolvedHistoricalCommit -or
-        @(& $git -C $historicalRoot status --porcelain=v1 --untracked-files=all).Count -ne 0) {
-        throw '历史源码身份或干净状态不正确'
-    }
-
-    $historicalSchema = Get-ControlSchemaVersion $historicalRoot
-    $currentSchema = Get-ControlSchemaVersion $repoRoot
-    if ($currentSchema -le $historicalSchema) {
-        throw "当前 control schema=$currentSchema 没有高于历史 schema=$historicalSchema"
-    }
-
-    $historicalBinary = Join-Path $binRoot 'galleryd-historical.exe'
     $currentBinary = Join-Path $binRoot 'galleryd-current.exe'
     $probe = Join-Path $binRoot 'historical-upgrade.exe'
-    Push-Location $historicalRoot
-    try {
-        Invoke-Checked '构建真实历史 galleryd' {
-            & $go build -trimpath -buildvcs=true -o $historicalBinary ./cmd/galleryd
-        }
-    } finally {
-        Pop-Location
-    }
     Push-Location $repoRoot
     try {
         Invoke-Checked '构建当前 galleryd' {
@@ -178,56 +141,84 @@ try {
         Pop-Location
     }
 
-    Assert-BuildProvenance $historicalBinary $resolvedHistoricalCommit $false '历史 galleryd'
     Assert-BuildProvenance $currentBinary $currentCommit ($dirty.Count -gt 0) '当前 galleryd'
-    $programPaths = @($historicalBinary, $currentBinary, $probe)
-    $programBefore = Get-ProgramSeal $programPaths
+    foreach ($baseline in $resolvedBaselines) {
+        Invoke-Checked "检出 schema $($baseline.Schema) detached 历史提交" {
+            & $git -C $historicalRoot checkout --detach $baseline.Commit
+        }
+        if ((& $git -C $historicalRoot rev-parse HEAD).Trim() -ne $baseline.Commit -or
+            @(& $git -C $historicalRoot status --porcelain=v1 --untracked-files=all).Count -ne 0) {
+            throw "schema $($baseline.Schema) 历史源码身份或干净状态不正确"
+        }
+        $historicalSchema = Get-GalleryControlSchemaVersion $historicalRoot
+        if ($historicalSchema -ne $baseline.Schema) {
+            throw "历史基线 $($baseline.Label) 的 control schema=$historicalSchema，预期 $($baseline.Schema)"
+        }
 
-    $probeOutput = @(& $probe `
-            -historical-bin $historicalBinary `
-            -current-bin $currentBinary `
-            -historical-commit $resolvedHistoricalCommit `
-            -current-commit $currentCommit `
-            -historical-schema $historicalSchema `
-            -current-schema $currentSchema)
-    if ($LASTEXITCODE -ne 0) { throw "真实历史升级 probe 失败，退出码 $LASTEXITCODE" }
-    if ($probeOutput.Count -eq 0) { throw '真实历史升级 probe 没有输出结果' }
-    if ((Get-ProgramSeal $programPaths) -ne $programBefore) {
-        throw '历史升级期间程序二进制发生变化，程序与数据未保持分离'
-    }
+        $historicalBinary = Join-Path $binRoot ("galleryd-historical-schema-{0}.exe" -f $historicalSchema)
+        Push-Location $historicalRoot
+        try {
+            Invoke-Checked "构建 schema $historicalSchema 真实历史 galleryd" {
+                & $go build -trimpath -buildvcs=true -o $historicalBinary ./cmd/galleryd
+            }
+        } finally {
+            Pop-Location
+        }
+        Assert-BuildProvenance $historicalBinary $baseline.Commit $false "schema $historicalSchema 历史 galleryd"
+        $programPaths = @($historicalBinary, $currentBinary, $probe)
+        $programBefore = Get-ProgramSeal $programPaths
 
-    $result = $probeOutput[-1] | ConvertFrom-Json
-    foreach ($field in @(
-            'restoreWillMigrate',
-            'upgradePreservedFacts',
-            'downgradeRejected',
-            'downgradeLeftDatabaseUntouched',
-            'currentRestartedAfterDowngrade',
-            'allNormalStopsExitedGracefully'
-        )) {
-        if ($result.$field -ne $true) { throw "真实历史升级结果未通过：$field" }
-    }
-    if ($result.historicalCommit -ne $resolvedHistoricalCommit -or $result.currentCommit -ne $currentCommit -or
-        $result.historicalSchemaVersion -ne $historicalSchema -or $result.currentSchemaVersion -ne $currentSchema -or
-        $result.historicalBackupSchemaVersion -ne $historicalSchema -or
-        $result.currentBackupSchemaVersion -ne $currentSchema) {
-        throw '真实历史升级结果的提交或 schema 身份不一致'
-    }
+        $probeOutput = @(& $probe `
+                -historical-bin $historicalBinary `
+                -current-bin $currentBinary `
+                -historical-commit $baseline.Commit `
+                -current-commit $currentCommit `
+                -historical-schema $historicalSchema `
+                -current-schema $currentSchema)
+        if ($LASTEXITCODE -ne 0) { throw "schema $historicalSchema 真实历史升级 probe 失败，退出码 $LASTEXITCODE" }
+        if ($probeOutput.Count -eq 0) { throw "schema $historicalSchema 真实历史升级 probe 没有输出结果" }
+        if ((Get-ProgramSeal $programPaths) -ne $programBefore) {
+            throw "schema $historicalSchema 历史升级期间程序二进制发生变化，程序与数据未保持分离"
+        }
 
-    [pscustomobject]@{
-        HistoricalCommit = $result.historicalCommit
-        CurrentCommit = $result.currentCommit
-        HistoricalSchemaVersion = $result.historicalSchemaVersion
-        CurrentSchemaVersion = $result.currentSchemaVersion
-        HistoricalBackupSchemaVersion = $result.historicalBackupSchemaVersion
-        CurrentBackupSchemaVersion = $result.currentBackupSchemaVersion
-        RestoreWillMigrate = 'passed'
-        UpgradePreservedFacts = 'passed'
-        DowngradeRejected = 'passed'
-        DowngradeLeftDatabaseUntouched = 'passed'
-        CurrentRestartedAfterDowngrade = 'passed'
-        ProgramDataSeparated = 'passed'
-        AllNormalStopsExitedGracefully = 'passed'
+        $result = $probeOutput[-1] | ConvertFrom-Json
+        foreach ($field in @(
+                'restoreWillMigrate',
+                'upgradePreservedFacts',
+                'upgradePreservedCredential',
+                'downgradeRejected',
+                'downgradeLeftDatabaseUntouched',
+                'downgradePreservedCredential',
+                'currentRestartedAfterDowngrade',
+                'allNormalStopsExitedGracefully'
+            )) {
+            if ($result.$field -ne $true) { throw "schema $historicalSchema 真实历史升级结果未通过：$field" }
+        }
+        if ($result.historicalCommit -ne $baseline.Commit -or $result.currentCommit -ne $currentCommit -or
+            $result.historicalSchemaVersion -ne $historicalSchema -or $result.currentSchemaVersion -ne $currentSchema -or
+            $result.historicalBackupSchemaVersion -ne $historicalSchema -or
+            $result.currentBackupSchemaVersion -ne $currentSchema) {
+            throw "schema $historicalSchema 真实历史升级结果的提交或 schema 身份不一致"
+        }
+
+        [pscustomobject]@{
+            Baseline = $baseline.Label
+            HistoricalCommit = $result.historicalCommit
+            CurrentCommit = $result.currentCommit
+            HistoricalSchemaVersion = $result.historicalSchemaVersion
+            CurrentSchemaVersion = $result.currentSchemaVersion
+            HistoricalBackupSchemaVersion = $result.historicalBackupSchemaVersion
+            CurrentBackupSchemaVersion = $result.currentBackupSchemaVersion
+            RestoreWillMigrate = 'passed'
+            UpgradePreservedFacts = 'passed'
+            UpgradePreservedCredential = 'passed'
+            DowngradeRejected = 'passed'
+            DowngradeLeftDatabaseUntouched = 'passed'
+            DowngradePreservedCredential = 'passed'
+            CurrentRestartedAfterDowngrade = 'passed'
+            ProgramDataSeparated = 'passed'
+            AllNormalStopsExitedGracefully = 'passed'
+        }
     }
 } finally {
     $env:CGO_ENABLED = $previousEnvironment.CGO_ENABLED
