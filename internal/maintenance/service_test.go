@@ -82,14 +82,101 @@ func TestMaintenancePublishesPersistentJobLifecycle(t *testing.T) {
 		t.Fatal(err)
 	}
 	events := notifier.snapshot()
-	if len(events) != 3 {
-		t.Fatalf("维护 Job 事件数量=%d，期望 queued/running/completed: %+v", len(events), events)
+	if len(events) != 6 {
+		t.Fatalf("维护 Job 事件数量=%d，期望 queued/running/三个进度阶段/completed: %+v", len(events), events)
 	}
-	want := []jobs.Status{jobs.StatusQueued, jobs.StatusRunning, jobs.StatusCompleted}
+	want := []struct {
+		status    jobs.Status
+		stage     string
+		current   int64
+		total     int64
+		estimated bool
+	}{
+		{status: jobs.StatusQueued, stage: "queued"},
+		{status: jobs.StatusRunning, stage: "maintenance"},
+		{status: jobs.StatusRunning, stage: "preflight", current: 0, total: 2, estimated: true},
+		{status: jobs.StatusRunning, stage: "executing", current: 1, total: 2, estimated: true},
+		{status: jobs.StatusRunning, stage: "finalizing", current: 2, total: 2, estimated: true},
+		{status: jobs.StatusCompleted, stage: "completed", current: 2, total: 2, estimated: true},
+	}
 	for index, event := range events {
-		if event.ID != job.ID || event.Status != want[index] {
-			t.Fatalf("维护 Job 事件 %d=%+v，期望 id=%s status=%s", index, event, job.ID, want[index])
+		expected := want[index]
+		if event.ID != job.ID || event.Status != expected.status || event.Stage != expected.stage ||
+			event.ProgressCurrent != expected.current || event.ProgressTotal != expected.total ||
+			event.ProgressEstimated != expected.estimated {
+			t.Fatalf("维护 Job 事件 %d=%+v，期望 id=%s status=%s stage=%s progress=%d/%d estimated=%v",
+				index, event, job.ID, expected.status, expected.stage, expected.current, expected.total, expected.estimated)
 		}
+		if index >= 2 && event.ProgressUnit != "phases" {
+			t.Fatalf("维护 Job 事件 %d 的进度单位=%q，期望 phases", index, event.ProgressUnit)
+		}
+		if index > 0 && event.ProgressSequence <= events[index-1].ProgressSequence {
+			t.Fatalf("维护 Job 事件进度序号未严格递增: previous=%d current=%d", events[index-1].ProgressSequence, event.ProgressSequence)
+		}
+	}
+	stored, err := jobStore.Get(ctx, job.ID)
+	if err != nil || stored.ProgressCurrent != 2 || stored.ProgressTotal != 2 || stored.ProgressUnit != "phases" ||
+		!stored.ProgressEstimated || stored.Stage != "completed" {
+		t.Fatalf("维护 Job 终态没有保留最终估算进度: %+v %v", stored, err)
+	}
+}
+
+// TestEveryMaintenanceTypePersistsEstimatedPhases 防止只有 GC 走进度路径，而
+// checkpoint/VACUUM/Derived GC 又退回“running 后长时间无任何可见变化”。每个子测试
+// 使用独立 AppDirs，避免维护单活跃约束和 SQLite 文件状态互相污染。
+func TestEveryMaintenanceTypePersistsEstimatedPhases(t *testing.T) {
+	for _, jobType := range []string{"catalog_gc", "catalog_checkpoint", "catalog_vacuum", "derived_gc"} {
+		t.Run(jobType, func(t *testing.T) {
+			ctx := context.Background()
+			dirs := appdirs.UnderRoot(filepath.Join(t.TempDir(), "app"))
+			if err := dirs.Ensure(filesystem.OS{}); err != nil {
+				t.Fatal(err)
+			}
+			store, err := storage.Open(ctx, dirs)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer store.Close()
+			clk := clock.Fixed{Time: time.Date(2026, 7, 30, 13, 0, 0, 0, time.UTC)}
+			ids := identity.NewGenerator(clk)
+			jobStore, err := jobs.NewStore(store.Control.SQL(), clk, ids)
+			if err != nil {
+				t.Fatal(err)
+			}
+			catalogStore, err := catalog.NewStore(store.Catalog.SQL(), clk, ids)
+			if err != nil {
+				t.Fatal(err)
+			}
+			notifier := &jobNotifier{}
+			service, err := maintenance.New(ctx, store.Control.SQL(), catalogStore, jobStore, nil, dirs,
+				spaceChecker{free: 1 << 30}, clk, notifier)
+			if err != nil {
+				t.Fatal(err)
+			}
+			var job jobs.Job
+			if jobType == "catalog_gc" {
+				job, err = service.CreateGC(ctx, "owner", maintenance.Request{DryRun: true})
+			} else {
+				job, err = service.Create(ctx, jobType, "owner")
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := service.Execute(ctx, job.ID); err != nil {
+				t.Fatal(err)
+			}
+			stored, err := jobStore.Get(ctx, job.ID)
+			if err != nil || stored.Status != jobs.StatusCompleted || stored.Stage != "completed" ||
+				stored.ProgressCurrent != 2 || stored.ProgressTotal != 2 || stored.ProgressUnit != "phases" ||
+				!stored.ProgressEstimated || stored.ProgressSequence < 6 {
+				t.Fatalf("%s 没有持久化完整维护进度: %+v %v", jobType, stored, err)
+			}
+			events := notifier.snapshot()
+			if len(events) != 6 || events[2].Stage != "preflight" || events[3].Stage != "executing" ||
+				events[4].Stage != "finalizing" || events[5].Status != jobs.StatusCompleted {
+				t.Fatalf("%s 的维护进度事件不完整: %+v", jobType, events)
+			}
+		})
 	}
 }
 
@@ -224,8 +311,10 @@ func TestMaintenanceCancellationEndsCancelled(t *testing.T) {
 		t.Fatalf("维护 Attempt 未收敛 cancelled: %+v %v", attempts, err)
 	}
 	events := notifier.snapshot()
-	if len(events) != 2 || events[0].Status != jobs.StatusRunning || events[1].Status != jobs.StatusCancelled {
-		t.Fatalf("维护取消事件未收敛为 running/cancelled: %+v", events)
+	if len(events) != 3 || events[0].Status != jobs.StatusRunning || events[1].Stage != "preflight" ||
+		events[1].ProgressCurrent != 0 || events[1].ProgressTotal != 2 || !events[1].ProgressEstimated ||
+		events[2].Status != jobs.StatusCancelled {
+		t.Fatalf("维护取消事件未收敛为 running/preflight/cancelled: %+v", events)
 	}
 	// 取消路径必须释放维护互斥；后续 dry-run GC 不应死锁。
 	verifyCtx, cancelVerify := context.WithTimeout(ctx, 3*time.Second)
@@ -302,8 +391,10 @@ func TestMaintenanceShutdownRemainsRetryableProcessInterrupted(t *testing.T) {
 		t.Fatalf("shutdown Attempt 未记录 PROCESS_INTERRUPTED: %+v %v", attempts, err)
 	}
 	events := notifier.snapshot()
-	if len(events) != 2 || events[0].Status != jobs.StatusRunning || events[1].Status != jobs.StatusFailed {
-		t.Fatalf("维护中断事件未收敛为 running/failed: %+v", events)
+	if len(events) != 3 || events[0].Status != jobs.StatusRunning || events[1].Stage != "preflight" ||
+		events[1].ProgressCurrent != 0 || events[1].ProgressTotal != 2 || !events[1].ProgressEstimated ||
+		events[2].Status != jobs.StatusFailed {
+		t.Fatalf("维护中断事件未收敛为 running/preflight/failed: %+v", events)
 	}
 }
 

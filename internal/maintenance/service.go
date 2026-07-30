@@ -142,38 +142,46 @@ func (s *Service) Execute(ctx context.Context, jobID string) error {
 		return err
 	}
 	s.notifier.JobChanged(job)
+	if err := s.progress(ctx, jobID, "preflight", 0); err != nil {
+		return s.fail(ctx, jobID, err)
+	}
+
+	var run func() error
 	switch job.Type {
 	case "catalog_gc":
 		var request Request
 		if err := json.Unmarshal(job.RequestJSON, &request); err != nil {
 			return s.fail(ctx, jobID, fault.New(fault.CodeValidation, false, err))
 		}
-		if _, err := s.Estimate(ctx, "catalog_gc"); err != nil {
-			return s.fail(ctx, jobID, err)
-		}
-		if _, err := s.RunGC(ctx, time.Duration(request.RetentionSeconds)*time.Second, request.DryRun); err != nil {
-			return s.fail(ctx, jobID, err)
+		run = func() error {
+			_, err := s.RunGC(ctx, time.Duration(request.RetentionSeconds)*time.Second, request.DryRun)
+			return err
 		}
 	case "catalog_checkpoint":
-		if _, err := s.Estimate(ctx, "catalog_checkpoint"); err != nil {
-			return s.fail(ctx, jobID, err)
-		}
-		if err := s.Checkpoint(ctx); err != nil {
-			return s.fail(ctx, jobID, err)
-		}
+		run = func() error { return s.Checkpoint(ctx) }
 	case "catalog_vacuum":
-		if _, err := s.Estimate(ctx, "catalog_vacuum"); err != nil {
-			return s.fail(ctx, jobID, err)
-		}
-		if err := s.Vacuum(ctx); err != nil {
-			return s.fail(ctx, jobID, err)
-		}
+		run = func() error { return s.Vacuum(ctx) }
 	case "derived_gc":
-		if _, err := s.RunGC(ctx, 0, false); err != nil {
-			return s.fail(ctx, jobID, err)
+		run = func() error {
+			_, err := s.RunGC(ctx, 0, false)
+			return err
 		}
 	default:
 		return s.fail(ctx, jobID, fault.New(fault.CodeValidation, false, nil))
+	}
+	// 创建任务时的空间估算只用于向用户说明和拒绝明显不足。真正取得维护互斥前必须
+	// 再做一次同操作的服务端预检；Derived GC 也不能依赖可能已经过期的创建时快照。
+	if _, err := s.Estimate(ctx, job.Type); err != nil {
+		return s.fail(ctx, jobID, err)
+	}
+	if err := s.progress(ctx, jobID, "executing", 1); err != nil {
+		return s.fail(ctx, jobID, err)
+	}
+	if err := run(); err != nil {
+		return s.fail(ctx, jobID, err)
+	}
+	if err := s.progress(ctx, jobID, "finalizing", 2); err != nil {
+		return s.fail(ctx, jobID, err)
 	}
 	if current, getErr := s.jobs.Get(context.Background(), jobID); getErr == nil && current.CancelRequested {
 		return s.fail(ctx, jobID, fault.New(fault.CodeProcessInterrupted, true, ctx.Err()))
@@ -183,6 +191,20 @@ func (s *Service) Execute(ctx context.Context, jobID string) error {
 		return s.fail(ctx, jobID, err)
 	}
 	s.notifier.JobChanged(completed)
+	return nil
+}
+
+// progress 将维护任务的粗粒度阶段持久化并立即发出失效提示。SQLite 的 VACUUM/
+// checkpoint 与当前 GC 端口没有可靠的逐页进度回调，因此这里只声明 estimated 的阶段
+// 进度，不伪造字节数或百分比；0/2、1/2、2/2 仍由 Job Store 保证严格单调。
+func (s *Service) progress(ctx context.Context, jobID, stage string, current int64) error {
+	job, err := s.jobs.ProgressDetailed(ctx, jobID, jobs.ProgressUpdate{
+		Stage: stage, Current: current, Total: 2, Unit: "phases", Estimated: true,
+	})
+	if err != nil {
+		return err
+	}
+	s.notifier.JobChanged(job)
 	return nil
 }
 

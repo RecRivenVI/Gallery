@@ -8,7 +8,16 @@ test.setTimeout(90_000);
 interface JobSnapshot {
   id: string;
   status: string;
+  stage?: string;
   issueCode?: string;
+  progress?: {
+    current: number;
+    total: number;
+    sequence: number;
+    phase?: string;
+    unit?: string;
+    estimated?: boolean;
+  };
 }
 
 interface BackupManifest {
@@ -140,7 +149,24 @@ test('Personal 维护、备份、验证与待重启恢复真实链 @real-mainten
   expect(gcResponse.status()).toBe(202);
   expect(gcResponse.request().postDataJSON()).toEqual({ retentionSeconds: 86_400, dryRun: true });
   const maintenance = (await gcResponse.json()) as { job: JobSnapshot };
-  await waitForJob(page, maintenance.job.id);
+  const completedMaintenance = await waitForJob(page, maintenance.job.id);
+  expect(completedMaintenance.stage).toBe('completed');
+  expect(completedMaintenance.progress).toMatchObject({
+    current: 2,
+    total: 2,
+    unit: 'phases',
+    estimated: true
+  });
+  expect(completedMaintenance.progress?.sequence).toBeGreaterThanOrEqual(6);
   await expect(fact(page, '任务 ID')).toContainText(maintenance.job.id);
   await expect(fact(page, '空间是否充足')).toHaveText('充足');
+
+  // 管理任务表必须消费同一 HTTP 快照中的估算阶段进度；后端字段存在但前端仍显示 0
+  // 不能算作“维护窗口对用户可见”。
+  await page.goto('/manage/scans');
+  await expect(page.getByRole('heading', { name: '扫描与任务', exact: true })).toBeVisible();
+  const maintenanceRow = page.getByRole('row').filter({ hasText: maintenance.job.id });
+  await expect(maintenanceRow).toHaveCount(1);
+  await expect(maintenanceRow).toContainText('2 / 2（估算）');
+  await expect(maintenanceRow).toContainText('completed');
 });
