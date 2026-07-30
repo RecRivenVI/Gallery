@@ -19,6 +19,8 @@ import (
 	"github.com/RecRivenVI/gallery/internal/contract/fault"
 	"github.com/RecRivenVI/gallery/internal/platform/appdirs"
 	"github.com/RecRivenVI/gallery/internal/platform/descriptor"
+	"github.com/RecRivenVI/gallery/internal/ports"
+	"github.com/RecRivenVI/gallery/internal/storage"
 	api "github.com/RecRivenVI/gallery/pkg/galleryapi"
 )
 
@@ -154,6 +156,23 @@ func TestWalkingSkeletonPersistsAcrossRealGallerydRestart(t *testing.T) {
 	}
 	publicationID := publication.JSON200.Id
 	stopGalleryd(t, firstCancel, firstDone)
+	stoppedStore, err := storage.Open(context.Background(), dirs)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var identityKind, identityValue string
+	if err := stoppedStore.Catalog.SQL().QueryRowContext(context.Background(),
+		"SELECT platform_identity_kind, platform_identity_value FROM source_media WHERE source_id=? AND relative_path='work-one/media.bin'",
+		sourceResponse.JSON201.Id).Scan(&identityKind, &identityValue); err != nil {
+		_ = stoppedStore.Close()
+		t.Fatal(err)
+	}
+	if err := stoppedStore.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if identityKind != ports.FileIdentityKindV1 || identityValue == "" {
+		t.Fatalf("真实 galleryd 未把平台身份写入 SourceMedia: kind=%q valueEmpty=%t", identityKind, identityValue == "")
+	}
 
 	secondCancel, secondDone, secondDescriptor := startGalleryd(t, cfg, logger)
 	client = newAPIClient(t, "http://"+secondDescriptor.Address, httpClient)

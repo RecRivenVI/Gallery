@@ -539,6 +539,87 @@ func TestCreateVerificationScanFailsWhenContentChangesBeforeExecute(t *testing.T
 	}
 }
 
+// TestCreateVerificationScanRejectsSameStatPlatformIdentityReplacement 覆盖 size/mtime 无法
+// 区分的路径替换：请求冻结 publication 中的 FileID/dev+inode 后，即使替代文件保持完全
+// 相同的 size 与 mtime，也必须在建立 Hash Job 前以不可重试的目标失效收敛。
+func TestCreateVerificationScanRejectsSameStatPlatformIdentityReplacement(t *testing.T) {
+	fixture := []byte("verification target locks the platform file identity")
+	_, _, catalogStore, service, source, store := setupWithHash(t, fixture)
+	defer store.Close()
+	ctx := context.Background()
+
+	indexJob, err := service.CreateScanWithProfile(ctx, source.ID, "personal-owner", "", scanner.ScanProfileIndex)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := service.Execute(ctx, indexJob.ID); err != nil {
+		t.Fatal(err)
+	}
+	publication, works, err := catalogStore.ListWorks(ctx)
+	if err != nil || len(works) != 1 {
+		t.Fatal(err)
+	}
+	_, mediaItems, err := catalogStore.ListMediaForWork(ctx, works[0].ID)
+	if err != nil || len(mediaItems) != 1 {
+		t.Fatal(err)
+	}
+	targetMedia := mediaItems[0]
+	observation, err := catalogStore.LookupObservationAt(ctx, publication.ID, source.ID, targetMedia.RelativePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if observation.PlatformIdentityKind == "" || observation.PlatformIdentityValue == "" {
+		t.Fatalf("测试前置条件缺少平台身份: %+v", observation)
+	}
+	fingerprint := scanner.ObservationFingerprintWithIdentity(observation.Size, observation.MTimeNanos,
+		observation.ContentVerificationState, observation.PlatformIdentityKind, observation.PlatformIdentityValue)
+	verifyJob, err := service.CreateVerificationScan(ctx, source.ID, "personal-owner", "", []scanner.VerificationTarget{{
+		MediaID: targetMedia.ID, SourceID: source.ID, RelativePath: targetMedia.RelativePath,
+		QueryPublicationID: publication.ID, ObservationFingerprint: fingerprint,
+		PlatformIdentityKind: observation.PlatformIdentityKind, PlatformIdentityValue: observation.PlatformIdentityValue,
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	mediaPath := filepath.Join(source.RootPath, filepath.FromSlash(targetMedia.RelativePath))
+	originalInfo, err := os.Stat(mediaPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Rename(mediaPath, filepath.Join(t.TempDir(), "old-target.bin")); err != nil {
+		t.Fatal(err)
+	}
+	replacement := append([]byte(nil), fixture...)
+	replacement[len(replacement)-1] ^= 0x33
+	if err := os.WriteFile(mediaPath, replacement, 0o400); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chtimes(mediaPath, originalInfo.ModTime(), originalInfo.ModTime()); err != nil {
+		t.Fatal(err)
+	}
+	replacementInfo, err := os.Stat(mediaPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if replacementInfo.Size() != originalInfo.Size() || replacementInfo.ModTime().UnixNano() != originalInfo.ModTime().UnixNano() {
+		t.Fatal("测试前置条件未保持 size/mtime")
+	}
+
+	err = service.Execute(ctx, verifyJob.ID)
+	var structured *fault.Error
+	if !errors.As(err, &structured) || structured.Code != fault.CodeVerificationTargetMismatch || structured.Retryable {
+		t.Fatalf("同 stat 路径替换应以不可重试目标失效收敛: %v", err)
+	}
+	if countHashJobs(t, store) != 0 {
+		t.Fatalf("目标身份失效不得建立 Hash Job，实际=%d", countHashJobs(t, store))
+	}
+	stillCurrent, err := catalogStore.Current(ctx)
+	if err != nil || stillCurrent.ID != publication.ID {
+		t.Fatalf("目标身份失效不得替换 publication: %+v %v", stillCurrent, err)
+	}
+}
+
 // TestCreateVerificationScanFailsWhenTargetMediaIDMismatched 覆盖阶段 4 收尾的核心缺口：
 // 冻结的 MediaID 必须真正参与执行阶段验证，不能只被持久化而从不比对。这里故意让
 // RelativePath 与 MediaID 分别指向同一 Source 内两个不同的真实媒体，模拟"请求排队后

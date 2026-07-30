@@ -5,6 +5,10 @@ import (
 	"os"
 )
 
+// FileIdentityKindV1 是写入 SourceMedia.platform_identity_kind 的版本化类型。
+// FileIdentityCandidate.Encoded 仍保持完整 opaque 编码，调用方不得解析其中的平台字段。
+const FileIdentityKindV1 = "gallery-file-identity:v1"
+
 var (
 	// ErrFileIdentityInvalidHandle 表示调用方没有提供仍然打开的文件句柄。
 	ErrFileIdentityInvalidHandle = errors.New("文件身份句柄无效")

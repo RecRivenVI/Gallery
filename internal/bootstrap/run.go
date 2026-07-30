@@ -29,6 +29,7 @@ import (
 	"github.com/RecRivenVI/gallery/internal/platform/clock"
 	"github.com/RecRivenVI/gallery/internal/platform/descriptor"
 	"github.com/RecRivenVI/gallery/internal/platform/disk"
+	platformfileidentity "github.com/RecRivenVI/gallery/internal/platform/fileidentity"
 	"github.com/RecRivenVI/gallery/internal/platform/filesystem"
 	"github.com/RecRivenVI/gallery/internal/platform/identity"
 	"github.com/RecRivenVI/gallery/internal/platform/lock"
@@ -204,6 +205,9 @@ func run(ctx context.Context, cfg config.Config, logger *slog.Logger, ready chan
 	if err != nil {
 		return err
 	}
+	fileIdentityProvider := platformfileidentity.OS{}
+	scannerService.SetFileIdentityProvider(fileIdentityProvider)
+	hashService.SetFileIdentityProvider(fileIdentityProvider)
 	maintenanceService, err := maintenance.New(ctx, store.Control.SQL(), catalogStore, jobStore, derivedService, cfg.AppDirs, disk.OS{}, systemClock, hub)
 	if err != nil {
 		return err

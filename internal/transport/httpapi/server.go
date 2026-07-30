@@ -3437,10 +3437,13 @@ func (s *Server) createMediaVerificationJobForTargets(w http.ResponseWriter, r *
 			s.writeRequestError(w, observationErr)
 			return
 		}
-		fingerprint := scanner.ObservationFingerprint(observation.Size, observation.MTimeNanos, observation.ContentVerificationState)
+		fingerprint := scanner.ObservationFingerprintWithIdentity(observation.Size, observation.MTimeNanos,
+			observation.ContentVerificationState, observation.PlatformIdentityKind, observation.PlatformIdentityValue)
 		targets = append(targets, scanner.VerificationTarget{
 			MediaID: item.ID, SourceID: item.SourceID, RelativePath: item.RelativePath,
 			QueryPublicationID: resolvedPub.ID, ObservationFingerprint: fingerprint,
+			PlatformIdentityKind:  observation.PlatformIdentityKind,
+			PlatformIdentityValue: observation.PlatformIdentityValue,
 		})
 	}
 	sort.Slice(targets, func(i, j int) bool {
@@ -3463,13 +3466,13 @@ func (s *Server) createMediaVerificationJobForTargets(w http.ResponseWriter, r *
 func mediaVerificationIdempotencyKey(publicationID, sourceID string, targets []scanner.VerificationTarget) string {
 	if len(targets) == 1 {
 		target := targets[0]
-		return fmt.Sprintf("verify-media:v3:%s:%s:%s:%s:%s", publicationID, target.MediaID, sourceID, target.RelativePath, target.ObservationFingerprint)
+		return fmt.Sprintf("verify-media:v4:%s:%s:%s:%s:%s", publicationID, target.MediaID, sourceID, target.RelativePath, target.ObservationFingerprint)
 	}
 	hash := sha256.New()
 	for _, target := range targets {
 		_, _ = fmt.Fprintf(hash, "%s\x00%s\x00%s\x00", target.MediaID, target.RelativePath, target.ObservationFingerprint)
 	}
-	return fmt.Sprintf("verify-media-batch:v1:%s:%s:%s", publicationID, sourceID, hex.EncodeToString(hash.Sum(nil)))
+	return fmt.Sprintf("verify-media-batch:v2:%s:%s:%s", publicationID, sourceID, hex.EncodeToString(hash.Sum(nil)))
 }
 
 func (s *Server) trackScan(ctx context.Context, job jobs.Job) {

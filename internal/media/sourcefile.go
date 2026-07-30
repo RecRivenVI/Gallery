@@ -14,22 +14,30 @@ import (
 
 	"github.com/RecRivenVI/gallery/internal/contract/fault"
 	"github.com/RecRivenVI/gallery/internal/domain"
+	"github.com/RecRivenVI/gallery/internal/ports"
 )
 
 type HashResult struct {
-	Blob         domain.ContentBlobRef
-	Size         int64
-	LocationKey  string
-	RelativePath string
+	Blob                  domain.ContentBlobRef
+	Size                  int64
+	LocationKey           string
+	RelativePath          string
+	ModTimeNanos          int64
+	HasObservedModTime    bool
+	PlatformIdentityKind  string
+	PlatformIdentityValue string
 }
 
 type HashOptions struct {
-	Context              context.Context
-	ExpectedSize         int64
-	ExpectedModTimeNanos int64
-	HasExpectedIdentity  bool
-	Progress             func(bytes int64)
-	AfterRead            func()
+	Context                       context.Context
+	ExpectedSize                  int64
+	ExpectedModTimeNanos          int64
+	HasExpectedIdentity           bool
+	ExpectedPlatformIdentityKind  string
+	ExpectedPlatformIdentityValue string
+	FileIdentityProvider          ports.FileIdentityProvider
+	Progress                      func(bytes int64)
+	AfterRead                     func()
 }
 
 func HashSourceFile(root, relative string, afterRead func()) (HashResult, error) {
@@ -51,8 +59,17 @@ func HashSourceFileWithOptions(root, relative string, options HashOptions) (Hash
 	if err != nil {
 		return HashResult{}, readFault(err)
 	}
+	identityKind, identityValue, err := observeFileIdentity(file, options.FileIdentityProvider)
+	if err != nil {
+		return HashResult{}, err
+	}
 	if options.HasExpectedIdentity && (before.Size() != options.ExpectedSize || before.ModTime().UnixNano() != options.ExpectedModTimeNanos) {
 		return HashResult{}, fault.New(fault.CodeContentChangedDuringHash, true, nil)
+	}
+	if options.ExpectedPlatformIdentityKind != "" || options.ExpectedPlatformIdentityValue != "" {
+		if identityKind != options.ExpectedPlatformIdentityKind || identityValue != options.ExpectedPlatformIdentityValue {
+			return HashResult{}, fault.New(fault.CodeContentChangedDuringHash, true, nil)
+		}
 	}
 	hasher := sha256.New()
 	buffer := make([]byte, 1024*1024)
@@ -95,6 +112,8 @@ func HashSourceFileWithOptions(root, relative string, options HashOptions) (Hash
 	return HashResult{
 		Blob: domain.NewSHA256BlobRef(sum), Size: before.Size(),
 		LocationKey: locationKey(normalized), RelativePath: normalized,
+		ModTimeNanos: before.ModTime().UnixNano(), HasObservedModTime: true,
+		PlatformIdentityKind: identityKind, PlatformIdentityValue: identityValue,
 	}, nil
 }
 
@@ -165,15 +184,23 @@ func readFault(err error) error {
 // LocateResult 只包含只读定位与身份线索，不读取文件正文；用于 index/incremental
 // 扫描档案在不确认内容的情况下发布 located_unverified 媒体或与既往观察比较。
 type LocateResult struct {
-	RelativePath string
-	LocationKey  string
-	Size         int64
-	ModTimeNanos int64
+	RelativePath          string
+	LocationKey           string
+	Size                  int64
+	ModTimeNanos          int64
+	PlatformIdentityKind  string
+	PlatformIdentityValue string
 }
 
 // LocateSourceFile 复用 OpenSourceFile 的安全路径解析与只读句柄，只读取文件元数据
 // （大小、mtime），不读取任何字节，不计算内容哈希。
 func LocateSourceFile(root, relative string) (LocateResult, error) {
+	return LocateSourceFileWithIdentity(root, relative, nil)
+}
+
+// LocateSourceFileWithIdentity 从同一个只读句柄取得 size、mtime 与可选平台身份。
+// FileID/dev+inode 只是候选位置证据；provider 不可用时显式退化为空身份，不影响定位。
+func LocateSourceFileWithIdentity(root, relative string, provider ports.FileIdentityProvider) (LocateResult, error) {
 	file, _, normalized, err := OpenSourceFile(root, relative)
 	if err != nil {
 		return LocateResult{}, err
@@ -183,10 +210,29 @@ func LocateSourceFile(root, relative string) (LocateResult, error) {
 	if err != nil {
 		return LocateResult{}, readFault(err)
 	}
+	identityKind, identityValue, err := observeFileIdentity(file, provider)
+	if err != nil {
+		return LocateResult{}, err
+	}
 	return LocateResult{
 		RelativePath: normalized, LocationKey: locationKey(normalized),
 		Size: info.Size(), ModTimeNanos: info.ModTime().UnixNano(),
+		PlatformIdentityKind: identityKind, PlatformIdentityValue: identityValue,
 	}, nil
+}
+
+func observeFileIdentity(file *os.File, provider ports.FileIdentityProvider) (string, string, error) {
+	if provider == nil {
+		return "", "", nil
+	}
+	candidate, err := provider.Identify(file)
+	if errors.Is(err, ports.ErrFileIdentityUnavailable) {
+		return "", "", nil
+	}
+	if err != nil || candidate.Encoded == "" {
+		return "", "", fault.New(fault.CodeInternal, true, err)
+	}
+	return ports.FileIdentityKindV1, candidate.Encoded, nil
 }
 
 func locationKey(relative string) string {

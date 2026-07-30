@@ -8,7 +8,7 @@ import (
 	"github.com/RecRivenVI/gallery/internal/ports"
 )
 
-const encodingPrefix = "gallery-file-identity:v1"
+const encodingPrefix = ports.FileIdentityKindV1
 
 // OS 是生产环境的平台文件身份 adapter。
 type OS struct{}

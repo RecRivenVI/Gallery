@@ -17,6 +17,8 @@ import (
 	"github.com/RecRivenVI/gallery/internal/domain"
 	"github.com/RecRivenVI/gallery/internal/hashjob"
 	"github.com/RecRivenVI/gallery/internal/jobs"
+	"github.com/RecRivenVI/gallery/internal/platform/fileidentity"
+	"github.com/RecRivenVI/gallery/internal/ports"
 	"github.com/RecRivenVI/gallery/internal/scanner"
 	"github.com/RecRivenVI/gallery/internal/storage"
 )
@@ -52,6 +54,9 @@ func setupWithHash(t *testing.T, fixture []byte) (*application.Resources, *jobs.
 	if err != nil {
 		t.Fatal(err)
 	}
+	provider := fileidentity.OS{}
+	service.SetFileIdentityProvider(provider)
+	hashService.SetFileIdentityProvider(provider)
 	service.SetHashService(hashService)
 	return resources, jobStore, catalogStore, service, source, store
 }
@@ -89,6 +94,13 @@ func TestIndexProfilePublishesLocatedUnverifiedWithoutHashing(t *testing.T) {
 	}
 	if mediaItems[0].Digest != "" || mediaItems[0].Algorithm != "" {
 		t.Fatalf("index 档案不得建立伪造 digest: %+v", mediaItems[0])
+	}
+	observation, err := catalogStore.LookupObservationAt(ctx, publication.ID, source.ID, mediaItems[0].RelativePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if observation.PlatformIdentityKind != ports.FileIdentityKindV1 || observation.PlatformIdentityValue == "" {
+		t.Fatalf("index 最终定位未持久化真实平台身份: %+v", observation)
 	}
 	var blobCount int
 	if err := store.Catalog.SQL().QueryRowContext(ctx, "SELECT count(*) FROM content_blobs WHERE catalog_revision_id=?", publication.CatalogRevisionID).Scan(&blobCount); err != nil {
@@ -156,6 +168,97 @@ func TestIncrementalProfileReusesUnchangedDigestWithoutRehash(t *testing.T) {
 	}
 	if hashJobCount != 1 {
 		t.Fatalf("无变化 incremental 重扫不应新建 Hash Job，实际 hashJobCount=%d", hashJobCount)
+	}
+}
+
+// TestIncrementalProfileRehashesSameStatPathReplacement 证明 FileID/dev+inode 真正进入
+// incremental 判据：路径、size 与 mtime 全部保持不变时，路径替代文件仍必须建立新的
+// Hash Job；平台身份只触发重新确认，不代替最终 SHA-256。
+func TestIncrementalProfileRehashesSameStatPathReplacement(t *testing.T) {
+	fixture := []byte("platform identity detects same-stat path replacement")
+	_, _, catalogStore, service, source, store := setupWithHash(t, fixture)
+	defer store.Close()
+	ctx := context.Background()
+
+	first, err := service.CreateScanWithProfile(ctx, source.ID, "personal-owner", "", scanner.ScanProfileIncremental)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := service.Execute(ctx, first.ID); err != nil {
+		t.Fatal(err)
+	}
+	_, works, err := catalogStore.ListWorks(ctx)
+	if err != nil || len(works) != 1 {
+		t.Fatal(err)
+	}
+	_, beforeMedia, err := catalogStore.ListMediaForWork(ctx, works[0].ID)
+	if err != nil || len(beforeMedia) != 1 {
+		t.Fatal(err)
+	}
+	beforeObservation, err := catalogStore.LookupPriorObservation(ctx, source.ID, beforeMedia[0].RelativePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if beforeObservation.PlatformIdentityKind != ports.FileIdentityKindV1 || beforeObservation.PlatformIdentityValue == "" {
+		t.Fatalf("首次完整哈希未保存平台身份: %+v", beforeObservation)
+	}
+
+	mediaPath := filepath.Join(source.RootPath, "work-one", "media.bin")
+	originalInfo, err := os.Stat(mediaPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	oldPath := filepath.Join(t.TempDir(), "old-media.bin")
+	if err := os.Rename(mediaPath, oldPath); err != nil {
+		t.Fatal(err)
+	}
+	replacement := append([]byte(nil), fixture...)
+	replacement[0] ^= 0x7f
+	if err := os.WriteFile(mediaPath, replacement, 0o400); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chtimes(mediaPath, originalInfo.ModTime(), originalInfo.ModTime()); err != nil {
+		t.Fatal(err)
+	}
+	replacementInfo, err := os.Stat(mediaPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if replacementInfo.Size() != originalInfo.Size() || replacementInfo.ModTime().UnixNano() != originalInfo.ModTime().UnixNano() {
+		t.Fatalf("测试前置条件未保持 size/mtime: before=%+v after=%+v", originalInfo, replacementInfo)
+	}
+
+	second, err := service.CreateScanWithProfile(ctx, source.ID, "personal-owner", "", scanner.ScanProfileIncremental)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := service.Execute(ctx, second.ID); err != nil {
+		t.Fatal(err)
+	}
+	_, afterMedia, err := catalogStore.ListMediaForWork(ctx, works[0].ID)
+	if err != nil || len(afterMedia) != 1 {
+		t.Fatal(err)
+	}
+	if afterMedia[0].Digest == beforeMedia[0].Digest {
+		t.Fatal("同路径、同 size、同 mtime 的替代文件错误复用了旧 digest")
+	}
+	expectedDigest := domain.NewSHA256BlobRef(sha256.Sum256(replacement)).Digest
+	if afterMedia[0].Digest != expectedDigest {
+		t.Fatalf("替代文件未由完整 SHA-256 确认: got=%s want=%s", afterMedia[0].Digest, expectedDigest)
+	}
+	afterObservation, err := catalogStore.LookupPriorObservation(ctx, source.ID, afterMedia[0].RelativePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if afterObservation.PlatformIdentityValue == "" || afterObservation.PlatformIdentityValue == beforeObservation.PlatformIdentityValue {
+		t.Fatalf("路径替代后平台身份未更新: before=%+v after=%+v", beforeObservation, afterObservation)
+	}
+	var hashJobCount int
+	if err := store.Control.SQL().QueryRowContext(ctx, "SELECT count(*) FROM jobs WHERE job_type='hash'").Scan(&hashJobCount); err != nil {
+		t.Fatal(err)
+	}
+	if hashJobCount != 2 {
+		t.Fatalf("FileID 不匹配应建立第二个 Hash Job，实际=%d", hashJobCount)
 	}
 }
 

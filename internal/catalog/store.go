@@ -2093,6 +2093,8 @@ type PriorObservation struct {
 	Found                    bool
 	Size                     int64
 	MTimeNanos               int64
+	PlatformIdentityKind     string
+	PlatformIdentityValue    string
 	ContentVerificationState string
 	Algorithm                string
 	Digest                   string
@@ -2106,12 +2108,13 @@ type PriorObservation struct {
 // 不产生任何文件 I/O。真实规模下依赖 source_media_identity_idx 索引，不做全表扫描。
 func (s *Store) LookupPriorObservation(ctx context.Context, sourceID, relativePath string) (PriorObservation, error) {
 	var size, mtimeNs, lastConfirmedAt sql.NullInt64
-	var state, algorithm, digest sql.NullString
-	err := s.db.QueryRowContext(ctx, `SELECT m.size_bytes, m.mtime_ns, m.content_verification_state, m.last_confirmed_algorithm, m.last_confirmed_digest, m.last_confirmed_at
+	var identityKind, identityValue, state, algorithm, digest sql.NullString
+	err := s.db.QueryRowContext(ctx, `SELECT m.size_bytes, m.mtime_ns, m.platform_identity_kind, m.platform_identity_value,
+m.content_verification_state, m.last_confirmed_algorithm, m.last_confirmed_digest, m.last_confirmed_at
 FROM source_media m
 JOIN active_query_publication a ON a.singleton=1 JOIN query_publications q ON q.query_publication_id=a.query_publication_id
 WHERE m.catalog_revision_id=q.catalog_revision_id AND m.source_id=? AND m.relative_path=?`, sourceID, relativePath).
-		Scan(&size, &mtimeNs, &state, &algorithm, &digest, &lastConfirmedAt)
+		Scan(&size, &mtimeNs, &identityKind, &identityValue, &state, &algorithm, &digest, &lastConfirmedAt)
 	if errors.Is(err, sql.ErrNoRows) {
 		return PriorObservation{}, nil
 	}
@@ -2120,6 +2123,7 @@ WHERE m.catalog_revision_id=q.catalog_revision_id AND m.source_id=? AND m.relati
 	}
 	observation := PriorObservation{
 		Found: true, Size: size.Int64, MTimeNanos: mtimeNs.Int64,
+		PlatformIdentityKind: identityKind.String, PlatformIdentityValue: identityValue.String,
 		ContentVerificationState: state.String, Algorithm: algorithm.String, Digest: digest.String,
 	}
 	if lastConfirmedAt.Valid {
@@ -2139,12 +2143,13 @@ WHERE m.catalog_revision_id=q.catalog_revision_id AND m.source_id=? AND m.relati
 // PublicationByID。
 func (s *Store) LookupObservationAt(ctx context.Context, publicationID, sourceID, relativePath string) (PriorObservation, error) {
 	var size, mtimeNs, lastConfirmedAt sql.NullInt64
-	var state, algorithm, digest sql.NullString
-	err := s.db.QueryRowContext(ctx, `SELECT m.size_bytes, m.mtime_ns, m.content_verification_state, m.last_confirmed_algorithm, m.last_confirmed_digest, m.last_confirmed_at
+	var identityKind, identityValue, state, algorithm, digest sql.NullString
+	err := s.db.QueryRowContext(ctx, `SELECT m.size_bytes, m.mtime_ns, m.platform_identity_kind, m.platform_identity_value,
+m.content_verification_state, m.last_confirmed_algorithm, m.last_confirmed_digest, m.last_confirmed_at
 FROM source_media m
 JOIN query_publications q ON q.query_publication_id=?
 WHERE m.catalog_revision_id=q.catalog_revision_id AND m.source_id=? AND m.relative_path=?`, publicationID, sourceID, relativePath).
-		Scan(&size, &mtimeNs, &state, &algorithm, &digest, &lastConfirmedAt)
+		Scan(&size, &mtimeNs, &identityKind, &identityValue, &state, &algorithm, &digest, &lastConfirmedAt)
 	if errors.Is(err, sql.ErrNoRows) {
 		return PriorObservation{}, nil
 	}
@@ -2153,6 +2158,7 @@ WHERE m.catalog_revision_id=q.catalog_revision_id AND m.source_id=? AND m.relati
 	}
 	observation := PriorObservation{
 		Found: true, Size: size.Int64, MTimeNanos: mtimeNs.Int64,
+		PlatformIdentityKind: identityKind.String, PlatformIdentityValue: identityValue.String,
 		ContentVerificationState: state.String, Algorithm: algorithm.String, Digest: digest.String,
 	}
 	if lastConfirmedAt.Valid {

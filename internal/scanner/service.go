@@ -2,6 +2,8 @@ package scanner
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -59,17 +61,18 @@ type HashJobService interface {
 }
 
 type Service struct {
-	context     context.Context
-	resources   *application.Resources
-	jobs        *jobs.Store
-	catalog     *catalog.Store
-	notifier    Notifier
-	wait        sync.WaitGroup
-	dispatcher  Dispatcher
-	hash        HashJobService
-	maintenance *maintenance.Coordinator
-	space       SpaceGate
-	clock       ports.Clock
+	context      context.Context
+	resources    *application.Resources
+	jobs         *jobs.Store
+	catalog      *catalog.Store
+	notifier     Notifier
+	wait         sync.WaitGroup
+	dispatcher   Dispatcher
+	hash         HashJobService
+	maintenance  *maintenance.Coordinator
+	space        SpaceGate
+	clock        ports.Clock
+	fileIdentity ports.FileIdentityProvider
 
 	// preReuseHook 仅供确定性测试使用：在本次扫描对某个媒体做最终定位观察（重新 Stat 当前
 	// 文件）之前触发一次，覆盖 incremental 复用决策与 index 两条路径，用于模拟 discovery
@@ -95,6 +98,10 @@ func (s *Service) SetDispatcher(d Dispatcher) { s.dispatcher = d }
 // SetHashService 将完整内容哈希交给独立 hash 资源池。未注入时保留同步 fallback，方便
 // 仅验证 Catalog 语义的单元测试；正式 bootstrap 始终注入持久 Hash Job Service。
 func (s *Service) SetHashService(service HashJobService) { s.hash = service }
+
+func (s *Service) SetFileIdentityProvider(provider ports.FileIdentityProvider) {
+	s.fileIdentity = provider
+}
 
 func (s *Service) SetMaintenanceCoordinator(coordinator *maintenance.Coordinator) {
 	s.maintenance = coordinator
@@ -142,6 +149,8 @@ type VerificationTarget struct {
 	RelativePath           string `json:"relativePath"`
 	QueryPublicationID     string `json:"queryPublicationId"`
 	ObservationFingerprint string `json:"observationFingerprint,omitempty"`
+	PlatformIdentityKind   string `json:"platformIdentityKind,omitempty"`
+	PlatformIdentityValue  string `json:"platformIdentityValue,omitempty"`
 }
 
 // ObservationFingerprint 是 VerificationTarget.ObservationFingerprint 与执行阶段
@@ -150,6 +159,18 @@ type VerificationTarget struct {
 // 定位观察，state 是该次观察时刻的 content_verification_state。
 func ObservationFingerprint(size, mtimeNanos int64, state string) string {
 	return fmt.Sprintf("%d:%d:%s", size, mtimeNanos, state)
+}
+
+// ObservationFingerprintWithIdentity 在平台身份可用时把它纳入冻结指纹。无身份时保持
+// v1 字符串格式，使升级前已经排队的 VerificationTarget 仍可按旧证据安全恢复。
+func ObservationFingerprintWithIdentity(size, mtimeNanos int64, state, identityKind, identityValue string) string {
+	if identityKind == "" && identityValue == "" {
+		return ObservationFingerprint(size, mtimeNanos, state)
+	}
+	hash := sha256.New()
+	_, _ = fmt.Fprintf(hash, "gallery-observation-fingerprint\x00v2\x00%d\x00%d\x00%s\x00%s\x00%s",
+		size, mtimeNanos, state, identityKind, identityValue)
+	return "v2:" + hex.EncodeToString(hash.Sum(nil))
 }
 
 type scanRequest struct {
@@ -247,6 +268,9 @@ func (s *Service) CreateVerificationScan(ctx context.Context, sourceID, createdB
 	normalizedTargets := make([]VerificationTarget, len(targets))
 	for index, target := range targets {
 		if target.SourceID != sourceID {
+			return jobs.Job{}, fault.WithField(fault.CodeValidation, "verificationTargets", nil)
+		}
+		if (target.PlatformIdentityKind == "") != (target.PlatformIdentityValue == "") {
 			return jobs.Job{}, fault.WithField(fault.CodeValidation, "verificationTargets", nil)
 		}
 		if _, err := domain.ParseID(domain.IDCanonicalMedia, target.MediaID); err != nil {
@@ -453,12 +477,19 @@ func (s *Service) Execute(ctx context.Context, jobID string) error {
 			}
 			item := &discovered[workIndex].Media[mediaIndex]
 			skipHash := false
+			var finalLocate *media.LocateResult
 			target, forced := forcedTargets[item.RelativePath]
 			if forced {
 				visitedTargets[item.RelativePath] = struct{}{}
-				if err := s.verifyObservationUnchanged(ctx, source.ID, target, item.ExpectedSize, item.ExpectedModTimeNanos); err != nil {
-					return s.fail(ctx, job.ID, err)
+				located, verifyErr := s.verifyObservationUnchanged(ctx, source.ID, source.RootPath, target)
+				if verifyErr != nil {
+					return s.fail(ctx, job.ID, verifyErr)
 				}
+				finalLocate = &located
+				item.ExpectedSize = located.Size
+				item.ExpectedModTimeNanos = located.ModTimeNanos
+				item.ExpectedPlatformIdentityKind = located.PlatformIdentityKind
+				item.ExpectedPlatformIdentityValue = located.PlatformIdentityValue
 			}
 			if scanProfile != ScanProfileVerify && !forced {
 				prior, lookupErr := s.catalog.LookupPriorObservation(ctx, source.ID, item.RelativePath)
@@ -475,17 +506,22 @@ func (s *Service) Execute(ctx context.Context, jobID string) error {
 					if s.preReuseHook != nil {
 						s.preReuseHook(item.RelativePath)
 					}
-					located, locateErr := media.LocateSourceFile(source.RootPath, item.RelativePath)
+					located, locateErr := media.LocateSourceFileWithIdentity(source.RootPath, item.RelativePath, s.fileIdentity)
 					if locateErr != nil {
 						return s.fail(ctx, job.ID, locateErr)
 					}
-					if located.Size == item.ExpectedSize && located.ModTimeNanos == item.ExpectedModTimeNanos {
+					finalLocate = &located
+					if located.Size == item.ExpectedSize && located.ModTimeNanos == item.ExpectedModTimeNanos &&
+						platformIdentityAllowsReuse(prior.PlatformIdentityKind, prior.PlatformIdentityValue,
+							located.PlatformIdentityKind, located.PlatformIdentityValue) {
 						blob, blobErr := domain.ParseContentBlobRef(prior.Algorithm, prior.Digest)
 						if blobErr != nil {
 							return s.fail(ctx, job.ID, blobErr)
 						}
 						item.Hash = media.HashResult{
 							Blob: blob, Size: located.Size, LocationKey: located.LocationKey, RelativePath: located.RelativePath,
+							ModTimeNanos: located.ModTimeNanos, HasObservedModTime: true,
+							PlatformIdentityKind: located.PlatformIdentityKind, PlatformIdentityValue: located.PlatformIdentityValue,
 						}
 						verificationState[item.RelativePath] = catalog.ContentVerificationStateContentVerified
 						// 复用摘要不改变确认时间：保留既往真正完成完整哈希时的时间，不得因为
@@ -498,6 +534,8 @@ func (s *Service) Execute(ctx context.Context, jobID string) error {
 						// 对本来只是稍后处理的合法文件产生误报的 CONTENT_CHANGED_DURING_HASH。
 						item.ExpectedSize = located.Size
 						item.ExpectedModTimeNanos = located.ModTimeNanos
+						item.ExpectedPlatformIdentityKind = located.PlatformIdentityKind
+						item.ExpectedPlatformIdentityValue = located.PlatformIdentityValue
 					}
 				} else if scanProfile == ScanProfileIndex ||
 					(len(forcedTargets) > 0 && prior.Found && prior.ContentVerificationState == catalog.ContentVerificationStateLocatedUnverified) {
@@ -513,24 +551,44 @@ func (s *Service) Execute(ctx context.Context, jobID string) error {
 					if s.preReuseHook != nil {
 						s.preReuseHook(item.RelativePath)
 					}
-					located, locateErr := media.LocateSourceFile(source.RootPath, item.RelativePath)
+					located, locateErr := media.LocateSourceFileWithIdentity(source.RootPath, item.RelativePath, s.fileIdentity)
 					if locateErr != nil {
 						return s.fail(ctx, job.ID, locateErr)
 					}
-					item.Hash = media.HashResult{Size: located.Size, LocationKey: located.LocationKey, RelativePath: located.RelativePath}
+					finalLocate = &located
+					item.Hash = media.HashResult{Size: located.Size, LocationKey: located.LocationKey, RelativePath: located.RelativePath,
+						ModTimeNanos: located.ModTimeNanos, HasObservedModTime: true,
+						PlatformIdentityKind: located.PlatformIdentityKind, PlatformIdentityValue: located.PlatformIdentityValue}
+					item.ExpectedSize = located.Size
 					item.ExpectedModTimeNanos = located.ModTimeNanos
+					item.ExpectedPlatformIdentityKind = located.PlatformIdentityKind
+					item.ExpectedPlatformIdentityValue = located.PlatformIdentityValue
 					verificationState[item.RelativePath] = catalog.ContentVerificationStateLocatedUnverified
 					skipHash = true
 				}
 			}
 			if !skipHash {
+				if finalLocate == nil {
+					located, locateErr := media.LocateSourceFileWithIdentity(source.RootPath, item.RelativePath, s.fileIdentity)
+					if locateErr != nil {
+						return s.fail(ctx, job.ID, locateErr)
+					}
+					finalLocate = &located
+					item.ExpectedSize = located.Size
+					item.ExpectedModTimeNanos = located.ModTimeNanos
+					item.ExpectedPlatformIdentityKind = located.PlatformIdentityKind
+					item.ExpectedPlatformIdentityValue = located.PlatformIdentityValue
+				}
 				var hashed media.HashResult
 				var hashErr error
 				hashJobID := ""
 				if s.hash != nil {
 					hashJob, createErr := s.hash.Create(ctx, hashjob.Request{SourceID: source.ID, RelativePath: item.RelativePath,
 						ExpectedSize: item.ExpectedSize, ExpectedModTimeNanos: item.ExpectedModTimeNanos,
-						HasExpectedIdentity: item.HasExpectedIdentity, ParentJobID: job.ID}, job.CreatedBy)
+						HasExpectedIdentity:           item.HasExpectedIdentity,
+						ExpectedPlatformIdentityKind:  item.ExpectedPlatformIdentityKind,
+						ExpectedPlatformIdentityValue: item.ExpectedPlatformIdentityValue,
+						ParentJobID:                   job.ID}, job.CreatedBy)
 					if createErr == nil && (hashJob.Status == jobs.StatusFailed || hashJob.Status == jobs.StatusCancelled || hashJob.Status == jobs.StatusNeedsRepair) {
 						hashJob, createErr = s.jobs.Retry(ctx, hashJob.ID, job.CreatedBy)
 					}
@@ -544,7 +602,13 @@ func (s *Service) Execute(ctx context.Context, jobID string) error {
 						hashErr = createErr
 					}
 				} else {
-					hashed, hashErr = media.HashSourceFileWithOptions(source.RootPath, item.RelativePath, media.HashOptions{Context: ctx})
+					hashed, hashErr = media.HashSourceFileWithOptions(source.RootPath, item.RelativePath, media.HashOptions{
+						Context: ctx, ExpectedSize: item.ExpectedSize, ExpectedModTimeNanos: item.ExpectedModTimeNanos,
+						HasExpectedIdentity:           item.HasExpectedIdentity,
+						ExpectedPlatformIdentityKind:  item.ExpectedPlatformIdentityKind,
+						ExpectedPlatformIdentityValue: item.ExpectedPlatformIdentityValue,
+						FileIdentityProvider:          s.fileIdentity,
+					})
 				}
 				if hashErr != nil {
 					cancelRequested, cancelStateErr := s.cancellationRequested(job.ID)
@@ -559,6 +623,12 @@ func (s *Service) Execute(ctx context.Context, jobID string) error {
 					return s.fail(ctx, job.ID, hashErr)
 				}
 				item.Hash = hashed
+				item.ExpectedSize = hashed.Size
+				if hashed.HasObservedModTime {
+					item.ExpectedModTimeNanos = hashed.ModTimeNanos
+				}
+				item.ExpectedPlatformIdentityKind = hashed.PlatformIdentityKind
+				item.ExpectedPlatformIdentityValue = hashed.PlatformIdentityValue
 				verificationState[item.RelativePath] = catalog.ContentVerificationStateContentVerified
 				// 只有真正完成完整哈希才推进确认时间。
 				lastConfirmedAt[item.RelativePath] = s.clock.Now().UTC()
@@ -666,7 +736,9 @@ func (s *Service) Execute(ctx context.Context, jobID string) error {
 				Algorithm: item.Hash.Blob.Algorithm, Digest: item.Hash.Blob.Digest, LocationKey: item.Hash.LocationKey,
 				MediaID: canonicalMedia.ID, WorkID: canonicalWork.ID, Ordinal: canonicalMedia.Ordinal,
 				ContentVerificationState: state, MTimeNanos: item.ExpectedModTimeNanos,
-				RuleHidden: item.RuleHidden,
+				PlatformIdentityKind:  item.Hash.PlatformIdentityKind,
+				PlatformIdentityValue: item.Hash.PlatformIdentityValue,
+				RuleHidden:            item.RuleHidden,
 			}
 			if state == catalog.ContentVerificationStateContentVerified {
 				fact.LastConfirmedAlgorithm = item.Hash.Blob.Algorithm
@@ -865,9 +937,8 @@ func isCatalogCandidatePublished(err error) bool {
 }
 
 // verifyObservationUnchanged 校验一个冻结 VerificationTarget 的 ObservationFingerprint
-// 与执行时刻的真实观察是否一致。currentSize/currentModTimeNanos 必须来自本次执行开头
-// discover() 对磁盘的新鲜 Stat（而不是再次读取磁盘或复用 Catalog 里可能早已过期的旧
-// 记录），据此判断请求排队期间文件是否已经被替换、截断或以不同内容重新写入；比较用的
+// 与执行时刻从同一只读句柄取得的 size/mtime/平台身份是否一致，据此判断请求排队期间
+// 文件是否已经被替换、截断或以不同内容重新写入；比较用的
 // 既往 content_verification_state 必须读取 target.QueryPublicationID 冻结的那个
 // publication（LookupObservationAt），不能像旧实现那样改读执行时刻恰好 active 的
 // publication——发起确认后、真正执行前 active publication 可能已经切换到另一个描述
@@ -876,26 +947,62 @@ func isCatalogCandidatePublished(err error) bool {
 // 来自请求方原本绑定的快照，直接判定为不可恢复的目标失效。空 ObservationFingerprint
 // 表示调用方未提供冻结指纹，跳过该项校验，仍然依赖调用方在循环中执行的目标消失与
 // MediaID 一致性检查。
-func (s *Service) verifyObservationUnchanged(ctx context.Context, sourceID string, target VerificationTarget, currentSize, currentModTimeNanos int64) error {
+func (s *Service) verifyObservationUnchanged(ctx context.Context, sourceID, sourceRoot string, target VerificationTarget) (media.LocateResult, error) {
 	if target.QueryPublicationID == "" {
-		return fault.New(fault.CodeVerificationTargetMismatch, false, nil)
+		return media.LocateResult{}, fault.New(fault.CodeVerificationTargetMismatch, false, nil)
 	}
 	if target.ObservationFingerprint == "" {
-		return nil
+		return media.LocateSourceFileWithIdentity(sourceRoot, target.RelativePath, s.fileIdentity)
 	}
 	prior, err := s.catalog.LookupObservationAt(ctx, target.QueryPublicationID, sourceID, target.RelativePath)
 	if err != nil {
-		return err
+		return media.LocateResult{}, err
 	}
-	current := ObservationFingerprint(currentSize, currentModTimeNanos, prior.ContentVerificationState)
+	usesPlatformIdentity := target.PlatformIdentityKind != "" || target.PlatformIdentityValue != ""
+	if usesPlatformIdentity && (target.PlatformIdentityKind != prior.PlatformIdentityKind ||
+		target.PlatformIdentityValue != prior.PlatformIdentityValue) {
+		return media.LocateResult{}, fault.New(fault.CodeVerificationTargetMismatch, false, nil)
+	}
+	frozen := ObservationFingerprint(prior.Size, prior.MTimeNanos, prior.ContentVerificationState)
+	if usesPlatformIdentity {
+		frozen = ObservationFingerprintWithIdentity(prior.Size, prior.MTimeNanos, prior.ContentVerificationState,
+			prior.PlatformIdentityKind, prior.PlatformIdentityValue)
+	}
+	if frozen != target.ObservationFingerprint {
+		return media.LocateResult{}, fault.New(fault.CodeVerificationTargetMismatch, false, nil)
+	}
+	located, err := media.LocateSourceFileWithIdentity(sourceRoot, target.RelativePath, s.fileIdentity)
+	if err != nil {
+		return media.LocateResult{}, err
+	}
+	current := ObservationFingerprint(located.Size, located.ModTimeNanos, prior.ContentVerificationState)
+	if usesPlatformIdentity {
+		current = ObservationFingerprintWithIdentity(located.Size, located.ModTimeNanos, prior.ContentVerificationState,
+			located.PlatformIdentityKind, located.PlatformIdentityValue)
+	}
 	if current != target.ObservationFingerprint {
 		// 冻结 observation 在 Job 真正开始读取内容之前就已经与当前观察不一致：这是
 		// 请求目标本身已经失效（文件在排队期间被替换/截断，或冻结的 publication
 		// 描述的状态已经过期），不是"完整 Hash 读取过程中并发发生变化"的瞬时故障，
 		// 不得返回 retryable 的 CONTENT_CHANGED_DURING_HASH 无意义地耗尽重试次数。
-		return fault.New(fault.CodeVerificationTargetMismatch, false, nil)
+		return media.LocateResult{}, fault.New(fault.CodeVerificationTargetMismatch, false, nil)
 	}
-	return nil
+	return located, nil
+}
+
+// platformIdentityAllowsReuse 只在前后两次观察都提供完整身份时要求严格相等；任一侧
+// 不支持 FileID/dev+inode 时显式回退既有 path+size+mtime 判据。部分字段属于损坏观察，
+// 不能参与复用。
+func platformIdentityAllowsReuse(priorKind, priorValue, currentKind, currentValue string) bool {
+	priorComplete := priorKind != "" && priorValue != ""
+	currentComplete := currentKind != "" && currentValue != ""
+	if (priorKind == "") != (priorValue == "") || (currentKind == "") != (currentValue == "") {
+		return false
+	}
+	if !priorComplete || !currentComplete {
+		return true
+	}
+	return priorKind == currentKind && priorValue == currentValue
 }
 
 // recoverAlreadyPublished 处理 BeginCandidate 检测到的 Saga gap：该 Job 已经真正完成过
@@ -955,6 +1062,8 @@ type discoveredMedia struct {
 	ExpectedSize                                 int64
 	ExpectedModTimeNanos                         int64
 	HasExpectedIdentity                          bool
+	ExpectedPlatformIdentityKind                 string
+	ExpectedPlatformIdentityValue                string
 	// RuleHidden 是规则判定的默认不展示，与用户 Overlay 的隐藏严格分离。
 	RuleHidden bool
 	Hash       media.HashResult

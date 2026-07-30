@@ -14,24 +14,31 @@ import (
 	"github.com/RecRivenVI/gallery/internal/domain"
 	"github.com/RecRivenVI/gallery/internal/jobs"
 	"github.com/RecRivenVI/gallery/internal/media"
+	"github.com/RecRivenVI/gallery/internal/ports"
 )
 
 type Request struct {
-	SourceID             string `json:"sourceId"`
-	RelativePath         string `json:"relativePath"`
-	ExpectedSize         int64  `json:"expectedSize"`
-	ExpectedModTimeNanos int64  `json:"expectedModTimeNanos"`
-	HasExpectedIdentity  bool   `json:"hasExpectedIdentity"`
-	ParentJobID          string `json:"parentJobId,omitempty"`
+	SourceID                      string `json:"sourceId"`
+	RelativePath                  string `json:"relativePath"`
+	ExpectedSize                  int64  `json:"expectedSize"`
+	ExpectedModTimeNanos          int64  `json:"expectedModTimeNanos"`
+	HasExpectedIdentity           bool   `json:"hasExpectedIdentity"`
+	ExpectedPlatformIdentityKind  string `json:"expectedPlatformIdentityKind,omitempty"`
+	ExpectedPlatformIdentityValue string `json:"expectedPlatformIdentityValue,omitempty"`
+	ParentJobID                   string `json:"parentJobId,omitempty"`
 }
 
 type Result struct {
-	Blob         string `json:"blob"`
-	Algorithm    string `json:"algorithm"`
-	Digest       string `json:"digest"`
-	Size         int64  `json:"size"`
-	LocationKey  string `json:"locationKey"`
-	RelativePath string `json:"relativePath"`
+	Blob                  string `json:"blob"`
+	Algorithm             string `json:"algorithm"`
+	Digest                string `json:"digest"`
+	Size                  int64  `json:"size"`
+	LocationKey           string `json:"locationKey"`
+	RelativePath          string `json:"relativePath"`
+	ModTimeNanos          int64  `json:"modTimeNanos,omitempty"`
+	HasObservedModTime    bool   `json:"hasObservedModTime,omitempty"`
+	PlatformIdentityKind  string `json:"platformIdentityKind,omitempty"`
+	PlatformIdentityValue string `json:"platformIdentityValue,omitempty"`
 }
 
 type Dispatcher interface {
@@ -51,6 +58,7 @@ type Service struct {
 	progressBytes     int64
 	progressInterval  time.Duration
 	heartbeatInterval time.Duration
+	fileIdentity      ports.FileIdentityProvider
 }
 
 func New(ctx context.Context, resources *application.Resources, jobStore *jobs.Store) (*Service, error) {
@@ -63,6 +71,10 @@ func New(ctx context.Context, resources *application.Resources, jobStore *jobs.S
 }
 
 func (s *Service) SetDispatcher(dispatcher Dispatcher) { s.dispatcher = dispatcher }
+
+func (s *Service) SetFileIdentityProvider(provider ports.FileIdentityProvider) {
+	s.fileIdentity = provider
+}
 
 // SetProgressPolicy 只用于运行配置与确定性测试；阈值属于 pre-freeze 调优项，不进入协议。
 func (s *Service) SetProgressPolicy(bytes int64, interval, heartbeat time.Duration) {
@@ -89,6 +101,9 @@ func (s *Service) Create(ctx context.Context, request Request, createdBy string)
 	if request.ExpectedSize < 0 {
 		return jobs.Job{}, fault.New(fault.CodeValidation, false, nil)
 	}
+	if (request.ExpectedPlatformIdentityKind == "") != (request.ExpectedPlatformIdentityValue == "") {
+		return jobs.Job{}, fault.WithField(fault.CodeValidation, "expectedPlatformIdentity", nil)
+	}
 	payload, err := json.Marshal(request)
 	if err != nil {
 		return jobs.Job{}, fault.New(fault.CodeInternal, true, err)
@@ -97,8 +112,9 @@ func (s *Service) Create(ctx context.Context, request Request, createdBy string)
 	// 幂等键，因此绝不会仅凭 path/size/mtime 跨扫描永久复用结果。
 	key := ""
 	if request.ParentJobID != "" {
-		key = fmt.Sprintf("hash:sha256-v1:%s:%s:%s:%d:%d:%t", request.ParentJobID, request.SourceID,
-			request.RelativePath, request.ExpectedSize, request.ExpectedModTimeNanos, request.HasExpectedIdentity)
+		key = fmt.Sprintf("hash:sha256-v2:%s:%s:%s:%d:%d:%t:%s:%s", request.ParentJobID, request.SourceID,
+			request.RelativePath, request.ExpectedSize, request.ExpectedModTimeNanos, request.HasExpectedIdentity,
+			request.ExpectedPlatformIdentityKind, request.ExpectedPlatformIdentityValue)
 	}
 	return s.jobs.CreateWithOptions(ctx, "hash", request.SourceID, createdBy, jobs.CreateOptions{
 		ResourceClass: jobs.ResourceHash, TargetResource: request.RelativePath, RequestJSON: payload,
@@ -233,7 +249,10 @@ func (s *Service) Execute(ctx context.Context, jobID string) error {
 	}()
 	hashed, hashErr := hashSourceFileWithOptions(source.RootPath, request.RelativePath, media.HashOptions{
 		Context: hashContext, ExpectedSize: request.ExpectedSize, ExpectedModTimeNanos: request.ExpectedModTimeNanos,
-		HasExpectedIdentity: request.HasExpectedIdentity,
+		HasExpectedIdentity:           request.HasExpectedIdentity,
+		ExpectedPlatformIdentityKind:  request.ExpectedPlatformIdentityKind,
+		ExpectedPlatformIdentityValue: request.ExpectedPlatformIdentityValue,
+		FileIdentityProvider:          s.fileIdentity,
 		Progress: func(bytes int64) {
 			latestBytes = bytes
 			if progressErr != nil {
@@ -275,7 +294,9 @@ func (s *Service) Execute(ctx context.Context, jobID string) error {
 		return s.fail(ctx, jobID, hashErr)
 	}
 	result := Result{Blob: hashed.Blob.Algorithm + ":" + hashed.Blob.Digest, Algorithm: hashed.Blob.Algorithm,
-		Digest: hashed.Blob.Digest, Size: hashed.Size, LocationKey: hashed.LocationKey, RelativePath: hashed.RelativePath}
+		Digest: hashed.Blob.Digest, Size: hashed.Size, LocationKey: hashed.LocationKey, RelativePath: hashed.RelativePath,
+		ModTimeNanos: hashed.ModTimeNanos, HasObservedModTime: hashed.HasObservedModTime,
+		PlatformIdentityKind: hashed.PlatformIdentityKind, PlatformIdentityValue: hashed.PlatformIdentityValue}
 	payload, err := json.Marshal(result)
 	if err != nil {
 		return s.fail(ctx, jobID, fault.New(fault.CodeInternal, true, err))
@@ -334,7 +355,10 @@ func (s *Service) WaitResult(ctx context.Context, jobID string) (media.HashResul
 			if err := json.Unmarshal(job.ResultJSON, &result); err != nil {
 				return media.HashResult{}, fault.New(fault.CodeInternal, true, err)
 			}
-			return media.HashResult{Blob: resultBlob(result), Size: result.Size, LocationKey: result.LocationKey, RelativePath: result.RelativePath}, nil
+			return media.HashResult{Blob: resultBlob(result), Size: result.Size, LocationKey: result.LocationKey,
+				RelativePath: result.RelativePath, ModTimeNanos: result.ModTimeNanos,
+				HasObservedModTime: result.HasObservedModTime, PlatformIdentityKind: result.PlatformIdentityKind,
+				PlatformIdentityValue: result.PlatformIdentityValue}, nil
 		case jobs.StatusFailed:
 			if job.FailureRetryable && job.NextAttemptAt != nil {
 				break
