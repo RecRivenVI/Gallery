@@ -392,14 +392,17 @@ func run(previousBin, currentBin, previousVersion, currentVersion string) error 
 	if err := os.Rename(controlPath, preservedControl); err != nil {
 		return fmt.Errorf("保全连续性失败前当前库: %w", err)
 	}
-	continuityWatchCtx, cancelContinuityWatch := context.WithCancel(ctx)
-	continuityHoldResults, stopContinuityWatcher, err := watchNextFileWithoutDeleteSharing(
-		continuityWatchCtx,
-		controlPath+".incoming",
-	)
+	continuityIncoming := controlPath + ".incoming"
+	if err := os.WriteFile(continuityIncoming, []byte("blocked continuity candidate fixture"), 0o600); err != nil {
+		return fmt.Errorf("建立连续性失败候选夹具: %w", err)
+	}
+	releaseContinuityHold, err := holdControlWithoutDeleteSharing(continuityIncoming)
 	if err != nil {
-		cancelContinuityWatch()
-		return err
+		return fmt.Errorf("持有连续性失败候选夹具: %w", err)
+	}
+	if removeErr := os.Remove(continuityIncoming); removeErr == nil {
+		_ = releaseContinuityHold()
+		return fmt.Errorf("真实 Windows handle 未阻止连续性候选删除")
 	}
 	continuityLog := filepath.Join(logs, "current-continuity-fail-closed.log")
 	unexpected, startErr := testprocess.StartGallerydWithSourceRootsContext(
@@ -407,35 +410,14 @@ func run(previousBin, currentBin, previousVersion, currentVersion string) error 
 	)
 	if unexpected != nil {
 		outcome := unexpected.Stop()
-		cancelContinuityWatch()
-		_ = stopContinuityWatcher()
+		_ = releaseContinuityHold()
 		return fmt.Errorf(
 			"连续性未知时 galleryd 意外发布 descriptor：forced=%t err=%v",
 			outcome.ForcedKill,
 			outcome.Err,
 		)
 	}
-	var continuityHold pendingFileHold
-	select {
-	case continuityHold = <-continuityHoldResults:
-	case <-time.After(2 * time.Second):
-		cancelContinuityWatch()
-		_ = stopContinuityWatcher()
-		return fmt.Errorf("未观察到连续性失败候选的真实 Windows 阻断句柄")
-	}
-	cancelContinuityWatch()
-	continuityWatchStopErr := stopContinuityWatcher()
-	if continuityHold.err != nil {
-		return fmt.Errorf("建立连续性失败候选阻断句柄: %w", continuityHold.err)
-	}
-	if continuityHold.release == nil {
-		return fmt.Errorf("连续性失败候选阻断未返回可释放句柄")
-	}
-	continuityReleaseErr := continuityHold.release()
-	if continuityWatchStopErr != nil {
-		return fmt.Errorf("停止连续性失败候选目录监视: %w", continuityWatchStopErr)
-	}
-	if continuityReleaseErr != nil {
+	if continuityReleaseErr := releaseContinuityHold(); continuityReleaseErr != nil {
 		return fmt.Errorf("释放连续性失败候选阻断句柄: %w", continuityReleaseErr)
 	}
 	if startErr == nil || !strings.Contains(startErr.Error(), "descriptor 前提前退出") {

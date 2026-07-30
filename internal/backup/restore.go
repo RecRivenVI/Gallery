@@ -194,9 +194,10 @@ func openStageAndCheck(ctx context.Context, path string) error {
 }
 
 // ApplyPendingRestore 在 galleryd 启动、打开任何数据库之前调用。若存在待应用恢复请求，它在隔离
-// 临时目录验证并迁移备份，产出干净候选，再原子替换当前 control.db（旧库轮换保留）。恢复失败一律
-// 保留当前 control.db 并继续启动，绝不因坏备份使进程无法启动。它必须在持有 AppDirs 单写者锁、
-// 且当前 control.db 尚未被打开时调用。
+// 临时目录验证并迁移备份，产出干净候选，再原子替换当前 control.db（旧库轮换保留）。恢复失败时，
+// 只有确认当前 control.db 仍是普通文件才允许消费 pending 并继续启动；当前库不可用时必须保留恢复
+// 请求并 fail-closed，禁止后续存储打开意外创建空库。它必须在持有 AppDirs 单写者锁、且当前
+// control.db 尚未被打开时调用。
 func ApplyPendingRestore(ctx context.Context, dirs appdirs.Dirs) (RestoreOutcome, error) {
 	markerPath := filepath.Join(dirs.State, restorePendingFile)
 	data, err := os.ReadFile(markerPath)
@@ -227,13 +228,30 @@ func ApplyPendingRestore(ctx context.Context, dirs appdirs.Dirs) (RestoreOutcome
 }
 
 func handleRestoreApplyFailure(dirs appdirs.Dirs, markerPath, backupID string, applyErr error) error {
-	recordRestoreOutcome(dirs, backupID, false, applyErr.Error())
 	var continuityErr *restoreContinuityError
 	if errors.As(applyErr, &continuityErr) {
 		// 当前库可能只剩轮换副本；保留 pending 供修复文件系统条件后的下一次
 		// 启动重试，并 fail-closed 阻止 storage.Open 创建空 control.db。
+		recordRestoreOutcome(dirs, backupID, false, applyErr.Error())
 		return fault.New(fault.CodeRestoreFailed, false, applyErr)
 	}
+	controlInfo, controlErr := os.Stat(filepath.Join(dirs.Data, databaseFileName))
+	if controlErr != nil || !controlInfo.Mode().IsRegular() {
+		availabilityErr := controlErr
+		if availabilityErr == nil {
+			availabilityErr = fmt.Errorf("当前 control.db 不是普通文件")
+		} else if errors.Is(availabilityErr, os.ErrNotExist) {
+			availabilityErr = fmt.Errorf("当前 control.db 不存在")
+		} else {
+			availabilityErr = fmt.Errorf("检查当前 control.db: %w", availabilityErr)
+		}
+		// 失败发生在轮换前也不能一概继续：若没有可证明可用的当前库，storage.Open
+		// 同样会在缺失路径创建空库。保留 pending，让文件系统条件修复后重试。
+		failClosedErr := errors.Join(applyErr, availabilityErr)
+		recordRestoreOutcome(dirs, backupID, false, failClosedErr.Error())
+		return fault.New(fault.CodeRestoreFailed, false, failClosedErr)
+	}
+	recordRestoreOutcome(dirs, backupID, false, applyErr.Error())
 	_ = os.Remove(markerPath)
 	return nil
 }

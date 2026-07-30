@@ -167,8 +167,14 @@ func TestHandleRestoreApplyFailureKeepsPendingWhenContinuityIsUnknown(t *testing
 
 func TestHandleRestoreApplyFailureConsumesPendingAfterSafeRollback(t *testing.T) {
 	root := t.TempDir()
-	dirs := appdirs.Dirs{State: filepath.Join(root, "state")}
+	dirs := appdirs.Dirs{Data: filepath.Join(root, "data"), State: filepath.Join(root, "state")}
+	if err := os.MkdirAll(dirs.Data, 0o700); err != nil {
+		t.Fatal(err)
+	}
 	if err := os.MkdirAll(dirs.State, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dirs.Data, databaseFileName), []byte("current-user-facts"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	markerPath := filepath.Join(dirs.State, restorePendingFile)
@@ -180,5 +186,41 @@ func TestHandleRestoreApplyFailureConsumesPendingAfterSafeRollback(t *testing.T)
 	}
 	if _, statErr := os.Stat(markerPath); !errors.Is(statErr, os.ErrNotExist) {
 		t.Fatalf("安全回滚后的失败标记未消费: %v", statErr)
+	}
+}
+
+func TestHandleRestoreApplyFailureKeepsPendingWhenCurrentDatabaseIsMissing(t *testing.T) {
+	root := t.TempDir()
+	dirs := appdirs.Dirs{Data: filepath.Join(root, "data"), State: filepath.Join(root, "state")}
+	if err := os.MkdirAll(dirs.Data, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(dirs.State, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	markerPath := filepath.Join(dirs.State, restorePendingFile)
+	if err := os.WriteFile(markerPath, []byte(`{"backupId":"test"}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	err := handleRestoreApplyFailure(dirs, markerPath, "cbak_test", errors.New("候选生成前失败"))
+	var structured *fault.Error
+	if !errors.As(err, &structured) || structured.Code != fault.CodeRestoreFailed {
+		t.Fatalf("当前库缺失时未返回 RESTORE_FAILED: %v", err)
+	}
+	if !strings.Contains(err.Error(), "当前 control.db 不存在") {
+		t.Fatalf("当前库缺失原因不可诊断: %v", err)
+	}
+	if _, statErr := os.Stat(markerPath); statErr != nil {
+		t.Fatalf("当前库缺失时不应消费待恢复标记: %v", statErr)
+	}
+	data, readErr := os.ReadFile(filepath.Join(dirs.State, restoreLastFile))
+	if readErr != nil {
+		t.Fatal(readErr)
+	}
+	var recorded restoreLast
+	if unmarshalErr := json.Unmarshal(data, &recorded); unmarshalErr != nil ||
+		!strings.Contains(recorded.Detail, "候选生成前失败") ||
+		!strings.Contains(recorded.Detail, "当前 control.db 不存在") {
+		t.Fatalf("当前库缺失失败事实未完整记录: %+v err=%v", recorded, unmarshalErr)
 	}
 }
