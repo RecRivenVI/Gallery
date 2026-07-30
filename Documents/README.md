@@ -60,6 +60,8 @@ EV-67 延续上述真实后端持续门禁：当前 primitive config 的 15 个 
 
 [EV-129](证据/验证记录.md) 将双入口从 `react-router-dom@7.18.1` 迁移到 `react-router@8.3.0` 并把 Node 基线提高到 22.22.0，删除 RSC 公告的 production 审计例外；当前 production-only 审计为 0，full 审计只剩 OpenAPI 生成器链的 4 个 high/1 条 dev-only 限时例外。精确生产资产在 Chromium/Firefox mock smoke 26/26 和隔离真实 `galleryd` 完整链各 23/23 通过，合成 Source 零变化。该证据不关闭 dev-only 例外，也不替代真实设备、真实存储或完整 Web/Security Gate。
 
+[EV-130](证据/验证记录.md) 从包含 EV-129 当前双前端的精确干净提交 `ffdf75d` 生成 `0.3.0-ev130` Windows x64 便携测试包；12,586,256-byte ZIP 为 `dirty=false`、`unsigned`，包外 SHA-256 为 `0FE458F57D7DAE143206C2DD977181ADA348E5E402E3D7A5587DA7DEBF54C227`，官方 smoke 已通过版本/提交、摘要、三份 SBOM、同源内嵌 Web 与同 AppDirs 强杀重启。该包是供当前功能实测的 pre-RC 制品，不是正式 RC；签名、安装/更新、真实用户数据与完整平台门禁仍未完成。
+
 2026-07-26 的 [EV-42](证据/验证记录.md#ev-42规则封面customcover-与-work-快照封面闭环e1) 又补齐规则 `CoverPath` → SourceMedia/CanonicalMedia → publication 有效封面的显式链路：同 Work 有效 CustomCover 优先，失效事实保留并回退规则封面，媒体顺序不再借用 `ordinal=-1`；`PublishedWork.coverMediaId` 为 required nullable，作品详情支持 `queryPublicationId`，Web 浏览、详情、封面与媒体沿用同一快照并提供 CustomCover 编辑。该轮通过根级 `Check.ps1`、WSL2 Debian 定向 race、合成 migration 与 Web Vitest/Chromium mock，未使用真实 Source/媒体，也没有真实后端浏览器证据；阶段 4 Reference Performance/API Freeze、阶段 5 Security Gate 与阶段 6 Web Gate 状态不变。
 
 ## 如何使用

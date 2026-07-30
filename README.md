@@ -133,6 +133,8 @@ EV-128 已补齐 Windows 恶意媒体有界语料基线：13 个纯合成样本�
 
 EV-129 已将用户端和管理端统一迁移到 `react-router@8.3.0`，移除旧 `react-router-dom` 与对应 production 审计例外；production-only `npm audit` 现为 0，完整审计只剩 1 条 dev-only 限时例外。Chromium/Firefox mock smoke 26/26、真实 `galleryd` 完整业务链各 23/23 和根级检查均通过；这仍不替代真实移动/触控、人工屏幕阅读器、物理高对比或真实存储门禁。
 
+EV-130 已从包含上述双前端的精确干净提交 `ffdf75d` 生成 `0.3.0-ev130` Windows x64 便携测试包。12,586,256-byte ZIP 为 `dirty=false`、`unsigned`，包外 SHA-256 为 `0FE458F57D7DAE143206C2DD977181ADA348E5E402E3D7A5587DA7DEBF54C227`；官方 smoke 已通过版本/提交、摘要、三份 SBOM、同源内嵌 Web 与同 AppDirs 强杀重启。它可用于当前功能实测，但没有正式签名、安装/更新或完整 Windows 发行门禁，仍不是 RC。
+
 EV-103 开始阶段 7 的窄发行基线：精确干净提交 `ac92f57` 可构建同源内嵌完整当前用户端/管理端的 Windows x64 便携 ZIP，并生成三个 CycloneDX SBOM、发行清单、包内/外 SHA-256 与实际 Authenticode 状态。12,454,092-byte 本地包通过版本、摘要、SBOM、内嵌 Web 和同 AppDirs 强杀重启 smoke，清单为 `dirty=false`、`unsigned`。它没有安装器、自动更新、CredentialStore、正式签名或真实升级/回滚，不能称为 RC。
 
 EV-104 在上述基线上增加同源双版本标签切换与 control 恢复门禁：两个独立 ZIP 先各自通过完整制品 smoke，旧标签在临时 AppDirs 建立用户事实与备份，新标签承接全部事实、dry-run 校验备份、登记恢复并在同 AppDirs 重启后证明备份后哨兵消失；两个解压程序树运行前后按目录/长度/SHA-256 封印一致，三个服务均优雅停止。精确干净提交 `3ef9acf` 的 `0.1.9-ev104` 与 `0.2.0-ev104` 本地包均为 `dirty=false`、`unsigned` 并通过。两份二进制来自同一源码，这只证明制品编排、程序/数据分离与恢复主路径，不是历史 Schema 升级、降级或失败回滚证据，仍不能称为 RC。
