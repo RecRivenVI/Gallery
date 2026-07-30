@@ -124,6 +124,13 @@ try {
             'finalizeResumeKeptCurrent',
             'finalizeResumeRevokedAuth',
             'finalizeResumeCompleted',
+            'outcomeWriteFailedClosed',
+            'outcomeWriteRetained',
+            'outcomeWriteRecovered',
+            'pendingDeleteFailedClosed',
+            'pendingDeleteRetained',
+            'pendingDeleteRecovered',
+            'pendingDeleteBlockedByOS',
             'allStopsExitedGracefully'
         )) {
         if ($result.$field -ne $true) { throw "版本切换结果未通过：$field" }
@@ -157,6 +164,13 @@ try {
         FinalizeResumeKeptCurrent = 'passed'
         FinalizeResumeRevokedAuth = 'passed'
         FinalizeResumeCompleted = 'passed'
+        OutcomeWriteFailedClosed = 'passed'
+        OutcomeWriteRetained = 'passed'
+        OutcomeWriteRecovered = 'passed'
+        PendingDeleteFailedClosed = 'passed'
+        PendingDeleteRetained = 'passed'
+        PendingDeleteRecovered = 'passed'
+        PendingDeleteBlockedByOS = 'passed'
         AllStopsExitedGracefully = 'passed'
     }
 } finally {

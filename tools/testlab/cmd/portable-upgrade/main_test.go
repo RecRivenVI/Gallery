@@ -169,4 +169,33 @@ func TestWriteFinalizeResumeMarker(t *testing.T) {
 	if marker.BackupID != backupID || marker.Phase != "placed_pending_finalize" {
 		t.Fatalf("待 finalize marker 不精确: %+v", marker)
 	}
+	if err := assertPendingFinalizeMarker(root, backupID); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestBlockRestoreOutcomePath(t *testing.T) {
+	root := t.TempDir()
+	state := filepath.Join(root, "state")
+	if err := os.MkdirAll(state, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	lastPath := filepath.Join(state, "restore-last.json")
+	if err := os.WriteFile(lastPath, []byte(`{"applied":true}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	release, err := blockRestoreOutcomePath(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	info, err := os.Stat(lastPath)
+	if err != nil || !info.IsDir() {
+		t.Fatalf("恢复结果路径未替换为目录阻断: info=%v err=%v", info, err)
+	}
+	if err := release(); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(lastPath); !os.IsNotExist(err) {
+		t.Fatalf("恢复结果目录阻断未解除: %v", err)
+	}
 }

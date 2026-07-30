@@ -31,6 +31,8 @@ const (
 	afterLandingLibrary    = "Portable landing restore current fact"
 	afterContinuityLibrary = "Portable continuity restore current fact"
 	afterFinalizeLibrary   = "Portable finalize resume current fact"
+	afterOutcomeLibrary    = "Portable outcome write current fact"
+	afterPendingLibrary    = "Portable pending delete current fact"
 	startupTimeout         = 60 * time.Second
 	jobTimeout             = 30 * time.Second
 )
@@ -66,6 +68,13 @@ type result struct {
 	FinalizeResumeKeptCurrent bool   `json:"finalizeResumeKeptCurrent"`
 	FinalizeResumeRevokedAuth bool   `json:"finalizeResumeRevokedAuth"`
 	FinalizeResumeCompleted   bool   `json:"finalizeResumeCompleted"`
+	OutcomeWriteFailedClosed  bool   `json:"outcomeWriteFailedClosed"`
+	OutcomeWriteRetained      bool   `json:"outcomeWriteRetained"`
+	OutcomeWriteRecovered     bool   `json:"outcomeWriteRecovered"`
+	PendingDeleteFailedClosed bool   `json:"pendingDeleteFailedClosed"`
+	PendingDeleteRetained     bool   `json:"pendingDeleteRetained"`
+	PendingDeleteRecovered    bool   `json:"pendingDeleteRecovered"`
+	PendingDeleteBlockedByOS  bool   `json:"pendingDeleteBlockedByOS"`
 	AllStopsExitedGracefully  bool   `json:"allStopsExitedGracefully"`
 }
 
@@ -513,9 +522,121 @@ func run(previousBin, currentBin, previousVersion, currentVersion string) error 
 	if err := assertSuccessfulRestoreRecorded(appRoot, continuityBackup.BackupId); err != nil {
 		return fmt.Errorf("finalize 续接结果: %w", err)
 	}
+	if err := createLibrary(ctx, finalizeClient, afterOutcomeLibrary); err != nil {
+		return err
+	}
 	if outcome := active.Stop(); !outcome.ExitedGracefully || outcome.ForcedKill || outcome.Err != nil {
 		stopsGraceful = false
-		return fmt.Errorf("finalize 续接后当前版本未优雅停止：forced=%t err=%v", outcome.ForcedKill, outcome.Err)
+		return fmt.Errorf("结果写入失败前当前版本未优雅停止：forced=%t err=%v", outcome.ForcedKill, outcome.Err)
+	}
+	active = nil
+
+	if err := writeFinalizeResumeMarker(appRoot, continuityBackup.BackupId); err != nil {
+		return err
+	}
+	releaseOutcomeBlock, err := blockRestoreOutcomePath(appRoot)
+	if err != nil {
+		return err
+	}
+	outcomeLog := filepath.Join(logs, "current-outcome-write-fail-closed.log")
+	if err := assertRestoreStartupFailed(ctx, currentPath, appRoot, outcomeLog, "记录恢复结果"); err != nil {
+		_ = releaseOutcomeBlock()
+		return err
+	}
+	if err := assertPendingFinalizeMarker(appRoot, continuityBackup.BackupId); err != nil {
+		_ = releaseOutcomeBlock()
+		return err
+	}
+	if err := releaseOutcomeBlock(); err != nil {
+		return fmt.Errorf("解除恢复结果写入阻断: %w", err)
+	}
+	active, err = testprocess.StartGallerydWithSourceRootsContext(
+		ctx, currentPath, appRoot, filepath.Join(logs, "current-after-outcome-write-recovery.log"), startupTimeout,
+	)
+	if err != nil {
+		return fmt.Errorf("恢复结果写入解除阻断后启动: %w", err)
+	}
+	outcomeClient, err := pair(ctx, active.BaseURL)
+	if err != nil {
+		return fmt.Errorf("恢复结果写入解除阻断后配对: %w", err)
+	}
+	if err := assertLibraries(ctx, outcomeClient, map[string]bool{
+		beforeBackupLibrary:    true,
+		afterBackupLibrary:     false,
+		afterBadBackupLibrary:  true,
+		afterLockedLibrary:     true,
+		afterLandingLibrary:    true,
+		afterContinuityLibrary: false,
+		afterFinalizeLibrary:   true,
+		afterOutcomeLibrary:    true,
+	}); err != nil {
+		return fmt.Errorf("恢复结果写入解除阻断后的当前事实: %w", err)
+	}
+	if err := assertSuccessfulRestoreRecorded(appRoot, continuityBackup.BackupId); err != nil {
+		return fmt.Errorf("恢复结果写入解除阻断后的结果: %w", err)
+	}
+	if err := createLibrary(ctx, outcomeClient, afterPendingLibrary); err != nil {
+		return err
+	}
+	if outcome := active.Stop(); !outcome.ExitedGracefully || outcome.ForcedKill || outcome.Err != nil {
+		stopsGraceful = false
+		return fmt.Errorf("pending 删除失败前当前版本未优雅停止：forced=%t err=%v", outcome.ForcedKill, outcome.Err)
+	}
+	active = nil
+
+	if err := writeFinalizeResumeMarker(appRoot, continuityBackup.BackupId); err != nil {
+		return err
+	}
+	pendingPath := filepath.Join(appRoot, "state", "restore-pending.json")
+	releasePendingHold, err := holdControlWithoutDeleteSharing(pendingPath)
+	if err != nil {
+		return fmt.Errorf("持有恢复 pending 阻断句柄: %w", err)
+	}
+	if removeErr := os.Remove(pendingPath); removeErr == nil {
+		_ = releasePendingHold()
+		return fmt.Errorf("真实 Windows handle 未阻止恢复 pending 删除")
+	}
+	pendingLog := filepath.Join(logs, "current-pending-delete-fail-closed.log")
+	if err := assertRestoreStartupFailed(ctx, currentPath, appRoot, pendingLog, "消费恢复请求"); err != nil {
+		_ = releasePendingHold()
+		return err
+	}
+	if err := assertPendingFinalizeMarker(appRoot, continuityBackup.BackupId); err != nil {
+		_ = releasePendingHold()
+		return err
+	}
+	if err := releasePendingHold(); err != nil {
+		return fmt.Errorf("释放恢复 pending 阻断句柄: %w", err)
+	}
+	active, err = testprocess.StartGallerydWithSourceRootsContext(
+		ctx, currentPath, appRoot, filepath.Join(logs, "current-after-pending-delete-recovery.log"), startupTimeout,
+	)
+	if err != nil {
+		return fmt.Errorf("恢复 pending 删除解除阻断后启动: %w", err)
+	}
+	pendingClient, err := pair(ctx, active.BaseURL)
+	if err != nil {
+		return fmt.Errorf("恢复 pending 删除解除阻断后配对: %w", err)
+	}
+	if err := assertLibraries(ctx, pendingClient, map[string]bool{
+		beforeBackupLibrary:    true,
+		afterBackupLibrary:     false,
+		afterBadBackupLibrary:  true,
+		afterLockedLibrary:     true,
+		afterLandingLibrary:    true,
+		afterContinuityLibrary: false,
+		afterFinalizeLibrary:   true,
+		afterOutcomeLibrary:    true,
+		afterPendingLibrary:    true,
+	}); err != nil {
+		return fmt.Errorf("恢复 pending 删除解除阻断后的当前事实: %w", err)
+	}
+	if err := assertSuccessfulRestoreRecorded(appRoot, continuityBackup.BackupId); err != nil {
+		return fmt.Errorf("恢复 pending 删除解除阻断后的结果: %w", err)
+	}
+	if outcome := active.Stop(); !outcome.ExitedGracefully || outcome.ForcedKill || outcome.Err != nil {
+		stopsGraceful = false
+		return fmt.Errorf("pending 删除恢复后当前版本未优雅停止：forced=%t err=%v", outcome.ForcedKill, outcome.Err)
 	}
 	active = nil
 
@@ -543,6 +664,13 @@ func run(previousBin, currentBin, previousVersion, currentVersion string) error 
 		FinalizeResumeKeptCurrent: true,
 		FinalizeResumeRevokedAuth: true,
 		FinalizeResumeCompleted:   true,
+		OutcomeWriteFailedClosed:  true,
+		OutcomeWriteRetained:      true,
+		OutcomeWriteRecovered:     true,
+		PendingDeleteFailedClosed: true,
+		PendingDeleteRetained:     true,
+		PendingDeleteRecovered:    true,
+		PendingDeleteBlockedByOS:  true,
 		AllStopsExitedGracefully:  stopsGraceful,
 	}
 	encoded, err := json.Marshal(value)
@@ -572,6 +700,75 @@ func writeFinalizeResumeMarker(appRoot, backupID string) error {
 	path := filepath.Join(appRoot, "state", "restore-pending.json")
 	if err := os.WriteFile(path, data, 0o600); err != nil {
 		return fmt.Errorf("写入待 finalize 恢复阶段: %w", err)
+	}
+	return nil
+}
+
+func assertPendingFinalizeMarker(appRoot, backupID string) error {
+	data, err := os.ReadFile(filepath.Join(appRoot, "state", "restore-pending.json"))
+	if err != nil {
+		return fmt.Errorf("读取待 finalize 恢复阶段: %w", err)
+	}
+	var marker struct {
+		BackupID string `json:"backupId"`
+		Phase    string `json:"phase"`
+	}
+	if err := json.Unmarshal(data, &marker); err != nil {
+		return fmt.Errorf("解析待 finalize 恢复阶段: %w", err)
+	}
+	if marker.BackupID != backupID || marker.Phase != "placed_pending_finalize" {
+		return fmt.Errorf("待 finalize 恢复阶段未精确保留")
+	}
+	return nil
+}
+
+func blockRestoreOutcomePath(appRoot string) (func() error, error) {
+	path := filepath.Join(appRoot, "state", "restore-last.json")
+	if err := os.Remove(path); err != nil && !errors.Is(err, os.ErrNotExist) {
+		return nil, fmt.Errorf("移除旧恢复结果: %w", err)
+	}
+	if err := os.Mkdir(path, 0o700); err != nil {
+		return nil, fmt.Errorf("建立恢复结果目录阻断: %w", err)
+	}
+	child := filepath.Join(path, "block")
+	if err := os.WriteFile(child, []byte("block restore outcome replacement"), 0o600); err != nil {
+		_ = os.Remove(path)
+		return nil, fmt.Errorf("建立恢复结果非空目录阻断: %w", err)
+	}
+	release := func() error {
+		if err := os.Remove(child); err != nil && !errors.Is(err, os.ErrNotExist) {
+			return err
+		}
+		if err := os.Remove(path); err != nil && !errors.Is(err, os.ErrNotExist) {
+			return err
+		}
+		return nil
+	}
+	return release, nil
+}
+
+func assertRestoreStartupFailed(ctx context.Context, binary, appRoot, logPath, requiredDetail string) error {
+	unexpected, startErr := testprocess.StartGallerydWithSourceRootsContext(
+		ctx, binary, appRoot, logPath, startupTimeout,
+	)
+	if unexpected != nil {
+		outcome := unexpected.Stop()
+		return fmt.Errorf(
+			"恢复状态失败时 galleryd 意外发布 descriptor：forced=%t err=%v",
+			outcome.ForcedKill,
+			outcome.Err,
+		)
+	}
+	if startErr == nil || !strings.Contains(startErr.Error(), "descriptor 前提前退出") {
+		return fmt.Errorf("恢复状态失败时未在 descriptor 前 fail-closed: %v", startErr)
+	}
+	data, err := os.ReadFile(logPath)
+	if err != nil {
+		return fmt.Errorf("读取恢复状态失败进程日志: %w", err)
+	}
+	if !strings.Contains(string(data), "RESTORE_FAILED:") ||
+		(requiredDetail != "" && !strings.Contains(string(data), requiredDetail)) {
+		return fmt.Errorf("恢复状态失败进程日志未记录精确 RESTORE_FAILED 阶段")
 	}
 	return nil
 }
