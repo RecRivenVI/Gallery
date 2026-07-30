@@ -64,6 +64,8 @@ EV-67 延续上述真实后端持续门禁：当前 primitive config 的 15 个 
 
 [EV-131](证据/验证记录.md) 为 Windows 恢复链补入真实当前用户 NTFS ACL 拒绝：`control.db` 文件 `DELETE` 与父目录 `FILE_DELETE_CHILD` 同时拒绝时数据库仍可读写，但恢复轮换由 OS 以 `ERROR_ACCESS_DENIED` 拒绝，当前事实和失败记录保持；恢复 DACL 后完整链继续收敛。精确干净 `457bef6` 的 `0.3.1-ev131` 未签名便携包及 EV-130→EV-131 全链通过；低完整性令牌、其它账户/服务、企业继承 ACL、ReFS/SMB、磁盘满与正式 RC Gate 仍未完成。
 
+[EV-132](证据/验证记录.md) 以仓库私有 build-only 兼容层保持 Redocly 1.x 的 `minimatch@5.1.9` 可调用 CommonJS 契约，实际委托 `minimatch@10.2.5` 与修复后的 `brace-expansion@5.0.8`，从而删除最后一条 OpenAPI 生成器 dev-only 审计例外。package/lock/实际解析路径、v5 表面、8 个行为用例和 894 个内部 `$ref` 均由门禁锁定；full/production 审计现在都是 0 漏洞、0 例外，生产资产哈希不变。该构建期收口不等于真实设备、真实存储或完整 Web/Security/RC Gate 通过。
+
 2026-07-26 的 [EV-42](证据/验证记录.md#ev-42规则封面customcover-与-work-快照封面闭环e1) 又补齐规则 `CoverPath` → SourceMedia/CanonicalMedia → publication 有效封面的显式链路：同 Work 有效 CustomCover 优先，失效事实保留并回退规则封面，媒体顺序不再借用 `ordinal=-1`；`PublishedWork.coverMediaId` 为 required nullable，作品详情支持 `queryPublicationId`，Web 浏览、详情、封面与媒体沿用同一快照并提供 CustomCover 编辑。该轮通过根级 `Check.ps1`、WSL2 Debian 定向 race、合成 migration 与 Web Vitest/Chromium mock，未使用真实 Source/媒体，也没有真实后端浏览器证据；阶段 4 Reference Performance/API Freeze、阶段 5 Security Gate 与阶段 6 Web Gate 状态不变。
 
 ## 如何使用
