@@ -43,6 +43,28 @@ type Process struct {
 	waitErr    error
 }
 
+// StartupTerminationError 表示启动等待被调用方取消或超时后，测试运行器是否确实
+// 对仍存活的 galleryd 发起了强制终止。调用方可用 errors.As 读取 ForcedKill，不能
+// 仅凭普通 context cancellation 推测真实进程已经被杀死。
+type StartupTerminationError struct {
+	Cause      error
+	ForcedKill bool
+}
+
+func (e *StartupTerminationError) Error() string {
+	if e == nil || e.Cause == nil {
+		return "galleryd 启动终止"
+	}
+	return e.Cause.Error()
+}
+
+func (e *StartupTerminationError) Unwrap() error {
+	if e == nil {
+		return nil
+	}
+	return e.Cause
+}
+
 // BuildGalleryd 用当前固定 Go 工具链编译一份独立的 galleryd 可执行文件，供本轮全部
 // 场景复用，避免每次启动都重新编译。
 func BuildGalleryd(goBin, repoRoot, outPath string) error {
@@ -218,15 +240,18 @@ func startGallerydWithSourceRootsContext(
 				return proc, nil
 			}
 		case <-startupCtx.Done():
-			killErr := proc.forceKill()
+			forcedKill, killErr := proc.forceKillWithOutcome()
 			if !proc.waitForExit(ForceKillTimeout) {
 				killErr = errors.Join(killErr, fmt.Errorf("强制终止 galleryd 后等待退出超时（%s）", ForceKillTimeout))
 			}
 			logFile.Close()
+			var cause error
 			if ctx.Err() != nil {
-				return nil, errors.Join(fmt.Errorf("启动 galleryd 已取消: %w", ctx.Err()), killErr)
+				cause = errors.Join(fmt.Errorf("启动 galleryd 已取消: %w", ctx.Err()), killErr)
+			} else {
+				cause = errors.Join(fmt.Errorf("等待 galleryd runtime descriptor 超时（%s）", timeout), killErr)
 			}
-			return nil, errors.Join(fmt.Errorf("等待 galleryd runtime descriptor 超时（%s）", timeout), killErr)
+			return nil, &StartupTerminationError{Cause: cause, ForcedKill: forcedKill}
 		}
 	}
 }
@@ -356,17 +381,25 @@ func (p *Process) waitForExit(timeout time.Duration) bool {
 }
 
 func (p *Process) forceKill() error {
+	_, err := p.forceKillWithOutcome()
+	return err
+}
+
+func (p *Process) forceKillWithOutcome() (bool, error) {
 	if p.cmd == nil || p.cmd.Process == nil {
-		return nil
+		return false, nil
 	}
 	select {
 	case <-p.exited:
-		return nil
+		return false, nil
 	default:
 	}
 	err := p.cmd.Process.Kill()
 	if errors.Is(err, os.ErrProcessDone) {
-		return nil
+		return false, nil
 	}
-	return err
+	if err != nil {
+		return false, err
+	}
+	return true, nil
 }

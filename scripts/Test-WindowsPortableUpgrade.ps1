@@ -135,6 +135,9 @@ try {
             'doubleRenameRetained',
             'doubleRenameRecovered',
             'doubleRenameBlockedByOS',
+            'finalizeWindowForcedKill',
+            'finalizeWindowRetained',
+            'finalizeWindowRecovered',
             'allStopsExitedGracefully'
         )) {
         if ($result.$field -ne $true) { throw "版本切换结果未通过：$field" }
@@ -179,6 +182,9 @@ try {
         DoubleRenameRetained = 'passed'
         DoubleRenameRecovered = 'passed'
         DoubleRenameBlockedByOS = 'passed'
+        FinalizeWindowForcedKill = 'passed'
+        FinalizeWindowRetained = 'passed'
+        FinalizeWindowRecovered = 'passed'
         AllStopsExitedGracefully = 'passed'
     }
 } finally {

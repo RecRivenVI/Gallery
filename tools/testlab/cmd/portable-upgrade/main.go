@@ -35,6 +35,7 @@ const (
 	afterOutcomeLibrary    = "Portable outcome write current fact"
 	afterPendingLibrary    = "Portable pending delete current fact"
 	afterDoubleLibrary     = "Portable double rename current fact"
+	afterKillLibrary       = "Portable finalize window kill current fact"
 	startupTimeout         = 60 * time.Second
 	jobTimeout             = 30 * time.Second
 )
@@ -81,6 +82,9 @@ type result struct {
 	DoubleRenameRetained      bool   `json:"doubleRenameRetained"`
 	DoubleRenameRecovered     bool   `json:"doubleRenameRecovered"`
 	DoubleRenameBlockedByOS   bool   `json:"doubleRenameBlockedByOS"`
+	FinalizeWindowForcedKill  bool   `json:"finalizeWindowForcedKill"`
+	FinalizeWindowRetained    bool   `json:"finalizeWindowRetained"`
+	FinalizeWindowRecovered   bool   `json:"finalizeWindowRecovered"`
 	AllStopsExitedGracefully  bool   `json:"allStopsExitedGracefully"`
 }
 
@@ -826,9 +830,121 @@ func run(previousBin, currentBin, previousVersion, currentVersion string) error 
 	if err != nil || retainedDigest != currentDigest {
 		return fmt.Errorf("双 Rename 恢复后轮换副本未保持当前事实字节: %v", err)
 	}
+	finalizeKillBackup, err := createBackup(ctx, doubleClient)
+	if err != nil {
+		return fmt.Errorf("创建 finalize 窗口强杀夹具备份: %w", err)
+	}
+	if err := createLibrary(ctx, doubleClient, afterKillLibrary); err != nil {
+		return err
+	}
+	if err := requestRestore(ctx, doubleClient, finalizeKillBackup.BackupId); err != nil {
+		return err
+	}
 	if outcome := active.Stop(); !outcome.ExitedGracefully || outcome.ForcedKill || outcome.Err != nil {
 		stopsGraceful = false
-		return fmt.Errorf("双 Rename 恢复后当前版本未优雅停止：forced=%t err=%v", outcome.ForcedKill, outcome.Err)
+		return fmt.Errorf("finalize 窗口强杀前当前版本未优雅停止：forced=%t err=%v", outcome.ForcedKill, outcome.Err)
+	}
+	active = nil
+
+	finalizeCurrentDigest, err := digestFile(controlPath)
+	if err != nil {
+		return fmt.Errorf("封印 finalize 窗口强杀前当前库: %w", err)
+	}
+	finalizeRotatedBefore, err := filepath.Glob(rotatedPattern)
+	if err != nil {
+		return fmt.Errorf("枚举 finalize 窗口强杀前轮换副本: %w", err)
+	}
+	killCtx, cancelKill := context.WithCancel(ctx)
+	phaseObserved, err := watchPendingFinalizePhase(killCtx, appRoot, cancelKill)
+	if err != nil {
+		cancelKill()
+		return err
+	}
+	killLog := filepath.Join(logs, "current-finalize-window-kill.log")
+	unexpected, killErr := testprocess.StartGallerydWithSourceRootsContext(
+		killCtx, currentPath, appRoot, killLog, startupTimeout,
+	)
+	if unexpected != nil {
+		outcome := unexpected.Stop()
+		cancelKill()
+		return fmt.Errorf(
+			"finalize 窗口强杀前 galleryd 意外发布 descriptor：forced=%t err=%v",
+			outcome.ForcedKill,
+			outcome.Err,
+		)
+	}
+	select {
+	case phaseErr := <-phaseObserved:
+		if phaseErr != nil {
+			cancelKill()
+			return phaseErr
+		}
+	case <-time.After(2 * time.Second):
+		cancelKill()
+		return fmt.Errorf("未确认 finalize 窗口持久阶段: startup=%v", killErr)
+	}
+	cancelKill()
+	var termination *testprocess.StartupTerminationError
+	if !errors.As(killErr, &termination) || !termination.ForcedKill || !errors.Is(killErr, context.Canceled) {
+		return fmt.Errorf("finalize 窗口未形成显式强杀启动结果: %v", killErr)
+	}
+	if err := assertPendingFinalizeMarker(appRoot, finalizeKillBackup.BackupId); err != nil {
+		return fmt.Errorf("finalize 窗口强杀后 pending: %w", err)
+	}
+	if _, err := os.Stat(filepath.Join(appRoot, "run", "galleryd.json")); !errors.Is(err, os.ErrNotExist) {
+		return fmt.Errorf("finalize 窗口强杀前意外发布 runtime descriptor")
+	}
+	finalizeRotatedPath, err := findOnlyNewPath(finalizeRotatedBefore, rotatedPattern)
+	if err != nil {
+		return fmt.Errorf("定位 finalize 窗口强杀轮换副本: %w", err)
+	}
+	finalizeRotatedDigest, err := digestFile(finalizeRotatedPath)
+	if err != nil || finalizeRotatedDigest != finalizeCurrentDigest {
+		return fmt.Errorf("finalize 窗口强杀后的轮换副本未保持当前事实字节: %v", err)
+	}
+
+	active, err = testprocess.StartGallerydWithSourceRootsContext(
+		ctx, currentPath, appRoot, filepath.Join(logs, "current-after-finalize-window-kill.log"), startupTimeout,
+	)
+	if err != nil {
+		return fmt.Errorf("finalize 窗口强杀后重启恢复: %w", err)
+	}
+	staleKillClient, err := rebindPairedClient(active.BaseURL, doubleClient)
+	if err != nil {
+		return fmt.Errorf("重绑定 finalize 窗口强杀前 Session: %w", err)
+	}
+	if err := assertSessionInvalidated(ctx, staleKillClient); err != nil {
+		return err
+	}
+	killClient, err := pair(ctx, active.BaseURL)
+	if err != nil {
+		return fmt.Errorf("finalize 窗口强杀恢复后重新配对: %w", err)
+	}
+	if err := assertLibraries(ctx, killClient, map[string]bool{
+		beforeBackupLibrary:    true,
+		afterBackupLibrary:     false,
+		afterBadBackupLibrary:  true,
+		afterLockedLibrary:     true,
+		afterLandingLibrary:    true,
+		afterContinuityLibrary: false,
+		afterFinalizeLibrary:   true,
+		afterOutcomeLibrary:    true,
+		afterPendingLibrary:    true,
+		afterDoubleLibrary:     false,
+		afterKillLibrary:       false,
+	}); err != nil {
+		return fmt.Errorf("finalize 窗口强杀恢复后的用户事实: %w", err)
+	}
+	if err := assertSuccessfulRestoreRecorded(appRoot, finalizeKillBackup.BackupId); err != nil {
+		return fmt.Errorf("finalize 窗口强杀后的恢复结果: %w", err)
+	}
+	finalizeRetainedDigest, err := digestFile(finalizeRotatedPath)
+	if err != nil || finalizeRetainedDigest != finalizeCurrentDigest {
+		return fmt.Errorf("finalize 窗口恢复后的轮换副本未保持当前事实字节: %v", err)
+	}
+	if outcome := active.Stop(); !outcome.ExitedGracefully || outcome.ForcedKill || outcome.Err != nil {
+		stopsGraceful = false
+		return fmt.Errorf("finalize 窗口恢复后当前版本未优雅停止：forced=%t err=%v", outcome.ForcedKill, outcome.Err)
 	}
 	active = nil
 
@@ -867,6 +983,9 @@ func run(previousBin, currentBin, previousVersion, currentVersion string) error 
 		DoubleRenameRetained:      true,
 		DoubleRenameRecovered:     true,
 		DoubleRenameBlockedByOS:   true,
+		FinalizeWindowForcedKill:  true,
+		FinalizeWindowRetained:    true,
+		FinalizeWindowRecovered:   true,
 		AllStopsExitedGracefully:  stopsGraceful,
 	}
 	encoded, err := json.Marshal(value)
@@ -901,21 +1020,52 @@ func writeFinalizeResumeMarker(appRoot, backupID string) error {
 }
 
 func assertPendingFinalizeMarker(appRoot, backupID string) error {
+	matches, err := pendingFinalizeMarkerMatches(appRoot, backupID)
+	if err != nil {
+		return err
+	}
+	if !matches {
+		return fmt.Errorf("待 finalize 恢复阶段未精确保留")
+	}
+	return nil
+}
+
+func pendingFinalizeMarkerMatches(appRoot, backupID string) (bool, error) {
 	data, err := os.ReadFile(filepath.Join(appRoot, "state", "restore-pending.json"))
 	if err != nil {
-		return fmt.Errorf("读取待 finalize 恢复阶段: %w", err)
+		return false, fmt.Errorf("读取待 finalize 恢复阶段: %w", err)
 	}
 	var marker struct {
 		BackupID string `json:"backupId"`
 		Phase    string `json:"phase"`
 	}
 	if err := json.Unmarshal(data, &marker); err != nil {
-		return fmt.Errorf("解析待 finalize 恢复阶段: %w", err)
+		return false, fmt.Errorf("解析待 finalize 恢复阶段: %w", err)
 	}
-	if marker.BackupID != backupID || marker.Phase != "placed_pending_finalize" {
-		return fmt.Errorf("待 finalize 恢复阶段未精确保留")
+	return marker.BackupID == backupID && marker.Phase == "placed_pending_finalize", nil
+}
+
+func watchPendingFinalizePhase(
+	ctx context.Context,
+	appRoot string,
+	onObserved context.CancelFunc,
+) (<-chan error, error) {
+	path := filepath.Join(appRoot, "state", "restore-pending.json")
+	observed, err := watchObservedFileReplacement(ctx, path)
+	if err != nil {
+		return nil, fmt.Errorf("建立 finalize 状态替换观察: %w", err)
 	}
-	return nil
+	result := make(chan error, 1)
+	go func() {
+		err := <-observed
+		if err != nil {
+			result <- fmt.Errorf("等待 finalize 持久阶段: %w", err)
+			return
+		}
+		onObserved()
+		result <- nil
+	}()
+	return result, nil
 }
 
 func blockRestoreOutcomePath(appRoot string) (func() error, error) {

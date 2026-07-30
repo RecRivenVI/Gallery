@@ -220,6 +220,38 @@ func TestKillReportsIntentionalForcedTermination(t *testing.T) {
 	}
 }
 
+func TestForceKillWithOutcomeReportsLiveProcessAttempt(t *testing.T) {
+	cmd := helperCommand(t, "sleep-without-descriptor")
+	configureProcessGroup(cmd)
+	logFile, err := os.Create(filepath.Join(t.TempDir(), "helper.log"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	cmd.Stdout = logFile
+	cmd.Stderr = logFile
+	if err := cmd.Start(); err != nil {
+		_ = logFile.Close()
+		t.Fatal(err)
+	}
+	proc := &Process{cmd: cmd, logFile: logFile, exited: make(chan struct{})}
+	go func() {
+		proc.waitErr = cmd.Wait()
+		close(proc.exited)
+	}()
+	forced, err := proc.forceKillWithOutcome()
+	if err != nil || !forced {
+		t.Fatalf("仍存活进程的强杀结果错误: forced=%t err=%v", forced, err)
+	}
+	if !proc.waitForExit(ForceKillTimeout) {
+		t.Fatal("强杀后子进程未收敛退出")
+	}
+	_ = logFile.Close()
+	termination := &StartupTerminationError{Cause: context.Canceled, ForcedKill: forced}
+	if !errors.Is(termination, context.Canceled) || !termination.ForcedKill {
+		t.Fatalf("启动终止错误未保留强杀/取消事实: %+v", termination)
+	}
+}
+
 func TestRunCommandContextCancelsEntireProcessTree(t *testing.T) {
 	pidPath := filepath.Join(t.TempDir(), "child.pid")
 	cmd := helperCommand(t, "spawn-tree-child")

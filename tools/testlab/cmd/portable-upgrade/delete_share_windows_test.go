@@ -115,3 +115,31 @@ func TestWatchPathMissingThenReopenBlocksRollbackRename(t *testing.T) {
 		t.Fatalf("释放句柄后仍不能回滚旧库: %v", err)
 	}
 }
+
+func TestWatchObservedFileReplacementDoesNotBlockAtomicRename(t *testing.T) {
+	root := t.TempDir()
+	path := filepath.Join(root, "restore-pending.json")
+	if err := os.WriteFile(path, []byte("before"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	done, err := watchObservedFileReplacement(ctx, path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	temporary := filepath.Join(root, ".restore-pending.json-test")
+	if err := os.WriteFile(temporary, []byte("after"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Rename(temporary, path); err != nil {
+		t.Fatalf("状态观察器阻断了原子替换: %v", err)
+	}
+	if err := <-done; err != nil {
+		t.Fatal(err)
+	}
+	data, err := os.ReadFile(path)
+	if err != nil || string(data) != "after" {
+		t.Fatalf("状态观察完成后未落位新内容: data=%q err=%v", data, err)
+	}
+}

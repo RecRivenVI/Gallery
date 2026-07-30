@@ -7,7 +7,9 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"strings"
 	"sync"
+	"unsafe"
 
 	"golang.org/x/sys/windows"
 )
@@ -39,6 +41,127 @@ func holdControlWithoutDeleteSharing(path string) (func() error, error) {
 
 func isDeleteSharingViolation(err error) bool {
 	return errors.Is(err, windows.ERROR_SHARING_VIOLATION)
+}
+
+func watchObservedFileReplacement(ctx context.Context, path string) (<-chan error, error) {
+	parent := filepath.Dir(path)
+	info, err := os.Stat(parent)
+	if err != nil {
+		return nil, fmt.Errorf("定位状态观察目录: %w", err)
+	}
+	if !info.IsDir() {
+		return nil, fmt.Errorf("状态观察父路径不是目录")
+	}
+	name, err := windows.UTF16PtrFromString(parent)
+	if err != nil {
+		return nil, err
+	}
+	directory, err := windows.CreateFile(
+		name,
+		windows.FILE_LIST_DIRECTORY,
+		windows.FILE_SHARE_READ|windows.FILE_SHARE_WRITE|windows.FILE_SHARE_DELETE,
+		nil,
+		windows.OPEN_EXISTING,
+		windows.FILE_FLAG_BACKUP_SEMANTICS|windows.FILE_FLAG_OVERLAPPED,
+		0,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("打开状态观察目录: %w", err)
+	}
+	event, err := windows.CreateEvent(nil, 1, 0, nil)
+	if err != nil {
+		_ = windows.CloseHandle(directory)
+		return nil, fmt.Errorf("建立状态观察事件: %w", err)
+	}
+	buffer := make([]byte, 4096)
+	overlapped := &windows.Overlapped{HEvent: event}
+	if err := windows.ReadDirectoryChanges(
+		directory,
+		&buffer[0],
+		uint32(len(buffer)),
+		false,
+		windows.FILE_NOTIFY_CHANGE_FILE_NAME,
+		nil,
+		overlapped,
+		0,
+	); err != nil && !errors.Is(err, windows.ERROR_IO_PENDING) {
+		_ = windows.CloseHandle(event)
+		_ = windows.CloseHandle(directory)
+		return nil, fmt.Errorf("订阅恢复状态文件替换: %w", err)
+	}
+
+	result := make(chan error, 1)
+	go func() {
+		defer windows.CloseHandle(event)
+		defer windows.CloseHandle(directory)
+		for {
+			if err := ctx.Err(); err != nil {
+				_ = windows.CancelIoEx(directory, overlapped)
+				result <- err
+				return
+			}
+			state, waitErr := windows.WaitForSingleObject(event, 25)
+			if waitErr != nil {
+				result <- fmt.Errorf("等待恢复状态文件替换: %w", waitErr)
+				return
+			}
+			if state == uint32(windows.WAIT_TIMEOUT) {
+				continue
+			}
+			if state != windows.WAIT_OBJECT_0 {
+				result <- fmt.Errorf("恢复状态文件替换等待返回未知状态: %d", state)
+				return
+			}
+			var bytesTransferred uint32
+			if err := windows.GetOverlappedResult(directory, overlapped, &bytesTransferred, false); err != nil {
+				result <- fmt.Errorf("读取恢复状态文件替换结果: %w", err)
+				return
+			}
+			if notificationRenamedPath(buffer, bytesTransferred, filepath.Base(path)) {
+				result <- nil
+				return
+			}
+			if err := windows.ResetEvent(event); err != nil {
+				result <- fmt.Errorf("重置恢复状态观察事件: %w", err)
+				return
+			}
+			overlapped = &windows.Overlapped{HEvent: event}
+			if err := windows.ReadDirectoryChanges(
+				directory,
+				&buffer[0],
+				uint32(len(buffer)),
+				false,
+				windows.FILE_NOTIFY_CHANGE_FILE_NAME,
+				nil,
+				overlapped,
+				0,
+			); err != nil && !errors.Is(err, windows.ERROR_IO_PENDING) {
+				result <- fmt.Errorf("续订恢复状态文件替换: %w", err)
+				return
+			}
+		}
+	}()
+	return result, nil
+}
+
+func notificationRenamedPath(buffer []byte, bytesTransferred uint32, target string) bool {
+	headerSize := uint32(unsafe.Offsetof(windows.FileNotifyInformation{}.FileName))
+	for offset := uint32(0); offset+headerSize <= bytesTransferred; {
+		info := (*windows.FileNotifyInformation)(unsafe.Pointer(&buffer[offset]))
+		nameBytes := info.FileNameLength
+		if nameBytes%2 != 0 || offset+headerSize+nameBytes > bytesTransferred {
+			return false
+		}
+		name := windows.UTF16ToString(unsafe.Slice(&info.FileName, int(nameBytes/2)))
+		if info.Action == windows.FILE_ACTION_RENAMED_NEW_NAME && strings.EqualFold(name, target) {
+			return true
+		}
+		if info.NextEntryOffset == 0 || offset+info.NextEntryOffset <= offset {
+			return false
+		}
+		offset += info.NextEntryOffset
+	}
+	return false
 }
 
 // watchNextFileWithoutDeleteSharing 先启动只针对精确候选路径的打开循环，再等待恢复
