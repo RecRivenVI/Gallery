@@ -45,7 +45,7 @@ Gallery（画廊）是一个本地优先、只读来源、规则驱动的个人�
 | 后台任务与崩溃恢复 | 支持取消、重试、租约和强制终止后自动恢复 | 已实现 |
 | 媒体读取与缩略图 | 支持按字节范围下载（Range）、ETag、按需内容校验和 JPEG 缩略图 | 已实现 |
 | API-first | Web、CLI、桌面壳和第三方客户端共用同一套正式 API | 已实现后端契约 |
-| 本地账户、资源授权与分享 | Personal 配对、LAN 本地账户、Session、API Token、Library/Source Grant、即时吊销，以及匿名 Work/Media/媒体正文 Share | 后端代码与合成安全门禁已实现；Personal 与同机 loopback LAN 安全管理已有真实浏览器链，物理 LAN/目标设备 Gate 未通过 |
+| 本地账户、资源授权与分享 | Personal 配对、LAN 本地账户、Session、API Token、Library/Source Grant、即时吊销，以及匿名 Work/Media/媒体正文 Share | 后端代码与合成安全门禁已实现；Personal 与同机 loopback LAN 安全管理、Windows 恶意媒体有界语料已有真实链，物理 LAN/目标设备/非 Windows Gate 未通过 |
 | 图形界面 | 响应式 Web/PWA 覆盖浏览、作品/媒体、实际封面与 CustomCover 编辑、Overlay、任务、规则、安全和维护页面 | 页面代码基线、Library/Source/扫描、publication-bound 画廊/媒体、CustomCover、规则生命周期、Schema 表单、安全、维护、规则绑定状态、作品/媒体人工解绑与撤销、普通 Binding issue 三决定/生命周期/分页、全部五种 SourceWork 结构 action、全部 orphan decision/实体类型及重现身份语义、已消费决策冲突、retry-backoff、运行中 Scan/Hash 级联取消、进程强杀启动接管与 control 恢复实际重启 E2E 已实现；完整设备门禁仍待覆盖 |
 | 安装与发行 | 安装包、签名、升级、跨平台发行 | 已有未签名 Windows x64 便携测试包/SBOM/smoke 基线；正式发行未开始 |
 
@@ -88,7 +88,7 @@ Gallery（画廊）是一个本地优先、只读来源、规则驱动的个人�
 | 阶段 2：规则系统 | ✅（正确性层面） | ✅（限定范围内） | 规则生命周期、编译执行、参数/绑定和影响调度已形成闭环 | 正式性能/平台门禁留待后续 | 已完成 |
 | 阶段 3：扫描、任务与目录库 | ✅（代码与模拟数据层面） | 🟡（真实大盘抽样与三平台有界链通过，全量未完成） | 真实 Pixiv 370,712 文件完成 discovery 取消/恢复与零写入；Gank/Pawchive 确认成功；Pawchive 又完成公共 Job API 观察下的活动 Hash 取消 | Pixiv/真实盘全量扫描与哈希、HDD/SMB/NAS 取消、publishing/崩溃恢复、正式性能门禁和网络共享盘尚未完成 | 继续其它存储与异常切片，同时优先收口阶段 4 正式压力门禁 |
 | 阶段 4：查询与媒体 | 🟡（主线完成，部分参数未冻结） | 🟡（正确性收口完成，500,000 规模正式压力测试已执行） | 搜索、排序、分页、显式规则/有效封面、媒体读取、缩略图及用户/治理 Creator keyset 均有代码闭环；500,000 规模 Correctness/Cursor 通过，可断点续跑的精确全局变化 publication 执行器已具备，并以 100k 实测每 Work 两条 Creator 关系 3/3 | 正式 500,000 十来源 publication 多样本、并发/冷缓存与 Degradation 尚未执行；排序权重、Total、租约和兼容版本策略仍待 API Freeze | 分窗执行正式 500k 性能矩阵并冻结接口 |
-| 阶段 5：账户、安全与多客户端 | 🟠（代码与合成安全收尾已实现） | 🟡（Personal 与同机 LAN 安全管理补证，正式 Gate 未通过） | LAN 本地账户、Argon2id、Session、API Token、资源 Grant、匿名 Share 与 WS 防滥用已形成代码闭环并有真实浏览器管理链 | 真实 LAN 多设备、目标设备 Argon2id 与真实恶意输入资源门禁未完成 | 完成外部设备安全门禁 |
+| 阶段 5：账户、安全与多客户端 | 🟠（代码与合成安全收尾已实现） | 🟡（Personal、同机 LAN 与 Windows 恶意媒体真实工具补证，正式 Gate 未通过） | LAN 本地账户、Argon2id、Session、API Token、资源 Grant、匿名 Share 与 WS 防滥用已有代码/浏览器链；13 个合成恶意媒体样本经 pin 的真实 ffprobe/ffmpeg 有界收敛 | 真实 LAN 多设备、目标设备 Argon2id 与非 Windows 外部工具资源门禁未完成 | 完成外部设备和其余平台安全门禁 |
 | 阶段 6：Web/PWA 界面 | 🟠（页面代码基线与双入口设计重构已实现） | 🟡（隔离 Chromium/Firefox 真实后端 E2E、当前全路由 axe 与模拟强制颜色/400% 等效重排已建立；正式 Gate 未通过） | 同源 Web/PWA 覆盖浏览与管理页面；主要业务/治理链已有双浏览器真实后端持续 E2E；当前 19 条路由及 5 个关键交互状态在桌面、窄屏或 320px 高对比/文本间距组合通过 axe | 浏览器业务链仍使用合成 Source；真实存储浏览器链、其余弱网矩阵、真实移动/触控、人工屏幕阅读器、真实浏览器缩放、物理操作系统高对比及其余交互状态组合未完成 | 扩大真实业务与可访问性门禁，不进入桌面壳 |
 | 阶段 7：平台适配与正式发行 | 🟠（Windows 便携、恢复/回滚及首条真实升级边界） | 🟡（本地制品、schema 23→24/反向拒绝、包内与进程级恢复失败门禁通过，正式 Gate 未通过） | 精确干净提交可生成同源双前端 ZIP、三份 SBOM、清单、摘要与签名状态门禁；正常/损坏备份、真实 schema 23→24/反向拒绝、Windows 轮换/落位失败，以及便携进程的当前库缺失、安全收尾续接、状态文件失败、双 Rename fail-closed、finalize 持久阶段强杀与解除阻断重试均已通过 | 正式签名、安装/更新、更多支持版本跨度、磁盘满/ACL/低权限、其它恢复窗口强杀/真实断电、平台矩阵及桌面壳未完成 | 完成 Windows RC 门禁 |
 
@@ -128,6 +128,8 @@ EV-115 又增加默认关闭、仅接受显式绝对路径的真实 `ffprobe` �
 EV-126 已把默认关闭的生产 ToolDiscovery 接入 `galleryd`：仅允许显式绝对路径、精确 `-version` token 与 SHA-256 同时匹配的 `ffprobe`/`ffmpeg`，不搜索 PATH；配置缺失或 pin 不匹配时在 descriptor/Job 创建前 fail-closed，能力日志不含路径，执行前还会重核摘要。本机真实 `ffprobe` 隔离启动、Windows 全量 Go、Linux amd64 交叉编译与根级门禁均已通过；外部转换 API、恶意媒体语料库和 OS 级 CPU/内存硬限额仍未完成，Security Gate 仍未通过。
 
 EV-127 已为 Windows 外部工具进程树接入 Job Object 累计 CPU 时间和聚合提交内存硬限制：预算冻结进持久 Job，Resolver 不能放宽，默认 512 MiB/CPU 等于墙钟超时及 2 GiB/3,600 秒上限均为 PRE_FREEZE；非 Windows 当前在 Job 创建前明确报告 unavailable。本机真实 `ffprobe` 在新限制下通过既有边界复验；恶意媒体语料库、非 Windows 等价实现与整体 Security Gate 仍未完成。
+
+EV-128 已补齐 Windows 恶意媒体有界语料基线：13 个纯合成样本覆盖尺寸/解压炸弹、异常长度/深度、高压缩比附件与外部引用，真实 `ffprobe`/`ffmpeg` 在显式版本/摘要 pin、协议/格式白名单和 256 MiB/2 秒 CPU/5 秒墙钟预算下得到 25 findings/0 failures，HLS 样本未建立网络连接且语料零变化。这不是 fuzz/CVE 全集、真实媒体、外部转换业务或非 Windows 支持，整体 Security Gate 仍未通过。
 
 EV-103 开始阶段 7 的窄发行基线：精确干净提交 `ac92f57` 可构建同源内嵌完整当前用户端/管理端的 Windows x64 便携 ZIP，并生成三个 CycloneDX SBOM、发行清单、包内/外 SHA-256 与实际 Authenticode 状态。12,454,092-byte 本地包通过版本、摘要、SBOM、内嵌 Web 和同 AppDirs 强杀重启 smoke，清单为 `dirty=false`、`unsigned`。它没有安装器、自动更新、CredentialStore、正式签名或真实升级/回滚，不能称为 RC。
 
