@@ -126,6 +126,12 @@ service.control
 | Backup/Restore/GC/VACUUM/Checkpoint | `admin.backup` / `admin.restore` / `admin.maintenance` | global |
 | WebSocket | 订阅 capability + payload 对应 capability | 每个 payload 按 Library/Source 重新授权；无资源 scope 的全局事件只发给 global 主体 |
 
+Session、API Token、Share、本地账户和 Grant 的管理列表是 `control.db` 的 live 读取，不提供 Catalog publication 那种可重复读
+快照。五类列表默认每页 50、合法范围 1～200，使用服务端稳定顺序和 `nextCursor` 续页；cursor 必须绑定端点资源类型，并在
+列表原本按 Principal/目标主体过滤时同时绑定该主体。格式损坏返回 `CURSOR_INVALID`，跨资源或跨主体复用返回可恢复的
+`CURSOR_EXPIRED`。客户端在列表内容发生创建、吊销、停用或授权变化后必须从第一页重新取得事实，不得把旧 live cursor
+解释为跨变更快照。安全审计仍是服务端固定的最新有界片段，不因此获得可续页语义。授权和对象可见范围继续以上表为准。
+
 API Token 在上表判定之外还要同时通过 Token 创建时冻结的 capability 与 Library/Source scope；因此同一主体的 Token 只能缩权，不能扩权。
 
 HEAD/GET、下载 disposition、内容确认和派生生成不得全部隐含落在同一个过宽 capability 上：读取媒体 metadata/正文（含已生成的 DerivedAsset 正文）使用 `media.read`；建立按需内容确认 Job 使用 `scan.run`（它本质是一个受限扫描 Job）；**创建**新的 DerivedAsset 生成工作使用独立的 `media.derive`，与只读的 `media.read` 分离——只读媒体账户可以读取已生成资源，但不能触发新的 CPU/磁盘生成工作。Personal owner 默认拥有三者；LAN Viewer 不含 `media.derive`，Operator/Owner 才含。仅以 `assetKey` 定位的 DerivedAsset 正文端点先从 DerivedAsset 注册事实取得稳定输入 Blob，再反查当前 publication 的 Source occurrence；资源限定主体至少对其中一个 Source 拥有 `media.read` 才能在授权后建立文件读取租约，猜中 `assetKey` 不能绕过授权。若 Blob 已无任何当前 occurrence，则只有 global `media.read` 可读该缓存资产。
