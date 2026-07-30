@@ -11,7 +11,15 @@
  *    不能出现 `undefined` 或 `Invalid Date`。
  */
 
-import type { ReactNode } from 'react';
+import {
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState,
+  type CSSProperties,
+  type ReactNode,
+  type RefCallback
+} from 'react';
 import { Link } from 'react-router';
 import { Badge, IconButton, useKeyedLayoutMotion, useToast } from '../../design';
 import { describeError } from '../../shared/errors';
@@ -27,7 +35,7 @@ import {
   type PublishedWork
 } from '../contracts';
 import { useOverlayMutation, useWorkOverlay } from '../queries';
-import { CoverMissing, MediaImage } from './media';
+import { CoverMissing, MediaImage, useInView } from './media';
 import { RuleBadges } from './badges';
 
 /* ————————————————————————————— 搜索命中 ————————————————————————————— */
@@ -182,12 +190,132 @@ export interface WorkGridProps {
   isVisualPlaceholder?: boolean;
 }
 
+interface GridChunkExtent {
+  inlineSize: number;
+  blockSize: number;
+}
+
+interface WorkGridChunkProps {
+  cacheKey: string;
+  works: readonly PublishedWork[];
+  timeZone?: string;
+  authorLabel?: string;
+  itemRef: (key: string) => RefCallback<HTMLElement>;
+}
+
+/**
+ * 窗口块大小固定而不随列数变化：响应式重排只改变块内 CSS Grid，既有 WorkCard 不会因为
+ * 断点变化被搬到另一个 React 父节点后重挂，焦点、媒体引用和稳定业务身份都得以保留。
+ */
+const GRID_ITEMS_PER_CHUNK = 48;
+const GRID_EXTENT_CACHE_CAPACITY = 256;
+const gridExtentCache = new Map<string, GridChunkExtent>();
+
+function cachedGridExtent(key: string): GridChunkExtent | undefined {
+  const extent = gridExtentCache.get(key);
+  if (extent === undefined) return undefined;
+  // 重新插入维持 LRU 顺序；这里只保存公开布局尺寸，不保存业务数据或媒体内容。
+  gridExtentCache.delete(key);
+  gridExtentCache.set(key, extent);
+  return extent;
+}
+
+function rememberGridExtent(key: string, extent: GridChunkExtent) {
+  gridExtentCache.delete(key);
+  gridExtentCache.set(key, extent);
+  while (gridExtentCache.size > GRID_EXTENT_CACHE_CAPACITY) {
+    const oldest = gridExtentCache.keys().next().value as string | undefined;
+    if (oldest === undefined) break;
+    gridExtentCache.delete(oldest);
+  }
+}
+
+function WorkGridChunk({ cacheKey, works, timeZone, authorLabel, itemRef }: WorkGridChunkProps) {
+  const chunkRef = useRef<HTMLDivElement>(null);
+  const isNearViewport = useInView(chunkRef, true);
+  const [extent, setExtent] = useState<GridChunkExtent | undefined>(() => cachedGridExtent(cacheKey));
+  // 新块必须至少真实渲染一次以取得稳定高度；已经量过的远端块则只保留等高占位。
+  const materialized = isNearViewport || extent === undefined;
+
+  useLayoutEffect(() => {
+    setExtent(cachedGridExtent(cacheKey));
+  }, [cacheKey]);
+
+  useLayoutEffect(() => {
+    if (!materialized) return;
+    const element = chunkRef.current;
+    if (element === null) return;
+    const rect = element.getBoundingClientRect();
+    if (rect.width <= 0 || rect.height <= 0) return;
+    const next = { inlineSize: rect.width, blockSize: rect.height };
+    rememberGridExtent(cacheKey, next);
+    setExtent((current) =>
+      current?.inlineSize === next.inlineSize && current.blockSize === next.blockSize ? current : next
+    );
+  }, [cacheKey, materialized, works.length]);
+
+  useLayoutEffect(() => {
+    const element = chunkRef.current;
+    if (element === null) return;
+    const invalidateForWidth = (inlineSize: number) => {
+      setExtent((current) => {
+        if (current === undefined || Math.abs(current.inlineSize - inlineSize) < 1) return current;
+        return undefined;
+      });
+    };
+    if (typeof ResizeObserver === 'function') {
+      const observer = new ResizeObserver((entries) => {
+        const entry = entries[0];
+        if (entry !== undefined) invalidateForWidth(entry.contentRect.width);
+      });
+      observer.observe(element);
+      return () => observer.disconnect();
+    }
+    const onResize = () => invalidateForWidth(element.getBoundingClientRect().width);
+    window.addEventListener('resize', onResize);
+    return () => window.removeEventListener('resize', onResize);
+  }, []);
+
+  return (
+    <div
+      ref={chunkRef}
+      role="presentation"
+      className="gal-grid__chunk"
+      data-window-spacer={materialized ? undefined : true}
+      style={
+        {
+          minBlockSize: materialized ? undefined : `${extent.blockSize}px`
+        } as CSSProperties
+      }
+    >
+      {materialized
+        ? works.map((work) => (
+            <div key={work.id} ref={itemRef(work.id)} role="listitem" className="gal-grid__cell">
+              <WorkCard work={work} timeZone={timeZone} authorLabel={authorLabel} />
+            </div>
+          ))
+        : null}
+    </div>
+  );
+}
+
 export function WorkGrid({ works, timeZone, authorLabel, isVisualPlaceholder = false }: WorkGridProps) {
   const { reducedMotion } = useTheme();
   const motion = useKeyedLayoutMotion(
     works.map((work) => work.id),
     { reducedMotion }
   );
+  const chunks = useMemo(() => {
+    const next: Array<{ key: string; cacheKey: string; works: readonly PublishedWork[] }> = [];
+    for (let start = 0; start < works.length; start += GRID_ITEMS_PER_CHUNK) {
+      const entries = works.slice(start, start + GRID_ITEMS_PER_CHUNK);
+      // React key 只取固定起点，续页填满最后一块时不重挂其中已有卡片；尺寸缓存再绑定
+      // publication 与完整 ID 集合，内容替换后不能借用旧高度。
+      const cacheKey = entries.map((work) => `${work.queryPublicationId}/${work.id}`).join(',');
+      next.push({ key: `chunk-${start}`, cacheKey, works: entries });
+    }
+    return next;
+  }, [works]);
 
   return (
     <div
@@ -197,10 +325,15 @@ export function WorkGrid({ works, timeZone, authorLabel, isVisualPlaceholder = f
       aria-hidden={isVisualPlaceholder ? true : undefined}
       data-replacing={isVisualPlaceholder ? true : undefined}
     >
-      {works.map((work) => (
-        <div key={work.id} ref={motion.itemRef(work.id)} role="listitem" className="gal-grid__cell">
-          <WorkCard work={work} timeZone={timeZone} authorLabel={authorLabel} />
-        </div>
+      {chunks.map((chunk) => (
+        <WorkGridChunk
+          key={chunk.key}
+          cacheKey={chunk.cacheKey}
+          works={chunk.works}
+          timeZone={timeZone}
+          authorLabel={authorLabel}
+          itemRef={motion.itemRef}
+        />
       ))}
     </div>
   );

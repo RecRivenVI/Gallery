@@ -309,8 +309,10 @@ export function WorkBrowser({ scope, presentation, heading, emptyDescription }: 
           />
           <div className="gal-browser__more" ref={sentinelRef}>
             {list.hasNextPage ? (
-              <Button variant="secondary" isPending={list.isFetchingNextPage} onPress={list.fetchNextPage}>
-                加载更多
+              // 最后一页会卸载这个按钮；使用 isPending 会让 RAC live-announcer 短暂保留
+              // 指向已消失按钮的 role=img。稳定的可见文案 + disabled 已完整表达当前状态。
+              <Button variant="secondary" isDisabled={list.isFetchingNextPage} onPress={list.fetchNextPage}>
+                {list.isFetchingNextPage ? '正在加载更多' : '加载更多'}
               </Button>
             ) : (
               <span className="gal-muted">已到末页</span>

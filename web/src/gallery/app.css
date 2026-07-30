@@ -398,8 +398,19 @@
 
 .gal-grid {
   display: grid;
+  gap: var(--space-4);
+}
+
+.gal-grid__chunk {
+  display: grid;
   grid-template-columns: repeat(auto-fill, minmax(10.5rem, 1fr));
   gap: var(--space-4);
+  min-width: 0;
+}
+
+.gal-grid__chunk[data-window-spacer] {
+  contain: layout size style;
+  pointer-events: none;
 }
 
 .gal-grid[data-replacing] {
@@ -936,7 +947,7 @@
 }
 
 @media (max-width: 30rem) {
-  .gal-grid {
+  .gal-grid__chunk {
     grid-template-columns: repeat(2, minmax(0, 1fr));
     gap: var(--space-3);
   }

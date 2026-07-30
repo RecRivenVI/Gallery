@@ -8,7 +8,7 @@
  * 的快照失效，把它渲染成页面级错误是在说谎。
  */
 
-import { useCallback, useEffect, useState, type FormEvent, type ReactNode } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useState, type FormEvent, type ReactNode } from 'react';
 import { Link, NavLink, NavigationType, useLocation, useNavigate, useNavigationType } from 'react-router';
 import { Button, Dialog, Icon, Menu, Spinner, TextInput, type IconName } from '../../design';
 import { describeError } from '../../shared/errors';
@@ -346,6 +346,15 @@ export function ScrollRestoration() {
   const key = location.key;
 
   useEffect(() => {
+    if (!('scrollRestoration' in window.history)) return;
+    const previous = window.history.scrollRestoration;
+    window.history.scrollRestoration = 'manual';
+    return () => {
+      window.history.scrollRestoration = previous;
+    };
+  }, []);
+
+  useLayoutEffect(() => {
     const save = () => {
       try {
         sessionStorage.setItem(`${SCROLL_KEY_PREFIX}${key}`, String(window.scrollY));
@@ -360,7 +369,7 @@ export function ScrollRestoration() {
     };
   }, [key]);
 
-  useEffect(() => {
+  useLayoutEffect(() => {
     if (navigationType !== NavigationType.Pop) {
       window.scrollTo(0, 0);
       return;
@@ -374,7 +383,9 @@ export function ScrollRestoration() {
     if (raw === null) return;
     const y = Number(raw);
     if (Number.isNaN(y)) return;
-    // 等一帧：列表要先从缓存渲染出来，页面才有足够高度可以滚回去。
+    // 布局清理会在路由 DOM 收缩前保存旧位置；新路由提交后则先用缓存高度同步恢复，
+    // 再等一帧复核一次，让窗口块的 IntersectionObserver 有机会物化目标区域。
+    window.scrollTo(0, y);
     const frame = requestAnimationFrame(() => {
       window.scrollTo(0, y);
     });

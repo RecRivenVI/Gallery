@@ -490,6 +490,114 @@ test('迟到的旧分页响应不会覆盖较新的搜索结果 @smoke', async (
   await expect(page.getByText('最新查询结果', { exact: true })).toBeVisible();
 });
 
+test('大量作品连续加载保持有界 DOM 并在返回时恢复位置 @smoke @work-window', async ({ page }) => {
+  const pageSize = 48;
+  const pageCount = 12;
+  const totalWorks = pageSize * pageCount;
+  const listCursors: Array<string | null> = [];
+  const work = (index: number) => {
+    const ordinal = String(index + 1).padStart(3, '0');
+    return {
+      id: `work_window_${ordinal}`,
+      title: `窗口作品 ${ordinal}`,
+      creator: '窗口测试创作者',
+      tags: ['合成'],
+      mediaCount: 0,
+      coverMediaId: null,
+      favorite: false,
+      progress: 0,
+      queryPublicationId: publication
+    };
+  };
+  const json = (route: Route, body: unknown) =>
+    route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(body) });
+
+  await page.route('**/api/v1/works**', async (route) => {
+    const url = new URL(route.request().url());
+    if (url.pathname === '/api/v1/works') {
+      const cursor = url.searchParams.get('cursor');
+      listCursors.push(cursor);
+      const pageIndex = cursor === null ? 0 : Number(cursor.slice('window-page-'.length));
+      const start = pageIndex * pageSize;
+      await json(route, {
+        queryPublicationId: publication,
+        sortProtocolVersion: 2,
+        rankProtocolVersion: 2,
+        catalogRevision: 'cat_window',
+        overlayProjectionRevision: 'overlay_window',
+        total: { mode: 'exact', value: totalWorks, protocolVersion: 1 },
+        dependencySet: [],
+        liveUserStateFields: ['favorite', 'progress'],
+        works: Array.from({ length: pageSize }, (_, offset) => work(start + offset)),
+        ...(pageIndex + 1 < pageCount ? { nextCursor: `window-page-${pageIndex + 1}` } : {})
+      });
+      return;
+    }
+
+    const mediaMatch = /^\/api\/v1\/works\/(work_window_(\d+))\/media$/.exec(url.pathname);
+    if (mediaMatch !== null) {
+      await json(route, { queryPublicationId: publication, media: [] });
+      return;
+    }
+    const overlayMatch = /^\/api\/v1\/works\/(work_window_(\d+))\/overlay$/.exec(url.pathname);
+    if (overlayMatch !== null) {
+      await json(route, {
+        workId: overlayMatch[1],
+        titleOverride: '',
+        manualTags: [],
+        hidden: false,
+        favorite: false,
+        progress: 0,
+        factWatermark: 1,
+        queryWatermark: 1,
+        projectedWatermark: 1,
+        projectionStatus: 'published',
+        publishedQueryPublicationId: publication
+      });
+      return;
+    }
+    const detailMatch = /^\/api\/v1\/works\/work_window_(\d+)$/.exec(url.pathname);
+    if (detailMatch !== null) {
+      await json(route, work(Number(detailMatch[1]) - 1));
+      return;
+    }
+    await route.fallback();
+  });
+
+  await page.goto('/browse');
+  await expect(page.getByText('窗口作品 048', { exact: true })).toBeAttached();
+  for (let pageIndex = 1; pageIndex < pageCount; pageIndex += 1) {
+    await page.getByRole('button', { name: '加载更多', exact: true }).click();
+    await expect(
+      page.getByText(`窗口作品 ${String((pageIndex + 1) * pageSize).padStart(3, '0')}`, { exact: true })
+    ).toBeAttached();
+  }
+
+  expect(listCursors).toEqual([
+    null,
+    ...Array.from({ length: pageCount - 1 }, (_, index) => `window-page-${index + 1}`)
+  ]);
+  await expect(page.getByText('窗口作品 576', { exact: true })).toBeVisible();
+  await expect(page.getByText('窗口作品 001', { exact: true })).toHaveCount(0);
+  await expect.poll(() => page.locator('.gal-grid__cell').count()).toBeLessThanOrEqual(pageSize * 3);
+
+  await page.evaluate(() => window.scrollTo(0, 0));
+  await expect(page.getByText('窗口作品 001', { exact: true })).toBeVisible();
+  await expect(page.getByText('窗口作品 576', { exact: true })).toHaveCount(0);
+
+  await page.evaluate(() => window.scrollTo(0, document.documentElement.scrollHeight));
+  await expect(page.getByText('窗口作品 576', { exact: true })).toBeVisible();
+  await page.getByText('窗口作品 576', { exact: true }).click();
+  await expect(page.getByRole('heading', { name: '窗口作品 576' })).toBeVisible();
+  await page.goBack();
+  await expect(page).toHaveURL(/\/browse$/);
+  await expect(page.getByText('窗口作品 576', { exact: true })).toBeVisible();
+  await expect.poll(() => page.locator('.gal-grid__cell').count()).toBeLessThanOrEqual(pageSize * 3);
+
+  const results = await new AxeBuilder({ page }).withTags(['wcag2a', 'wcag2aa']).analyze();
+  expect(results.violations).toEqual([]);
+});
+
 test('作品快照替换保留旧内容并按业务身份连续交接 @smoke', async ({ page }) => {
   let releaseReordered: (() => void) | undefined;
   const work = (id: string, title: string) => ({
