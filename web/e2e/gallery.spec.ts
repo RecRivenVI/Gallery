@@ -176,7 +176,33 @@ async function respond(route: Route) {
   if (url.pathname === '/api/v1/rule-parameters') return json({ parameterSets: [] });
   if (url.pathname === '/api/v1/source-rule-bindings') return json({ bindings: [] });
   if (url.pathname === '/api/v1/sessions') return json({ sessions: [] });
-  if (url.pathname === '/api/v1/api-tokens') return json({ tokens: [] });
+  if (url.pathname === '/api/v1/api-tokens') {
+    if (route.request().method() === 'POST') {
+      const body = route.request().postDataJSON() as {
+        name: string;
+        capabilities: string[];
+        scopes: Array<{ kind: string; id?: string }>;
+        expiresAt?: string;
+      };
+      return json(
+        {
+          id: 'token_01SYNTHETIC',
+          principalId: bootstrap.principalId,
+          name: body.name,
+          secretPrefix: 'gal_syn',
+          capabilities: body.capabilities,
+          scopes: body.scopes,
+          createdAt: new Date().toISOString(),
+          expiresAt: body.expiresAt ?? null,
+          lastUsedAt: null,
+          revoked: false,
+          secret: 'gallery_token_synthetic_abcdefghijklmnopqrstuvwxyz'
+        },
+        201
+      );
+    }
+    return json({ tokens: [] });
+  }
   if (url.pathname === '/api/v1/admin/users') {
     if (route.request().method() === 'POST')
       return json(
@@ -797,6 +823,12 @@ async function expectRoutesAccessibleWithReflow(
   }
 }
 
+async function expectCurrentInteractiveStateAccessible(page: Page, context: string): Promise<void> {
+  await expectNoHorizontalOverflow(page, context);
+  const results = await new AxeBuilder({ page }).withTags(['wcag2a', 'wcag2aa']).analyze();
+  expect(results.violations, `${context} 存在可访问性违规`).toEqual([]);
+}
+
 test('高对比、文本间距与 400% 等效宽度下完整路由保持可访问重排 @smoke', async ({ page }) => {
   test.setTimeout(90_000);
   await page.addInitScript(() => window.localStorage.setItem('gallery.theme', 'high-contrast'));
@@ -812,6 +844,52 @@ test('高对比、文本间距与 400% 等效宽度下完整路由保持可访�
   expect(await page.evaluate(() => window.matchMedia('(forced-colors: active)').matches)).toBe(true);
   await page.addStyleTag({ content: wcagTextSpacingOverride });
   await expectRoutesAccessibleWithReflow(page, manageAccessibilityRoutes);
+});
+
+test('高对比组合下关键表单、校验、弹出层与一次性密文保持可访问 @smoke', async ({ page }) => {
+  test.setTimeout(60_000);
+  await page.addInitScript(() => window.localStorage.setItem('gallery.theme', 'high-contrast'));
+  await page.emulateMedia({ forcedColors: 'active', contrast: 'more' });
+  await page.setViewportSize({ width: 320, height: 800 });
+
+  await page.goto(`/works/work_01SYNTHETIC?queryPublicationId=${publication}`);
+  await page.addStyleTag({ content: wcagTextSpacingOverride });
+  await expect(page.getByRole('heading', { name: '我的编辑', exact: true })).toBeVisible();
+  await page.getByRole('button', { name: /自定义封面$/ }).click();
+  await expect(page.getByRole('listbox')).toBeVisible();
+  await expectCurrentInteractiveStateAccessible(page, '作品自定义封面选单');
+  await page.keyboard.press('Escape');
+
+  await page.goto('/manage');
+  await page.addStyleTag({ content: wcagTextSpacingOverride });
+  await navigateWithinMountedEntry(page, '/manage/diagnostics');
+  const retention = page.getByRole('textbox', { name: '保留期（秒）', exact: true });
+  await retention.fill('-1');
+  await expect(page.getByText('必须是非负整数', { exact: true })).toBeVisible();
+  await expectCurrentInteractiveStateAccessible(page, '维护表单校验错误');
+  await retention.fill('86400');
+  await page.getByRole('button', { name: '创建维护任务', exact: true }).click();
+  const maintenanceDialog = page.getByRole('dialog', { name: '创建维护任务', exact: true });
+  await expect(maintenanceDialog).toBeVisible();
+  await expectCurrentInteractiveStateAccessible(page, '维护确认对话框');
+  await maintenanceDialog.getByRole('button', { name: '取消', exact: true }).click();
+
+  await navigateWithinMountedEntry(page, '/manage/security');
+  await page.getByRole('tab', { name: 'API Token', exact: true }).click();
+  await page.getByRole('textbox', { name: '名称', exact: true }).fill('可访问性门禁');
+  const capability = page.getByRole('checkbox', { name: 'library.read', exact: true });
+  await capability.focus();
+  await capability.press('Space');
+  await expect(capability).toBeChecked();
+  const expiry = page.getByRole('textbox', { name: '有效期（天）', exact: true });
+  await expiry.fill('0');
+  await expect(page.getByText('必须是正整数', { exact: true })).toBeVisible();
+  await expectCurrentInteractiveStateAccessible(page, 'Token 表单校验错误');
+  await expiry.fill('1');
+  await page.getByRole('button', { name: '创建 Token', exact: true }).click();
+  const secretDialog = page.getByRole('dialog', { name: 'API Token 密文', exact: true });
+  await expect(secretDialog).toBeVisible();
+  await expectCurrentInteractiveStateAccessible(page, '一次性密文对话框');
 });
 
 test('窄屏导航限制焦点并由 Escape 关闭后返还触发点 @smoke', async ({ page }) => {
