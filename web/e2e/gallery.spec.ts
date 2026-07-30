@@ -1,5 +1,6 @@
 import AxeBuilder from '@axe-core/playwright';
 import { expect, test, type Page, type Route } from '@playwright/test';
+import { readFileSync } from 'node:fs';
 // 合成 bootstrap 必须直接引用后端权威词表的前端副本：自行书写 capability 名会让 mock
 // 套件自证通过，EV-39 的 CAP-1 正是这样被掩盖的。
 import { CAPABILITIES } from '../src/auth/capabilities';
@@ -10,6 +11,9 @@ test.skip(
 );
 
 const publication = 'qpub_01SYNTHETIC';
+const rulePackageSchema = JSON.parse(
+  readFileSync(new URL('../../internal/rules/rule-package.schema.json', import.meta.url), 'utf8')
+) as unknown;
 const bootstrap = {
   mode: 'personal',
   authenticated: true,
@@ -689,6 +693,98 @@ test('五类安全资源只挂载当前 keyset 页并复用已访问页 @smoke',
   expect(requested.get('users')).toEqual([null, 'cursor-users']);
   expect(requested.get('grants')).toEqual([null, 'cursor-grants']);
   await expectNoHorizontalOverflow(page, '安全资源窄屏分页');
+  const results = await new AxeBuilder({ page }).withTags(['wcag2a', 'wcag2aa']).analyze();
+  expect(results.violations).toEqual([]);
+});
+
+test('规则配置大数组只挂载当前 20 项且窄屏可往返 @smoke', async ({ page }) => {
+  const ruleSetId = 'rset_00000000-0000-7000-8000-000000000001';
+  const content = {
+    rule_set_id: ruleSetId,
+    version: '1.0.0',
+    schema_version: 1,
+    normalization_algorithm_version: 'gallery-canonical-json-v1',
+    compiler_requirement: 'gallery-rule-compiler-v1',
+    cel_profile_version: 'gallery-cel-v1',
+    parameter_schema: { type: 'object', additionalProperties: false },
+    provider_namespaces: [],
+    primitives: Array.from({ length: 21 }, (_, index) => ({
+      id: `primitive_${String(index).padStart(2, '0')}`,
+      kind: 'metadata_map',
+      config: { fields: {} }
+    })),
+    cel_expressions: [],
+    tests: [{ id: 'base-test' }],
+    extensions: {
+      'gallery.window': {
+        required: false,
+        semantic: false,
+        payload: Array.from({ length: 21 }, (_, index) => `payload-${String(index).padStart(2, '0')}`)
+      }
+    }
+  };
+  const json = (route: Route, body: unknown, contentType = 'application/json') =>
+    route.fulfill({ status: 200, contentType, body: JSON.stringify(body) });
+
+  await page.route('**/api/v1/rule-packages/pkg_window', (route) =>
+    json(route, {
+      id: 'pkg_window',
+      ruleSetId,
+      name: '规则窗口合成夹具',
+      description: '',
+      status: 'active',
+      createdBy: 'principal_test',
+      revision: 5,
+      createdAt: '2026-07-31T00:00:00Z',
+      updatedAt: '2026-07-31T00:00:00Z'
+    })
+  );
+  await page.route('**/api/v1/rule-packages/pkg_window/draft', (route) =>
+    json(route, {
+      id: 'draft_window',
+      packageId: 'pkg_window',
+      content,
+      contentText: JSON.stringify(content, null, 2),
+      format: 'json',
+      validationStatus: 'draft',
+      diagnostics: [],
+      revision: 3,
+      savedBy: 'principal_test',
+      createdAt: '2026-07-31T00:00:00Z',
+      updatedAt: '2026-07-31T00:00:00Z'
+    })
+  );
+  await page.route('**/api/v1/rule-packages/pkg_window/versions', (route) => json(route, { items: [] }));
+  await page.route('**/api/v1/rule-packages/pkg_window/audits', (route) => json(route, { items: [] }));
+  await page.route('**/api/v1/rules/schema', (route) =>
+    json(route, rulePackageSchema, 'application/schema+json')
+  );
+  await page.route('**/api/v1/rules/examples', (route) => json(route, { items: [] }));
+
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.goto('/manage');
+  await navigateWithinMountedEntry(page, '/manage/rules/pkg_window');
+  await page.getByRole('tab', { name: 'Schema 表单', exact: true }).click();
+  await expect(page.getByTestId('rule-schema-form')).toBeVisible();
+
+  await expect(
+    page.getByText('规则原语 · 第 1 / 2 页 · 本页 20 项 · 共 21 项 · 每页最多 20 项。')
+  ).toBeVisible();
+  await expect(page.locator('input[value="primitive_00"]')).toBeVisible();
+  await expect(page.locator('input[value="primitive_20"]')).toHaveCount(0);
+  await page.getByRole('button', { name: '下一页：规则原语', exact: true }).click();
+  await expect(page.locator('input[value="primitive_20"]')).toBeVisible();
+  await expect(page.locator('input[value="primitive_00"]')).toHaveCount(0);
+  await page.getByRole('button', { name: '上一页：规则原语', exact: true }).click();
+  await expect(page.locator('input[value="primitive_00"]')).toBeVisible();
+
+  await expect(page.locator('input[value="payload-00"]')).toBeVisible();
+  await expect(page.locator('input[value="payload-20"]')).toHaveCount(0);
+  await page.getByRole('button', { name: '下一页：gallery.window payload 数组', exact: true }).click();
+  await expect(page.locator('input[value="payload-20"]')).toBeVisible();
+  await expect(page.locator('input[value="payload-00"]')).toHaveCount(0);
+
+  await expectNoHorizontalOverflow(page, '规则配置大数组窄屏分页');
   const results = await new AxeBuilder({ page }).withTags(['wcag2a', 'wcag2aa']).analyze();
   expect(results.violations).toEqual([]);
 });

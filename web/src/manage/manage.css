@@ -309,6 +309,17 @@
   gap: var(--space-2);
 }
 
+.manage-local-window {
+  display: grid;
+  min-width: 0;
+  gap: var(--space-2);
+  padding-block: var(--space-1);
+}
+
+.manage-local-window > p {
+  margin: 0;
+}
+
 .manage-field-changes,
 .manage-opaque-field {
   display: grid;
@@ -581,9 +592,15 @@
 }
 
 .manage-rule-schema-form button:disabled,
-.manage-rule-schema-form .form-control:disabled,
-.manage-rule-schema-form .form-control:read-only {
+.manage-rule-schema-form .form-control:disabled {
   opacity: 0.58;
+  cursor: not-allowed;
+}
+
+/* `:read-only` 也会命中原生 select，使可编辑选项被错误降低到 4:1。 */
+.manage-rule-schema-form .form-control[readonly] {
+  background: var(--color-surface-sunken);
+  color: var(--color-text);
   cursor: not-allowed;
 }
 

@@ -2,6 +2,7 @@ import type { FieldProps as RjsfFieldProps, FormContextType, RJSFSchema } from '
 import { isLosslessNumber } from 'lossless-json';
 import { useEffect, useId, useMemo, useState } from 'react';
 import { Button, Checkbox, Field, Select, TextInput } from '../../design';
+import { LocalCollectionPager, useLocalCollectionWindow } from './LocalCollectionWindow';
 import { cloneRuleValue, isRecord, parseRuleValue, stringifyRuleValue } from './lossless';
 
 export interface RuleFormContext extends FormContextType {
@@ -362,6 +363,9 @@ function JsonTreeEditor({
   onChange: (value: unknown) => void;
 }) {
   const kind = jsonKind(value);
+  const objectEntries = isJsonObject(value) ? Object.entries(value) : [];
+  const objectWindow = useLocalCollectionWindow(objectEntries.length);
+  const arrayWindow = useLocalCollectionWindow(isUnknownArray(value) ? value.length : 0);
 
   return (
     <div className="manage-json-node">
@@ -380,49 +384,56 @@ function JsonTreeEditor({
 
       {kind === 'object' && isJsonObject(value) ? (
         <div className="manage-json-node__children">
-          {Object.entries(value).map(([key, child], index) => (
-            <div className="manage-json-entry" key={index}>
-              <RenameableKey
-                label={`属性 ${index + 1} 名称`}
-                value={key}
-                siblings={Object.keys(value)}
-                isDisabled={isDisabled}
-                onRename={(nextKey) => {
-                  const next = Object.fromEntries(
-                    Object.entries(value).map(([entryKey, entryValue]) => [
-                      entryKey === key ? nextKey : entryKey,
-                      entryValue
-                    ])
-                  );
-                  onChange(next);
-                }}
-              />
-              <JsonTreeEditor
-                value={child}
-                label={`/${key}`}
-                path={[...path, key]}
-                isDisabled={isDisabled}
-                formContext={formContext}
-                onChange={(nextChild) => onChange({ ...value, [key]: nextChild })}
-              />
-              <Button
-                variant="danger"
-                isDisabled={isDisabled}
-                aria-label={`删除 JSON 属性 ${key}`}
-                onPress={() => {
-                  const next = { ...value };
-                  Reflect.deleteProperty(next, key);
-                  onChange(next);
-                }}
-              >
-                删除属性
-              </Button>
-            </div>
-          ))}
+          <LocalCollectionPager label={`${label} 对象属性`} window={objectWindow} />
+          {objectEntries.slice(objectWindow.start, objectWindow.end).map(([key, child], offset) => {
+            const index = objectWindow.start + offset;
+            return (
+              <div className="manage-json-entry" key={key}>
+                <RenameableKey
+                  label={`属性 ${index + 1} 名称`}
+                  value={key}
+                  siblings={Object.keys(value)}
+                  isDisabled={isDisabled}
+                  onRename={(nextKey) => {
+                    const next = Object.fromEntries(
+                      Object.entries(value).map(([entryKey, entryValue]) => [
+                        entryKey === key ? nextKey : entryKey,
+                        entryValue
+                      ])
+                    );
+                    onChange(next);
+                  }}
+                />
+                <JsonTreeEditor
+                  value={child}
+                  label={`/${key}`}
+                  path={[...path, key]}
+                  isDisabled={isDisabled}
+                  formContext={formContext}
+                  onChange={(nextChild) => onChange({ ...value, [key]: nextChild })}
+                />
+                <Button
+                  variant="danger"
+                  isDisabled={isDisabled}
+                  aria-label={`删除 JSON 属性 ${key}`}
+                  onPress={() => {
+                    const next = { ...value };
+                    Reflect.deleteProperty(next, key);
+                    onChange(next);
+                  }}
+                >
+                  删除属性
+                </Button>
+              </div>
+            );
+          })}
           <Button
             variant="secondary"
             isDisabled={isDisabled}
-            onPress={() => onChange({ ...value, [nextObjectKey(value)]: '' })}
+            onPress={() => {
+              objectWindow.showIndex(objectEntries.length);
+              onChange({ ...value, [nextObjectKey(value)]: '' });
+            }}
           >
             添加 JSON 属性
           </Button>
@@ -431,57 +442,68 @@ function JsonTreeEditor({
 
       {kind === 'array' && isUnknownArray(value) ? (
         <div className="manage-json-node__children">
-          {value.map((child, index) => (
-            <div className="manage-json-entry" key={index}>
-              <JsonTreeEditor
-                value={child}
-                label={`项目 ${index + 1}`}
-                path={[...path, index]}
-                isDisabled={isDisabled}
-                formContext={formContext}
-                onChange={(nextChild) => {
-                  const next = [...value];
-                  next[index] = nextChild;
-                  onChange(next);
-                }}
-              />
-              <div className="manage-form__actions">
-                <Button
-                  variant="secondary"
-                  isDisabled={isDisabled || index === 0}
-                  aria-label={`上移 JSON 项目 ${index + 1}`}
-                  onPress={() => {
-                    const next = [...value];
-                    [next[index - 1], next[index]] = [next[index], next[index - 1]];
-                    onChange(next);
-                  }}
-                >
-                  上移
-                </Button>
-                <Button
-                  variant="secondary"
-                  isDisabled={isDisabled || index === value.length - 1}
-                  aria-label={`下移 JSON 项目 ${index + 1}`}
-                  onPress={() => {
-                    const next = [...value];
-                    [next[index], next[index + 1]] = [next[index + 1], next[index]];
-                    onChange(next);
-                  }}
-                >
-                  下移
-                </Button>
-                <Button
-                  variant="danger"
+          <LocalCollectionPager label={`${label} 数组`} window={arrayWindow} />
+          {value.slice(arrayWindow.start, arrayWindow.end).map((child, offset) => {
+            const index = arrayWindow.start + offset;
+            return (
+              <div className="manage-json-entry" key={index}>
+                <JsonTreeEditor
+                  value={child}
+                  label={`项目 ${index + 1}`}
+                  path={[...path, index]}
                   isDisabled={isDisabled}
-                  aria-label={`删除 JSON 项目 ${index + 1}`}
-                  onPress={() => onChange(value.filter((_, itemIndex) => itemIndex !== index))}
-                >
-                  删除项目
-                </Button>
+                  formContext={formContext}
+                  onChange={(nextChild) => {
+                    const next = [...value];
+                    next[index] = nextChild;
+                    onChange(next);
+                  }}
+                />
+                <div className="manage-form__actions">
+                  <Button
+                    variant="secondary"
+                    isDisabled={isDisabled || index === 0}
+                    aria-label={`上移 JSON 项目 ${index + 1}`}
+                    onPress={() => {
+                      const next = [...value];
+                      [next[index - 1], next[index]] = [next[index], next[index - 1]];
+                      onChange(next);
+                    }}
+                  >
+                    上移
+                  </Button>
+                  <Button
+                    variant="secondary"
+                    isDisabled={isDisabled || index === value.length - 1}
+                    aria-label={`下移 JSON 项目 ${index + 1}`}
+                    onPress={() => {
+                      const next = [...value];
+                      [next[index], next[index + 1]] = [next[index + 1], next[index]];
+                      onChange(next);
+                    }}
+                  >
+                    下移
+                  </Button>
+                  <Button
+                    variant="danger"
+                    isDisabled={isDisabled}
+                    aria-label={`删除 JSON 项目 ${index + 1}`}
+                    onPress={() => onChange(value.filter((_, itemIndex) => itemIndex !== index))}
+                  >
+                    删除项目
+                  </Button>
+                </div>
               </div>
-            </div>
-          ))}
-          <Button variant="secondary" isDisabled={isDisabled} onPress={() => onChange([...value, null])}>
+            );
+          })}
+          <Button
+            variant="secondary"
+            isDisabled={isDisabled}
+            onPress={() => {
+              arrayWindow.showIndex(value.length);
+              onChange([...value, null]);
+            }}
+          >
             添加 JSON 项目
           </Button>
         </div>
@@ -720,6 +742,8 @@ export function ParameterSchemaField(props: RuleFieldProps) {
   const schemaValue = isJsonObject(exactValue) ? exactValue : null;
   const properties =
     schemaValue !== null && isJsonObject(schemaValue.properties) ? schemaValue.properties : null;
+  const propertyEntries = Object.entries(properties ?? {});
+  const propertyWindow = useLocalCollectionWindow(propertyEntries.length);
   const [newName, setNewName] = useState('');
   const duplicate = properties !== null && Object.prototype.hasOwnProperty.call(properties, newName);
   const isDisabled = props.disabled === true || props.readonly === true;
@@ -757,9 +781,10 @@ export function ParameterSchemaField(props: RuleFieldProps) {
           ) : (
             <>
               <div className="manage-structured-list">
-                {Object.entries(properties ?? {}).map(([name, definition], index) => (
+                <LocalCollectionPager label="参数 Schema 属性" window={propertyWindow} />
+                {propertyEntries.slice(propertyWindow.start, propertyWindow.end).map(([name, definition]) => (
                   <ParameterPropertyCard
-                    key={index}
+                    key={name}
                     name={name}
                     definition={definition}
                     schemaValue={schemaValue}
@@ -780,6 +805,7 @@ export function ParameterSchemaField(props: RuleFieldProps) {
                   variant="secondary"
                   isDisabled={isDisabled || newName === '' || duplicate}
                   onPress={() => {
+                    propertyWindow.showIndex(propertyEntries.length);
                     update({
                       ...schemaValue,
                       properties: { ...(properties ?? {}), [newName]: { type: 'string' } }
@@ -826,6 +852,7 @@ export function RuleTestsField(props: RuleFieldProps) {
     .map((value) => (isJsonObject(value) && typeof value.id === 'string' ? value.id : null))
     .filter((value): value is string => value !== null);
   const duplicate = existingIDs.includes(newTestId);
+  const testWindow = useLocalCollectionWindow(tests?.length ?? 0);
   const isDisabled = props.disabled === true || props.readonly === true;
   const update = (next: unknown) => props.registry.formContext.changeOpaque(props.fieldPathId.path, next);
 
@@ -842,75 +869,79 @@ export function RuleTestsField(props: RuleFieldProps) {
       ) : (
         <>
           <div className="manage-structured-list">
-            {tests.map((test, index) => (
-              <article className="manage-structured-card" key={index}>
-                <h4>测试 {index + 1}</h4>
-                {isJsonObject(test) ? (
-                  <>
-                    <TextInput
-                      label={`测试 ${index + 1} ID`}
-                      value={typeof test.id === 'string' ? test.id : ''}
-                      isDisabled={isDisabled}
-                      onChange={(value) => {
+            <LocalCollectionPager label="规则测试" window={testWindow} />
+            {tests.slice(testWindow.start, testWindow.end).map((test, offset) => {
+              const index = testWindow.start + offset;
+              return (
+                <article className="manage-structured-card" key={index}>
+                  <h4>测试 {index + 1}</h4>
+                  {isJsonObject(test) ? (
+                    <>
+                      <TextInput
+                        label={`测试 ${index + 1} ID`}
+                        value={typeof test.id === 'string' ? test.id : ''}
+                        isDisabled={isDisabled}
+                        onChange={(value) => {
+                          const next = [...tests];
+                          next[index] = setOptionalString(test, 'id', value);
+                          update(next);
+                        }}
+                      />
+                      <TextInput
+                        label={`测试 ${index + 1} 说明`}
+                        value={typeof test.description === 'string' ? test.description : ''}
+                        isDisabled={isDisabled}
+                        isMultiline
+                        rows={2}
+                        onChange={(value) => {
+                          const next = [...tests];
+                          next[index] = setOptionalString(test, 'description', value);
+                          update(next);
+                        }}
+                      />
+                    </>
+                  ) : (
+                    <p className="manage-inline-warning">
+                      此测试不是对象；现有值保持不变，可在完整结构或原始 JSON 中编辑。
+                    </p>
+                  )}
+                  <div className="manage-form__actions">
+                    <Button
+                      variant="secondary"
+                      isDisabled={isDisabled || index === 0}
+                      aria-label={`上移测试 ${index + 1}`}
+                      onPress={() => {
                         const next = [...tests];
-                        next[index] = setOptionalString(test, 'id', value);
+                        [next[index - 1], next[index]] = [next[index], next[index - 1]];
                         update(next);
                       }}
-                    />
-                    <TextInput
-                      label={`测试 ${index + 1} 说明`}
-                      value={typeof test.description === 'string' ? test.description : ''}
-                      isDisabled={isDisabled}
-                      isMultiline
-                      rows={2}
-                      onChange={(value) => {
+                    >
+                      上移
+                    </Button>
+                    <Button
+                      variant="secondary"
+                      isDisabled={isDisabled || index === tests.length - 1}
+                      aria-label={`下移测试 ${index + 1}`}
+                      onPress={() => {
                         const next = [...tests];
-                        next[index] = setOptionalString(test, 'description', value);
+                        [next[index], next[index + 1]] = [next[index + 1], next[index]];
                         update(next);
                       }}
-                    />
-                  </>
-                ) : (
-                  <p className="manage-inline-warning">
-                    此测试不是对象；现有值保持不变，可在完整结构或原始 JSON 中编辑。
-                  </p>
-                )}
-                <div className="manage-form__actions">
-                  <Button
-                    variant="secondary"
-                    isDisabled={isDisabled || index === 0}
-                    aria-label={`上移测试 ${index + 1}`}
-                    onPress={() => {
-                      const next = [...tests];
-                      [next[index - 1], next[index]] = [next[index], next[index - 1]];
-                      update(next);
-                    }}
-                  >
-                    上移
-                  </Button>
-                  <Button
-                    variant="secondary"
-                    isDisabled={isDisabled || index === tests.length - 1}
-                    aria-label={`下移测试 ${index + 1}`}
-                    onPress={() => {
-                      const next = [...tests];
-                      [next[index], next[index + 1]] = [next[index + 1], next[index]];
-                      update(next);
-                    }}
-                  >
-                    下移
-                  </Button>
-                  <Button
-                    variant="danger"
-                    isDisabled={isDisabled || tests.length <= 1}
-                    aria-label={`删除测试 ${index + 1}`}
-                    onPress={() => update(tests.filter((_, testIndex) => testIndex !== index))}
-                  >
-                    删除测试
-                  </Button>
-                </div>
-              </article>
-            ))}
+                    >
+                      下移
+                    </Button>
+                    <Button
+                      variant="danger"
+                      isDisabled={isDisabled || tests.length <= 1}
+                      aria-label={`删除测试 ${index + 1}`}
+                      onPress={() => update(tests.filter((_, testIndex) => testIndex !== index))}
+                    >
+                      删除测试
+                    </Button>
+                  </div>
+                </article>
+              );
+            })}
           </div>
           <div className="manage-form__row">
             <TextInput
@@ -924,6 +955,7 @@ export function RuleTestsField(props: RuleFieldProps) {
               variant="secondary"
               isDisabled={isDisabled || newTestId === '' || duplicate}
               onPress={() => {
+                testWindow.showIndex(tests.length);
                 update([...tests, { id: newTestId }]);
                 setNewTestId('');
               }}
@@ -1074,6 +1106,8 @@ export function ExtensionsField(props: RuleFieldProps) {
   const [newNamespace, setNewNamespace] = useState('');
   const duplicate = extensions !== null && Object.prototype.hasOwnProperty.call(extensions, newNamespace);
   const namespaceInvalid = newNamespace !== '' && !EXTENSION_NAMESPACE_PATTERN.test(newNamespace);
+  const extensionEntries = Object.entries(extensions ?? {});
+  const extensionWindow = useLocalCollectionWindow(extensionEntries.length);
   const isDisabled = props.disabled === true || props.readonly === true;
   const update = (next: unknown) => props.registry.formContext.changeOpaque(props.fieldPathId.path, next);
 
@@ -1091,18 +1125,21 @@ export function ExtensionsField(props: RuleFieldProps) {
       ) : (
         <>
           <div className="manage-structured-list">
-            {Object.entries(extensions).map(([namespace, extension], index) => (
-              <ExtensionCard
-                key={index}
-                namespace={namespace}
-                extension={extension}
-                extensions={extensions}
-                rootPath={props.fieldPathId.path}
-                isDisabled={isDisabled}
-                formContext={props.registry.formContext}
-                onChange={update}
-              />
-            ))}
+            <LocalCollectionPager label="Extensions" window={extensionWindow} />
+            {extensionEntries
+              .slice(extensionWindow.start, extensionWindow.end)
+              .map(([namespace, extension]) => (
+                <ExtensionCard
+                  key={namespace}
+                  namespace={namespace}
+                  extension={extension}
+                  extensions={extensions}
+                  rootPath={props.fieldPathId.path}
+                  isDisabled={isDisabled}
+                  formContext={props.registry.formContext}
+                  onChange={update}
+                />
+              ))}
           </div>
           <div className="manage-form__row">
             <TextInput
@@ -1122,6 +1159,7 @@ export function ExtensionsField(props: RuleFieldProps) {
               variant="secondary"
               isDisabled={isDisabled || newNamespace === '' || duplicate || namespaceInvalid}
               onPress={() => {
+                extensionWindow.showIndex(extensionEntries.length);
                 update({
                   ...extensions,
                   [newNamespace]: { required: false, semantic: false, payload: {} }

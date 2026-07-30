@@ -1,5 +1,13 @@
 import Form from '@rjsf/core';
-import type { Field as RjsfField, FieldProps as RjsfFieldProps, RJSFSchema, UiSchema } from '@rjsf/utils';
+import {
+  buttonId,
+  getUiOptions,
+  type ArrayFieldTemplateProps,
+  type Field as RjsfField,
+  type FieldProps as RjsfFieldProps,
+  type RJSFSchema,
+  type UiSchema
+} from '@rjsf/utils';
 import { createPrecompiledValidator, type ValidatorFunctions } from '@rjsf/validator-ajv8';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import buildSchema from '../../../../internal/rules/rule-package.schema.json';
@@ -20,6 +28,7 @@ import {
   valueAtPath,
   valueExistsAtPath
 } from './RuleStructuredFields';
+import { LocalCollectionPager, useLocalCollectionWindow } from './LocalCollectionWindow';
 
 interface RuleSchemaFormProps {
   value: Record<string, unknown>;
@@ -118,6 +127,71 @@ const validator = createPrecompiledValidator<Record<string, unknown>, RJSFSchema
   validatorFunctions as ValidatorFunctions,
   schema
 );
+
+function BoundedArrayFieldTemplate(props: ArrayFieldTemplateProps<unknown, RJSFSchema, RuleFormContext>) {
+  const {
+    canAdd,
+    className,
+    disabled,
+    fieldPathId,
+    items,
+    onAddClick,
+    optionalDataControl,
+    readonly,
+    registry,
+    required,
+    schema: fieldSchema,
+    title,
+    uiSchema: fieldUiSchema
+  } = props;
+  const options = getUiOptions(fieldUiSchema);
+  const displayTitle = typeof options.title === 'string' && options.title.length > 0 ? options.title : title;
+  const window = useLocalCollectionWindow(items.length);
+  const { ArrayFieldDescriptionTemplate, ArrayFieldTitleTemplate } = registry.templates;
+  const { AddButton } = registry.templates.ButtonTemplates;
+  const showOptionalDataControlInTitle = !readonly && !disabled;
+
+  return (
+    <fieldset className={className} id={fieldPathId.$id}>
+      <ArrayFieldTitleTemplate
+        fieldPathId={fieldPathId}
+        title={displayTitle}
+        required={required}
+        schema={fieldSchema}
+        uiSchema={fieldUiSchema}
+        registry={registry}
+        optionalDataControl={showOptionalDataControlInTitle ? optionalDataControl : undefined}
+      />
+      <ArrayFieldDescriptionTemplate
+        fieldPathId={fieldPathId}
+        description={options.description ?? fieldSchema.description}
+        schema={fieldSchema}
+        uiSchema={fieldUiSchema}
+        registry={registry}
+      />
+      {showOptionalDataControlInTitle ? null : optionalDataControl}
+      <LocalCollectionPager label={displayTitle} window={window} />
+      <div className="row array-item-list">{items.slice(window.start, window.end)}</div>
+      {canAdd ? (
+        <AddButton
+          id={buttonId(fieldPathId, 'add')}
+          className="rjsf-array-item-add"
+          onClick={(event) => {
+            window.showIndex(items.length);
+            onAddClick(event);
+          }}
+          disabled={disabled ? true : readonly}
+          uiSchema={fieldUiSchema}
+          registry={registry}
+        />
+      ) : null}
+    </fieldset>
+  );
+}
+
+const templates = {
+  ArrayFieldTemplate: BoundedArrayFieldTemplate
+};
 const fields = {
   OpaqueJsonField: OpaqueJsonField as unknown as RjsfField<
     Record<string, unknown>,
@@ -195,6 +269,8 @@ function FieldUndoPanel({
   isDisabled: boolean;
   onRestore: (path: RuleFieldPath) => void;
 }) {
+  const changeWindow = useLocalCollectionWindow(changes.length);
+
   return (
     <section className="manage-field-changes" aria-labelledby="rule-field-changes-title">
       <div>
@@ -206,21 +282,24 @@ function FieldUndoPanel({
       {changes.length === 0 ? (
         <p className="manage-section__description">当前没有可撤销的字段修改。</p>
       ) : (
-        <ul className="manage-field-changes__list">
-          {changes.map((change) => (
-            <li className="manage-field-changes__item" key={change.pointer}>
-              <code className="manage-field-changes__path">{change.pointer}</code>
-              <Button
-                variant="secondary"
-                isDisabled={isDisabled}
-                aria-label={`撤销字段 ${change.pointer}`}
-                onPress={() => onRestore(change.path)}
-              >
-                撤销
-              </Button>
-            </li>
-          ))}
-        </ul>
+        <>
+          <LocalCollectionPager label="字段修改" window={changeWindow} />
+          <ul className="manage-field-changes__list">
+            {changes.slice(changeWindow.start, changeWindow.end).map((change) => (
+              <li className="manage-field-changes__item" key={change.pointer}>
+                <code className="manage-field-changes__path">{change.pointer}</code>
+                <Button
+                  variant="secondary"
+                  isDisabled={isDisabled}
+                  aria-label={`撤销字段 ${change.pointer}`}
+                  onPress={() => onRestore(change.path)}
+                >
+                  撤销
+                </Button>
+              </li>
+            ))}
+          </ul>
+        </>
       )}
     </section>
   );
@@ -372,6 +451,7 @@ export default function RuleSchemaForm({
         validator={validator}
         uiSchema={uiSchema}
         fields={fields}
+        templates={templates}
         formData={value}
         formContext={formContext}
         disabled={isDisabled}

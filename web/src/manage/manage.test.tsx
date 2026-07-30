@@ -1173,15 +1173,15 @@ describe('同名 Source 写入身份', () => {
 /* ————————————————————————————— 5. 草稿 If-Match 冲突 ————————————————————————————— */
 
 describe('规则草稿', () => {
-  const routeLosslessSchemaDraft = () => {
+  const routeLosslessSchemaDraft = (contentText = LOSSLESS_RULE_TEXT) => {
     route('GET /api/v1/rule-packages/pkg_01', () =>
       jsonResponse(rulePackage({ ruleSetId: FORM_RULE_SET_ID }))
     );
     route('GET /api/v1/rule-packages/pkg_01/draft', () =>
       jsonResponse(
         ruleDraft({
-          content: JSON.parse(LOSSLESS_RULE_TEXT),
-          contentText: LOSSLESS_RULE_TEXT,
+          content: JSON.parse(contentText),
+          contentText,
           validationStatus: 'draft'
         })
       )
@@ -1513,6 +1513,141 @@ describe('规则草稿', () => {
     expect(text).toContain('1e+40');
     expect(text).toContain('1.2300000000000000001');
   });
+
+  const windowedRuleText = (overrides: Record<string, unknown>) =>
+    JSON.stringify(
+      {
+        rule_set_id: FORM_RULE_SET_ID,
+        version: '1.0.0',
+        schema_version: 1,
+        normalization_algorithm_version: 'gallery-canonical-json-v1',
+        compiler_requirement: 'gallery-rule-compiler-v1',
+        cel_profile_version: 'gallery-cel-v1',
+        parameter_schema: { type: 'object', additionalProperties: false },
+        provider_namespaces: [],
+        primitives: [{ id: 'base', kind: 'metadata_map', config: { fields: {} } }],
+        cel_expressions: [],
+        tests: [{ id: 'base-test' }],
+        extensions: {},
+        ...overrides
+      },
+      null,
+      2
+    );
+
+  const openWindowedRule = async (contentText: string) => {
+    routeLosslessSchemaDraft(contentText);
+    renderManage('/rules/pkg_01');
+    await userEvent.click(await screen.findByRole('tab', { name: 'Schema 表单' }));
+    await screen.findByTestId('rule-schema-form', {}, { timeout: 10_000 });
+  };
+
+  it('RJSF 规则数组只挂载当前 20 项并可前后往返', async () => {
+    await openWindowedRule(
+      windowedRuleText({
+        primitives: Array.from({ length: 21 }, (_, index) => ({
+          id: `primitive_${String(index).padStart(2, '0')}`,
+          kind: 'metadata_map',
+          config: { fields: {} }
+        }))
+      })
+    );
+
+    expect(
+      screen.getByText('规则原语 · 第 1 / 2 页 · 本页 20 项 · 共 21 项 · 每页最多 20 项。')
+    ).toBeInTheDocument();
+    expect(screen.getByDisplayValue('primitive_00')).toBeInTheDocument();
+    expect(screen.queryByDisplayValue('primitive_20')).not.toBeInTheDocument();
+    await userEvent.click(screen.getByRole('button', { name: '下一页：规则原语' }));
+    expect(await screen.findByDisplayValue('primitive_20')).toBeInTheDocument();
+    expect(screen.queryByDisplayValue('primitive_00')).not.toBeInTheDocument();
+    await userEvent.click(screen.getByRole('button', { name: '上一页：规则原语' }));
+    expect(await screen.findByDisplayValue('primitive_00')).toBeInTheDocument();
+  }, 20_000);
+
+  it('参数属性与完整对象结构分别只挂载当前 20 项', async () => {
+    const properties = Object.fromEntries(
+      Array.from({ length: 21 }, (_, index) => [
+        `parameter${String(index).padStart(2, '0')}`,
+        { type: 'string', title: `参数 ${index}` }
+      ])
+    );
+    await openWindowedRule(
+      windowedRuleText({
+        parameter_schema: { type: 'object', additionalProperties: false, properties }
+      })
+    );
+
+    expect(
+      screen.getByText('参数 Schema 属性 · 第 1 / 2 页 · 本页 20 项 · 共 21 项 · 每页最多 20 项。')
+    ).toBeInTheDocument();
+    expect(screen.getByDisplayValue('parameter00')).toBeInTheDocument();
+    expect(screen.queryByDisplayValue('parameter20')).not.toBeInTheDocument();
+    await userEvent.click(screen.getByRole('button', { name: '下一页：参数 Schema 属性' }));
+    expect(await screen.findByDisplayValue('parameter20')).toBeInTheDocument();
+
+    const expandParameter = screen.getAllByRole('button', { name: '展开完整 JSON 结构' }).at(0);
+    if (expandParameter === undefined) throw new Error('未找到参数 Schema 完整结构入口');
+    await userEvent.click(expandParameter);
+    expect(
+      screen.getByText('/properties 对象属性 · 第 1 / 2 页 · 本页 20 项 · 共 21 项 · 每页最多 20 项。')
+    ).toBeInTheDocument();
+  }, 20_000);
+
+  it('规则测试只挂载当前 20 项且新增后跳到包含新项的末页', async () => {
+    await openWindowedRule(
+      windowedRuleText({
+        tests: Array.from({ length: 21 }, (_, index) => ({
+          id: `test-${String(index).padStart(2, '0')}`,
+          description: `测试 ${index}`
+        }))
+      })
+    );
+
+    expect(screen.getByDisplayValue('test-00')).toBeInTheDocument();
+    expect(screen.queryByDisplayValue('test-20')).not.toBeInTheDocument();
+    fireEvent.change(screen.getByRole('textbox', { name: '新测试 ID' }), {
+      target: { value: 'test-new' }
+    });
+    await userEvent.click(screen.getByRole('button', { name: '添加测试' }));
+    expect(await screen.findByDisplayValue('test-new')).toBeInTheDocument();
+    expect(screen.getByText(/规则测试 · 第 2 \/ 2 页 · 本页 2 项 · 共 22 项/)).toBeInTheDocument();
+
+    await userEvent.click(screen.getByRole('tab', { name: 'JSON 文本' }));
+    const text = (screen.getByRole('textbox', { name: '草稿内容' }) as HTMLTextAreaElement).value;
+    expect(text).toContain('"test-00"');
+    expect(text).toContain('"test-20"');
+    expect(text).toContain('"test-new"');
+  }, 20_000);
+
+  it('Extensions 与嵌套 payload 数组分别只挂载当前 20 项', async () => {
+    const extensions = Object.fromEntries(
+      Array.from({ length: 21 }, (_, index) => [
+        `gallery.extension-${String(index).padStart(2, '0')}`,
+        {
+          required: false,
+          semantic: false,
+          payload:
+            index === 0
+              ? Array.from({ length: 21 }, (_, itemIndex) => `payload-${String(itemIndex).padStart(2, '0')}`)
+              : {}
+        }
+      ])
+    );
+    await openWindowedRule(windowedRuleText({ extensions }));
+
+    expect(
+      screen.getByText('Extensions · 第 1 / 2 页 · 本页 20 项 · 共 21 项 · 每页最多 20 项。')
+    ).toBeInTheDocument();
+    expect(screen.getByDisplayValue('gallery.extension-00')).toBeInTheDocument();
+    expect(screen.queryByDisplayValue('gallery.extension-20')).not.toBeInTheDocument();
+    expect(screen.getByDisplayValue('payload-00')).toBeInTheDocument();
+    expect(screen.queryByDisplayValue('payload-20')).not.toBeInTheDocument();
+    await userEvent.click(screen.getByRole('button', { name: '下一页：gallery.extension-00 payload 数组' }));
+    expect(await screen.findByDisplayValue('payload-20')).toBeInTheDocument();
+    await userEvent.click(screen.getByRole('button', { name: '下一页：Extensions' }));
+    expect(await screen.findByDisplayValue('gallery.extension-20')).toBeInTheDocument();
+  }, 20_000);
 
   it('普通字段撤销全部修改后恢复精确草稿文本', async () => {
     routeLosslessSchemaDraft();
