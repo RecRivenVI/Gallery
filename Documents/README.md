@@ -54,6 +54,8 @@ EV-67 延续上述真实后端持续门禁：当前 primitive config 的 15 个 
 
 [EV-126](证据/验证记录.md) 已将默认关闭的生产 ToolDiscovery 接入 `galleryd`：受支持工具必须同时声明显式绝对路径、精确 `-version` token 与可执行文件 SHA-256，且不搜索 PATH；启动期验证、无路径能力报告、执行前摘要复核和未配置工具的 Job 前拒绝均已进入正式代码。本机真实 `ffprobe` 只执行版本探针并成功启动隔离服务；没有读取媒体，也没有新增外部转换 API。恶意媒体语料库与 OS 级 CPU/内存硬限额仍缺，Security Gate 状态不变。
 
+[EV-127](证据/验证记录.md) 又把 Windows 外部工具执行放入带 `JOB_TIME`、`JOB_MEMORY` 与 `KILL_ON_JOB_CLOSE` 的 Job Object：父子树累计 CPU 时间耗尽会整体终止，父子聚合提交内存越界会被操作系统拒绝；默认 512 MiB、CPU 等于墙钟超时和 2 GiB/3,600 秒上限均冻结进 Job request，但仍属 PRE_FREEZE。非 Windows 当前没有等价的无竞态树级适配器，因此 external-tool capability 在持久 Job 前 fail-closed。本机真实 `ffprobe` 已在新限制下复验；恶意媒体语料库、非 Windows 门禁和整体 Security Gate 仍未完成。
+
 2026-07-26 的 [EV-42](证据/验证记录.md#ev-42规则封面customcover-与-work-快照封面闭环e1) 又补齐规则 `CoverPath` → SourceMedia/CanonicalMedia → publication 有效封面的显式链路：同 Work 有效 CustomCover 优先，失效事实保留并回退规则封面，媒体顺序不再借用 `ordinal=-1`；`PublishedWork.coverMediaId` 为 required nullable，作品详情支持 `queryPublicationId`，Web 浏览、详情、封面与媒体沿用同一快照并提供 CustomCover 编辑。该轮通过根级 `Check.ps1`、WSL2 Debian 定向 race、合成 migration 与 Web Vitest/Chromium mock，未使用真实 Source/媒体，也没有真实后端浏览器证据；阶段 4 Reference Performance/API Freeze、阶段 5 Security Gate 与阶段 6 Web Gate 状态不变。
 
 ## 如何使用

@@ -127,6 +127,8 @@ EV-115 又增加默认关闭、仅接受显式绝对路径的真实 `ffprobe` �
 
 EV-126 已把默认关闭的生产 ToolDiscovery 接入 `galleryd`：仅允许显式绝对路径、精确 `-version` token 与 SHA-256 同时匹配的 `ffprobe`/`ffmpeg`，不搜索 PATH；配置缺失或 pin 不匹配时在 descriptor/Job 创建前 fail-closed，能力日志不含路径，执行前还会重核摘要。本机真实 `ffprobe` 隔离启动、Windows 全量 Go、Linux amd64 交叉编译与根级门禁均已通过；外部转换 API、恶意媒体语料库和 OS 级 CPU/内存硬限额仍未完成，Security Gate 仍未通过。
 
+EV-127 已为 Windows 外部工具进程树接入 Job Object 累计 CPU 时间和聚合提交内存硬限制：预算冻结进持久 Job，Resolver 不能放宽，默认 512 MiB/CPU 等于墙钟超时及 2 GiB/3,600 秒上限均为 PRE_FREEZE；非 Windows 当前在 Job 创建前明确报告 unavailable。本机真实 `ffprobe` 在新限制下通过既有边界复验；恶意媒体语料库、非 Windows 等价实现与整体 Security Gate 仍未完成。
+
 EV-103 开始阶段 7 的窄发行基线：精确干净提交 `ac92f57` 可构建同源内嵌完整当前用户端/管理端的 Windows x64 便携 ZIP，并生成三个 CycloneDX SBOM、发行清单、包内/外 SHA-256 与实际 Authenticode 状态。12,454,092-byte 本地包通过版本、摘要、SBOM、内嵌 Web 和同 AppDirs 强杀重启 smoke，清单为 `dirty=false`、`unsigned`。它没有安装器、自动更新、CredentialStore、正式签名或真实升级/回滚，不能称为 RC。
 
 EV-104 在上述基线上增加同源双版本标签切换与 control 恢复门禁：两个独立 ZIP 先各自通过完整制品 smoke，旧标签在临时 AppDirs 建立用户事实与备份，新标签承接全部事实、dry-run 校验备份、登记恢复并在同 AppDirs 重启后证明备份后哨兵消失；两个解压程序树运行前后按目录/长度/SHA-256 封印一致，三个服务均优雅停止。精确干净提交 `3ef9acf` 的 `0.1.9-ev104` 与 `0.2.0-ev104` 本地包均为 `dirty=false`、`unsigned` 并通过。两份二进制来自同一源码，这只证明制品编排、程序/数据分离与恢复主路径，不是历史 Schema 升级、降级或失败回滚证据，仍不能称为 RC。
