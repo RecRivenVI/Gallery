@@ -9,6 +9,8 @@ Gallery（画廊）是一个本地优先、只读来源、规则驱动的个人�
 >
 > [EV-109](Documents/证据/验证记录.md) 已阻止恢复候选落位与旧库回滚双失败后继续创建空 control 库；[EV-110](Documents/证据/验证记录.md) 又以真实 Windows 便携 `galleryd` 证明候选落位 sharing violation 后可安全回滚；[EV-119](Documents/证据/验证记录.md) 再用真实 Win32 handle 验证包内双失败保全。[EV-121](Documents/证据/验证记录.md) 进一步修复当前库缺失、恢复在候选生成前失败时仍会继续创建空库的问题；[EV-122](Documents/证据/验证记录.md) 再让落位后到安全收尾之间的中断可在重启时幂等续接；[EV-123](Documents/证据/验证记录.md) 又让结果记录失败与 pending 删除 sharing violation 进入真实便携进程门禁；[EV-124](Documents/证据/验证记录.md) 进一步在同一真实便携进程中关闭候选落位和旧库回滚双 Rename 失败/恢复；[EV-125](Documents/证据/验证记录.md) 又在 finalize 阶段已持久化、descriptor 尚未发布时真实强杀服务，并以同 AppDirs 重启完成续接。磁盘满/ACL/低权限、其它恢复窗口强杀/真实断电、正式签名与 RC Gate 仍未完成。
 >
+> [EV-131](Documents/证据/验证记录.md) 已关闭上述范围中的“当前用户、本地 NTFS 显式 deny”切片；磁盘满、低完整性/多账户/继承 ACL、其它文件系统和剩余发行门禁仍未完成。
+>
 > [EV-111](Documents/证据/验证记录.md) 已把同一 Source 的多个按需确认目标合并为一个兼容批量 Job，保留单媒体入口与每目标完整哈希。真实 Pawchive 12 目标最终以一个 Job 在 74.003 秒确认 12/12，全树 11,595 文件/2,353 目录前后零变化；这关闭逐目标重复完整 Source 处理，不代表活动 Hash 取消、全量扫描、HDD/SMB/NAS、正式性能或 RC Gate 已通过。
 
 > [EV-112](Documents/证据/验证记录.md) 已在全新 Pawchive 隔离运行中先从公共 Job API 观察到真实 `hash/running`，再取消父 Scan；父子任务在 4 ms 内被观察为 `cancelled`，完整 124,660,469,885-byte Source 前后增删改为 0。该结果关闭 Windows 本地 SSD/Pawchive 这一条活动 Hash 取消切片；HDD/SMB/NAS、publishing 临界点、崩溃恢复、全量与 RC Gate 仍未通过。
@@ -87,10 +89,10 @@ Gallery（画廊）是一个本地优先、只读来源、规则驱动的个人�
 | 阶段 1：领域和数据所有权 | ✅ | ✅（限定范围内） | 备份/恢复、目录库整体重建、作者合并等已通过验证 | 网络共享盘、底层文件身份识别留待以后阶段 | 已完成 |
 | 阶段 2：规则系统 | ✅（正确性层面） | ✅（限定范围内） | 规则生命周期、编译执行、参数/绑定和影响调度已形成闭环 | 正式性能/平台门禁留待后续 | 已完成 |
 | 阶段 3：扫描、任务与目录库 | ✅（代码与模拟数据层面） | 🟡（真实大盘抽样与三平台有界链通过，全量未完成） | 真实 Pixiv 370,712 文件完成 discovery 取消/恢复与零写入；Gank/Pawchive 确认成功；Pawchive 又完成公共 Job API 观察下的活动 Hash 取消 | Pixiv/真实盘全量扫描与哈希、HDD/SMB/NAS 取消、publishing/崩溃恢复、正式性能门禁和网络共享盘尚未完成 | 继续其它存储与异常切片，同时优先收口阶段 4 正式压力门禁 |
-| 阶段 4：查询与媒体 | 🟡（主线完成，部分参数未冻结） | 🟡（正确性收口完成，500,000 规模正式压力测试已执行） | 搜索、排序、分页、显式规则/有效封面、媒体读取、缩略图及用户/治理 Creator keyset 均有代码闭环；500,000 规模 Correctness/Cursor 通过，可断点续跑的精确全局变化 publication 执行器已具备，并以 100k 实测每 Work 两条 Creator 关系 3/3 | 正式 500,000 十来源 publication 多样本、并发/冷缓存与 Degradation 尚未执行；排序权重、Total、租约和兼容版本策略仍待 API Freeze | 分窗执行正式 500k 性能矩阵并冻结接口 |
+| 阶段 4：查询与媒体 | 🟡（主线完成，部分参数未冻结） | 🟡（正确性收口完成，500,000 publication 正式矩阵执行中） | 搜索、排序、分页、显式规则/有效封面、媒体读取、缩略图及用户/治理 Creator keyset 均有代码闭环；500,000 Correctness/Cursor 通过，十来源双关系 publication 矩阵已完成 40/60、失败 0 | publication 的 50% 变化档及 Query 并发/冷缓存、Degradation 尚未完成；排序权重、Total、租约和兼容版本策略仍待 API Freeze | 完成正式 500k 性能矩阵并冻结接口 |
 | 阶段 5：账户、安全与多客户端 | 🟠（代码与合成安全收尾已实现） | 🟡（Personal、同机 LAN 与 Windows 恶意媒体真实工具补证，正式 Gate 未通过） | LAN 本地账户、Argon2id、Session、API Token、资源 Grant、匿名 Share 与 WS 防滥用已有代码/浏览器链；13 个合成恶意媒体样本经 pin 的真实 ffprobe/ffmpeg 有界收敛 | 真实 LAN 多设备、目标设备 Argon2id 与非 Windows 外部工具资源门禁未完成 | 完成外部设备和其余平台安全门禁 |
 | 阶段 6：Web/PWA 界面 | 🟠（页面代码基线与双入口设计重构已实现） | 🟡（隔离 Chromium/Firefox 真实后端 E2E、当前全路由 axe 与模拟强制颜色/400% 等效重排已建立；正式 Gate 未通过） | 同源 Web/PWA 覆盖浏览与管理页面；当前 19 条路由及 5 个关键交互状态在桌面、窄屏或 320px 高对比/文本间距组合通过 axe；EV-129 清除 production 路由审计例外并让双浏览器完整真实链各 23/23 通过 | 浏览器业务链仍使用合成 Source；真实存储浏览器链、其余弱网矩阵、真实移动/触控、人工屏幕阅读器、真实浏览器缩放、物理操作系统高对比及其余交互状态组合未完成 | 扩大真实业务与可访问性门禁，不进入桌面壳 |
-| 阶段 7：平台适配与正式发行 | 🟠（Windows 便携、恢复/回滚及首条真实升级边界） | 🟡（本地制品、schema 23→24/反向拒绝、包内与进程级恢复失败门禁通过，正式 Gate 未通过） | 精确干净提交可生成同源双前端 ZIP、三份 SBOM、清单、摘要与签名状态门禁；正常/损坏备份、真实 schema 23→24/反向拒绝、Windows 轮换/落位失败，以及便携进程的当前库缺失、安全收尾续接、状态文件失败、双 Rename fail-closed、finalize 持久阶段强杀与解除阻断重试均已通过 | 正式签名、安装/更新、更多支持版本跨度、磁盘满/ACL/低权限、其它恢复窗口强杀/真实断电、平台矩阵及桌面壳未完成 | 完成 Windows RC 门禁 |
+| 阶段 7：平台适配与正式发行 | 🟠（Windows 便携、恢复/回滚及首条真实升级边界） | 🟡（本地制品、schema 23→24/反向拒绝、包内、进程级及当前用户 ACL 门禁通过，正式 Gate 未通过） | 精确干净提交可生成同源双前端 ZIP、三份 SBOM、清单、摘要与签名状态门禁；正常/损坏备份、真实 schema 23→24/反向拒绝、Windows 轮换/落位失败，以及便携进程的当前库缺失、安全收尾续接、状态文件失败、双 Rename fail-closed、finalize 强杀和真实 NTFS ACL 拒绝均已通过 | 正式签名、安装/更新、更多支持版本跨度、磁盘满、低完整性/多账户/继承 ACL、其它恢复窗口强杀/真实断电、平台矩阵及桌面壳未完成 | 完成 Windows RC 门禁 |
 
 状态图例、每个阶段的详细功能清单、测试与门禁证据，见完整项目状态文档：
 
@@ -134,6 +136,8 @@ EV-128 已补齐 Windows 恶意媒体有界语料基线：13 个纯合成样本�
 EV-129 已将用户端和管理端统一迁移到 `react-router@8.3.0`，移除旧 `react-router-dom` 与对应 production 审计例外；production-only `npm audit` 现为 0，完整审计只剩 1 条 dev-only 限时例外。Chromium/Firefox mock smoke 26/26、真实 `galleryd` 完整业务链各 23/23 和根级检查均通过；这仍不替代真实移动/触控、人工屏幕阅读器、物理高对比或真实存储门禁。
 
 EV-130 已从包含上述双前端的精确干净提交 `ffdf75d` 生成 `0.3.0-ev130` Windows x64 便携测试包。12,586,256-byte ZIP 为 `dirty=false`、`unsigned`，包外 SHA-256 为 `0FE458F57D7DAE143206C2DD977181ADA348E5E402E3D7A5587DA7DEBF54C227`；官方 smoke 已通过版本/提交、摘要、三份 SBOM、同源内嵌 Web 与同 AppDirs 强杀重启。它可用于当前功能实测，但没有正式签名、安装/更新或完整 Windows 发行门禁，仍不是 RC。
+
+EV-131 已用真实 Windows/NTFS ACL 拒绝补齐一条恢复权限失败门禁：数据库保持可读写，但轮换由操作系统拒绝，当前事实与失败记录均保留；恢复权限后全链继续通过。精确干净提交 `457bef6` 的 `0.3.1-ev131` Windows x64 便携包为 `dirty=false`、`unsigned`，SHA-256 为 `814E16C250F3508F3405D39C820906CA9826B2BDF13751AAB63D14015BF5C94B`；它仍是 pre-RC 测试包，不代表低权限、多账户、网络文件系统、签名或安装更新门禁完成。
 
 EV-103 开始阶段 7 的窄发行基线：精确干净提交 `ac92f57` 可构建同源内嵌完整当前用户端/管理端的 Windows x64 便携 ZIP，并生成三个 CycloneDX SBOM、发行清单、包内/外 SHA-256 与实际 Authenticode 状态。12,454,092-byte 本地包通过版本、摘要、SBOM、内嵌 Web 和同 AppDirs 强杀重启 smoke，清单为 `dirty=false`、`unsigned`。它没有安装器、自动更新、CredentialStore、正式签名或真实升级/回滚，不能称为 RC。
 
