@@ -23,6 +23,8 @@ type probeController struct {
 	started []ports.Command
 }
 
+func (*probeController) SupportsLimits() bool { return true }
+
 func (c *probeController) Start(_ context.Context, command ports.Command) (ports.Process, error) {
 	c.started = append(c.started, command)
 	if command.Stdout != nil {

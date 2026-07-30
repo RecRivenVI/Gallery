@@ -18,14 +18,21 @@ import (
 	"github.com/RecRivenVI/gallery/internal/ports"
 )
 
-const DefaultOutputLimit = 8 << 20
+const (
+	DefaultOutputLimit      = 8 << 20
+	DefaultMemoryLimitBytes = 512 << 20
+	MaxMemoryLimitBytes     = 2 << 30
+	MaxCPUTimeSeconds       = 3600
+)
 
 type Request struct {
-	ToolID         string   `json:"toolId"`
-	Args           []string `json:"args"`
-	WorkingDir     string   `json:"workingDir,omitempty"`
-	TimeoutSeconds int64    `json:"timeoutSeconds"`
-	MaxOutputBytes int64    `json:"maxOutputBytes"`
+	ToolID            string   `json:"toolId"`
+	Args              []string `json:"args"`
+	WorkingDir        string   `json:"workingDir,omitempty"`
+	TimeoutSeconds    int64    `json:"timeoutSeconds"`
+	MaxOutputBytes    int64    `json:"maxOutputBytes"`
+	MaxMemoryBytes    int64    `json:"maxMemoryBytes"`
+	MaxCPUTimeSeconds int64    `json:"maxCpuTimeSeconds"`
 }
 
 type Resolver interface {
@@ -61,17 +68,18 @@ func New(jobStore *jobs.Store, controller ports.ProcessController, resolver Reso
 
 func (s *Service) Create(ctx context.Context, request Request, createdBy string) (jobs.Job, error) {
 	if strings.TrimSpace(request.ToolID) == "" || request.ToolID != strings.TrimSpace(request.ToolID) ||
-		strings.TrimSpace(createdBy) == "" || request.TimeoutSeconds <= 0 || request.TimeoutSeconds > 3600 {
+		strings.TrimSpace(createdBy) == "" {
 		return jobs.Job{}, fault.New(fault.CodeValidation, false, nil)
 	}
-	if request.MaxOutputBytes <= 0 {
-		request.MaxOutputBytes = DefaultOutputLimit
-	}
-	if request.MaxOutputBytes > 64<<20 {
-		return jobs.Job{}, fault.New(fault.CodeValidation, false, nil)
+	if err := normalizeRequest(&request); err != nil {
+		return jobs.Job{}, err
 	}
 	if s.resolver == nil || !s.resolver.Available(request.ToolID) {
 		return jobs.Job{}, fault.New(fault.CodeExternalToolUnavailable, false, nil)
+	}
+	if !s.process.SupportsLimits() {
+		return jobs.Job{}, fault.New(fault.CodeExternalToolUnavailable, false,
+			errors.New("当前平台不支持外部工具进程树硬限制"))
 	}
 	if s.space != nil {
 		if err := s.space.CheckSpace(ctx, "external_tool", request.MaxOutputBytes*2); err != nil {
@@ -87,7 +95,9 @@ func (s *Service) Create(ctx context.Context, request Request, createdBy string)
 	})
 }
 
-func (s *Service) Available() bool { return s != nil && s.resolver != nil }
+func (s *Service) Available() bool {
+	return s != nil && s.resolver != nil && s.process != nil && s.process.SupportsLimits()
+}
 
 func (s *Service) SetTempStore(store *jobs.TempStore) { s.temp = store }
 
@@ -101,6 +111,15 @@ func (s *Service) Execute(ctx context.Context, jobID string) error {
 	var request Request
 	if err := json.Unmarshal(job.RequestJSON, &request); err != nil {
 		return s.fail(ctx, jobID, fault.New(fault.CodeValidation, false, err))
+	}
+	// 旧版已排队 Job 没有两个硬限制字段。执行前补齐同一组安全默认值；畸形持久请求则
+	// fail-closed，不能把反序列化出的零值解释成无限制。
+	if err := normalizeRequest(&request); err != nil {
+		return s.fail(ctx, jobID, err)
+	}
+	if !s.process.SupportsLimits() {
+		return s.fail(ctx, jobID, fault.New(fault.CodeExternalToolUnavailable, false,
+			errors.New("当前平台不支持外部工具进程树硬限制")))
 	}
 	if s.resolver == nil {
 		return s.fail(ctx, jobID, fault.New(fault.CodeExternalToolUnavailable, false, errors.New("ToolDiscovery 未配置")))
@@ -118,6 +137,12 @@ func (s *Service) Execute(ctx context.Context, jobID string) error {
 	}
 	if command.Path == "" {
 		return s.fail(ctx, jobID, fault.New(fault.CodeExternalToolFailed, false, errors.New("ToolDiscovery 返回空路径")))
+	}
+	// Resolver 只决定允许执行的路径和参数；资源预算来自持久 Job 快照，不能被 Resolver
+	// 放宽或覆盖。
+	command.Limits = ports.ProcessLimits{
+		MemoryBytes: uint64(request.MaxMemoryBytes),
+		CPUTime:     time.Duration(request.MaxCPUTimeSeconds) * time.Second,
 	}
 	limit := request.MaxOutputBytes
 	if limit <= 0 {
@@ -153,6 +178,28 @@ func (s *Service) Execute(ctx context.Context, jobID string) error {
 }
 
 var errOutputLimitExceeded = errors.New("外部工具输出超过上限")
+
+func normalizeRequest(request *Request) error {
+	if strings.TrimSpace(request.ToolID) == "" || request.ToolID != strings.TrimSpace(request.ToolID) ||
+		request.TimeoutSeconds <= 0 || request.TimeoutSeconds > MaxCPUTimeSeconds ||
+		request.MaxOutputBytes < 0 || request.MaxMemoryBytes < 0 || request.MaxCPUTimeSeconds < 0 {
+		return fault.New(fault.CodeValidation, false, nil)
+	}
+	if request.MaxOutputBytes == 0 {
+		request.MaxOutputBytes = DefaultOutputLimit
+	}
+	if request.MaxMemoryBytes == 0 {
+		request.MaxMemoryBytes = DefaultMemoryLimitBytes
+	}
+	if request.MaxCPUTimeSeconds == 0 {
+		request.MaxCPUTimeSeconds = request.TimeoutSeconds
+	}
+	if request.MaxOutputBytes > 64<<20 || request.MaxMemoryBytes > MaxMemoryLimitBytes ||
+		request.MaxCPUTimeSeconds > MaxCPUTimeSeconds || request.MaxCPUTimeSeconds > request.TimeoutSeconds {
+		return fault.New(fault.CodeValidation, false, nil)
+	}
+	return nil
+}
 
 // digestWriter 只把数据喂给 sha256，从不缓冲，内存占用与输出体量无关（O(1)）。
 //

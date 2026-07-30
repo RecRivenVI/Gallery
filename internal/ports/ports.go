@@ -58,6 +58,14 @@ type Command struct {
 	Stdin  io.Reader
 	Stdout io.Writer
 	Stderr io.Writer
+	Limits ProcessLimits
+}
+
+// ProcessLimits 是由操作系统施加到整棵进程树的硬限制。零值表示该维度不受限制；调用方若
+// 声明非零限制而当前平台无法无竞态地保证它，ProcessController 必须在启动前 fail-closed。
+type ProcessLimits struct {
+	MemoryBytes uint64
+	CPUTime     time.Duration
 }
 
 type Process interface {
@@ -67,5 +75,6 @@ type Process interface {
 
 // ProcessController 只接受参数数组，不提供 shell 字符串入口。
 type ProcessController interface {
+	SupportsLimits() bool
 	Start(ctx context.Context, command Command) (Process, error)
 }

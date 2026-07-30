@@ -5,6 +5,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"testing"
 	"time"
 
@@ -18,8 +19,9 @@ import (
 // Execute 的两条收敛路径。service_test.go 的假控制器能精确断言「Kill 被调用了几次」，但证明不了
 // 真实进程会不会死；本文件反过来：不看调用次数，只看真实进程树的存活性与真实耗时。
 //
-// 被执行的「外部工具」是测试二进制自身重新执行，因此不依赖 ffmpeg 等任何外部工具，Windows 与
-// Unix 共用同一套用例。工具进程会再派生一个孙进程，孙进程继承同一批 stdout/stderr 管道写端并
+// 被执行的「外部工具」是测试二进制自身重新执行，因此不依赖 ffmpeg 等任何外部工具。完整
+// toolrunner 用例当前只在实现进程树硬限制的 Windows 上运行；跨平台进程树取消仍由
+// internal/platform/process 的共享用例覆盖。工具进程会再派生一个孙进程，孙进程继承同一批 stdout/stderr 管道写端并
 // 持续写心跳文件——「整棵树都死了」的判据就是心跳在 Execute 返回之后停止增长。
 
 const (
@@ -210,6 +212,9 @@ func assertToolJobFailed(t *testing.T, store *jobs.Store, jobID string) {
 // Execute 快速返回既不可能来自执行超时，也不可能来自 WaitDelay 兜底，只可能来自溢出触发的强杀
 // 真的把进程树打掉了。孙进程的心跳停止进一步排除「只杀了直接子进程」。
 func TestIntegrationOutputOverflowKillsRealProcessTree(t *testing.T) {
+	if runtime.GOOS != "windows" {
+		t.Skip("当前只有 Windows Job Object 实现了外部工具进程树硬限制")
+	}
 	if testing.Short() {
 		t.Skip("短模式跳过真实进程用例")
 	}
@@ -244,6 +249,9 @@ func TestIntegrationOutputOverflowKillsRealProcessTree(t *testing.T) {
 // 退出，孙进程一直持有 stdout/stderr 管道写端。WaitDelay 同样远大于允许耗时，因此 Execute 有界
 // 返回只能来自 context 到期时整棵树被杀，而不是 WaitDelay 强行关管道。
 func TestIntegrationTimeoutKillsRealProcessTree(t *testing.T) {
+	if runtime.GOOS != "windows" {
+		t.Skip("当前只有 Windows Job Object 实现了外部工具进程树硬限制")
+	}
 	if testing.Short() {
 		t.Skip("短模式跳过真实进程用例")
 	}

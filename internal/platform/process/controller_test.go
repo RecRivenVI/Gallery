@@ -32,9 +32,13 @@ const (
 	// 表现为「子进程 exit status 2、孙进程从未存在」。
 	flagTerminator = "--"
 
-	roleSpawnExit = "spawn-exit" // 派生孙进程后立刻退出：制造「子进程已退出但管道未关闭」
-	roleSpawnHold = "spawn-hold" // 派生孙进程后自己也不退出：制造需要整树强杀的形态
-	roleHold      = "hold"       // 持有管道并写心跳，直到被杀
+	roleSpawnExit   = "spawn-exit" // 派生孙进程后立刻退出：制造「子进程已退出但管道未关闭」
+	roleSpawnHold   = "spawn-hold" // 派生孙进程后自己也不退出：制造需要整树强杀的形态
+	roleHold        = "hold"       // 持有管道并写心跳，直到被杀
+	roleSpawnCPU    = "spawn-cpu"  // 派生持续消耗 CPU 的孙进程，验证 Job 级累计 CPU 时间
+	roleCPUHold     = "cpu-hold"
+	roleSpawnMemory = "spawn-memory" // 父子共同提交内存，验证 Job 级聚合内存上限
+	roleMemoryHold  = "memory-hold"
 )
 
 // helperArgs 是重新执行测试二进制进入辅助进程角色的唯一实参构造入口，父进程与子进程都必须
@@ -79,20 +83,77 @@ func runHelper(role, heartbeat string) {
 	case roleHold:
 		holdAndBeat(heartbeat)
 		os.Exit(0)
+	case roleSpawnCPU:
+		if err := spawnHelper(roleCPUHold, heartbeat, false); err != nil {
+			os.Exit(2)
+		}
+		time.Sleep(2 * time.Minute)
+		os.Exit(0)
+	case roleCPUHold:
+		busyAndBeat(heartbeat)
+		os.Exit(0)
+	case roleSpawnMemory:
+		if err := spawnHelper(roleMemoryHold, heartbeat, false); err != nil {
+			os.Exit(2)
+		}
+		if !waitForHelperHeartbeat(heartbeat, 10*time.Second) {
+			os.Exit(4)
+		}
+		if !allocateForLimitTest(192 << 20) {
+			os.Exit(5)
+		}
+		os.Exit(0)
+	case roleMemoryHold:
+		if !allocateForLimitTest(192 << 20) {
+			os.Exit(5)
+		}
+		holdAndBeat(heartbeat)
+		os.Exit(0)
 	}
 	os.Exit(3)
 }
 
 // spawnHolder 派生孙进程，并把自己的 stdout/stderr 原样交给它，使孙进程继承同一批管道写端。
 func spawnHolder(heartbeat string) error {
+	return spawnHelper(roleHold, heartbeat, true)
+}
+
+func spawnHelper(role, heartbeat string, inheritPipes bool) error {
 	executable, err := os.Executable()
 	if err != nil {
 		return err
 	}
-	command := exec.Command(executable, helperArgs(roleHold, heartbeat)...)
-	command.Stdout = os.Stdout
-	command.Stderr = os.Stderr
+	command := exec.Command(executable, helperArgs(role, heartbeat)...)
+	if inheritPipes {
+		command.Stdout = os.Stdout
+		command.Stderr = os.Stderr
+	}
 	return command.Start()
+}
+
+func waitForHelperHeartbeat(path string, timeout time.Duration) bool {
+	deadline := time.Now().Add(timeout)
+	for time.Now().Before(deadline) {
+		if info, err := os.Stat(path); err == nil && info.Size() > 0 {
+			return true
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	return false
+}
+
+func busyAndBeat(heartbeat string) {
+	var value uint64
+	for {
+		value = value*1664525 + 1013904223
+		if value&0xfffff == 0 {
+			file, err := os.OpenFile(heartbeat, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o600)
+			if err == nil {
+				_, _ = file.Write([]byte{'.'})
+				_ = file.Close()
+			}
+		}
+	}
 }
 
 func holdAndBeat(heartbeat string) {

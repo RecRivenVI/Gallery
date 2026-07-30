@@ -7,6 +7,7 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -93,6 +94,9 @@ func executeActualFFprobeExpectFailure(t *testing.T, harness actualFFprobeHarnes
 }
 
 func TestActualFFprobeBoundaries(t *testing.T) {
+	if runtime.GOOS != "windows" {
+		t.Skip("当前只有 Windows Job Object 实现了外部工具进程树硬限制")
+	}
 	if testing.Short() {
 		t.Skip("短模式跳过真实 ffprobe 门禁")
 	}

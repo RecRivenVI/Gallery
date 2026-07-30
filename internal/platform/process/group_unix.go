@@ -6,7 +6,11 @@ import (
 	"fmt"
 	"os/exec"
 	"syscall"
+
+	"github.com/RecRivenVI/gallery/internal/ports"
 )
+
+const supportsLimits = false
 
 // processGroup 在 Unix 上用独立进程组承载「进程树」。
 //
@@ -15,7 +19,12 @@ import (
 // kill(-pgid) 因此可以一次终止它派生出的全部后代（后代自己调用 setpgid 脱离时除外）。
 type processGroup struct{}
 
-func newProcessGroup() *processGroup { return &processGroup{} }
+func newProcessGroup(limits ports.ProcessLimits) (*processGroup, error) {
+	if limits.MemoryBytes != 0 || limits.CPUTime != 0 {
+		return nil, fmt.Errorf("当前平台尚不支持无竞态的进程树 CPU/内存硬限制")
+	}
+	return &processGroup{}, nil
+}
 
 func (g *processGroup) prepare(cmd *exec.Cmd) {
 	if cmd.SysProcAttr == nil {

@@ -58,11 +58,28 @@ func (unavailableAtResolve) Resolve(context.Context, string, []string, string) (
 // exitingController 模拟正常退出的工具：写出少量输出后进程结束。
 type exitingController struct{}
 
+func (exitingController) SupportsLimits() bool { return true }
+
 func (exitingController) Start(_ context.Context, command ports.Command) (ports.Process, error) {
 	_, _ = io.WriteString(command.Stdout, "stdout\n")
 	_, _ = io.WriteString(command.Stderr, "stderr\n")
 	return exited{}, nil
 }
+
+type recordingController struct {
+	command ports.Command
+}
+
+func (*recordingController) SupportsLimits() bool { return true }
+
+func (c *recordingController) Start(_ context.Context, command ports.Command) (ports.Process, error) {
+	c.command = command
+	return exited{}, nil
+}
+
+type unsupportedLimitController struct{ exitingController }
+
+func (unsupportedLimitController) SupportsLimits() bool { return false }
 
 type exited struct{}
 
@@ -118,6 +135,8 @@ type floodController struct {
 	flooded chan struct{}
 }
 
+func (*floodController) SupportsLimits() bool { return true }
+
 func newFloodController(chunk, repeat int) *floodController {
 	return &floodController{chunk: chunk, repeat: repeat, flooded: make(chan struct{})}
 }
@@ -157,6 +176,8 @@ type eagerFloodController struct {
 	process *livingProcess
 }
 
+func (*eagerFloodController) SupportsLimits() bool { return true }
+
 func (c *eagerFloodController) Start(ctx context.Context, command ports.Command) (ports.Process, error) {
 	payload := bytes.Repeat([]byte("x"), c.chunk)
 	for i := 0; i < c.repeat; i++ {
@@ -180,6 +201,8 @@ type hangController struct {
 	mu      sync.Mutex
 	process *livingProcess
 }
+
+func (*hangController) SupportsLimits() bool { return true }
 
 func (c *hangController) Start(ctx context.Context, _ ports.Command) (ports.Process, error) {
 	process := newLivingProcess(ctx)
@@ -240,6 +263,58 @@ func TestExecutePersistsBoundedToolOutputDigest(t *testing.T) {
 	}
 	if result.StdoutBytes != int64(len("stdout\n")) || result.StderrBytes != int64(len("stderr\n")) || result.StdoutSHA256 == "" || result.StderrSHA256 == "" {
 		t.Fatalf("外部工具输出摘要不完整: %+v", result)
+	}
+}
+
+func TestCreateFreezesAndExecuteEnforcesProcessLimits(t *testing.T) {
+	jobStore, _, _ := newJobStore(t, 13)
+	controller := &recordingController{}
+	service, err := toolrunner.New(jobStore, controller, resolver{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	job, err := service.Create(context.Background(), toolrunner.Request{
+		ToolID: "ffprobe", TimeoutSeconds: 9, MaxOutputBytes: 1024,
+	}, "owner")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var frozen toolrunner.Request
+	if err := json.Unmarshal(job.RequestJSON, &frozen); err != nil {
+		t.Fatal(err)
+	}
+	if frozen.MaxMemoryBytes != toolrunner.DefaultMemoryLimitBytes || frozen.MaxCPUTimeSeconds != 9 {
+		t.Fatalf("Job 未冻结默认进程限制: %+v", frozen)
+	}
+	if err := service.Execute(context.Background(), job.ID); err != nil {
+		t.Fatal(err)
+	}
+	if controller.command.Limits.MemoryBytes != uint64(toolrunner.DefaultMemoryLimitBytes) ||
+		controller.command.Limits.CPUTime != 9*time.Second {
+		t.Fatalf("执行命令未携带冻结限制: %+v", controller.command.Limits)
+	}
+}
+
+func TestExecuteAddsLimitsToLegacyPersistedRequest(t *testing.T) {
+	jobStore, _, _ := newJobStore(t, 15)
+	controller := &recordingController{}
+	service, err := toolrunner.New(jobStore, controller, resolver{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	legacyPayload := json.RawMessage(`{"toolId":"ffprobe","args":["-version"],"timeoutSeconds":7,"maxOutputBytes":1024}`)
+	job, err := jobStore.CreateWithOptions(context.Background(), "external_tool", "", "owner", jobs.CreateOptions{
+		ResourceClass: jobs.ResourceExternalTool, RequestJSON: legacyPayload, MaxRetries: 1,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := service.Execute(context.Background(), job.ID); err != nil {
+		t.Fatal(err)
+	}
+	if controller.command.Limits.MemoryBytes != uint64(toolrunner.DefaultMemoryLimitBytes) ||
+		controller.command.Limits.CPUTime != 7*time.Second {
+		t.Fatalf("旧 Job 未补齐安全限制: %+v", controller.command.Limits)
 	}
 }
 
@@ -396,8 +471,8 @@ func TestExecuteHonorsCallerCancellation(t *testing.T) {
 	}
 }
 
-// TestCreateRejectsBoundaryViolations 覆盖 Create 侧的两条声明边界：执行超时必须落在
-// 1~3600 秒，单流输出上限不得超过 64 MiB。
+// TestCreateRejectsBoundaryViolations 覆盖 Create 侧声明边界：执行超时/CPU 时间必须落在
+// 1~3600 秒，CPU 不得超过墙钟超时，单流输出不得超过 64 MiB，进程树内存不得超过 2 GiB。
 func TestCreateRejectsBoundaryViolations(t *testing.T) {
 	jobStore, store, _ := newJobStore(t, 9)
 	service, err := toolrunner.New(jobStore, exitingController{}, resolver{})
@@ -411,7 +486,12 @@ func TestCreateRejectsBoundaryViolations(t *testing.T) {
 		{"超时为零", toolrunner.Request{ToolID: "ffprobe", TimeoutSeconds: 0}},
 		{"超时为负", toolrunner.Request{ToolID: "ffprobe", TimeoutSeconds: -1}},
 		{"超时超过上限", toolrunner.Request{ToolID: "ffprobe", TimeoutSeconds: 3601}},
+		{"输出上限为负", toolrunner.Request{ToolID: "ffprobe", TimeoutSeconds: 2, MaxOutputBytes: -1}},
 		{"输出上限超过硬上限", toolrunner.Request{ToolID: "ffprobe", TimeoutSeconds: 2, MaxOutputBytes: (64 << 20) + 1}},
+		{"内存上限为负", toolrunner.Request{ToolID: "ffprobe", TimeoutSeconds: 2, MaxMemoryBytes: -1}},
+		{"内存上限超过硬上限", toolrunner.Request{ToolID: "ffprobe", TimeoutSeconds: 2, MaxMemoryBytes: toolrunner.MaxMemoryLimitBytes + 1}},
+		{"CPU 上限为负", toolrunner.Request{ToolID: "ffprobe", TimeoutSeconds: 2, MaxCPUTimeSeconds: -1}},
+		{"CPU 上限超过墙钟", toolrunner.Request{ToolID: "ffprobe", TimeoutSeconds: 2, MaxCPUTimeSeconds: 3}},
 		{"缺少 ToolID", toolrunner.Request{TimeoutSeconds: 2}},
 	}
 	for _, item := range cases {
@@ -424,8 +504,31 @@ func TestCreateRejectsBoundaryViolations(t *testing.T) {
 		t.Fatalf("越界请求污染了 Job 表: count=%d err=%v", count, err)
 	}
 	// 上边界本身必须被接受，避免把边界检查写成 off-by-one。
-	if _, err := service.Create(context.Background(), toolrunner.Request{ToolID: "ffprobe", TimeoutSeconds: 3600, MaxOutputBytes: 64 << 20}, "owner"); err != nil {
+	if _, err := service.Create(context.Background(), toolrunner.Request{
+		ToolID: "ffprobe", TimeoutSeconds: 3600, MaxOutputBytes: 64 << 20,
+		MaxMemoryBytes: toolrunner.MaxMemoryLimitBytes, MaxCPUTimeSeconds: toolrunner.MaxCPUTimeSeconds,
+	}, "owner"); err != nil {
 		t.Fatalf("边界内请求被拒绝: %v", err)
+	}
+}
+
+func TestCreateRejectsPlatformWithoutHardLimitsBeforePersistingJob(t *testing.T) {
+	jobStore, store, _ := newJobStore(t, 14)
+	service, err := toolrunner.New(jobStore, unsupportedLimitController{}, resolver{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if service.Available() {
+		t.Fatal("不支持进程树硬限制的平台错误报告外部工具可用")
+	}
+	_, err = service.Create(context.Background(), toolrunner.Request{ToolID: "ffprobe", TimeoutSeconds: 2}, "owner")
+	var structured *fault.Error
+	if !errors.As(err, &structured) || structured.Code != fault.CodeExternalToolUnavailable {
+		t.Fatalf("不支持硬限制的平台错误 = %v", err)
+	}
+	var count int
+	if err := store.Control.SQL().QueryRowContext(context.Background(), "SELECT COUNT(*) FROM jobs").Scan(&count); err != nil || count != 0 {
+		t.Fatalf("不支持硬限制的平台污染了 Job 表: count=%d err=%v", count, err)
 	}
 }
 

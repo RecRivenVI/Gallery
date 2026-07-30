@@ -7,10 +7,14 @@ import (
 	"os/exec"
 	"sync"
 	"syscall"
+	"time"
 	"unsafe"
 
+	"github.com/RecRivenVI/gallery/internal/ports"
 	"golang.org/x/sys/windows"
 )
+
+const supportsLimits = true
 
 // processGroup 在 Windows 上用 Job Object 承载「进程树」。
 //
@@ -22,11 +26,23 @@ import (
 // 子进程以 CREATE_SUSPENDED 创建：先纳入 Job 再恢复执行，避免它在被纳入之前就派生出不属于
 // 该 Job 的孙进程。Windows 8 起支持嵌套 Job，因此宿主进程本身已在某个 Job 内也不影响。
 type processGroup struct {
-	mu  sync.Mutex
-	job windows.Handle
+	mu     sync.Mutex
+	job    windows.Handle
+	limits ports.ProcessLimits
 }
 
-func newProcessGroup() *processGroup { return &processGroup{} }
+func newProcessGroup(limits ports.ProcessLimits) (*processGroup, error) {
+	if limits.CPUTime < 0 {
+		return nil, fmt.Errorf("进程 CPU 时间限制不能为负数")
+	}
+	if limits.CPUTime > 0 && limits.CPUTime < 100*time.Nanosecond {
+		return nil, fmt.Errorf("进程 CPU 时间限制不能小于 100ns")
+	}
+	if uint64(uintptr(limits.MemoryBytes)) != limits.MemoryBytes {
+		return nil, fmt.Errorf("进程内存限制超出当前平台可表示范围")
+	}
+	return &processGroup{limits: limits}, nil
+}
 
 func (g *processGroup) prepare(cmd *exec.Cmd) {
 	if cmd.SysProcAttr == nil {
@@ -42,7 +58,7 @@ func (g *processGroup) adopt(cmd *exec.Cmd) error {
 	if cmd.Process == nil {
 		return fmt.Errorf("process 尚未启动")
 	}
-	job, err := createKillOnCloseJob()
+	job, err := createJob(g.limits)
 	if err != nil {
 		return err
 	}
@@ -83,13 +99,22 @@ func (g *processGroup) release(_ *exec.Cmd) {
 	}
 }
 
-func createKillOnCloseJob() (windows.Handle, error) {
+func createJob(limits ports.ProcessLimits) (windows.Handle, error) {
 	job, err := windows.CreateJobObject(nil, nil)
 	if err != nil {
 		return 0, fmt.Errorf("创建 Job Object 失败: %w", err)
 	}
 	var info windows.JOBOBJECT_EXTENDED_LIMIT_INFORMATION
 	info.BasicLimitInformation.LimitFlags = windows.JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE
+	if limits.MemoryBytes > 0 {
+		info.BasicLimitInformation.LimitFlags |= windows.JOB_OBJECT_LIMIT_JOB_MEMORY
+		info.JobMemoryLimit = uintptr(limits.MemoryBytes)
+	}
+	if limits.CPUTime > 0 {
+		info.BasicLimitInformation.LimitFlags |= windows.JOB_OBJECT_LIMIT_JOB_TIME
+		// Windows 的 LARGE_INTEGER 时间单位是 100ns。newProcessGroup 已拒绝更小的非零值。
+		info.BasicLimitInformation.PerJobUserTimeLimit = int64(limits.CPUTime / (100 * time.Nanosecond))
+	}
 	if _, err := windows.SetInformationJobObject(job, windows.JobObjectExtendedLimitInformation,
 		uintptr(unsafe.Pointer(&info)), uint32(unsafe.Sizeof(info))); err != nil {
 		_ = windows.CloseHandle(job)

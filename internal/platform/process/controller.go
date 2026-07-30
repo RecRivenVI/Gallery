@@ -28,6 +28,10 @@ type Controller struct {
 	WaitDelay time.Duration
 }
 
+// SupportsLimits 表示当前平台适配器能否在子进程执行任何指令前，对整棵进程树施加 CPU 与
+// 内存硬限制。调用方用它在创建持久 Job 前 fail-closed。
+func (Controller) SupportsLimits() bool { return supportsLimits }
+
 func (c Controller) Start(ctx context.Context, command ports.Command) (ports.Process, error) {
 	if command.Path == "" {
 		return nil, fmt.Errorf("process path 不能为空")
@@ -43,7 +47,10 @@ func (c Controller) Start(ctx context.Context, command ports.Command) (ports.Pro
 	}
 	cmd.WaitDelay = waitDelay
 
-	group := newProcessGroup()
+	group, err := newProcessGroup(command.Limits)
+	if err != nil {
+		return nil, err
+	}
 	group.prepare(cmd)
 	// exec.CommandContext 的默认 Cancel 只杀直接子进程，孙进程会继续持有管道。改为终止整棵树。
 	cmd.Cancel = func() error { return group.kill(cmd) }
