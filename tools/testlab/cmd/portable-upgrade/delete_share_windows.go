@@ -43,6 +43,122 @@ func isDeleteSharingViolation(err error) bool {
 	return errors.Is(err, windows.ERROR_SHARING_VIOLATION)
 }
 
+func accessDeniedMessage() string { return windows.ERROR_ACCESS_DENIED.Error() }
+
+// denyCurrentUserDeleteWithACL 在保留原始 DACL 的前提下，为当前进程用户同时加入
+// 文件 DELETE 与父目录 FILE_DELETE_CHILD deny ACE。Windows 允许任一权限授权 Rename，
+// 因此两条路径必须一起受限。它只用于系统临时 AppDirs 的 Windows 发行门禁，用真实
+// ACL 拒绝 control.db 轮换，同时不阻止 galleryd 继续读写当前 SQLite 文件。
+// 返回的恢复函数精确还原两个 DACL，且可重复调用。
+func denyCurrentUserDeleteWithACL(path string) (func() error, error) {
+	user, err := windows.GetCurrentProcessToken().GetTokenUser()
+	if err != nil {
+		return nil, fmt.Errorf("读取当前进程用户 SID: %w", err)
+	}
+	targets := []struct {
+		path        string
+		permission  windows.ACCESS_MASK
+		description string
+	}{
+		{path: path, permission: windows.DELETE, description: "control.db"},
+		{path: filepath.Dir(path), permission: windows.ACCESS_MASK(0x40), description: "control.db 父目录"}, // FILE_DELETE_CHILD
+	}
+	type aclChange struct {
+		path       string
+		original   *windows.ACL
+		restricted *windows.ACL
+	}
+	changes := make([]aclChange, 0, len(targets))
+	for _, target := range targets {
+		descriptor, descriptorErr := windows.GetNamedSecurityInfo(
+			target.path,
+			windows.SE_FILE_OBJECT,
+			windows.DACL_SECURITY_INFORMATION,
+		)
+		if descriptorErr != nil {
+			return nil, fmt.Errorf("读取 %s DACL: %w", target.description, descriptorErr)
+		}
+		if descriptor == nil {
+			return nil, fmt.Errorf("%s 缺少安全描述符", target.description)
+		}
+		currentACL, _, daclErr := descriptor.DACL()
+		if daclErr != nil {
+			return nil, fmt.Errorf("读取 %s 当前 DACL: %w", target.description, daclErr)
+		}
+		if currentACL == nil {
+			return nil, fmt.Errorf("%s 使用 null DACL，拒绝修改", target.description)
+		}
+		originalACL, copyErr := windows.ACLFromEntries(nil, currentACL)
+		if copyErr != nil {
+			return nil, fmt.Errorf("复制 %s 原始 DACL: %w", target.description, copyErr)
+		}
+		restrictedACL, restrictErr := windows.ACLFromEntries([]windows.EXPLICIT_ACCESS{{
+			AccessPermissions: target.permission,
+			AccessMode:        windows.DENY_ACCESS,
+			Inheritance:       windows.NO_INHERITANCE,
+			Trustee: windows.TRUSTEE{
+				TrusteeForm:  windows.TRUSTEE_IS_SID,
+				TrusteeType:  windows.TRUSTEE_IS_USER,
+				TrusteeValue: windows.TrusteeValueFromSID(user.User.Sid),
+			},
+		}}, currentACL)
+		if restrictErr != nil {
+			return nil, fmt.Errorf("构造 %s deny DACL: %w", target.description, restrictErr)
+		}
+		changes = append(changes, aclChange{
+			path:       target.path,
+			original:   originalACL,
+			restricted: restrictedACL,
+		})
+	}
+	for index, change := range changes {
+		if setErr := windows.SetNamedSecurityInfo(
+			change.path,
+			windows.SE_FILE_OBJECT,
+			windows.DACL_SECURITY_INFORMATION,
+			nil,
+			nil,
+			change.restricted,
+			nil,
+		); setErr != nil {
+			var rollbackErr error
+			for rollbackIndex := index - 1; rollbackIndex >= 0; rollbackIndex-- {
+				previous := changes[rollbackIndex]
+				rollbackErr = errors.Join(rollbackErr, windows.SetNamedSecurityInfo(
+					previous.path,
+					windows.SE_FILE_OBJECT,
+					windows.DACL_SECURITY_INFORMATION,
+					nil,
+					nil,
+					previous.original,
+					nil,
+				))
+			}
+			return nil, errors.Join(fmt.Errorf("应用 ACL deny: %w", setErr), rollbackErr)
+		}
+	}
+
+	var once sync.Once
+	var restoreErr error
+	return func() error {
+		once.Do(func() {
+			for index := len(changes) - 1; index >= 0; index-- {
+				change := changes[index]
+				restoreErr = errors.Join(restoreErr, windows.SetNamedSecurityInfo(
+					change.path,
+					windows.SE_FILE_OBJECT,
+					windows.DACL_SECURITY_INFORMATION,
+					nil,
+					nil,
+					change.original,
+					nil,
+				))
+			}
+		})
+		return restoreErr
+	}, nil
+}
+
 func watchObservedFileReplacement(ctx context.Context, path string) (<-chan error, error) {
 	parent := filepath.Dir(path)
 	info, err := os.Stat(parent)

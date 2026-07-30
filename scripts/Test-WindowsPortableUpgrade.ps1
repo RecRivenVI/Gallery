@@ -114,6 +114,9 @@ try {
             'failedRestoreRecorded',
             'lockedRestoreKeptCurrent',
             'lockedRestoreRecorded',
+            'aclRestoreKeptCurrent',
+            'aclRestoreRecorded',
+            'aclRestoreBlockedByOS',
             'landingRestoreKeptCurrent',
             'landingRestoreRecorded',
             'landingRestoreBlockedByOS',
@@ -161,6 +164,9 @@ try {
         FailedRestoreRecorded = 'passed'
         LockedRestoreKeptCurrent = 'passed'
         LockedRestoreRecorded = 'passed'
+        ACLRestoreKeptCurrent = 'passed'
+        ACLRestoreRecorded = 'passed'
+        ACLRestoreBlockedByOS = 'passed'
         LandingRestoreKeptCurrent = 'passed'
         LandingRestoreRecorded = 'passed'
         LandingRestoreBlockedByOS = 'passed'

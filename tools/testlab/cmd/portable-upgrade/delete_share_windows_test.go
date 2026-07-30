@@ -2,10 +2,13 @@ package main
 
 import (
 	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"testing"
 	"time"
+
+	"golang.org/x/sys/windows"
 )
 
 func TestHoldControlWithoutDeleteSharingBlocksOnlyRename(t *testing.T) {
@@ -34,6 +37,41 @@ func TestHoldControlWithoutDeleteSharingBlocksOnlyRename(t *testing.T) {
 	}
 	if err := os.Rename(path, rotated); err != nil {
 		t.Fatalf("释放句柄后仍不能 Rename: %v", err)
+	}
+}
+
+func TestDenyCurrentUserDeleteWithACLBlocksOnlyRenameAndRestores(t *testing.T) {
+	root := t.TempDir()
+	path := filepath.Join(root, "control.db")
+	if err := os.WriteFile(path, []byte("current"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	restore, err := denyCurrentUserDeleteWithACL(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		if err := restore(); err != nil {
+			t.Errorf("恢复 control.db DACL: %v", err)
+		}
+	})
+	if _, err := os.ReadFile(path); err != nil {
+		t.Fatalf("ACL 不应阻止读取: %v", err)
+	}
+	if err := os.WriteFile(path, []byte("updated"), 0o600); err != nil {
+		t.Fatalf("ACL 不应阻止写入: %v", err)
+	}
+	rotated := filepath.Join(root, "control.db.bak")
+	if err := os.Rename(path, rotated); err == nil {
+		t.Fatal("DELETE deny ACL 未阻止 control.db Rename")
+	} else if !errors.Is(err, windows.ERROR_ACCESS_DENIED) {
+		t.Fatalf("control.db Rename 未返回 access denied: %v", err)
+	}
+	if err := restore(); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Rename(path, rotated); err != nil {
+		t.Fatalf("恢复 DACL 后仍不能 Rename: %v", err)
 	}
 }
 

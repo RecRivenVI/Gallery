@@ -15,6 +15,12 @@ func holdControlWithoutDeleteSharing(string) (func() error, error) {
 
 func isDeleteSharingViolation(error) bool { return false }
 
+func accessDeniedMessage() string { return "access denied" }
+
+func denyCurrentUserDeleteWithACL(string) (func() error, error) {
+	return nil, fmt.Errorf("ACL 轮换阻断只支持 Windows")
+}
+
 type observedFileSnapshot struct {
 	size      int64
 	lastWrite int64

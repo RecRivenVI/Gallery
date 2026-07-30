@@ -29,6 +29,7 @@ const (
 	afterBackupLibrary     = "Portable upgrade restore sentinel"
 	afterBadBackupLibrary  = "Portable failed restore current fact"
 	afterLockedLibrary     = "Portable locked restore current fact"
+	afterACLLibrary        = "Portable ACL restore current fact"
 	afterLandingLibrary    = "Portable landing restore current fact"
 	afterContinuityLibrary = "Portable continuity restore current fact"
 	afterFinalizeLibrary   = "Portable finalize resume current fact"
@@ -61,6 +62,9 @@ type result struct {
 	FailedRestoreRecorded     bool   `json:"failedRestoreRecorded"`
 	LockedRestoreKeptCurrent  bool   `json:"lockedRestoreKeptCurrent"`
 	LockedRestoreRecorded     bool   `json:"lockedRestoreRecorded"`
+	ACLRestoreKeptCurrent     bool   `json:"aclRestoreKeptCurrent"`
+	ACLRestoreRecorded        bool   `json:"aclRestoreRecorded"`
+	ACLRestoreBlockedByOS     bool   `json:"aclRestoreBlockedByOS"`
 	LandingRestoreKeptCurrent bool   `json:"landingRestoreKeptCurrent"`
 	LandingRestoreRecorded    bool   `json:"landingRestoreRecorded"`
 	LandingRestoreBlockedByOS bool   `json:"landingRestoreBlockedByOS"`
@@ -324,14 +328,64 @@ func run(previousBin, currentBin, previousVersion, currentVersion string) error 
 	if err := assertFailedRestoreRecorded(appRoot, lockedBackup.BackupId, "轮换当前 control.db"); err != nil {
 		return err
 	}
-	landingBackup, err := createBackup(ctx, lockedRestoreClient)
+	aclBackup, err := createBackup(ctx, lockedRestoreClient)
+	if err != nil {
+		return fmt.Errorf("创建 ACL 轮换拒绝夹具备份: %w", err)
+	}
+	if err := createLibrary(ctx, lockedRestoreClient, afterACLLibrary); err != nil {
+		return err
+	}
+	if err := requestRestore(ctx, lockedRestoreClient, aclBackup.BackupId); err != nil {
+		return err
+	}
+	if outcome := active.Stop(); !outcome.ExitedGracefully || outcome.ForcedKill || outcome.Err != nil {
+		stopsGraceful = false
+		return fmt.Errorf("ACL 轮换拒绝恢复前当前版本未优雅停止：forced=%t err=%v", outcome.ForcedKill, outcome.Err)
+	}
+	active = nil
+	controlPath := filepath.Join(appRoot, "data", "control.db")
+	restoreACL, err := denyCurrentUserDeleteWithACL(controlPath)
+	if err != nil {
+		return err
+	}
+	active, err = testprocess.StartGallerydWithSourceRootsContext(
+		ctx, currentPath, appRoot, filepath.Join(logs, "current-after-acl-restore.log"), startupTimeout,
+	)
+	aclRestoreErr := restoreACL()
+	if err != nil {
+		return errors.Join(fmt.Errorf("ACL 轮换被拒绝后启动当前版本: %w", err), aclRestoreErr)
+	}
+	if aclRestoreErr != nil {
+		return fmt.Errorf("恢复 control.db ACL: %w", aclRestoreErr)
+	}
+	aclRestoreClient, err := pair(ctx, active.BaseURL)
+	if err != nil {
+		return fmt.Errorf("ACL 轮换被拒绝后重新配对: %w", err)
+	}
+	if err := assertLibraries(ctx, aclRestoreClient, map[string]bool{
+		beforeBackupLibrary:   true,
+		afterBackupLibrary:    false,
+		afterBadBackupLibrary: true,
+		afterLockedLibrary:    true,
+		afterACLLibrary:       true,
+	}); err != nil {
+		return fmt.Errorf("ACL 轮换被拒绝后的当前用户事实: %w", err)
+	}
+	if err := assertFailedRestoreRecorded(appRoot, aclBackup.BackupId, "轮换当前 control.db"); err != nil {
+		return err
+	}
+	if err := assertFailedRestoreRecorded(appRoot, aclBackup.BackupId, accessDeniedMessage()); err != nil {
+		return fmt.Errorf("ACL 轮换失败未记录操作系统 access denied: %w", err)
+	}
+
+	landingBackup, err := createBackup(ctx, aclRestoreClient)
 	if err != nil {
 		return fmt.Errorf("创建候选落位拒绝夹具备份: %w", err)
 	}
-	if err := createLibrary(ctx, lockedRestoreClient, afterLandingLibrary); err != nil {
+	if err := createLibrary(ctx, aclRestoreClient, afterLandingLibrary); err != nil {
 		return err
 	}
-	if err := requestRestore(ctx, lockedRestoreClient, landingBackup.BackupId); err != nil {
+	if err := requestRestore(ctx, aclRestoreClient, landingBackup.BackupId); err != nil {
 		return err
 	}
 	if outcome := active.Stop(); !outcome.ExitedGracefully || outcome.ForcedKill || outcome.Err != nil {
@@ -389,6 +443,7 @@ func run(previousBin, currentBin, previousVersion, currentVersion string) error 
 		afterBackupLibrary:    false,
 		afterBadBackupLibrary: true,
 		afterLockedLibrary:    true,
+		afterACLLibrary:       true,
 		afterLandingLibrary:   true,
 	}); err != nil {
 		return fmt.Errorf("候选落位被拒绝后的当前用户事实: %w", err)
@@ -412,7 +467,7 @@ func run(previousBin, currentBin, previousVersion, currentVersion string) error 
 	}
 	active = nil
 
-	controlPath := filepath.Join(appRoot, "data", "control.db")
+	controlPath = filepath.Join(appRoot, "data", "control.db")
 	preservedControl := filepath.Join(appRoot, "data", "control.db.continuity-current")
 	if err := os.Rename(controlPath, preservedControl); err != nil {
 		return fmt.Errorf("保全连续性失败前当前库: %w", err)
@@ -480,6 +535,7 @@ func run(previousBin, currentBin, previousVersion, currentVersion string) error 
 		afterBackupLibrary:     false,
 		afterBadBackupLibrary:  true,
 		afterLockedLibrary:     true,
+		afterACLLibrary:        true,
 		afterLandingLibrary:    true,
 		afterContinuityLibrary: false,
 	}); err != nil {
@@ -524,6 +580,7 @@ func run(previousBin, currentBin, previousVersion, currentVersion string) error 
 		afterBackupLibrary:     false,
 		afterBadBackupLibrary:  true,
 		afterLockedLibrary:     true,
+		afterACLLibrary:        true,
 		afterLandingLibrary:    true,
 		afterContinuityLibrary: false,
 		afterFinalizeLibrary:   true,
@@ -576,6 +633,7 @@ func run(previousBin, currentBin, previousVersion, currentVersion string) error 
 		afterBackupLibrary:     false,
 		afterBadBackupLibrary:  true,
 		afterLockedLibrary:     true,
+		afterACLLibrary:        true,
 		afterLandingLibrary:    true,
 		afterContinuityLibrary: false,
 		afterFinalizeLibrary:   true,
@@ -637,6 +695,7 @@ func run(previousBin, currentBin, previousVersion, currentVersion string) error 
 		afterBackupLibrary:     false,
 		afterBadBackupLibrary:  true,
 		afterLockedLibrary:     true,
+		afterACLLibrary:        true,
 		afterLandingLibrary:    true,
 		afterContinuityLibrary: false,
 		afterFinalizeLibrary:   true,
@@ -814,6 +873,7 @@ func run(previousBin, currentBin, previousVersion, currentVersion string) error 
 		afterBackupLibrary:     false,
 		afterBadBackupLibrary:  true,
 		afterLockedLibrary:     true,
+		afterACLLibrary:        true,
 		afterLandingLibrary:    true,
 		afterContinuityLibrary: false,
 		afterFinalizeLibrary:   true,
@@ -925,6 +985,7 @@ func run(previousBin, currentBin, previousVersion, currentVersion string) error 
 		afterBackupLibrary:     false,
 		afterBadBackupLibrary:  true,
 		afterLockedLibrary:     true,
+		afterACLLibrary:        true,
 		afterLandingLibrary:    true,
 		afterContinuityLibrary: false,
 		afterFinalizeLibrary:   true,
@@ -962,6 +1023,9 @@ func run(previousBin, currentBin, previousVersion, currentVersion string) error 
 		FailedRestoreRecorded:     true,
 		LockedRestoreKeptCurrent:  true,
 		LockedRestoreRecorded:     true,
+		ACLRestoreKeptCurrent:     true,
+		ACLRestoreRecorded:        true,
+		ACLRestoreBlockedByOS:     true,
 		LandingRestoreKeptCurrent: true,
 		LandingRestoreRecorded:    true,
 		LandingRestoreBlockedByOS: true,
