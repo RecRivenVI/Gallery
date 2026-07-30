@@ -25,6 +25,9 @@ func TestHoldControlWithoutDeleteSharingBlocksOnlyRename(t *testing.T) {
 	if err := os.Rename(path, rotated); err == nil {
 		_ = release()
 		t.Fatal("未阻止 control.db Rename")
+	} else if !isDeleteSharingViolation(err) {
+		_ = release()
+		t.Fatalf("control.db Rename 未返回 sharing violation: %v", err)
 	}
 	if err := release(); err != nil {
 		t.Fatal(err)
@@ -60,6 +63,9 @@ func TestWatchNextFileWithoutDeleteSharingBlocksRename(t *testing.T) {
 	if err := os.Rename(path, landed); err == nil {
 		_ = hold.release()
 		t.Fatal("未阻止恢复候选 Rename")
+	} else if !isDeleteSharingViolation(err) {
+		_ = hold.release()
+		t.Fatalf("恢复候选 Rename 未返回 sharing violation: %v", err)
 	}
 	if err := hold.release(); err != nil {
 		t.Fatal(err)

@@ -595,6 +595,9 @@ func run(previousBin, currentBin, previousVersion, currentVersion string) error 
 	if removeErr := os.Remove(pendingPath); removeErr == nil {
 		_ = releasePendingHold()
 		return fmt.Errorf("真实 Windows handle 未阻止恢复 pending 删除")
+	} else if !isDeleteSharingViolation(removeErr) {
+		_ = releasePendingHold()
+		return fmt.Errorf("恢复 pending 删除未返回 Windows sharing violation: %w", removeErr)
 	}
 	pendingLog := filepath.Join(logs, "current-pending-delete-fail-closed.log")
 	if err := assertRestoreStartupFailed(ctx, currentPath, appRoot, pendingLog, "消费恢复请求"); err != nil {

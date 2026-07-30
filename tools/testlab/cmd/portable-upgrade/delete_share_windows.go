@@ -35,6 +35,10 @@ func holdControlWithoutDeleteSharing(path string) (func() error, error) {
 	return func() error { return windows.CloseHandle(handle) }, nil
 }
 
+func isDeleteSharingViolation(err error) bool {
+	return errors.Is(err, windows.ERROR_SHARING_VIOLATION)
+}
+
 // watchNextFileWithoutDeleteSharing 先启动只针对精确候选路径的打开循环，再等待恢复
 // 候选由真实 galleryd 创建。句柄允许 SQLite 继续读写，但不共享删除/重命名，因此
 // 随后的 incoming -> control.db Rename 必须由 Windows 拒绝。持续尝试仅存在于这个
