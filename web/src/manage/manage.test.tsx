@@ -540,7 +540,7 @@ describe('capability 不能当作授权判断', () => {
 /* ————————————————————————————— 2. 任务状态以 HTTP 快照为准 ————————————————————————————— */
 
 describe('任务状态的事实源', () => {
-  it('按新到旧连续载入任务，追加失败保留既有页并可原地重试', async () => {
+  it('按新到旧分页任务，续页失败保留当前页且已访问页可前后复用', async () => {
     let olderAttempts = 0;
     const seen: Array<{ status: string | null; cursor: string | null }> = [];
     route('GET /api/v1/sources', () => jsonResponse({ sources: [] }));
@@ -561,22 +561,32 @@ describe('任务状态的事实源', () => {
 
     renderManage('/scans');
     await screen.findByRole('link', { name: 'job_NEWEST' });
-    expect(screen.getByText('已按新到旧载入 1 条（还有更早任务）。')).toBeInTheDocument();
+    expect(screen.getByText('第 1 页 · 本页 1 条 · 每页最多 50 条（还有更早任务）。')).toBeInTheDocument();
 
-    await userEvent.click(screen.getByRole('button', { name: '加载更早任务' }));
+    await userEvent.click(screen.getByRole('button', { name: '下一页（更早）' }));
     await screen.findByText('更早的任务暂时未能载入');
     expect(screen.getByRole('link', { name: 'job_NEWEST' })).toBeInTheDocument();
     expect(screen.queryByRole('link', { name: 'job_OLDER' })).not.toBeInTheDocument();
 
-    await userEvent.click(screen.getByRole('button', { name: '重试加载更早任务' }));
+    await userEvent.click(screen.getByRole('button', { name: '重试下一页（更早）' }));
     await screen.findByRole('link', { name: 'job_OLDER' });
-    expect(screen.getByText('已按新到旧载入 2 条（已到末页）。')).toBeInTheDocument();
+    expect(screen.queryByRole('link', { name: 'job_NEWEST' })).not.toBeInTheDocument();
+    expect(screen.getByText('第 2 页 · 本页 1 条 · 每页最多 50 条（已到末页）。')).toBeInTheDocument();
+    expect(seen.filter((entry) => entry.cursor === 'cursor-older')).toHaveLength(2);
+
+    await userEvent.click(screen.getByRole('button', { name: '上一页（较新）' }));
+    await screen.findByRole('link', { name: 'job_NEWEST' });
+    expect(screen.queryByRole('link', { name: 'job_OLDER' })).not.toBeInTheDocument();
+    await userEvent.click(screen.getByRole('button', { name: '下一页（更早）' }));
+    await screen.findByRole('link', { name: 'job_OLDER' });
     expect(seen.filter((entry) => entry.cursor === 'cursor-older')).toHaveLength(2);
 
     await selectOption(/状态/, '已失败');
     await screen.findByRole('link', { name: 'job_FAILED' });
+    expect(screen.getByText('第 1 页 · 本页 1 条 · 每页最多 50 条（已到末页）。')).toBeInTheDocument();
     expect(seen.some((entry) => entry.status === 'failed' && entry.cursor === null)).toBe(true);
     expect(screen.queryByRole('link', { name: 'job_NEWEST' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: '上一页（较新）' })).not.toBeInTheDocument();
   });
 
   it('WebSocket 的 job.completed 只触发重新拉取快照，不直接改变本地状态', async () => {

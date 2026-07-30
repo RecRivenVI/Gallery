@@ -511,6 +511,7 @@ function SourceTable() {
 function JobTable() {
   const { show } = useToast();
   const [status, setStatus] = useState<string>('all');
+  const [pageIndex, setPageIndex] = useState(0);
   const jobs = useJobs(status === 'all' ? null : (status as JobStatus), JOB_PAGE_SIZE);
   // 追加页失败时 TanStack 会同时把整个 InfiniteQuery 标为 isError；已有第一页仍是
   // 可用的 HTTP snapshot，不能因此被通用 AsyncPanel 替换成整块错误页。
@@ -532,7 +533,10 @@ function JobTable() {
             options={JOB_STATUS_FILTERS.map((item) => ({ id: item.id, label: item.label }))}
             selectedKey={status}
             onSelectionChange={(key) => {
-              if (key !== null) setStatus(key);
+              if (key !== null) {
+                setStatus(key);
+                setPageIndex(0);
+              }
             }}
           />
         </>
@@ -543,11 +547,32 @@ function JobTable() {
       <InlineError error={jobs.isFetchNextPageError ? jobs.error : null} title="更早的任务暂时未能载入" />
       <AsyncPanel query={jobSnapshotQuery}>
         {(data) => {
-          const rows = data.pages.flatMap((page) => page.jobs);
+          // InfiniteQuery 负责缓存已经访问过的 keyset 页，但 DOM 只渲染当前一页。
+          // 这保留前后导航和续页失败恢复，同时让任务历史再长也不会让一张表无限增高。
+          const currentPageIndex = Math.min(pageIndex, Math.max(0, data.pages.length - 1));
+          const rows = data.pages[currentPageIndex]?.jobs ?? [];
+          const hasLoadedOlderPage = currentPageIndex + 1 < data.pages.length;
+          const hasOlderPage =
+            hasLoadedOlderPage || (currentPageIndex === data.pages.length - 1 && jobs.hasNextPage);
+          const nextNeedsRetry = !hasLoadedOlderPage && jobs.isFetchNextPageError;
+
+          const showOlderPage = () => {
+            if (hasLoadedOlderPage) {
+              setPageIndex(currentPageIndex + 1);
+              return;
+            }
+            void jobs.fetchNextPage().then((result) => {
+              if (result.data?.pages[currentPageIndex + 1] !== undefined) {
+                setPageIndex(currentPageIndex + 1);
+              }
+            });
+          };
+
           return (
             <>
               <p className="manage-section__description">
-                已按新到旧载入 {rows.length} 条{jobs.hasNextPage ? '（还有更早任务）' : '（已到末页）'}。
+                第 {currentPageIndex + 1} 页 · 本页 {rows.length} 条 · 每页最多 {JOB_PAGE_SIZE} 条
+                {hasOlderPage ? '（还有更早任务）' : '（已到末页）'}。
               </p>
               <DataTable
                 caption="任务快照"
@@ -670,15 +695,22 @@ function JobTable() {
                   }
                 ]}
               />
-              {jobs.hasNextPage ? (
+              {currentPageIndex > 0 || hasOlderPage ? (
                 <div className="manage-form__actions">
-                  <Button
-                    variant="secondary"
-                    isPending={jobs.isFetchingNextPage}
-                    onPress={() => void jobs.fetchNextPage()}
-                  >
-                    {jobs.isFetchNextPageError ? '重试加载更早任务' : '加载更早任务'}
-                  </Button>
+                  {currentPageIndex > 0 ? (
+                    <Button variant="secondary" onPress={() => setPageIndex(currentPageIndex - 1)}>
+                      上一页（较新）
+                    </Button>
+                  ) : null}
+                  {hasOlderPage ? (
+                    <Button
+                      variant="secondary"
+                      isPending={!hasLoadedOlderPage && jobs.isFetchingNextPage}
+                      onPress={showOlderPage}
+                    >
+                      {nextNeedsRetry ? '重试下一页（更早）' : '下一页（更早）'}
+                    </Button>
+                  ) : null}
                 </div>
               ) : null}
             </>
