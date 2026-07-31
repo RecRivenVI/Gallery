@@ -159,6 +159,11 @@ func TestRunOneCombinationCountsTimeoutsAsFailed(t *testing.T) {
 	if !sample.IdentityOK() {
 		t.Fatalf("sample violates run-count identity: %+v", sample)
 	}
+	for _, finding := range rep.Findings {
+		if finding.Name == "perf/browse-limit20-concurrency2-no-failed-runs" && !strings.Contains(finding.Detail, "requestDeadline=3") {
+			t.Fatalf("请求超时被错误描述: %s", finding.Detail)
+		}
+	}
 }
 
 func TestRunOneCombinationStopsPastCombinationDeadline(t *testing.T) {
@@ -180,6 +185,11 @@ func TestRunOneCombinationStopsPastCombinationDeadline(t *testing.T) {
 	}
 	if !sample.IdentityOK() {
 		t.Fatalf("sample violates run-count identity: %+v", sample)
+	}
+	for _, finding := range rep.Findings {
+		if finding.Name == "perf/browse-limit20-concurrency1-no-failed-runs" && !strings.Contains(finding.Detail, "combinationDeadline=1000") {
+			t.Fatalf("组合截止未被准确描述: %s", finding.Detail)
+		}
 	}
 }
 
@@ -486,7 +496,7 @@ func TestRunPerfMatrixAlwaysPublishesInterpretationLimitations(t *testing.T) {
 	timeouts := PerfTimeouts{PerRequest: time.Second, PerCombination: time.Second, Scenario: time.Minute}
 	RunPerfMatrix(rep, sess, combos, timeouts, PerfOptions{ProcessColdAtStart: true, WarmupRuns: 1}, nil)
 
-	for _, expected := range []string{"最近秩", "不代表冷存储读", "p99Estimable", "EXPLAIN QUERY PLAN"} {
+	for _, expected := range []string{"最近秩", "不代表冷存储读", "p99Estimable", "重复请求风暴", "EXPLAIN QUERY PLAN"} {
 		found := false
 		for _, limitation := range rep.Limitations {
 			if strings.Contains(limitation, expected) {

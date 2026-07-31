@@ -175,6 +175,7 @@ type Service struct {
 	signer  *contractquery.CursorSigner
 	exact   *exactValueIndexCache
 	totals  *totalResultCache
+	pages   *pageInFlightGroup
 }
 
 func NewService(ctx context.Context, control, catalog *sql.DB, clock ports.Clock, random io.Reader) (*Service, error) {
@@ -193,7 +194,7 @@ func NewService(ctx context.Context, control, catalog *sql.DB, clock ports.Clock
 		return nil, err
 	}
 	return &Service{control: control, catalog: catalog, clock: clock, random: random, signer: signer,
-		exact: newExactValueIndexCache(), totals: newTotalResultCache()}, nil
+		exact: newExactValueIndexCache(), totals: newTotalResultCache(), pages: newPageInFlightGroup()}, nil
 }
 
 func (s *Service) Search(ctx context.Context, request Request) (Result, error) {
@@ -762,7 +763,16 @@ func (s *Service) query(ctx context.Context, pub publication, authorization sour
 	if err != nil {
 		return nil, false, err
 	}
-	return s.executePageStatement(ctx, statement, args, request, plan)
+	// SQL 与实参已经包含 publication、授权集合、过滤、排序、limit 和 keyset 锚点；
+	// 同一键的同时在途请求读取完全相同的 immutable page。这里只合并执行窗口，不在
+	// 完成后缓存页，避免大 payload 长期占内存，并保持不同页/不同授权彼此隔离。
+	key := fingerprint(struct {
+		Statement string
+		Args      []any
+	}{Statement: statement, Args: args})
+	return s.pages.do(ctx, key, func(buildCtx context.Context) ([]Work, bool, error) {
+		return s.executePageStatement(buildCtx, statement, args, request, plan)
+	})
 }
 
 // titlePrefixFastPathEligible 只选择语义可以被局部证明的宽召回形态：完整 Source 授权、

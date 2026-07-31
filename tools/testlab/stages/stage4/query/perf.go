@@ -571,6 +571,8 @@ func perfLimitations(opts PerfOptions, combos []combination) []string {
 			"本工具不清空操作系统文件系统缓存（需要管理员权限与平台专有接口），因此任何样本都不代表冷存储读。",
 		"p99Estimable=false 的样本其 p99Ms 只是最近秩落在最大值上的结果，不是 P99 估计；" +
 			"P99 至少需要 " + fmt.Sprintf("%d", report.MinSamplesForP99) + " 个成功样本。",
+		"同一性能组合发送完全相同的页请求；生产 Query Service 可以合并同时在途且 SQL/实参完全相同的 immutable page 构建。" +
+			"因此 concurrency 数字表示重复请求风暴下的用户观测延迟，不代表混合搜索词或不同游标的吞吐。",
 		"structured-and/structured-or/overlay-favorite 使用生产 SQL builder 的 EXPLAIN QUERY PLAN 持续门禁；" +
 			"门禁锁定 publication 范围索引、关联身份索引和无临时排序，但不把当前 SQLite 计划外推为其它版本或真实存储吞吐。",
 	}
@@ -784,7 +786,15 @@ func runOneCombination(rep *report.Report, sess *environment.Session, combo comb
 
 	prefix := fmt.Sprintf("perf/%s-limit%d-concurrency%d", combo.shape.name, combo.limit, combo.concurrency)
 	if failed > 0 || notAttempted > 0 {
-		rep.Add(prefix+"-no-failed-runs", false, fmt.Sprintf("planned=%d attempted=%d failed=%d timedOut=%d notAttempted=%d(combination-deadline)", combo.runs, attempted, failed, timedOut, notAttempted))
+		reasons := make([]string, 0, 2)
+		if timedOut > 0 {
+			reasons = append(reasons, fmt.Sprintf("requestDeadline=%d", timedOut))
+		}
+		if notAttempted > 0 {
+			reasons = append(reasons, fmt.Sprintf("combinationDeadline=%d", notAttempted))
+		}
+		rep.Add(prefix+"-no-failed-runs", false, fmt.Sprintf("planned=%d attempted=%d failed=%d timedOut=%d notAttempted=%d reasons=%s",
+			combo.runs, attempted, failed, timedOut, notAttempted, strings.Join(reasons, ",")))
 	} else {
 		rep.Add(prefix+"-no-failed-runs", true, "")
 	}
