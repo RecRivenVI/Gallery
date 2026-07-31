@@ -68,14 +68,16 @@ func run() (exitCode int) {
 	var governanceOnly bool
 	var jobHistoryOnly bool
 	var accessibilityOnly bool
+	var ruleSizeOnly bool
 	flag.StringVar(&repoRoot, "repo-root", ".", "Gallery 仓库根目录")
 	flag.StringVar(&browserProject, "browser-project", "chromium", "Playwright 浏览器项目（chromium 或 firefox）")
 	flag.BoolVar(&keep, "keep", false, "保留临时验证目录")
 	flag.BoolVar(&governanceOnly, "governance-only", false, "只执行正式应用层治理浏览器 E2E")
 	flag.BoolVar(&jobHistoryOnly, "job-history-only", false, "只执行真实 Job 历史分页浏览器 E2E")
 	flag.BoolVar(&accessibilityOnly, "accessibility-only", false, "只执行真实后端高对比交互状态 E2E")
+	flag.BoolVar(&ruleSizeOnly, "rule-size-only", false, "只执行真实后端大规则草稿浏览器 E2E")
 	flag.Parse()
-	if err := validateRunModes(governanceOnly, jobHistoryOnly, accessibilityOnly); err != nil {
+	if err := validateRunModes(governanceOnly, jobHistoryOnly, accessibilityOnly, ruleSizeOnly); err != nil {
 		return fail("验证运行模式", err)
 	}
 	if err := validateBrowserProject(browserProject); err != nil {
@@ -295,6 +297,29 @@ func run() (exitCode int) {
 	}
 	playwright := filepath.Join(webRoot, "node_modules", "@playwright", "test", "cli.js")
 	projectArgument := "--project=" + browserProject
+	if ruleSizeOnly {
+		testErr := waitHealthy(runCtx, server.BaseURL, 30*time.Second)
+		if testErr == nil {
+			testErr = command(runCtx, 2*time.Minute, webRoot, env, nodeBin, playwright, "test",
+				"e2e/real-rule-size.spec.ts", projectArgument, "--workers=1", "--retries=0")
+		}
+		stop := server.Stop()
+		serverStopped = true
+		testErr = errors.Join(testErr, stopError(stop))
+		after, guardErr := snapshot(sourceGuardRoot)
+		if guardErr == nil && !reflect.DeepEqual(before, after) {
+			guardErr = describeGuardDifference(before, after)
+		}
+		if testErr != nil || guardErr != nil {
+			diagnosticErr := retainDiagnostics(gallerydLog, diagnosticsRoot)
+			if diagnosticErr == nil {
+				fmt.Printf("失败诊断已保存到：%s\n", diagnosticsRoot)
+			}
+			return fail("真实后端大规则草稿浏览器 E2E", errors.Join(testErr, guardErr, diagnosticErr))
+		}
+		fmt.Printf("真实 %s 大规则草稿与合成 Source 只读 guard 通过\n", browserProject)
+		return 0
+	}
 	if accessibilityOnly {
 		testErr := waitHealthy(runCtx, server.BaseURL, 30*time.Second)
 		if testErr == nil {
@@ -349,6 +374,10 @@ func run() (exitCode int) {
 	if testErr == nil {
 		testErr = command(runCtx, 2*time.Minute, webRoot, env, nodeBin, playwright, "test",
 			"e2e/real-bootstrap.spec.ts", projectArgument, "--workers=1", "--retries=0")
+	}
+	if testErr == nil {
+		testErr = command(runCtx, 2*time.Minute, webRoot, env, nodeBin, playwright, "test",
+			"e2e/real-rule-size.spec.ts", projectArgument, "--workers=1", "--retries=0")
 	}
 	if testErr == nil {
 		testErr = command(runCtx, time.Minute, webRoot, env, nodeBin, playwright, "test",
@@ -725,7 +754,7 @@ func validateRunModes(modes ...bool) error {
 		}
 	}
 	if selected > 1 {
-		return fmt.Errorf("governance-only、job-history-only 与 accessibility-only 只能选择一个")
+		return fmt.Errorf("governance-only、job-history-only、accessibility-only 与 rule-size-only 只能选择一个")
 	}
 	return nil
 }
