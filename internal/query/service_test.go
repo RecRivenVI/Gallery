@@ -118,6 +118,116 @@ func TestFTSSnapshotKeysetCursorAndAuthorization(t *testing.T) {
 	}
 }
 
+func TestBroadTitlePrefixSearchPreservesRankingAndKeyset(t *testing.T) {
+	ctx := context.Background()
+	now := time.Date(2026, 7, 31, 4, 0, 0, 0, time.UTC)
+	dirs := appdirs.UnderRoot(t.TempDir())
+	if err := dirs.Ensure(filesystem.OS{}); err != nil {
+		t.Fatal(err)
+	}
+	store, err := storage.Open(ctx, dirs)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	seedPublication(t, store, "812", []seedWork{
+		{title: "普通作品 01"},
+		{title: "普通作品 02"},
+		{title: "普通作品 03"},
+		{title: "普通作品 04"},
+		{title: "普通作品 05"},
+		{title: "普通作品 06"},
+		// 最低优先级的 Filename exact（rank=30）也必须稳定排在 title prefix
+		//（rank=23）之前；若快路径没有先证明不存在 exact，这一项会被错误地漏出第一页。
+		{title: "zz exact filename", filenames: []string{"普通作品"}},
+	})
+	service, err := galleryquery.NewService(ctx, store.Control.SQL(), store.Catalog.SQL(), clock.Fixed{Time: now}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	originalBudget := galleryquery.TotalBudget
+	galleryquery.TotalBudget = 2
+	defer func() { galleryquery.TotalBudget = originalBudget }()
+	scope := galleryquery.AuthorizationScope("owner", []string{"library.read"})
+
+	for _, test := range []struct {
+		name, sort string
+		want       []string
+	}{
+		{name: "ascending", sort: "title_asc", want: []string{
+			"zz exact filename", "普通作品 01", "普通作品 02", "普通作品 03", "普通作品 04", "普通作品 05", "普通作品 06",
+		}},
+		{name: "descending", sort: "title_desc", want: []string{
+			"zz exact filename", "普通作品 06", "普通作品 05", "普通作品 04", "普通作品 03", "普通作品 02", "普通作品 01",
+		}},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			request := authorizedRequest(galleryquery.Request{
+				Search: "普通作品", Sort: test.sort, Limit: 2, AuthorizationScope: scope,
+			})
+			var titles []string
+			for {
+				page, err := service.Search(ctx, request)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if page.Total.Mode != galleryquery.TotalModeLowerBound || page.Total.Value == nil || *page.Total.Value != 2 {
+					t.Fatalf("宽搜索 Total=%+v want lower_bound 2", page.Total)
+				}
+				for _, item := range page.Items {
+					titles = append(titles, item.Title)
+				}
+				if page.NextCursor == "" {
+					break
+				}
+				request.Cursor = page.NextCursor
+			}
+			if !reflect.DeepEqual(titles, test.want) {
+				t.Fatalf("宽搜索排序/游标漂移: got=%v want=%v", titles, test.want)
+			}
+			if hasDuplicate(titles) {
+				t.Fatalf("宽搜索游标产生重复项: %v", titles)
+			}
+		})
+	}
+
+	// 新 Service 没有进程内 exact 索引；并发首查必须只建立一次 publication 集合，
+	// 其余请求等待同一结果，并继续得到完全一致的 Ranking。
+	concurrentService, err := galleryquery.NewService(ctx, store.Control.SQL(), store.Catalog.SQL(), clock.Fixed{Time: now}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	concurrentCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
+	defer cancel()
+	type concurrentResult struct {
+		titles []string
+		err    error
+	}
+	results := make(chan concurrentResult, 8)
+	for range 8 {
+		go func() {
+			result, err := concurrentService.Search(concurrentCtx, authorizedRequest(galleryquery.Request{
+				Search: "普通作品", Sort: "title_asc", Limit: 2, AuthorizationScope: scope,
+			}))
+			results <- concurrentResult{titles: resultTitles(result), err: err}
+		}()
+	}
+	for range 8 {
+		result := <-results
+		if result.err != nil || !reflect.DeepEqual(result.titles, []string{"zz exact filename", "普通作品 01"}) {
+			t.Fatalf("并发首查不一致: titles=%v err=%v", result.titles, result.err)
+		}
+	}
+
+	omitted, err := concurrentService.Search(ctx, authorizedRequest(galleryquery.Request{
+		Search: "普通作品", Sort: "title_asc", Limit: 2, OmitTotal: true, AuthorizationScope: scope,
+	}))
+	if err != nil || omitted.Total.Mode != galleryquery.TotalModeOmitted || omitted.Total.Value != nil {
+		t.Fatalf("omitTotal 宽搜索错误: total=%+v err=%v", omitted.Total, err)
+	}
+}
+
 func TestResourceAuthorizationFiltersBeforeTotalSortingAndPagination(t *testing.T) {
 	ctx := context.Background()
 	now := time.Date(2026, 7, 26, 3, 0, 0, 0, time.UTC)

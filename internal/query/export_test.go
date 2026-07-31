@@ -64,6 +64,23 @@ func BuildTotalStatementForTest(ctx context.Context, catalogRevision, overlayRev
 		querytext.PlanSearch(request.Search), filterNode)
 }
 
+// BuildTitlePrefixPageStatementForTest 返回宽搜索标题前缀快路径的真实生产语句，供
+// EXPLAIN 锁定它按 publication 标题索引顺序提前停止、不会重新建立全量排序器。
+func BuildTitlePrefixPageStatementForTest(catalogRevision, overlayRevision string,
+	request Request, claims contractquery.CursorClaims) (string, []any, error) {
+	return buildTitlePrefixPageStatement(
+		publication{CatalogRevision: catalogRevision, OverlayRevision: overlayRevision},
+		request, querytext.PlanSearch(request.Search), claims)
+}
+
+// BuildTitlePrefixBudgetStatementForTest 返回同一快路径的 lower-bound 子集探测语句。
+func BuildTitlePrefixBudgetStatementForTest(catalogRevision, overlayRevision string,
+	request Request) (string, []any, error) {
+	return buildTitlePrefixBudgetStatement(
+		publication{CatalogRevision: catalogRevision, OverlayRevision: overlayRevision},
+		querytext.PlanSearch(request.Search))
+}
+
 // EmptyCursorClaimsForTest 返回第一页构建使用的空 claims，避免外部测试为了调用生产 SQL
 // builder 直接依赖 contract/query 的具体类型。
 func EmptyCursorClaimsForTest() contractquery.CursorClaims { return contractquery.CursorClaims{} }

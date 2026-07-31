@@ -173,6 +173,7 @@ type Service struct {
 	clock   ports.Clock
 	random  io.Reader
 	signer  *contractquery.CursorSigner
+	exact   *exactValueIndexCache
 }
 
 func NewService(ctx context.Context, control, catalog *sql.DB, clock ports.Clock, random io.Reader) (*Service, error) {
@@ -190,7 +191,8 @@ func NewService(ctx context.Context, control, catalog *sql.DB, clock ports.Clock
 	if err != nil {
 		return nil, err
 	}
-	return &Service{control: control, catalog: catalog, clock: clock, random: random, signer: signer}, nil
+	return &Service{control: control, catalog: catalog, clock: clock, random: random, signer: signer,
+		exact: newExactValueIndexCache()}, nil
 }
 
 func (s *Service) Search(ctx context.Context, request Request) (Result, error) {
@@ -282,13 +284,41 @@ func (s *Service) Search(ctx context.Context, request Request) (Result, error) {
 			return Result{}, err
 		}
 	}
-	items, more, err := s.query(ctx, pub, authorization, request, plan, filterNode, claims)
+	// 可证明的标题前缀子集先沿 publication 排序索引做 TotalBudget+1 有界探测：子集
+	// 已超预算就足以证明完整搜索也是 lower_bound，无需让 FTS 扫描宽召回。该探测也让
+	// omitTotal 请求可以选择同一语义快路径，但不会对其它查询形态增加预检。
+	var total TotalInfo
+	totalReady := false
+	broadSearch := false
+	if titlePrefixFastPathShapeEligible(authorization, request, plan, filterNode) {
+		broadSearch, err = s.titlePrefixExceedsTotalBudget(ctx, pub, plan)
+		if err != nil {
+			return Result{}, err
+		}
+	}
+	if request.OmitTotal {
+		total = TotalInfo{Mode: TotalModeOmitted, ProtocolVersion: TotalProtocolVersion}
+		totalReady = true
+	} else if broadSearch {
+		value := TotalBudget
+		total = TotalInfo{Mode: TotalModeLowerBound, Value: &value, ProtocolVersion: TotalProtocolVersion}
+		totalReady = true
+	} else if plan.NormalizedQuery != "" {
+		total, err = s.computeTotal(ctx, pub, authorization, request, plan, filterNode)
+		if err != nil {
+			return Result{}, err
+		}
+		totalReady = true
+	}
+	items, more, err := s.query(ctx, pub, authorization, request, plan, filterNode, claims, broadSearch)
 	if err != nil {
 		return Result{}, err
 	}
-	total, err := s.computeTotal(ctx, pub, authorization, request, plan, filterNode)
-	if err != nil {
-		return Result{}, err
+	if !totalReady {
+		total, err = s.computeTotal(ctx, pub, authorization, request, plan, filterNode)
+		if err != nil {
+			return Result{}, err
+		}
 	}
 	result := Result{
 		QueryPublicationID: pub.ID, CatalogRevision: pub.CatalogRevision, OverlayProjectionRevision: pub.OverlayRevision,
@@ -346,6 +376,8 @@ func multiFieldTierSQL(column string) string {
 func combinedFieldScoreSQL(tierColumn string, priority int) string {
 	return fmt.Sprintf("CASE WHEN %s = 0 THEN 0 ELSE %s * 10 + %d END", tierColumn, tierColumn, priority)
 }
+
+const titlePrefixRankTier = 2*10 + fieldPriorityTitle
 
 // authorizePublicationSources 在一次授权快照中计算本次请求涉及的有效 Source 集合。
 // 回调缺失或执行失败时无法证明任何结果可见，必须 fail-closed。候选集合来自已经确定
@@ -715,11 +747,166 @@ FROM page p JOIN work_projections payload ON payload.catalog_revision_id = ? AND
 	return statement, args, nil
 }
 
-func (s *Service) query(ctx context.Context, pub publication, authorization sourceAuthorization, request Request, plan querytext.SearchPlan, filterNode *FilterNode, claims contractquery.CursorClaims) ([]Work, bool, error) {
+func (s *Service) query(ctx context.Context, pub publication, authorization sourceAuthorization, request Request, plan querytext.SearchPlan, filterNode *FilterNode, claims contractquery.CursorClaims, broadSearch bool) ([]Work, bool, error) {
+	if broadSearch && titlePrefixFastPathEligible(authorization, request, plan, filterNode, claims) {
+		items, more, conclusive, err := s.queryTitlePrefixFastPath(ctx, pub, request, plan, claims)
+		if err != nil {
+			return nil, false, err
+		}
+		if conclusive {
+			return items, more, nil
+		}
+	}
 	statement, args, err := s.buildPageStatement(ctx, pub, authorization, request, plan, filterNode, claims)
 	if err != nil {
 		return nil, false, err
 	}
+	return s.executePageStatement(ctx, statement, args, request, plan)
+}
+
+// titlePrefixFastPathEligible 只选择语义可以被局部证明的宽召回形态：完整 Source 授权、
+// 无额外过滤、标题排序，并且 Total 已确认命中超过预算。选择性查询继续由 FTS 驱动，
+// 其它排序/过滤继续走通用 ranking，不用启发式猜测候选量。
+func titlePrefixFastPathEligible(authorization sourceAuthorization, request Request, plan querytext.SearchPlan, filterNode *FilterNode, claims contractquery.CursorClaims) bool {
+	if !titlePrefixFastPathShapeEligible(authorization, request, plan, filterNode) {
+		return false
+	}
+	// 第一页需要排除任何 exact 命中；续页只有在游标仍位于 title-prefix 档位时
+	// 才能继续。更高档位已在游标之前，较低档位不能越过当前档位。
+	return claims.LastCanonicalWorkID == "" || claims.LastRankTier == titlePrefixRankTier
+}
+
+func titlePrefixFastPathShapeEligible(authorization sourceAuthorization, request Request, plan querytext.SearchPlan, filterNode *FilterNode) bool {
+	if plan.NormalizedQuery == "" || filterNode != nil || request.Tag != "" || request.LibraryID != "" || request.SourceID != "" {
+		return false
+	}
+	if _, _, ok := titlePrefixSortRange(plan); !ok {
+		return false
+	}
+	if request.Sort != "title_asc" && request.Sort != "title_desc" {
+		return false
+	}
+	if len(authorization.DeniedSourceIDs) != 0 || len(authorization.AllowedSourceIDs) != len(authorization.CandidateSourceIDs) {
+		return false
+	}
+	return true
+}
+
+// queryTitlePrefixFastPath 利用 publication 的标题排序索引按最终顺序扫描 title-prefix
+// 命中并在 limit+1 后停止。只有取得完整一页且证明没有更高的 exact 档位时结果才具有
+// 决定性；否则回退到通用 FTS→ranking 路径，绝不以性能启发式改变结果集合或顺序。
+func (s *Service) queryTitlePrefixFastPath(ctx context.Context, pub publication, request Request, plan querytext.SearchPlan, claims contractquery.CursorClaims) ([]Work, bool, bool, error) {
+	statement, args, err := buildTitlePrefixPageStatement(pub, request, plan, claims)
+	if err != nil {
+		return nil, false, false, err
+	}
+	items, more, err := s.executePageStatement(ctx, statement, args, request, plan)
+	if err != nil || !more {
+		return nil, false, false, err
+	}
+	if claims.LastCanonicalWorkID == "" {
+		hasExact, err := s.hasExactSearchMatch(ctx, pub, plan)
+		if err != nil {
+			return nil, false, false, err
+		}
+		if hasExact {
+			return nil, false, false, nil
+		}
+	}
+	return items, true, true, nil
+}
+
+func buildTitlePrefixPageStatement(pub publication, request Request, plan querytext.SearchPlan, claims contractquery.CursorClaims) (string, []any, error) {
+	sortSpec, err := resolveWorkSort(request.Sort)
+	if err != nil {
+		return "", nil, err
+	}
+	sortLower, sortUpper, ok := titlePrefixSortRange(plan)
+	if !ok {
+		return "", nil, fmt.Errorf("查询无法建立安全的标题前缀排序范围")
+	}
+	statement := fmt.Sprintf(`SELECT w.work_id, w.title, w.creator, w.tags_json, w.filenames_text, w.sort_title_key,
+w.favorite, w.progress, w.cover_media_id, w.badges_json, w.description, w.source_url, w.published_at_ns,
+%s AS media_count, %d AS rank_tier
+FROM work_projections w
+WHERE w.catalog_revision_id=? AND w.overlay_revision_id=? AND w.hidden=0
+  AND w.sort_title_key>=? AND w.sort_title_key<?
+  AND instr(w.search_title_norm, ?)=1`, mediaCountExpr, titlePrefixRankTier)
+	args := []any{pub.CatalogRevision, pub.OverlayRevision, sortLower, sortUpper, plan.NormalizedQuery}
+	if claims.LastCanonicalWorkID != "" {
+		continuation, continuationArgs, err := sortSpec.continuation("w.sort_title_key", "w.work_id", claims)
+		if err != nil {
+			return "", nil, err
+		}
+		statement += " AND " + continuation
+		args = append(args, continuationArgs...)
+	}
+	statement += " ORDER BY " + sortSpec.orderBy("w.sort_title_key", "w.work_id") + " LIMIT ?"
+	return statement, append(args, request.Limit+1), nil
+}
+
+func (s *Service) titlePrefixExceedsTotalBudget(ctx context.Context, pub publication, plan querytext.SearchPlan) (bool, error) {
+	statement, args, err := buildTitlePrefixBudgetStatement(pub, plan)
+	if err != nil {
+		return false, err
+	}
+	var count int64
+	if err := s.catalog.QueryRowContext(ctx, statement, args...).Scan(&count); err != nil {
+		return false, fault.New(fault.CodeInternal, true, err)
+	}
+	return count > TotalBudget, nil
+}
+
+func buildTitlePrefixBudgetStatement(pub publication, plan querytext.SearchPlan) (string, []any, error) {
+	sortLower, sortUpper, ok := titlePrefixSortRange(plan)
+	if !ok {
+		return "", nil, fmt.Errorf("查询无法建立安全的标题前缀排序范围")
+	}
+	statement := `SELECT count(*) FROM (
+SELECT 1 FROM work_projections w INDEXED BY work_projections_query_idx
+WHERE w.catalog_revision_id=? AND w.overlay_revision_id=? AND w.hidden=0
+  AND w.sort_title_key>=? AND w.sort_title_key<?
+  AND instr(w.search_title_norm, ?)=1
+LIMIT ?)`
+	return statement, []any{pub.CatalogRevision, pub.OverlayRevision, sortLower, sortUpper,
+		plan.NormalizedQuery, TotalBudget + 1}, nil
+}
+
+// titlePrefixSortRange 把“规范化标题以查询开头”收窄为 NaturalSortKey v2 的 BINARY
+// 前缀范围。查询以非数字结尾时，去掉最后文本段终止符后的 key 是所有匹配标题的
+// 公共前缀：标题可以继续同一文本段，也可以转入数字段。残余 instr 判据继续负责最终
+// 正确性。数字结尾会与更长数字段的长度编码分叉，无法形成单一区间，因此明确不走
+// 快路径，避免为无标题前缀的宽 Creator/Tag 查询扫描整张标题索引。
+func titlePrefixSortRange(plan querytext.SearchPlan) (string, string, bool) {
+	runes := []rune(plan.NormalizedQuery)
+	if len(runes) == 0 || (runes[len(runes)-1] >= '0' && runes[len(runes)-1] <= '9') {
+		return "", "", false
+	}
+	key := querytext.NaturalSortKey(plan.NormalizedQuery)
+	if !strings.HasSuffix(key, "!") {
+		return "", "", false
+	}
+	lower := strings.TrimSuffix(key, "!")
+	if lower == "" {
+		return "", "", false
+	}
+	upperBytes := []byte(lower)
+	upperBytes[len(upperBytes)-1]++
+	return lower, string(upperBytes), true
+}
+
+// hasExactSearchMatch 只回答“通用结果中是否存在高于 title-prefix 的 exact 档位”。
+// publication 的字段投影不可变，因此首次宽查询可顺序建立一个有界、不可逆 hash 集合；
+// 后续只做 O(1) 查找。hash 碰撞只会保守回退通用路径，absence 结论不会出现假阴性。
+func (s *Service) hasExactSearchMatch(ctx context.Context, pub publication, plan querytext.SearchPlan) (bool, error) {
+	exists, err := s.exact.contains(ctx, s.catalog, pub, plan.NormalizedQuery)
+	if err != nil {
+		return false, fault.New(fault.CodeInternal, true, err)
+	}
+	return exists, nil
+}
+
+func (s *Service) executePageStatement(ctx context.Context, statement string, args []any, request Request, plan querytext.SearchPlan) ([]Work, bool, error) {
 
 	rows, err := s.catalog.QueryContext(ctx, statement, args...)
 	if err != nil {

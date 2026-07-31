@@ -229,6 +229,75 @@ func TestSearchQueryPlanSortsNarrowRowsAndProjectsAfterPagination(t *testing.T) 
 	})
 }
 
+func TestTitlePrefixFastPathUsesPublicationOrderWithoutSorter(t *testing.T) {
+	ctx := context.Background()
+	dirs := appdirs.UnderRoot(t.TempDir())
+	if err := dirs.Ensure(filesystem.OS{}); err != nil {
+		t.Fatal(err)
+	}
+	store, err := storage.Open(ctx, dirs)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	db := store.Catalog.SQL()
+	seedAuthorizationPlanStats(t, db)
+	seedPlanSearchDocuments(t, db)
+
+	for _, test := range []struct {
+		name   string
+		sort   string
+		claims contractquery.CursorClaims
+	}{
+		{name: "first-page", sort: "title_asc"},
+		{name: "keyset-descending", sort: "title_desc", claims: contractquery.CursorClaims{
+			LastSortKey: "title-005000", LastRankTier: 23, LastCanonicalWorkID: "work-005000",
+		}},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			statement, args, err := galleryquery.BuildTitlePrefixPageStatementForTest("cat", "ovr",
+				galleryquery.Request{Search: "title", Sort: test.sort, Limit: 100}, test.claims)
+			if err != nil {
+				t.Fatal(err)
+			}
+			nodes := explainPlanNodes(t, db, statement, args...)
+			plan := formatPlanNodes(nodes)
+			indexScan, rangeScan, payloadSorter, ftsScan := false, false, false, false
+			for _, node := range nodes {
+				indexScan = indexScan || strings.Contains(node.detail, "work_projections_query_idx")
+				rangeScan = rangeScan || strings.Contains(node.detail, "sort_title_key>? AND sort_title_key<?")
+				payloadSorter = payloadSorter || strings.Contains(node.detail, "USE TEMP B-TREE FOR ORDER BY")
+				ftsScan = ftsScan || strings.Contains(node.detail, "work_search VIRTUAL TABLE INDEX")
+			}
+			if !indexScan || !rangeScan || payloadSorter || ftsScan {
+				t.Fatalf("标题前缀快路径未保持有界索引序/提前停止: index=%v range=%v sorter=%v fts=%v\n%s",
+					indexScan, rangeScan, payloadSorter, ftsScan, plan)
+			}
+		})
+	}
+
+	t.Run("lower-bound-budget", func(t *testing.T) {
+		statement, args, err := galleryquery.BuildTitlePrefixBudgetStatementForTest("cat", "ovr",
+			galleryquery.Request{Search: "title", Sort: "title_asc", Limit: 100})
+		if err != nil {
+			t.Fatal(err)
+		}
+		nodes := explainPlanNodes(t, db, statement, args...)
+		plan := formatPlanNodes(nodes)
+		indexScan, rangeScan, sorter, ftsScan := false, false, false, false
+		for _, node := range nodes {
+			indexScan = indexScan || strings.Contains(node.detail, "work_projections_query_idx")
+			rangeScan = rangeScan || strings.Contains(node.detail, "sort_title_key>? AND sort_title_key<?")
+			sorter = sorter || strings.Contains(node.detail, "USE TEMP B-TREE")
+			ftsScan = ftsScan || strings.Contains(node.detail, "work_search VIRTUAL TABLE INDEX")
+		}
+		if !indexScan || !rangeScan || sorter || ftsScan {
+			t.Fatalf("标题前缀预算探测未保持有界索引序: index=%v range=%v sorter=%v fts=%v\n%s",
+				indexScan, rangeScan, sorter, ftsScan, plan)
+		}
+	})
+}
+
 // TestBrowseQueryPlanKeepsCoveringIndexWithoutSorter 用生产语句复核无搜索浏览形态没有
 // 因为搜索路径的两阶段改写而退化：它必须继续走覆盖索引、没有排序器，且相关子查询只有
 // 一次。authorization_plan_test.go 中同名断言建立在手写 SQL 副本上，这里补上对真实语句的
