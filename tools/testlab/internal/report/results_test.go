@@ -220,13 +220,18 @@ func TestSummarizeIdentityHoldsWithNoLoss(t *testing.T) {
 		Category: "browse", Limit: 20, Concurrency: 4,
 		PlannedRuns: 5, AttemptedRuns: 5, Durations: durations,
 		FailedRuns: 3, TimedOutRuns: 1, NotAttemptedRuns: 0,
-		CacheState: CacheStateWarm, HitCount: 7, TotalMode: "exact", TotalValue: 7,
+		CacheState: CacheStateWarm, CandidateCount: 490_000,
+		OriginalTextVerification: true, P95BudgetMs: 150,
+		HitCount: 7, TotalMode: "exact", TotalValue: 7,
 	})
 	if sample.PlannedRuns != 5 || sample.AttemptedRuns != 5 || sample.SuccessfulRuns != 2 || sample.FailedRuns != 3 || sample.TimedOutRuns != 1 || sample.NotAttemptedRuns != 0 {
 		t.Fatalf("unexpected sample: %+v", sample)
 	}
 	if !sample.IdentityOK() {
 		t.Fatalf("expected identity to hold: %+v", sample)
+	}
+	if sample.CandidateCount != 490_000 || !sample.OriginalTextVerification || sample.P95BudgetMs != 150 {
+		t.Fatalf("threshold identity was not preserved: %+v", sample)
 	}
 }
 

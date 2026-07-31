@@ -79,12 +79,21 @@ type LatencySample struct {
 	WarmupRuns       int `json:"warmupRuns"`
 	WarmupFailedRuns int `json:"warmupFailedRuns"`
 
-	CacheState string  `json:"cacheState"`
-	P50Ms      float64 `json:"p50Ms"`
-	P95Ms      float64 `json:"p95Ms"`
-	P99Ms      float64 `json:"p99Ms"`
-	MinMs      float64 `json:"minMs"`
-	MaxMs      float64 `json:"maxMs"`
+	CacheState string `json:"cacheState"`
+	// CandidateCount 是确定性语料中进入本查询判据的精确候选数；它与 HitCount（当前页
+	// 返回数）不同，必须进入报告，避免用同名查询在另一种选择性上套用阈值。
+	CandidateCount int `json:"candidateCount,omitempty"`
+	// OriginalTextVerification 表示生产查询在 FTS/结构谓词之后是否还执行规范要求的
+	// normalized_original_text 原文复核。
+	OriginalTextVerification bool `json:"originalTextVerification"`
+	// P95BudgetMs 为本组合绑定的参考机 P95 上限；0 表示本次规模/矩阵只提供诊断，
+	// 不承载 Reference P95 finding。
+	P95BudgetMs float64 `json:"p95BudgetMs,omitempty"`
+	P50Ms       float64 `json:"p50Ms"`
+	P95Ms       float64 `json:"p95Ms"`
+	P99Ms       float64 `json:"p99Ms"`
+	MinMs       float64 `json:"minMs"`
+	MaxMs       float64 `json:"maxMs"`
 
 	// PercentileMethod 固定为 nearest-rank，写进每条样本使读者不必猜测这批数字用的是
 	// 哪种分位数定义；历史结果文件里没有这个字段，即为旧口径。
@@ -152,6 +161,7 @@ type Report struct {
 type QueryPerfMatrix struct {
 	Fingerprint             string `json:"fingerprint"`
 	PublicationFingerprint  string `json:"publicationFingerprint,omitempty"`
+	ThresholdProfile        string `json:"thresholdProfile,omitempty"`
 	CacheMode               string `json:"cacheMode"`
 	WarmupRuns              int    `json:"warmupRuns"`
 	PerRequestTimeoutMs     int64  `json:"perRequestTimeoutMs"`
@@ -447,7 +457,10 @@ type Measurement struct {
 	// CacheState 必须是本次实测到的状态（见 CacheState* 常量），不得填写字面量猜测。
 	CacheState string
 	// CarriesP99 表示本组合被矩阵指定为承载 P99 的组合。
-	CarriesP99 bool
+	CarriesP99               bool
+	CandidateCount           int
+	OriginalTextVerification bool
+	P95BudgetMs              float64
 
 	HitCount   int
 	TotalMode  string
@@ -476,11 +489,14 @@ func Summarize(m Measurement) LatencySample {
 		PlannedRuns: m.PlannedRuns, AttemptedRuns: m.AttemptedRuns, SuccessfulRuns: len(ms),
 		FailedRuns: m.FailedRuns, TimedOutRuns: m.TimedOutRuns, NotAttemptedRuns: m.NotAttemptedRuns,
 		WarmupRuns: m.WarmupRuns, WarmupFailedRuns: m.WarmupFailedRuns,
-		CacheState: cacheState,
-		P50Ms:      percentileNearestRank(ms, perMilleP50),
-		P95Ms:      percentileNearestRank(ms, perMilleP95),
-		P99Ms:      percentileNearestRank(ms, perMilleP99),
-		MinMs:      min, MaxMs: max,
+		CacheState:               cacheState,
+		CandidateCount:           m.CandidateCount,
+		OriginalTextVerification: m.OriginalTextVerification,
+		P95BudgetMs:              m.P95BudgetMs,
+		P50Ms:                    percentileNearestRank(ms, perMilleP50),
+		P95Ms:                    percentileNearestRank(ms, perMilleP95),
+		P99Ms:                    percentileNearestRank(ms, perMilleP99),
+		MinMs:                    min, MaxMs: max,
 		PercentileMethod: PercentileMethodNearestRank,
 		CarriesP99:       m.CarriesP99,
 		P99Estimable:     len(ms) >= MinSamplesForP99,

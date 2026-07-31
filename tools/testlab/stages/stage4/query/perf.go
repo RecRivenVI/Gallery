@@ -40,29 +40,30 @@ func ValidatePerfCorpusBinding(rep *report.Report, sess *environment.Session, ma
 
 // perfShape 描述第九节「查询类别」中的一个可重复查询类别。
 type perfShape struct {
-	name   string
-	params func(limit int) api.ListWorksParams
+	name                     string
+	params                   func(limit int) api.ListWorksParams
+	originalTextVerification bool
 }
 
 func perfShapes() map[string]perfShape {
 	shapes := []perfShape{
-		{"browse", func(limit int) api.ListWorksParams { return api.ListWorksParams{Limit: ptr(limit)} }},
-		{"selective-cjk", func(limit int) api.ListWorksParams {
+		{name: "browse", params: func(limit int) api.ListWorksParams { return api.ListWorksParams{Limit: ptr(limit)} }},
+		{name: "selective-cjk", originalTextVerification: true, params: func(limit int) api.ListWorksParams {
 			return api.ListWorksParams{Q: ptr("关键词命中"), Limit: ptr(limit)}
 		}},
-		{"wide-cjk", func(limit int) api.ListWorksParams {
+		{name: "wide-cjk", originalTextVerification: true, params: func(limit int) api.ListWorksParams {
 			return api.ListWorksParams{Q: ptr("普通作品"), Limit: ptr(limit)}
 		}},
-		{"filename-infix", func(limit int) api.ListWorksParams {
+		{name: "filename-infix", originalTextVerification: true, params: func(limit int) api.ListWorksParams {
 			return api.ListWorksParams{Q: ptr("middle-000"), Limit: ptr(limit)}
 		}},
-		{"structured-and", func(limit int) api.ListWorksParams {
+		{name: "structured-and", params: func(limit int) api.ListWorksParams {
 			return api.ListWorksParams{Filter: ptr(filterJSON(all(leaf("provider.id", "eq", "provider-0"), leaf("media.kind", "eq", "image")))), Limit: ptr(limit)}
 		}},
-		{"structured-or", func(limit int) api.ListWorksParams {
+		{name: "structured-or", params: func(limit int) api.ListWorksParams {
 			return api.ListWorksParams{Filter: ptr(filterJSON(any_(leaf("provider.id", "eq", "provider-0"), leaf("provider.id", "eq", "provider-1")))), Limit: ptr(limit)}
 		}},
-		{"overlay-favorite", func(limit int) api.ListWorksParams {
+		{name: "overlay-favorite", params: func(limit int) api.ListWorksParams {
 			return api.ListWorksParams{Filter: ptr(filterJSON(leaf("overlay.favorite", "eq", true))), Limit: ptr(limit)}
 		}},
 	}
@@ -75,13 +76,80 @@ func perfShapes() map[string]perfShape {
 
 // combination 是性能矩阵里的一个可独立执行、可独立超时、可独立记录进度的单元。
 type combination struct {
-	shape       perfShape
-	limit       int
-	concurrency int
-	runs        int
+	shape          perfShape
+	limit          int
+	concurrency    int
+	runs           int
+	candidateCount int
+	p95BudgetMs    float64
 	// carriesP99 表示本组合被指定为承载 P99 的组合，因此它的成功样本数必须达到
 	// report.MinSamplesForP99，否则报告里会出现一条明确的失败 finding。
 	carriesP99 bool
+}
+
+const referenceP95ThresholdProfile = "query-reference-500k-p95-v1"
+
+// referenceP95BudgetsMs 按行绑定 limit=20/100/200，按列绑定 concurrency=1/4/16。
+// 这些上限只在正式 500,000 语料上启用，并以 EV-151 同一登记参考机的 warm 与
+// cold-process 较差结果为基线保留可见余量。它们不是通用硬件承诺；不同环境的报告
+// 仍必须先核对 environment facts，不能只看 finding 是否绿色。
+var referenceP95BudgetsMs = map[string][3][3]float64{
+	"browse":           {{10, 30, 150}, {15, 50, 175}, {20, 75, 250}},
+	"selective-cjk":    {{100, 300, 1500}, {125, 350, 1500}, {1000, 2500, 15000}},
+	"wide-cjk":         {{250, 2000, 3500}, {300, 2500, 3500}, {250, 2750, 3500}},
+	"filename-infix":   {{2000, 4000, 20000}, {2000, 6000, 20000}, {4000, 9000, 28000}},
+	"structured-and":   {{250, 1750, 2500}, {300, 1750, 2500}, {300, 2000, 3000}},
+	"structured-or":    {{750, 750, 1000}, {750, 750, 1000}, {1000, 1000, 1000}},
+	"overlay-favorite": {{2500, 1750, 2000}, {2500, 1750, 2250}, {3000, 2000, 2500}},
+}
+
+func referenceP95BudgetMs(shape string, limit, concurrency, scale int) float64 {
+	if scale != corpus.ReferenceScale {
+		return 0
+	}
+	limitIndex, concurrencyIndex := -1, -1
+	for index, value := range []int{20, 100, 200} {
+		if value == limit {
+			limitIndex = index
+		}
+	}
+	for index, value := range []int{1, 4, 16} {
+		if value == concurrency {
+			concurrencyIndex = index
+		}
+	}
+	budgets, exists := referenceP95BudgetsMs[shape]
+	if !exists || limitIndex < 0 || concurrencyIndex < 0 {
+		return 0
+	}
+	return budgets[limitIndex][concurrencyIndex]
+}
+
+// perfCandidateCounts 把矩阵中的查询文字/过滤器绑定到确定性 corpus 的精确候选量。
+// 这不是从响应页大小或 lower-bound Total 反推；宽查询也会记录完整真实候选数。
+func perfCandidateCounts(scale int) map[string]int {
+	stats := corpus.ComputeStats(scale)
+	counts := map[string]int{
+		"browse":        stats.VisibleN,
+		"selective-cjk": stats.VisibleSpecialCJKCount,
+		"wide-cjk":      stats.VisibleN - stats.VisibleSpecialCJKCount - stats.VisibleSpecialLatinCount,
+		"structured-or": stats.VisibleProviderCounts[corpus.ProviderID(0)] + stats.VisibleProviderCounts[corpus.ProviderID(1)],
+	}
+	for index := 0; index < scale; index++ {
+		if corpus.Hidden(index) {
+			continue
+		}
+		if strings.Contains(corpus.Filename(index), "middle-000") {
+			counts["filename-infix"]++
+		}
+		if corpus.ProviderIndex(index) == 0 && corpus.MediaKind(index) == "image" {
+			counts["structured-and"]++
+		}
+		if corpus.Favorite(index) {
+			counts["overlay-favorite"]++
+		}
+	}
+	return counts
 }
 
 // p99CarryingShapes 是被指定承载 P99 的查询类别。只选已经被 EV-35/EV-36 证明在参考
@@ -101,8 +169,9 @@ var p99CarryingShapes = map[string]bool{
 // p99Runs 是承载 P99 的类别使用的重复次数；小于 report.MinSamplesForP99 时该类别仍会
 // 被标记为 carriesP99，从而在报告里以失败 finding 暴露"要求 P99 却没给够样本"，而不是
 // 悄悄产出一个其实等于最大值的数字。
-func buildFullMatrix(limits, concurrencies []int, runs, p99Runs int) []combination {
+func buildFullMatrix(limits, concurrencies []int, runs, p99Runs, scale int) []combination {
 	shapes := perfShapes()
+	candidateCounts := perfCandidateCounts(scale)
 	order := []string{"browse", "selective-cjk", "wide-cjk", "filename-infix", "structured-and", "structured-or", "overlay-favorite"}
 	var combos []combination
 	for _, name := range order {
@@ -114,7 +183,11 @@ func buildFullMatrix(limits, concurrencies []int, runs, p99Runs int) []combinati
 		}
 		for _, limit := range limits {
 			for _, concurrency := range concurrencies {
-				combos = append(combos, combination{shape: shape, limit: limit, concurrency: concurrency, runs: comboRuns, carriesP99: carriesP99})
+				combos = append(combos, combination{
+					shape: shape, limit: limit, concurrency: concurrency, runs: comboRuns,
+					candidateCount: candidateCounts[name], p95BudgetMs: referenceP95BudgetMs(name, limit, concurrency, scale),
+					carriesP99: carriesP99,
+				})
 			}
 		}
 	}
@@ -129,9 +202,10 @@ func buildFullMatrix(limits, concurrencies []int, runs, p99Runs int) []combinati
 // 不用于任何正式性能门禁判定。
 // 这里全部使用具名字段：carriesP99 在本矩阵中恒为 false（精简采样本来就只提供方向性
 // 证据，不承载任何分位数门禁），位置初始化会让未来新增字段悄悄错位。
-func buildDirectionalMatrix() []combination {
+func buildDirectionalMatrix(scale int) []combination {
 	shapes := perfShapes()
-	return []combination{
+	candidateCounts := perfCandidateCounts(scale)
+	combos := []combination{
 		{shape: shapes["browse"], limit: 20, concurrency: 1, runs: 5},
 		{shape: shapes["browse"], limit: 100, concurrency: 1, runs: 5},
 		{shape: shapes["selective-cjk"], limit: 20, concurrency: 1, runs: 5},
@@ -144,6 +218,10 @@ func buildDirectionalMatrix() []combination {
 		{shape: shapes["structured-or"], limit: 20, concurrency: 1, runs: 1},
 		{shape: shapes["overlay-favorite"], limit: 20, concurrency: 1, runs: 1},
 	}
+	for index := range combos {
+		combos[index].candidateCount = candidateCounts[combos[index].shape.name]
+	}
+	return combos
 }
 
 // PerfTimeouts 控制性能矩阵的三层超时：单请求、单组合、整个场景。默认值见
@@ -165,11 +243,11 @@ func DefaultPerfTimeouts() PerfTimeouts {
 // directional 是非推荐（≥1,000,000）等规模使用的精简采样矩阵，runs/p99Runs 参数被忽略
 // （每个组合的重复次数已经按查询类别单独固定在 buildDirectionalMatrix 里），且没有任何
 // 组合承载 P99——那本来就只是方向性证据。
-func PerfCombosFor(kind string, runs, p99Runs int) []combination {
+func PerfCombosFor(kind string, runs, p99Runs, scale int) []combination {
 	if kind == "directional" {
-		return buildDirectionalMatrix()
+		return buildDirectionalMatrix(scale)
 	}
-	return buildFullMatrix([]int{20, 100, 200}, []int{1, 4, 16}, runs, p99Runs)
+	return buildFullMatrix([]int{20, 100, 200}, []int{1, 4, 16}, runs, p99Runs, scale)
 }
 
 // PerfOptions 描述本次矩阵的缓存条件。它取代了此前直接写进 report.Summarize 的
@@ -216,7 +294,7 @@ const (
 
 	queryPerfTerminalFinding    = "perf/matrix-completed-without-time-abort"
 	environmentGateFinding      = "environment/gate-required-facts-complete"
-	queryPerfFingerprintVersion = "query-perf-matrix-v1"
+	queryPerfFingerprintVersion = "query-perf-matrix-v2"
 )
 
 func queryPerfCacheMode(opts PerfOptions) string {
@@ -234,22 +312,34 @@ func queryPerfCacheMode(opts PerfOptions) string {
 // Scenario 整体超时故意不在其中：它只控制一次续跑窗口最多工作多久，不改变单个组合。
 func queryPerfMatrixDefinition(combos []combination, timeouts PerfTimeouts, opts PerfOptions) report.QueryPerfMatrix {
 	var definition strings.Builder
-	fmt.Fprintf(&definition, "%s\npublication=%s\ncache=%s\nwarmup=%d\nprocessColdAtStart=%t\nrequestNs=%d\ncombinationNs=%d\n",
-		queryPerfFingerprintVersion, opts.PublicationFingerprint, queryPerfCacheMode(opts), opts.WarmupRuns, opts.ProcessColdAtStart,
+	thresholdProfile := thresholdProfileFor(combos)
+	fmt.Fprintf(&definition, "%s\npublication=%s\ncache=%s\nwarmup=%d\nprocessColdAtStart=%t\nthresholdProfile=%s\nrequestNs=%d\ncombinationNs=%d\n",
+		queryPerfFingerprintVersion, opts.PublicationFingerprint, queryPerfCacheMode(opts), opts.WarmupRuns, opts.ProcessColdAtStart, thresholdProfile,
 		timeouts.PerRequest.Nanoseconds(), timeouts.PerCombination.Nanoseconds())
 	for i, combo := range combos {
-		fmt.Fprintf(&definition, "%d|%s|%d|%d|%d|%t\n",
-			i, combo.shape.name, combo.limit, combo.concurrency, combo.runs, combo.carriesP99)
+		fmt.Fprintf(&definition, "%d|%s|%d|%d|%d|%d|%t|%.3f|%t\n",
+			i, combo.shape.name, combo.limit, combo.concurrency, combo.runs, combo.candidateCount,
+			combo.shape.originalTextVerification, combo.p95BudgetMs, combo.carriesP99)
 	}
 	sum := sha256.Sum256([]byte(definition.String()))
 	return report.QueryPerfMatrix{
 		Fingerprint:             fmt.Sprintf("%x", sum),
 		PublicationFingerprint:  opts.PublicationFingerprint,
+		ThresholdProfile:        thresholdProfile,
 		CacheMode:               queryPerfCacheMode(opts),
 		WarmupRuns:              opts.WarmupRuns,
 		PerRequestTimeoutMs:     timeouts.PerRequest.Milliseconds(),
 		PerCombinationTimeoutMs: timeouts.PerCombination.Milliseconds(),
 	}
+}
+
+func thresholdProfileFor(combos []combination) string {
+	for _, combo := range combos {
+		if combo.p95BudgetMs > 0 {
+			return referenceP95ThresholdProfile
+		}
+	}
+	return ""
 }
 
 func validatePerfMatrixConfiguration(combos []combination, timeouts PerfTimeouts, opts PerfOptions) error {
@@ -262,6 +352,9 @@ func validatePerfMatrixConfiguration(combos []combination, timeouts PerfTimeouts
 	for i, combo := range combos {
 		if combo.shape.name == "" || combo.shape.params == nil || combo.limit <= 0 || combo.concurrency <= 0 || combo.runs <= 0 {
 			return fmt.Errorf("查询性能矩阵第 %d 个组合定义不完整", i+1)
+		}
+		if combo.candidateCount < 0 || combo.p95BudgetMs < 0 {
+			return fmt.Errorf("查询性能矩阵第 %d 个组合候选量或 P95 预算无效", i+1)
 		}
 	}
 	if opts.Resume && queryPerfCacheMode(opts) == queryPerfCacheModeUncontrolled {
@@ -277,6 +370,7 @@ func sameQueryPerfDefinition(recorded *report.QueryPerfMatrix, expected report.Q
 	return recorded != nil &&
 		recorded.Fingerprint == expected.Fingerprint &&
 		recorded.PublicationFingerprint == expected.PublicationFingerprint &&
+		recorded.ThresholdProfile == expected.ThresholdProfile &&
 		recorded.CacheMode == expected.CacheMode &&
 		recorded.WarmupRuns == expected.WarmupRuns &&
 		recorded.PerRequestTimeoutMs == expected.PerRequestTimeoutMs &&
@@ -286,6 +380,8 @@ func sameQueryPerfDefinition(recorded *report.QueryPerfMatrix, expected report.Q
 func validateCompletedQuerySample(sample report.LatencySample, combo combination, opts PerfOptions) error {
 	if sample.Category != combo.shape.name || sample.Limit != combo.limit || sample.Concurrency != combo.concurrency ||
 		sample.PlannedRuns != combo.runs || sample.CarriesP99 != combo.carriesP99 ||
+		sample.CandidateCount != combo.candidateCount || sample.OriginalTextVerification != combo.shape.originalTextVerification ||
+		sample.P95BudgetMs != combo.p95BudgetMs ||
 		sample.PercentileMethod != report.PercentileMethodNearestRank {
 		return fmt.Errorf("组合身份或分位数口径不匹配")
 	}
@@ -346,7 +442,7 @@ func prepareQueryPerfMatrix(rep *report.Report, combos []combination, timeouts P
 		rep.QueryPerfMatrix = &expected
 		rep.StartedAt = time.Now().UTC().Format(time.RFC3339)
 		rep.PlannedCombinations = len(combos)
-		rep.Limitations = append(rep.Limitations, perfLimitations(opts)...)
+		rep.Limitations = append(rep.Limitations, perfLimitations(opts, combos)...)
 		return 0, false, nil
 	}
 
@@ -359,7 +455,7 @@ func prepareQueryPerfMatrix(rep *report.Report, combos []combination, timeouts P
 	if _, parseErr := time.Parse(time.RFC3339, rep.StartedAt); parseErr != nil || rep.PlannedCombinations != len(combos) || rep.CompletedCombinations < 0 || rep.CompletedCombinations > len(combos) {
 		return 0, false, fmt.Errorf("查询性能断点的计划/进度字段无效")
 	}
-	for _, required := range perfLimitations(opts) {
+	for _, required := range perfLimitations(opts, combos) {
 		found := false
 		for _, actual := range rep.Limitations {
 			if actual == required {
@@ -466,7 +562,7 @@ func resolveCacheState(base string, warmupExecuted, warmupSucceeded int) string 
 // perfLimitations 是每次性能矩阵都必须随结果一起发布的口径与覆盖限制。它们不是可选
 // 说明：门禁要求结果自带足以判断其效力的上下文，缺了这些上下文的数字会被误读为可与
 // 历史结果直接比较的通过证据。
-func perfLimitations(opts PerfOptions) []string {
+func perfLimitations(opts PerfOptions, combos []combination) []string {
 	limitations := []string{
 		"分位数口径自 2026-07-27 起改为标准最近秩 ceil(p·n)；此前实现是 floor(p·n)−1，整整低一名。" +
 			"因此本文件的 P95/P99 与更早的结果文件不可直接比较（同一批原始样本下新口径只会等于或高于旧口径）。",
@@ -475,8 +571,13 @@ func perfLimitations(opts PerfOptions) []string {
 			"本工具不清空操作系统文件系统缓存（需要管理员权限与平台专有接口），因此任何样本都不代表冷存储读。",
 		"p99Estimable=false 的样本其 p99Ms 只是最近秩落在最大值上的结果，不是 P99 估计；" +
 			"P99 至少需要 " + fmt.Sprintf("%d", report.MinSamplesForP99) + " 个成功样本。",
-		"结构化筛选形态（structured-and/structured-or/overlay-favorite）在 internal/query 侧没有 EXPLAIN QUERY PLAN 断言，" +
-			"因此这些类别的耗时没有任何结构性保证支撑，只能作为观测值，不能作为「执行计划未退化」的证据。",
+		"structured-and/structured-or/overlay-favorite 使用生产 SQL builder 的 EXPLAIN QUERY PLAN 持续门禁；" +
+			"门禁锁定 publication 范围索引、关联身份索引和无临时排序，但不把当前 SQLite 计划外推为其它版本或真实存储吞吐。",
+	}
+	if profile := thresholdProfileFor(combos); profile != "" {
+		limitations = append(limitations,
+			"P95 阈值配置 "+profile+" 只对登记的 500,000 Work 参考形状和参考硬件成立；"+
+				"不同 environment facts 上的同一 finding 只能作为诊断，不能据此宣称 Reference Gate 通过。")
 	}
 	if opts.ColdRestart == nil && opts.WarmupRuns <= 0 {
 		limitations = append(limitations,
@@ -672,9 +773,12 @@ func runOneCombination(rep *report.Report, sess *environment.Session, combo comb
 		PlannedRuns: combo.runs, AttemptedRuns: attempted, Durations: durations,
 		FailedRuns: failed, TimedOutRuns: timedOut, NotAttemptedRuns: notAttempted,
 		WarmupRuns: warmupExecuted, WarmupFailedRuns: warmupExecuted - warmupSucceeded,
-		CacheState: cacheState,
-		CarriesP99: combo.carriesP99,
-		HitCount:   hitCount, TotalMode: totalMode, TotalValue: totalValue,
+		CacheState:               cacheState,
+		CarriesP99:               combo.carriesP99,
+		CandidateCount:           combo.candidateCount,
+		OriginalTextVerification: combo.shape.originalTextVerification,
+		P95BudgetMs:              combo.p95BudgetMs,
+		HitCount:                 hitCount, TotalMode: totalMode, TotalValue: totalValue,
 	})
 	rep.Latencies = append(rep.Latencies, sample)
 
@@ -697,6 +801,13 @@ func runOneCombination(rep *report.Report, sess *environment.Session, combo comb
 	if combo.carriesP99 && !sample.P99Estimable {
 		rep.Add(prefix+"-p99-sample-size", false,
 			fmt.Sprintf("successfulRuns=%d 少于 P99 所需的 %d，p99Ms 只是最近秩落在最大值上的结果", sample.SuccessfulRuns, report.MinSamplesForP99))
+	}
+	if combo.p95BudgetMs > 0 {
+		pass := sample.SuccessfulRuns == combo.runs && sample.P95Ms <= combo.p95BudgetMs
+		detail := fmt.Sprintf("P95=%.3fms budget=%.3fms candidateCount=%d originalTextVerification=%t successfulRuns=%d/%d",
+			sample.P95Ms, combo.p95BudgetMs, combo.candidateCount, combo.shape.originalTextVerification,
+			sample.SuccessfulRuns, combo.runs)
+		rep.Add(prefix+"-p95-budget", pass, detail)
 	}
 	return dispatched > 0
 }

@@ -191,7 +191,7 @@ func run() int {
 			}
 			return 1
 		}
-		combos := query.PerfCombosFor(*perfMatrixKind, *runs, *perfP99Runs)
+		combos := query.PerfCombosFor(*perfMatrixKind, *runs, *perfP99Runs, manifest.Scale)
 		timeouts := query.PerfTimeouts{PerRequest: *perfRequestTimeout, PerCombination: *perfCombinationTimeout, Scenario: *perfScenarioTimeout}
 		// publication/manifest 绑定预检已经服务过一次查询，warm 模式不能再把首组合
 		// 标成 cold-process；cold-process 仍会在每个组合前重启。
@@ -313,7 +313,7 @@ func run() int {
 			}
 			return 1
 		}
-		combos := query.PerfCombosFor(*perfMatrixKind, *runs, *perfP99Runs)
+		combos := query.PerfCombosFor(*perfMatrixKind, *runs, *perfP99Runs, manifest.Scale)
 		timeouts := query.PerfTimeouts{PerRequest: *perfRequestTimeout, PerCombination: *perfCombinationTimeout, Scenario: *perfScenarioTimeout}
 		// all 场景在矩阵之前已经跑完全部 Correctness/Cursor 断言，进程早已服务过大量
 		// 查询，因此绝不能断言进程是冷的——那正是"看起来合理其实是假的"标注。

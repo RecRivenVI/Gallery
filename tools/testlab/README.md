@@ -78,7 +78,8 @@ Personal Session，执行 320px/forced-colors/文本间距下的 Token 校验、
   -scale 500000 -sources 10 -tier reference `
   -manifest-out <root>/manifests/query-reference-500k.json
 
-# 热缓存、并发查询矩阵；每个组合显式预热，报告逐项记录 limit/concurrency/runs/P95/P99
+# 热缓存、并发查询矩阵；每个组合显式预热，报告逐项记录 limit/concurrency/runs、
+# 精确 candidateCount、是否执行原文复核、P95 预算与 P95/P99
 & $env:GALLERY_GO run ./tools/testlab/cmd/probe `
   -go $env:GALLERY_GO -repo . `
   -approot <root>/appdirs/query-reference-500k `
@@ -117,7 +118,9 @@ Personal Session，执行 320px/forced-colors/文本间距下的 Token 校验、
 实际生成每 Work 两条 Creator 关系；manifest 与 report 同时记录十目标来源代号和关系数。probe 在任何
 计时请求前先经真实 HTTP 核对当前 active publication/Catalog revision 与 manifest 一致，错配 AppRoot
 会直接失败而不会开始矩阵。这个预检不进入分位数；warm 模式随后逐组合显式预热，cold-process 模式逐
-组合重启 `galleryd`，但两者都不清空操作系统文件缓存。
+组合重启 `galleryd`，但两者都不清空操作系统文件缓存。只有 500,000 `reference` 完整矩阵绑定
+`query-reference-500k-p95-v1`；其它规模和 `directional` 矩阵的 P95 预算为 0，只提供诊断，不能冒充
+Reference 阈值结论。具体阈值以测试与发布门禁中的冻结表为准。
 
 查询矩阵从启动时的 `0/N`、每个完整组合到终态都原子写入同一个 `results-out`。分窗到期会以非零
 退出码和失败 terminal finding 明示“尚未完成”；后续 `-resume` 只保留完整成功的组合前缀并继续下一项。

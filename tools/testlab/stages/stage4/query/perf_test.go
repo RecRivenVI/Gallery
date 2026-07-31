@@ -75,7 +75,7 @@ func newFakeSession(t *testing.T, handler http.HandlerFunc) *environment.Session
 }
 
 func TestBuildFullMatrixCombinationCount(t *testing.T) {
-	combos := buildFullMatrix([]int{20, 100, 200}, []int{1, 4, 16}, 30, 30)
+	combos := buildFullMatrix([]int{20, 100, 200}, []int{1, 4, 16}, 30, 30, 1_000)
 	want := 7 * 3 * 3 // 7 shapes x 3 limits x 3 concurrencies
 	if len(combos) != want {
 		t.Fatalf("len(combos) = %d, want %d", len(combos), want)
@@ -91,7 +91,7 @@ func TestBuildFullMatrixCombinationCount(t *testing.T) {
 // 的类别把 runs 提到 p99Runs，其余类别保持常规 runs（把 100 次重复加到已知秒级退化的
 // 类别上只会重复证明同一个已知问题并挤爆时间预算）。
 func TestBuildFullMatrixRaisesRunsOnlyForP99CarryingShapes(t *testing.T) {
-	combos := buildFullMatrix([]int{20}, []int{1}, 30, report.MinSamplesForP99)
+	combos := buildFullMatrix([]int{20}, []int{1}, 30, report.MinSamplesForP99, 1_000)
 	for _, c := range combos {
 		if p99CarryingShapes[c.shape.name] {
 			if !c.carriesP99 || c.runs != report.MinSamplesForP99 {
@@ -110,7 +110,7 @@ func TestBuildFullMatrixRaisesRunsOnlyForP99CarryingShapes(t *testing.T) {
 // 组合仍然被标记为承载 P99，从而在报告里以失败 finding 暴露，而不是悄悄产出一个其实
 // 等于最大值的 p99。
 func TestBuildFullMatrixKeepsP99FlagWhenRunsAreTooLow(t *testing.T) {
-	for _, c := range buildFullMatrix([]int{20}, []int{1}, 30, 10) {
+	for _, c := range buildFullMatrix([]int{20}, []int{1}, 30, 10, 1_000) {
 		if p99CarryingShapes[c.shape.name] && (!c.carriesP99 || c.runs != 30) {
 			t.Fatalf("p99Runs 低于常规 runs 时不应降低 runs，且必须保留 carriesP99: %+v", c)
 		}
@@ -119,7 +119,7 @@ func TestBuildFullMatrixKeepsP99FlagWhenRunsAreTooLow(t *testing.T) {
 
 // TestDirectionalMatrixNeverCarriesP99 复核精简采样矩阵不承载任何分位数门禁。
 func TestDirectionalMatrixNeverCarriesP99(t *testing.T) {
-	for _, c := range buildDirectionalMatrix() {
+	for _, c := range buildDirectionalMatrix(1_000) {
 		if c.carriesP99 {
 			t.Fatalf("directional 矩阵只提供方向性证据，不应承载 P99: %+v", c)
 		}
@@ -127,7 +127,7 @@ func TestDirectionalMatrixNeverCarriesP99(t *testing.T) {
 }
 
 func TestBuildDirectionalMatrixNeverExceedsOneRunForKnownSlowShapes(t *testing.T) {
-	for _, c := range buildDirectionalMatrix() {
+	for _, c := range buildDirectionalMatrix(1_000) {
 		switch c.shape.name {
 		case "wide-cjk", "structured-and", "structured-or", "overlay-favorite":
 			if c.runs > 1 || c.concurrency > 1 {
@@ -409,6 +409,73 @@ func TestRunOneCombinationFailsP99CarryingComboWithTooFewSamples(t *testing.T) {
 	assertFailedFinding(t, rep, "perf/browse-limit20-concurrency1-p99-sample-size")
 }
 
+func TestReferenceFullMatrixBindsCandidateCountsAndP95Budgets(t *testing.T) {
+	combos := buildFullMatrix([]int{20, 100, 200}, []int{1, 4, 16}, 30, report.MinSamplesForP99, corpus.ReferenceScale)
+	wantCounts := map[string]int{
+		"browse": 490_000, "selective-cjk": 500, "wide-cjk": 489_000,
+		"filename-infix": 9_780, "structured-and": 50_000,
+		"structured-or": 190_000, "overlay-favorite": 20_000,
+	}
+	if len(combos) != 63 {
+		t.Fatalf("reference combinations=%d, want 63", len(combos))
+	}
+	for _, combo := range combos {
+		if combo.candidateCount != wantCounts[combo.shape.name] {
+			t.Fatalf("%s candidateCount=%d, want %d", combo.shape.name, combo.candidateCount, wantCounts[combo.shape.name])
+		}
+		if combo.p95BudgetMs <= 0 {
+			t.Fatalf("reference combo lacks a P95 budget: %+v", combo)
+		}
+		wantOriginalVerification := combo.shape.name == "selective-cjk" || combo.shape.name == "wide-cjk" || combo.shape.name == "filename-infix"
+		if combo.shape.originalTextVerification != wantOriginalVerification {
+			t.Fatalf("%s originalTextVerification=%t, want %t", combo.shape.name, combo.shape.originalTextVerification, wantOriginalVerification)
+		}
+	}
+	if profile := thresholdProfileFor(combos); profile != referenceP95ThresholdProfile {
+		t.Fatalf("threshold profile=%q, want %q", profile, referenceP95ThresholdProfile)
+	}
+}
+
+func TestNonReferenceMatricesDoNotClaimReferenceP95Thresholds(t *testing.T) {
+	full := buildFullMatrix([]int{20}, []int{1}, 1, 1, 1_000)
+	directional := buildDirectionalMatrix(corpus.ReferenceScale)
+	for _, combos := range [][]combination{full, directional} {
+		if profile := thresholdProfileFor(combos); profile != "" {
+			t.Fatalf("non-reference matrix claimed threshold profile %q", profile)
+		}
+		for _, combo := range combos {
+			if combo.p95BudgetMs != 0 {
+				t.Fatalf("non-reference combo claimed P95 budget: %+v", combo)
+			}
+		}
+	}
+}
+
+func TestRunOneCombinationEnforcesReferenceP95Budget(t *testing.T) {
+	for _, test := range []struct {
+		name     string
+		delay    time.Duration
+		wantPass bool
+	}{
+		{name: "pass", wantPass: true},
+		{name: "fail", delay: 20 * time.Millisecond},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			sess := newFakeSession(t, fakeWorksHandler(test.delay, nil))
+			combo := combination{
+				shape: perfShapes()["browse"], limit: 20, concurrency: 1, runs: 3,
+				candidateCount: 490_000, p95BudgetMs: 10,
+			}
+			rep := &report.Report{}
+			runOneCombination(rep, sess, combo, time.Second, time.Now().Add(10*time.Second), 0, report.CacheStateColdProcess)
+			assertFindingPass(t, rep, "perf/browse-limit20-concurrency1-p95-budget", test.wantPass)
+			if got := rep.Latencies[0]; got.CandidateCount != combo.candidateCount || got.P95BudgetMs != combo.p95BudgetMs {
+				t.Fatalf("P95 threshold identity did not reach report: %+v", got)
+			}
+		})
+	}
+}
+
 // TestRunPerfMatrixAlwaysPublishesInterpretationLimitations 复核每份性能报告都自带分位数
 // 口径变更、缓存状态含义与执行计划断言缺口的说明；缺了它们，数字会被当成可与历史结果
 // 直接比较的通过证据。
@@ -434,11 +501,15 @@ func TestRunPerfMatrixAlwaysPublishesInterpretationLimitations(t *testing.T) {
 }
 
 func assertFailedFinding(t *testing.T, rep *report.Report, name string) {
+	assertFindingPass(t, rep, name, false)
+}
+
+func assertFindingPass(t *testing.T, rep *report.Report, name string, want bool) {
 	t.Helper()
 	for _, finding := range rep.Findings {
 		if finding.Name == name {
-			if finding.Pass {
-				t.Fatalf("finding %q 应当失败", name)
+			if finding.Pass != want {
+				t.Fatalf("finding %q pass=%t, want %t; detail=%s", name, finding.Pass, want, finding.Detail)
 			}
 			return
 		}
@@ -453,7 +524,7 @@ func assertFailedFinding(t *testing.T, rep *report.Report, name string) {
 func TestRunPerfMatrixPartialReportIsParseable(t *testing.T) {
 	sess := newFakeSession(t, fakeWorksHandler(0, nil))
 	rep := &report.Report{}
-	combos := buildFullMatrix([]int{20}, []int{1}, 2, 2)[:2]
+	combos := buildFullMatrix([]int{20}, []int{1}, 2, 2, 1_000)[:2]
 	timeouts := PerfTimeouts{PerRequest: time.Second, PerCombination: time.Second, Scenario: time.Minute}
 	var lastSnapshot []byte
 	RunPerfMatrix(rep, sess, combos, timeouts, PerfOptions{ProcessColdAtStart: true}, func() error {
@@ -480,7 +551,7 @@ func queryPerfResumeCheckpoint(combos []combination, timeouts PerfTimeouts, opts
 		PlannedCombinations:   len(combos),
 		CompletedCombinations: completed,
 		QueryPerfMatrix:       &definition,
-		Limitations:           perfLimitations(opts),
+		Limitations:           perfLimitations(opts, combos),
 	}
 	for i := 0; i < completed; i++ {
 		combo := combos[i]
@@ -496,7 +567,8 @@ func queryPerfResumeCheckpoint(combos []combination, timeouts PerfTimeouts, opts
 			Category: combo.shape.name, Limit: combo.limit, Concurrency: combo.concurrency,
 			PlannedRuns: combo.runs, AttemptedRuns: combo.runs, Durations: durations,
 			WarmupRuns: opts.WarmupRuns, CacheState: cacheState,
-			CarriesP99: combo.carriesP99,
+			CarriesP99: combo.carriesP99, CandidateCount: combo.candidateCount,
+			OriginalTextVerification: combo.shape.originalTextVerification, P95BudgetMs: combo.p95BudgetMs,
 		}))
 	}
 	if completed < len(combos) {
