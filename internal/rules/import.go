@@ -14,6 +14,13 @@ import (
 
 const MaxRulePackageBytes = 8 * 1024 * 1024
 
+func validateRulePackageSize(content []byte) error {
+	if len(content) == 0 || len(content) > MaxRulePackageBytes {
+		return fmt.Errorf("规则包大小超限")
+	}
+	return nil
+}
+
 type ImportDiagnostic struct {
 	Path    string `json:"path"`
 	Message string `json:"message"`
@@ -35,8 +42,8 @@ func ImportRulePackage(format string, input []byte) (ImportResult, error) {
 	if format == "" {
 		return ImportResult{}, fmt.Errorf("规则导入格式不能为空")
 	}
-	if len(input) == 0 || len(input) > MaxRulePackageBytes {
-		return ImportResult{}, fmt.Errorf("规则包大小超限")
+	if err := validateRulePackageSize(input); err != nil {
+		return ImportResult{}, err
 	}
 	var value any
 	var err error
@@ -61,6 +68,12 @@ func ImportRulePackage(format string, input []byte) (ImportResult, error) {
 	canonical, err := NormalizeWithSchema(encoded, RulePackageSchema())
 	if err != nil {
 		return ImportResult{}, fmt.Errorf("导入规范化: %w", err)
+	}
+	// 8 MiB 限制约束的是可保存、可返回的单份规则内容，而不只是导入原文。
+	// YAML/TOML 转 JSON、默认值物化和规范字符串转义都可能让结果大于输入；
+	// 若不在这里复核，服务端会产生自己下一次无法再接受的 canonical 文本。
+	if err := validateRulePackageSize(canonical); err != nil {
+		return ImportResult{}, err
 	}
 	return ImportResult{Format: format, CanonicalJSON: canonical, Diagnostics: []ImportDiagnostic{}}, nil
 }

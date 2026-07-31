@@ -212,6 +212,9 @@ var badgePositions = map[string]struct{}{
 }
 
 func CompilePackage(input []byte) (CompiledPackage, error) {
+	if err := validateRulePackageSize(input); err != nil {
+		return CompiledPackage{}, err
+	}
 	validator, err := NewRulePackageValidator()
 	if err != nil {
 		return CompiledPackage{}, err
@@ -219,6 +222,9 @@ func CompilePackage(input []byte) (CompiledPackage, error) {
 	input, err = NormalizeWithSchema(input, RulePackageSchema())
 	if err != nil {
 		return CompiledPackage{}, fmt.Errorf("规则包规范化: %w", err)
+	}
+	if err := validateRulePackageSize(input); err != nil {
+		return CompiledPackage{}, err
 	}
 	if err := validator.ValidateJSON(input); err != nil {
 		return CompiledPackage{}, fmt.Errorf("规则包 Schema: %w", err)
@@ -270,6 +276,11 @@ func CompilePackage(input []byte) (CompiledPackage, error) {
 	root["semantic_hash"], _ = json.Marshal(semanticHash)
 	canonical, err := canonicalObject(root)
 	if err != nil {
+		return CompiledPackage{}, err
+	}
+	// package_hash 与 semantic_hash 是服务端物化出的规范内容，同样属于公开的
+	// 单份规则 8 MiB 边界。最终输出必须仍可被草稿 API 和前端无损往返。
+	if err := validateRulePackageSize(canonical); err != nil {
 		return CompiledPackage{}, err
 	}
 

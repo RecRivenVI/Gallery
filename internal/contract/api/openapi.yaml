@@ -4492,6 +4492,7 @@ components:
         canonicalText:
           type: string
           description: 后端规范化后的逐字节 UTF-8 JSON 文本；用于避免浏览器 Number 中转损失精度
+          maxLength: 8388608
         packageHash: {$ref: "#/components/schemas/SHA256Digest"}
         semanticHash: {$ref: "#/components/schemas/SHA256Digest"}
     RuleCompileRequest:
@@ -4784,6 +4785,7 @@ components:
         canonicalText:
           type: string
           description: 导入、默认值物化和规范化后的逐字节 UTF-8 JSON 文本
+          maxLength: 8388608
         diagnostics:
           type: array
           items:
@@ -4849,6 +4851,7 @@ components:
         contentText:
           type: string
           description: 服务端保存的精确原文；成功导入时为 canonical JSON，导入失败时为未覆盖的原始文本
+          maxLength: 8388608
         format: {type: string, enum: [json, yaml, toml]}
         validationStatus: {type: string, enum: [draft, validated, invalid]}
         diagnostics: {type: array, items: {type: object, additionalProperties: true}}

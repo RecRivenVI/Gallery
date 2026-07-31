@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/RecRivenVI/gallery/internal/rules"
@@ -101,6 +102,58 @@ func TestPackageHashesSeparateDistributionFromRuntimeSemantics(t *testing.T) {
 			t.Fatalf("数字 %s 未精确规范化: %s %v", number, canonical, err)
 		}
 	}
+}
+
+func TestCompilePackageFinalCanonicalHonorsSizeLimit(t *testing.T) {
+	withoutPadding := rulePackageWithPadding(t, 0)
+	base, err := rules.CompilePackage(withoutPadding)
+	if err != nil {
+		t.Fatal(err)
+	}
+	paddingAtLimit := rules.MaxRulePackageBytes - len(base.Canonical)
+	if paddingAtLimit <= 0 {
+		t.Fatalf("最小规则包已超过大小上限: %d", len(base.Canonical))
+	}
+
+	atLimitInput := rulePackageWithPadding(t, paddingAtLimit)
+	atLimit, err := rules.CompilePackage(atLimitInput)
+	if err != nil {
+		t.Fatalf("最终 canonical 恰好位于上限时被拒绝: %v", err)
+	}
+	if len(atLimit.Canonical) != rules.MaxRulePackageBytes {
+		t.Fatalf("最终 canonical 大小 = %d, want %d", len(atLimit.Canonical), rules.MaxRulePackageBytes)
+	}
+
+	overLimitInput := rulePackageWithPadding(t, paddingAtLimit+1)
+	if len(overLimitInput) >= rules.MaxRulePackageBytes {
+		t.Fatalf("测试输入应仍低于入口上限: %d", len(overLimitInput))
+	}
+	if _, err := rules.ImportRulePackage("json", overLimitInput); err != nil {
+		t.Fatalf("追加 hash 前的规范输入应仍可导入: %v", err)
+	}
+	if _, err := rules.CompilePackage(overLimitInput); err == nil || !strings.Contains(err.Error(), "大小超限") {
+		t.Fatalf("最终 canonical 超限未拒绝: %v", err)
+	}
+}
+
+func rulePackageWithPadding(t *testing.T, padding int) []byte {
+	t.Helper()
+	base, err := os.ReadFile(filepath.Join("testdata", "minimal-rule-package.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var root map[string]any
+	if err := json.Unmarshal(base, &root); err != nil {
+		t.Fatal(err)
+	}
+	root["extensions"] = map[string]any{
+		"example.padding": map[string]any{"padding": strings.Repeat("x", padding)},
+	}
+	result, err := json.Marshal(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return result
 }
 
 func TestCompilePackageRejectsInvalidParameterSchemaBeforeBinding(t *testing.T) {

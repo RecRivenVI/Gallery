@@ -52,6 +52,19 @@ func TestImportFormatsAndExactNumberIdentity(t *testing.T) {
 	}
 }
 
+func TestImportRejectsCanonicalExpansionBeyondLimit(t *testing.T) {
+	// '<' 在输入 JSON 字符串中占 1 字节，规范 JSON 由 encoding/json 写为
+	// \u003c（6 字节）。入口正文远低于 8 MiB，但规范结果会超过上限。
+	padding := strings.Repeat("<", rules.MaxRulePackageBytes/6+1024)
+	input := []byte(`{"padding":"` + padding + `"}`)
+	if len(input) >= rules.MaxRulePackageBytes {
+		t.Fatalf("测试输入没有保持在入口上限内: %d", len(input))
+	}
+	if _, err := rules.ImportRulePackage("json", input); err == nil || !strings.Contains(err.Error(), "大小超限") {
+		t.Fatalf("规范化膨胀未按规则内容上限拒绝: %v", err)
+	}
+}
+
 func TestRuleDiffExplainAndSemanticExtensionExecution(t *testing.T) {
 	lifecycle, err := rules.NewLifecycle()
 	if err != nil {

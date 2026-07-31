@@ -353,6 +353,81 @@ func TestInvalidRuleDraftIsPreservedAcrossValidation(t *testing.T) {
 	}
 }
 
+func TestRuleDraftNeverPersistsCanonicalBeyondSizeLimit(t *testing.T) {
+	ctx := context.Background()
+	root := t.TempDir()
+	dirs := appdirs.UnderRoot(filepath.Join(root, "app"))
+	if err := dirs.Ensure(filesystem.OS{}); err != nil {
+		t.Fatal(err)
+	}
+	store, err := storage.Open(ctx, dirs)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	now := clock.Fixed{Time: time.Date(2026, 7, 31, 0, 0, 0, 0, time.UTC)}
+	resources, err := application.NewResources(store.Control.SQL(), dirs, filesystem.OS{}, now, identity.NewGenerator(now))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	base, err := os.ReadFile(filepath.Join("..", "rules", "testdata", "minimal-rule-package.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var rootPackage map[string]any
+	if err := json.Unmarshal(base, &rootPackage); err != nil {
+		t.Fatal(err)
+	}
+	withPadding := func(size int) []byte {
+		rootPackage["extensions"] = map[string]any{
+			"example.padding": map[string]any{"padding": strings.Repeat("x", size)},
+		}
+		result, marshalErr := json.Marshal(rootPackage)
+		if marshalErr != nil {
+			t.Fatal(marshalErr)
+		}
+		return result
+	}
+	compiledBase, err := rules.CompilePackage(withPadding(0))
+	if err != nil {
+		t.Fatal(err)
+	}
+	overFinalLimit := withPadding(rules.MaxRulePackageBytes - len(compiledBase.Canonical) + 1)
+	if len(overFinalLimit) >= rules.MaxRulePackageBytes {
+		t.Fatalf("测试输入应低于入口上限: %d", len(overFinalLimit))
+	}
+
+	pkg, err := resources.CreateRulePackage(ctx, "rset_018f47d2-5c16-7a44-a8a0-000000000001", "规范文本边界", "", "owner")
+	if err != nil {
+		t.Fatal(err)
+	}
+	draft, err := resources.SaveRuleDraft(ctx, pkg.ID, overFinalLimit, "json", "", 0, "owner")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if draft.ValidationStatus != application.RuleDraftInvalid || draft.SourceFormat != "json" {
+		t.Fatalf("超限规范结果未作为可编辑 invalid 草稿保留: %+v", draft)
+	}
+	if len(draft.Content) > rules.MaxRulePackageBytes {
+		t.Fatalf("SaveRuleDraft 持久化了超限 canonical: %d", len(draft.Content))
+	}
+	var diagnostics []rules.ImportDiagnostic
+	if err := json.Unmarshal(draft.Diagnostics, &diagnostics); err != nil {
+		t.Fatalf("草稿诊断无法解析: %s: %v", draft.Diagnostics, err)
+	}
+	if len(diagnostics) == 0 || !strings.Contains(diagnostics[0].Message, "大小超限") {
+		t.Fatalf("草稿缺少规范结果超限诊断: %+v", diagnostics)
+	}
+	validation, err := resources.ValidateRuleDraft(ctx, pkg.ID, draft.Revision, "owner")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if validation.Valid || validation.Draft.ValidationStatus != application.RuleDraftInvalid || len(validation.Draft.Content) > rules.MaxRulePackageBytes {
+		t.Fatalf("重新校验后草稿边界失守: %+v", validation.Draft)
+	}
+}
+
 func TestRuleDraftImportFormatsConvergeBeforeStoredValidation(t *testing.T) {
 	const yamlPackage = `rule_set_id: rset_018f47d2-5c16-7a44-a8a0-000000000001
 version: 0.1.0
