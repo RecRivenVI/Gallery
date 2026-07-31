@@ -304,7 +304,7 @@ func (s *Server) validateRulePackage(w http.ResponseWriter, r *http.Request) {
 	var request struct {
 		Package json.RawMessage `json:"package"`
 	}
-	if err := decodeJSON(r, &request); err != nil || len(request.Package) == 0 {
+	if err := decodeRuleJSON(r, &request); err != nil || len(request.Package) == 0 {
 		s.writeRequestError(w, fault.WithField(fault.CodeRuleSchemaInvalid, "package", err))
 		return
 	}
@@ -330,7 +330,7 @@ func (s *Server) compileRulePackage(w http.ResponseWriter, r *http.Request) {
 		Package    json.RawMessage `json:"package"`
 		Parameters json.RawMessage `json:"parameters"`
 	}
-	if err := decodeJSON(r, &request); err != nil {
+	if err := decodeRuleJSON(r, &request); err != nil {
 		s.writeRequestError(w, fault.WithField(fault.CodeRuleCompile, "body", err))
 		return
 	}
@@ -361,7 +361,7 @@ func (s *Server) dryRunRulePackage(w http.ResponseWriter, r *http.Request) {
 		Parameters json.RawMessage   `json:"parameters"`
 		Sample     rules.DryRunInput `json:"sample"`
 	}
-	if err := decodeJSON(r, &request); err != nil {
+	if err := decodeRuleJSON(r, &request); err != nil {
 		s.writeRequestError(w, fault.WithField(fault.CodeRuleDryRun, "body", err))
 		return
 	}
@@ -387,7 +387,7 @@ func (s *Server) analyzeRuleImpact(w http.ResponseWriter, r *http.Request) {
 		Before json.RawMessage `json:"before"`
 		After  json.RawMessage `json:"after"`
 	}
-	if err := decodeJSON(r, &request); err != nil {
+	if err := decodeRuleJSON(r, &request); err != nil {
 		s.writeRequestError(w, fault.WithField(fault.CodeRuleImpact, "body", err))
 		return
 	}
@@ -1432,7 +1432,7 @@ func (s *Server) createRuleVersion(w http.ResponseWriter, r *http.Request) {
 	var request struct {
 		Package json.RawMessage `json:"package"`
 	}
-	if err := decodeJSON(r, &request); err != nil || len(request.Package) == 0 {
+	if err := decodeRuleJSON(r, &request); err != nil || len(request.Package) == 0 {
 		s.writeRequestError(w, fault.WithField(fault.CodeValidation, "package", err))
 		return
 	}
@@ -1476,7 +1476,7 @@ func (s *Server) createSourceRuleBinding(w http.ResponseWriter, r *http.Request)
 		Override     json.RawMessage `json:"override"`
 		Condition    json.RawMessage `json:"condition"`
 	}
-	if err := decodeJSON(r, &request); err != nil {
+	if err := decodeRuleJSON(r, &request); err != nil {
 		s.writeRequestError(w, fault.WithField(fault.CodeValidation, "body", err))
 		return
 	}
@@ -4444,12 +4444,37 @@ func sessionSummary(session auth.Session) api.SessionSummary {
 	}
 }
 
+const (
+	maxJSONRequestBodyBytes = 1 << 20
+	// 一个规则请求至多同时携带两份受 MaxRulePackageBytes 约束的精确文档
+	//（例如 Impact 的 before/after 或 Compile 的 package/parameters）。JSON 字符串中
+	// 单个输入字节最坏可编码为六个 ASCII 字节（\\u00XX）；额外 1 MiB 留给字段名、
+	// Dry Run sample 等受各自领域校验约束的请求数据。该预算只保护传输解码，绝不
+	// 放宽每份规则内容自己的 8 MiB 应用层上限。
+	maxRuleJSONRequestBodyBytes = 2*6*rules.MaxRulePackageBytes + maxJSONRequestBodyBytes
+)
+
 func decodeJSON(r *http.Request, target any) error {
+	return decodeJSONWithLimit(r, target, maxJSONRequestBodyBytes)
+}
+
+func decodeRuleJSON(r *http.Request, target any) error {
+	return decodeJSONWithLimit(r, target, maxRuleJSONRequestBodyBytes)
+}
+
+func decodeJSONWithLimit(r *http.Request, target any, maxBytes int64) error {
 	mediaType, _, err := mime.ParseMediaType(r.Header.Get("Content-Type"))
 	if err != nil || mediaType != "application/json" {
 		return errors.New("Content-Type 必须是 application/json")
 	}
-	decoder := json.NewDecoder(io.LimitReader(r.Body, 1<<20))
+	data, err := io.ReadAll(io.LimitReader(r.Body, maxBytes+1))
+	if err != nil {
+		return err
+	}
+	if int64(len(data)) > maxBytes {
+		return errors.New("请求体大小超限")
+	}
+	decoder := json.NewDecoder(bytes.NewReader(data))
 	decoder.DisallowUnknownFields()
 	if err := decoder.Decode(target); err != nil {
 		return err

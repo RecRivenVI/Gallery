@@ -30,6 +30,7 @@ import {
 } from '../api';
 import { IMPACT_CATEGORY_LABELS, IMPACT_CATEGORY_TONES } from '../labels';
 import { isRecord, parseRuleText, ruleValuesEqual } from '../rules/lossless';
+import { rulePackageByteLength, rulePackageSizeError } from '../rules/limits';
 import { RuleParameterSetsPanel } from '../rules/RuleParameterSetsPanel';
 import { RuleDebugPanel } from '../rules/RuleDebugPanel';
 import { RuleVersionLifecyclePanel } from '../rules/RuleVersionLifecyclePanel';
@@ -194,8 +195,20 @@ function DraftEditor({
   const [opaqueInvalid, setOpaqueInvalid] = useState(false);
   const [modeError, setModeError] = useState<string>();
   const missing = draft.isError && errorCode(draft.error) === 'NOT_FOUND';
-  const parsed = parseDraft(workspace?.text ?? '', workspace?.format ?? 'json');
-  const parsedBaseline = parseDraft(workspace?.baseText ?? '', workspace?.baseFormat ?? 'json');
+  const draftBytes = rulePackageByteLength(workspace?.text ?? '');
+  const sizeError = rulePackageSizeError(draftBytes);
+  const baselineBytes = rulePackageByteLength(workspace?.baseText ?? '');
+  const baselineSizeError = rulePackageSizeError(baselineBytes);
+  // 超过服务端权威字节边界时仍保留原始文本，但不再把它送入 JSON 解析、Schema
+  // 表单或 AJV。用户缩减内容后会自动恢复正常编辑链。
+  const parsed =
+    sizeError === undefined
+      ? parseDraft(workspace?.text ?? '', workspace?.format ?? 'json')
+      : { value: null, error: sizeError };
+  const parsedBaseline =
+    baselineSizeError === undefined
+      ? parseDraft(workspace?.baseText ?? '', workspace?.baseFormat ?? 'json')
+      : { value: null, error: baselineSizeError };
   const emptyJSONDraft = workspace?.format === 'json' && workspace.text.trim() === '';
   const conflict =
     errorCode(save.error) === 'RULE_DRAFT_CONFLICT' || errorCode(validate.error) === 'RULE_DRAFT_CONFLICT';
@@ -355,7 +368,7 @@ function DraftEditor({
                 isMultiline
                 rows={18}
                 isDisabled={!canWrite || isLocked}
-                errorMessage={workspace.format === 'json' ? parsed.error : undefined}
+                errorMessage={sizeError ?? (workspace.format === 'json' ? parsed.error : undefined)}
               />
             )
           }
@@ -376,6 +389,7 @@ function DraftEditor({
               !workspace.dirty ||
               isLocked ||
               workspace.text === '' ||
+              sizeError !== undefined ||
               (workspace.format === 'json' && parsed.error !== undefined) ||
               opaqueInvalid
             }

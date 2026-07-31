@@ -4,6 +4,7 @@ import { readFileSync } from 'node:fs';
 // 合成 bootstrap 必须直接引用后端权威词表的前端副本：自行书写 capability 名会让 mock
 // 套件自证通过，EV-39 的 CAP-1 正是这样被掩盖的。
 import { CAPABILITIES } from '../src/auth/capabilities';
+import { RULE_PACKAGE_MAX_BYTES } from '../src/manage/rules/limits';
 
 test.skip(
   Boolean(process.env.GALLERY_REAL_BASE_URL ?? process.env.GALLERY_REAL_LAN_BASE_URL),
@@ -810,6 +811,77 @@ test('规则配置大数组窗口与超深 JSON 守卫在窄屏稳定 @smoke', a
   const completeDraft = page.getByRole('textbox', { name: '草稿内容', exact: true });
   await expect(completeDraft).toHaveValue(/primitive_limit_4095/);
   await expect(completeDraft).toHaveValue(/test-limit-09999/);
+});
+
+test('规则草稿八兆字节边界阻止解析和保存 @smoke', async ({ page }) => {
+  test.setTimeout(60_000);
+  const ruleSetId = 'rset_00000000-0000-7000-8000-000000000001';
+  const content = {
+    rule_set_id: ruleSetId,
+    version: '1.0.0',
+    schema_version: 1,
+    normalization_algorithm_version: 'gallery-canonical-json-v1',
+    compiler_requirement: 'gallery-rule-compiler-v1',
+    cel_profile_version: 'gallery-cel-v1',
+    parameter_schema: { type: 'object', additionalProperties: false },
+    provider_namespaces: [],
+    primitives: [],
+    cel_expressions: [],
+    tests: [],
+    extensions: {}
+  };
+  const json = (route: Route, body: unknown, contentType = 'application/json') =>
+    route.fulfill({ status: 200, contentType, body: JSON.stringify(body) });
+
+  await page.route('**/api/v1/rule-packages/pkg_size_limit', (route) =>
+    json(route, {
+      id: 'pkg_size_limit',
+      ruleSetId,
+      name: '规则字节边界合成夹具',
+      description: '',
+      status: 'active',
+      createdBy: 'principal_test',
+      revision: 1,
+      createdAt: '2026-07-31T00:00:00Z',
+      updatedAt: '2026-07-31T00:00:00Z'
+    })
+  );
+  await page.route('**/api/v1/rule-packages/pkg_size_limit/draft', (route) =>
+    json(route, {
+      id: 'draft_size_limit',
+      packageId: 'pkg_size_limit',
+      content,
+      contentText: JSON.stringify(content, null, 2),
+      format: 'json',
+      validationStatus: 'draft',
+      diagnostics: [],
+      revision: 1,
+      savedBy: 'principal_test',
+      createdAt: '2026-07-31T00:00:00Z',
+      updatedAt: '2026-07-31T00:00:00Z'
+    })
+  );
+  await page.route('**/api/v1/rule-packages/pkg_size_limit/versions', (route) => json(route, { items: [] }));
+  await page.route('**/api/v1/rule-packages/pkg_size_limit/audits', (route) => json(route, { items: [] }));
+  await page.route('**/api/v1/rules/schema', (route) =>
+    json(route, rulePackageSchema, 'application/schema+json')
+  );
+  await page.route('**/api/v1/rules/examples', (route) => json(route, { items: [] }));
+
+  await page.goto('/manage');
+  await navigateWithinMountedEntry(page, '/manage/rules/pkg_size_limit');
+  const completeDraft = page.getByRole('textbox', { name: '草稿内容', exact: true });
+  await expect(completeDraft).toHaveValue(/gallery-canonical-json-v1/);
+  await completeDraft.fill('x'.repeat(RULE_PACKAGE_MAX_BYTES + 1));
+  await expect
+    .poll(() => completeDraft.evaluate((element) => (element as HTMLTextAreaElement).value.length))
+    .toBe(RULE_PACKAGE_MAX_BYTES + 1);
+  await expect(completeDraft.locator('xpath=..').locator('.ui-field__error')).toHaveText(
+    `规则包内容超过 8 MiB 上限（当前 ${RULE_PACKAGE_MAX_BYTES + 1} 字节）。`,
+    { timeout: 15_000 }
+  );
+  await expect(page.getByRole('tab', { name: 'Schema 表单' })).toHaveAttribute('aria-disabled', 'true');
+  await expect(page.getByRole('button', { name: '保存草稿' })).toBeDisabled();
 });
 
 test('迟到的旧分页响应不会覆盖较新的搜索结果 @smoke', async ({ page }) => {

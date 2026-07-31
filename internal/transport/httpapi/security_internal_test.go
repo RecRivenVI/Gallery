@@ -34,6 +34,27 @@ func TestDecodeJSONRequiresJSONContentType(t *testing.T) {
 	}
 }
 
+func TestDecodeJSONKeepsGenericLimitAndAllowsRuleBudget(t *testing.T) {
+	body := `{"value":"` + strings.Repeat("x", maxJSONRequestBodyBytes) + `"}`
+	request := func() *http.Request {
+		value := httptest.NewRequest(http.MethodPost, "/", strings.NewReader(body))
+		value.Header.Set("Content-Type", "application/json")
+		return value
+	}
+	var target struct {
+		Value string `json:"value"`
+	}
+	if err := decodeJSON(request(), &target); err == nil || err.Error() != "请求体大小超限" {
+		t.Fatalf("普通请求体没有保持 1 MiB 上限: %v", err)
+	}
+	if err := decodeRuleJSON(request(), &target); err != nil {
+		t.Fatalf("超过普通上限但低于规则预算的请求被拒绝: %v", err)
+	}
+	if target.Value != strings.Repeat("x", maxJSONRequestBodyBytes) {
+		t.Fatalf("规则请求解码长度=%d", len(target.Value))
+	}
+}
+
 func TestStatusForFaultMapsSecurityCodes(t *testing.T) {
 	cases := []struct {
 		code fault.Code

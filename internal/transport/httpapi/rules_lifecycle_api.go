@@ -73,7 +73,7 @@ func (s *Server) testRuleExample(w http.ResponseWriter, r *http.Request) {
 		Parameters json.RawMessage    `json:"parameters"`
 		Sample     *rules.DryRunInput `json:"sample"`
 	}
-	if err := decodeJSON(r, &request); err != nil {
+	if err := decodeRuleJSON(r, &request); err != nil {
 		s.writeRequestError(w, fault.WithField(fault.CodeRuleDryRun, "body", err))
 		return
 	}
@@ -166,7 +166,7 @@ func (s *Server) saveRuleDraft(w http.ResponseWriter, r *http.Request) {
 		BaseSemanticHash string          `json:"baseSemanticHash"`
 		ExpectedRevision *int            `json:"expectedRevision"`
 	}
-	if err := decodeJSON(r, &request); err != nil {
+	if err := decodeRuleJSON(r, &request); err != nil {
 		s.writeRequestError(w, fault.WithField(fault.CodeValidation, "body", err))
 		return
 	}
@@ -455,7 +455,7 @@ func (s *Server) createRuleParameterSet(w http.ResponseWriter, r *http.Request) 
 		SemanticHash string          `json:"semanticHash"`
 		Parameters   json.RawMessage `json:"parameters"`
 	}
-	if err := decodeJSON(r, &request); err != nil {
+	if err := decodeRuleJSON(r, &request); err != nil {
 		s.writeRequestError(w, fault.WithField(fault.CodeValidation, "body", err))
 		return
 	}
@@ -517,7 +517,7 @@ func (s *Server) updateRuleParameterSet(w http.ResponseWriter, r *http.Request) 
 		ExpectedRevision *int            `json:"expectedRevision"`
 		ConfirmImpact    *bool           `json:"confirmImpact"`
 	}
-	if err := decodeJSON(r, &request); err != nil {
+	if err := decodeRuleJSON(r, &request); err != nil {
 		s.writeRequestError(w, fault.WithField(fault.CodeValidation, "body", err))
 		return
 	}
@@ -557,7 +557,7 @@ func (s *Server) impactRuleParameterSet(w http.ResponseWriter, r *http.Request) 
 	var request struct {
 		Parameters json.RawMessage `json:"parameters"`
 	}
-	if err := decodeJSON(r, &request); err != nil {
+	if err := decodeRuleJSON(r, &request); err != nil {
 		s.writeRequestError(w, fault.WithField(fault.CodeRuleParameterInvalid, "body", err))
 		return
 	}
@@ -691,7 +691,7 @@ func (s *Server) importRulePackage(w http.ResponseWriter, r *http.Request) {
 		Format  string          `json:"format"`
 		Content json.RawMessage `json:"content"`
 	}
-	if err := decodeJSON(r, &request); err != nil {
+	if err := decodeRuleJSON(r, &request); err != nil {
 		s.writeRequestError(w, fault.WithField(fault.CodeValidation, "body", err))
 		return
 	}
@@ -721,7 +721,7 @@ func (s *Server) diffRulePackages(w http.ResponseWriter, r *http.Request) {
 		Before json.RawMessage `json:"before"`
 		After  json.RawMessage `json:"after"`
 	}
-	if err := decodeJSON(r, &request); err != nil {
+	if err := decodeRuleJSON(r, &request); err != nil {
 		s.writeRequestError(w, fault.WithField(fault.CodeValidation, "body", err))
 		return
 	}
@@ -766,7 +766,7 @@ func (s *Server) runRuleExplain(r *http.Request, capability string) (rules.Expla
 		Parameters   json.RawMessage   `json:"parameters"`
 		Sample       rules.DryRunInput `json:"sample"`
 	}
-	if err := decodeJSON(r, &request); err != nil {
+	if err := decodeRuleJSON(r, &request); err != nil {
 		return rules.ExplainResult{}, fault.WithField(fault.CodeRuleDryRun, "body", err)
 	}
 	packageJSON, err := s.resolveRulePackage(r, request.Package, request.SemanticHash)
@@ -790,7 +790,7 @@ func (s *Server) runRuleTrace(r *http.Request, capability string) (map[string]an
 		Parameters   json.RawMessage   `json:"parameters"`
 		Sample       rules.DryRunInput `json:"sample"`
 	}
-	if err := decodeJSON(r, &request); err != nil {
+	if err := decodeRuleJSON(r, &request); err != nil {
 		return nil, fault.WithField(fault.CodeRuleDryRun, "body", err)
 	}
 	packageJSON, err := s.resolveRulePackage(r, request.Package, request.SemanticHash)

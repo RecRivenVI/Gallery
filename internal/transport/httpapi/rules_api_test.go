@@ -23,6 +23,7 @@ import (
 	"github.com/RecRivenVI/gallery/internal/platform/clock"
 	"github.com/RecRivenVI/gallery/internal/platform/filesystem"
 	"github.com/RecRivenVI/gallery/internal/platform/identity"
+	"github.com/RecRivenVI/gallery/internal/rules"
 	"github.com/RecRivenVI/gallery/internal/storage"
 	"github.com/RecRivenVI/gallery/internal/transport/httpapi"
 	api "github.com/RecRivenVI/gallery/pkg/galleryapi"
@@ -164,6 +165,55 @@ func TestRuleHTTPPreservesCanonicalTextAcrossStringRequests(t *testing.T) {
 	})
 	if unchanged["category"] != "NO_ACTION" {
 		t.Fatalf("字符串 before/after 未按精确 JSON 处理: %+v", unchanged)
+	}
+}
+
+func TestRuleHTTPAcceptsBodiesAboveGenericLimitWithoutExceedingContentLimit(t *testing.T) {
+	server, client, csrf := pairedRuleServer(t)
+	packageJSON, err := os.ReadFile(filepath.Join("..", "..", "rules", "testdata", "minimal-rule-package.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var packageValue map[string]any
+	if err := json.Unmarshal(packageJSON, &packageValue); err != nil {
+		t.Fatal(err)
+	}
+	packageValue["extensions"] = map[string]any{
+		"gallery.transport-limit": map[string]any{"padding": strings.Repeat("x", (1<<20)+4096)},
+	}
+	largeContent, err := json.Marshal(packageValue)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(largeContent) <= 1<<20 || len(largeContent) >= rules.MaxRulePackageBytes {
+		t.Fatalf("规则大请求夹具长度=%d，不在 (1 MiB, 8 MiB) 内", len(largeContent))
+	}
+
+	imported := postRuleJSON(t, client, server.URL, csrf, "/api/v1/rules/import", map[string]any{
+		"format": "json", "content": string(largeContent),
+	})
+	if text, ok := imported["canonicalText"].(string); !ok || len(text) <= 1<<20 {
+		t.Fatalf("大规则导入没有返回完整 canonicalText: type=%T len=%d", imported["canonicalText"], len(text))
+	}
+
+	pkg := requestRuleJSON(t, client, server.URL, csrf, http.MethodPost, "/api/v1/rule-packages", map[string]any{
+		"ruleSetId": packageValue["rule_set_id"], "name": "大请求规则包",
+	}, http.StatusCreated)
+	base := "/api/v1/rule-packages/" + pkg["id"].(string)
+	draft := requestRuleJSONWithIfMatch(t, client, server.URL, csrf, http.MethodPut, base+"/draft", map[string]any{
+		"format": "json", "content": string(largeContent),
+	}, `"0"`, http.StatusOK)
+	if text, ok := draft["contentText"].(string); !ok || len(text) <= 1<<20 {
+		t.Fatalf("大规则草稿没有完整保存: type=%T len=%d", draft["contentText"], len(text))
+	}
+
+	oversized := strings.Repeat("x", rules.MaxRulePackageBytes+1)
+	errorBody := requestRuleJSONWithIfMatch(t, client, server.URL, csrf, http.MethodPut, base+"/draft", map[string]any{
+		"format": "json", "content": oversized,
+	}, `"1"`, http.StatusBadRequest)
+	detail, ok := errorBody["error"].(map[string]any)
+	if !ok || detail["field"] != "content" {
+		t.Fatalf("超过 8 MiB 的规则内容没有由应用层按 content 拒绝: %+v", errorBody)
 	}
 }
 

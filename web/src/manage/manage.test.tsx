@@ -26,6 +26,7 @@ import { ManageApp } from './app';
 import RULE_SCHEMA from '../../../internal/rules/rule-package.schema.json';
 import { DataTable, formatDateTime } from './ui';
 import { RULE_CONTAINER_DEPTH_LIMIT, ruleValueFitsContainerDepth } from './rules/RuleStructuredFields';
+import { RULE_PACKAGE_MAX_BYTES } from './rules/limits';
 
 /* ————————————————————————————— HTTP 桩 ————————————————————————————— */
 
@@ -1631,6 +1632,22 @@ describe('规则草稿', () => {
     expect(text).toContain('"primitive_limit_4095"');
     expect(text).toContain('"test-limit-09999"');
   }, 60_000);
+
+  it('超过 8 MiB 的本地草稿保留文本但不进入解析、Schema 或保存链', async () => {
+    routeLosslessSchemaDraft(windowedRuleText({}));
+    renderManage('/rules/pkg_01');
+    const editor = await screen.findByRole('textbox', { name: '草稿内容' });
+    const oversized = 'x'.repeat(RULE_PACKAGE_MAX_BYTES + 1);
+    fireEvent.change(editor, { target: { value: oversized } });
+
+    expect(editor).toHaveValue(oversized);
+    expect(
+      screen.getByText(`规则包内容超过 8 MiB 上限（当前 ${RULE_PACKAGE_MAX_BYTES + 1} 字节）。`)
+    ).toBeInTheDocument();
+    expect(screen.getByRole('tab', { name: 'Schema 表单' })).toHaveAttribute('aria-disabled', 'true');
+    expect(screen.getByRole('button', { name: '保存草稿' })).toBeDisabled();
+    expect(recorded.filter((request) => request.method === 'PUT')).toHaveLength(0);
+  }, 30_000);
 
   it('参数属性与完整对象结构分别只挂载当前 20 项', async () => {
     const properties = Object.fromEntries(
