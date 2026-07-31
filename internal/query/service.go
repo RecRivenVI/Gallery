@@ -174,6 +174,7 @@ type Service struct {
 	random  io.Reader
 	signer  *contractquery.CursorSigner
 	exact   *exactValueIndexCache
+	totals  *totalResultCache
 }
 
 func NewService(ctx context.Context, control, catalog *sql.DB, clock ports.Clock, random io.Reader) (*Service, error) {
@@ -192,7 +193,7 @@ func NewService(ctx context.Context, control, catalog *sql.DB, clock ports.Clock
 		return nil, err
 	}
 	return &Service{control: control, catalog: catalog, clock: clock, random: random, signer: signer,
-		exact: newExactValueIndexCache()}, nil
+		exact: newExactValueIndexCache(), totals: newTotalResultCache()}, nil
 }
 
 func (s *Service) Search(ctx context.Context, request Request) (Result, error) {
@@ -304,7 +305,7 @@ func (s *Service) Search(ctx context.Context, request Request) (Result, error) {
 		total = TotalInfo{Mode: TotalModeLowerBound, Value: &value, ProtocolVersion: TotalProtocolVersion}
 		totalReady = true
 	} else if plan.NormalizedQuery != "" {
-		total, err = s.computeTotal(ctx, pub, authorization, request, plan, filterNode)
+		total, err = s.computeTotalCached(ctx, pub, authorization, request, plan, filterNode)
 		if err != nil {
 			return Result{}, err
 		}
@@ -315,7 +316,7 @@ func (s *Service) Search(ctx context.Context, request Request) (Result, error) {
 		return Result{}, err
 	}
 	if !totalReady {
-		total, err = s.computeTotal(ctx, pub, authorization, request, plan, filterNode)
+		total, err = s.computeTotalCached(ctx, pub, authorization, request, plan, filterNode)
 		if err != nil {
 			return Result{}, err
 		}
@@ -1043,6 +1044,33 @@ func (s *Service) computeTotal(ctx context.Context, pub publication, authorizati
 		return TotalInfo{Mode: TotalModeLowerBound, Value: &value, ProtocolVersion: TotalProtocolVersion}, nil
 	}
 	return TotalInfo{Mode: TotalModeExact, Value: &count, ProtocolVersion: TotalProtocolVersion}, nil
+}
+
+func (s *Service) computeTotalCached(ctx context.Context, pub publication, authorization sourceAuthorization, request Request, plan querytext.SearchPlan, filterNode *FilterNode) (TotalInfo, error) {
+	// creator.id 在编译时读取 control.db 的当前等价组，不是纯 publication 事实；在它
+	// 被正式绑定到 publication watermark 前不得跨请求缓存。其余当前字段全部来自不可变
+	// Catalog/Overlay projection，可安全按 publication 与授权集合复用。
+	if filterReferencesField(filterNode, "creator.id") {
+		return s.computeTotal(ctx, pub, authorization, request, plan, filterNode)
+	}
+	filterCanonical := ""
+	if filterNode != nil {
+		filterCanonical = filterNode.canonicalJSON()
+	}
+	key := fingerprint(map[string]any{
+		"catalogRevisionId": pub.CatalogRevision, "overlayRevisionId": pub.OverlayRevision,
+		"q": plan.NormalizedQuery, "tag": request.Tag, "libraryId": request.LibraryID,
+		"sourceId": request.SourceID, "filter": filterCanonical,
+		"allowedSourceIds": authorization.AllowedSourceIDs,
+		"totalBudget":      TotalBudget, "totalProtocolVersion": TotalProtocolVersion,
+	})
+	result, err := s.totals.get(ctx, key, func(buildCtx context.Context) (TotalInfo, error) {
+		return s.computeTotal(buildCtx, pub, authorization, request, plan, filterNode)
+	})
+	if err != nil {
+		return TotalInfo{}, fault.New(fault.CodeInternal, true, err)
+	}
+	return result, nil
 }
 
 func (s *Service) buildTotalStatement(ctx context.Context, pub publication, authorization sourceAuthorization, request Request, plan querytext.SearchPlan, filterNode *FilterNode) (string, []any, error) {
