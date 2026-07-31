@@ -37,6 +37,10 @@ Gallery（画廊）是一个本地优先、只读来源、规则驱动的个人�
 >
 > [EV-145](Documents/证据/验证记录.md) 已在同一规则草稿中直接验证正式上限 4,096 个 primitive 与 10,000 个 test：两类结构化编辑器各只挂载当前 20 项，切回无损 JSON 文本后末项仍完整存在。定向组件 1/1、Chromium/Firefox 2/2、15 文件 226 项 Vitest、最终 mock 36/36 与根级全仓门禁通过；完整草稿解析/序列化/AJV/内存、无 Schema 项数上限的任意对象、同规模真实后端和真实设备仍未验证。
 >
+> [EV-146](Documents/证据/验证记录.md) 已让规则 HTTP 端点真正接受正式 8 MiB 内容，而普通 API 继续保持 1 MiB 请求上限；管理端按 UTF-8 字节在解析、Schema/AJV 与保存前有界降级，超限原文仍保留。真实 HTTP 大正文测试、双浏览器生产资产 4/4、16 文件 228 项 Vitest、mock 38/38、Windows/WSL2 race 与根级全仓门禁通过；尚未用真实 `galleryd` 浏览器提交同一超大正文，也不代表前端内存或 8 MiB 内最坏形状已完成门禁。
+>
+> [EV-147](Documents/证据/验证记录.md) 已完成 500,000 Work、十来源、双 Creator 关系的 publication 正式矩阵：1%/10%/50% 各 20/20，总计 60/60、0 失败，P95 为 2.168/2.147/5.581 ms，全部低于 250 ms 且旧快照跨构建可读。该子矩阵已通过；500k Query warm/cold-process 并发与 Degradation 尚未执行，完整 Reference Gate/API Freeze 不变。
+>
 > [EV-111](Documents/证据/验证记录.md) 已把同一 Source 的多个按需确认目标合并为一个兼容批量 Job，保留单媒体入口与每目标完整哈希。真实 Pawchive 12 目标最终以一个 Job 在 74.003 秒确认 12/12，全树 11,595 文件/2,353 目录前后零变化；这关闭逐目标重复完整 Source 处理，不代表活动 Hash 取消、全量扫描、HDD/SMB/NAS、正式性能或 RC Gate 已通过。
 
 > [EV-112](Documents/证据/验证记录.md) 已在全新 Pawchive 隔离运行中先从公共 Job API 观察到真实 `hash/running`，再取消父 Scan；父子任务在 4 ms 内被观察为 `cancelled`，完整 124,660,469,885-byte Source 前后增删改为 0。该结果关闭 Windows 本地 SSD/Pawchive 这一条活动 Hash 取消切片；HDD/SMB/NAS、publishing 临界点、崩溃恢复、全量与 RC Gate 仍未通过。
@@ -115,9 +119,9 @@ Gallery（画廊）是一个本地优先、只读来源、规则驱动的个人�
 | 阶段 1：领域和数据所有权 | ✅ | ✅（限定范围内） | 备份/恢复、目录库整体重建、作者合并等已通过验证 | 网络共享盘、底层文件身份识别留待以后阶段 | 已完成 |
 | 阶段 2：规则系统 | ✅（正确性层面） | ✅（限定范围内） | 规则生命周期、编译执行、参数/绑定和影响调度已形成闭环 | 正式性能/平台门禁留待后续 | 已完成 |
 | 阶段 3：扫描、任务与目录库 | ✅（代码与模拟数据层面） | 🟡（真实大盘抽样与三平台有界链通过，全量未完成） | 真实 Pixiv 370,712 文件完成 discovery 取消/恢复与零写入；Gank/Pawchive 确认成功；Pawchive 又完成公共 Job API 观察下的活动 Hash 取消；四类维护 Job 已有持久估算阶段进度 | Pixiv/真实盘全量扫描与哈希、HDD/SMB/NAS 取消、publishing/崩溃恢复、真实慢盘维护/磁盘满、正式性能门禁和网络共享盘尚未完成 | 继续其它存储与异常切片，同时优先收口阶段 4 正式压力门禁 |
-| 阶段 4：查询与媒体 | 🟡（主线完成，部分参数未冻结） | 🟡（正确性收口完成，500,000 publication 正式矩阵执行中） | 搜索、排序、分页、显式规则/有效封面、媒体读取、缩略图及用户/治理 Creator keyset 均有代码闭环；500,000 Correctness/Cursor 通过，十来源双关系 publication 矩阵已完成 58/60、失败 0，50% 档为 18/20 并持续运行 | publication 的 50% 变化档及 Query 并发/冷缓存、Degradation 尚未完成；排序权重、Total、租约和兼容版本策略仍待 API Freeze | 完成正式 500k 性能矩阵并冻结接口 |
+| 阶段 4：查询与媒体 | 🟡（主线完成，部分参数未冻结） | 🟡（Correctness 与 500,000 publication 正式矩阵完成；完整 Reference Gate 未过） | 搜索、排序、分页、显式规则/有效封面、媒体读取、缩略图及用户/治理 Creator keyset 均有代码闭环；500,000 Correctness/Cursor 通过，十来源双关系 publication 的 1%/10%/50% 三档各 20 个样本全部完成，60/60、失败 0，P95 分别为 2.168/2.147/5.581 ms | Query 并发/冷缓存、Degradation 尚未完成；排序权重、Total、租约和兼容版本策略仍待 API Freeze | 完成正式 500k Query/Degradation 矩阵并冻结接口 |
 | 阶段 5：账户、安全与多客户端 | 🟠（代码与合成安全收尾已实现） | 🟡（Personal、同机 LAN 与 Windows 恶意媒体真实工具补证，正式 Gate 未通过） | LAN 本地账户、Argon2id、Session、API Token、资源 Grant、匿名 Share 与 WS 防滥用已有代码/浏览器链；13 个合成恶意媒体样本经 pin 的真实 ffprobe/ffmpeg 有界收敛 | 真实 LAN 多设备、目标设备 Argon2id 与非 Windows 外部工具资源门禁未完成 | 完成外部设备和其余平台安全门禁 |
-| 阶段 6：Web/PWA 界面 | 🟠（页面代码基线与双入口设计重构已实现） | 🟡（隔离 Chromium/Firefox 真实后端 E2E、当前全路由 axe 与模拟强制颜色/400% 等效重排已建立；正式 Gate 未通过） | 同源 Web/PWA 覆盖浏览与管理页面；当前 19 条路由及 5 个关键交互状态在桌面、窄屏或 320px 高对比/文本间距组合通过 axe；EV-129/132 已清除全部依赖审计例外，EV-136～EV-145 已窗口化主要大列表与规则配置、对齐 256 层深度，并验证 4,096/10,000 正式项数 | 浏览器业务链仍使用合成 Source；真实存储浏览器链、其余弱网矩阵、真实移动/触控、人工屏幕阅读器、真实浏览器缩放、物理操作系统高对比、完整草稿解析/序列化/AJV/内存与交互状态组合未完成 | 扩大真实业务与可访问性门禁，不进入桌面壳 |
+| 阶段 6：Web/PWA 界面 | 🟠（页面代码基线与双入口设计重构已实现） | 🟡（隔离 Chromium/Firefox 真实后端 E2E、当前全路由 axe 与模拟强制颜色/400% 等效重排已建立；正式 Gate 未通过） | 同源 Web/PWA 覆盖浏览与管理页面；当前 19 条路由及 5 个关键交互状态在桌面、窄屏或 320px 高对比/文本间距组合通过 axe；EV-129/132 已清除全部依赖审计例外，EV-136～EV-146 已窗口化主要大列表与规则配置、对齐 256 层深度、验证 4,096/10,000 正式项数，并对齐规则内容 8 MiB 前后端边界 | 浏览器业务链仍使用合成 Source；真实存储浏览器链、其余弱网矩阵、真实移动/触控、人工屏幕阅读器、真实浏览器缩放、物理操作系统高对比、8 MiB 内完整草稿解析/序列化/AJV/内存与交互状态组合未完成 | 扩大真实业务与可访问性门禁，不进入桌面壳 |
 | 阶段 7：平台适配与正式发行 | 🟠（Windows 便携、恢复/回滚、连续升级及真实 FileID 垂直链） | 🟡（本地制品、schema 20～23→24/反向拒绝、包内、进程级、当前用户 ACL 与 FileID 门禁切片通过，正式 Gate 未通过） | 精确干净提交可生成同源双前端 ZIP、三份 SBOM、清单、摘要与签名状态门禁；正常/损坏备份、真实 schema 20/21/22/23→24、凭据承接与反向拒绝、Windows 轮换/落位失败、当前库缺失、安全收尾续接、状态文件失败、双 Rename fail-closed、finalize 强杀、真实 NTFS ACL 拒绝，以及 Windows 128-bit FileID 扫描/Hash/确认链均已通过 | 正式签名、安装/更新、schema 20 以前开发快照、磁盘满、低完整性/多账户/继承 ACL、其它恢复窗口强杀/真实断电、Linux 原生/SMB/NAS/重挂载身份、平台矩阵及桌面壳未完成 | 完成 Windows RC 门禁 |
 
 状态图例、每个阶段的详细功能清单、测试与门禁证据，见完整项目状态文档：
@@ -137,7 +141,7 @@ EV-93 已定位并修复上述取消延迟的确定性根因：Scheduler 虽已�
 
 EV-94 已完成真实补证：首轮 Scan/Attempt 在 45 秒边界同秒 cancelled、无 publication，取消 POST 后 201 ms 即观察终态；随后同 AppDirs 恢复重跑 531.695 秒完整通过，7 findings/0 failures，`bounded-index-scan=45,397 ms`，最终全树 guard 零变化。该结论仅覆盖 Windows 本地 SSD/Pixiv/index discovery，不代表活动 Hash、HDD/SMB/NAS、全量扫描/哈希/发布或 RC Gate。
 
-EV-96 已建立 publication 性能执行器：十 Source 加权语料可精确测量全局 1%/10%/50% 变化，覆盖生产 Store 的完整候选、验证、发布、GC/Checkpoint、历史快照与空间报告。但初版虽声明每 Work 两条 Creator 关系，实际只写入一条；旧 1,000/100,000 Work 数字因此只保留为容量与工具证据。EV-97 已真正实装并核对每 Work 两条关系，增加 fail-closed 原子断点续跑；EV-98 随后以 2 核亲和性完成纠正后 100,000 Work/10 Source 预检，全局三档 3/3、0 failure，每轮实测 200,000 条 WorkCreator 关系，同环境完成报告 `-resume` 退出码 0；EV-99 又将十个权威目标来源代号和实测 `goMaxProcs` 纳入报告/续跑指纹；EV-100 再让通用 Query Reference seed/probe 强制同一 500k/十目标来源/双关系形状，并在计时前验证实际 active publication 与 manifest 一致；EV-101 又把 63 组合 Query 矩阵改为只复用完整成功前缀的原子分窗续跑，并把矩阵、缓存、publication 与实测环境共同封入报告身份。正式 500,000 多样本、并发/冷缓存与 Degradation 仍未执行，因此 Reference Performance/API Freeze Gate 继续保持未通过。
+EV-96 已建立 publication 性能执行器：十 Source 加权语料可精确测量全局 1%/10%/50% 变化，覆盖生产 Store 的完整候选、验证、发布、GC/Checkpoint、历史快照与空间报告。但初版虽声明每 Work 两条 Creator 关系，实际只写入一条；旧 1,000/100,000 Work 数字因此只保留为容量与工具证据。EV-97 已真正实装并核对每 Work 两条关系，增加 fail-closed 原子断点续跑；EV-98 随后以 2 核亲和性完成纠正后 100,000 Work/10 Source 预检；EV-99 又将十个权威目标来源代号和实测 `goMaxProcs` 纳入报告/续跑指纹；EV-100 再让通用 Query Reference seed/probe 强制同一 500k/十目标来源/双关系形状；EV-101 又把 63 组合 Query 矩阵改为只复用完整成功前缀的原子分窗续跑。EV-147 现已完成 publication 正式形状的三档各 20 样本，60/60、0 failure，P95 为 2.168/2.147/5.581 ms，全部旧快照跨构建可读；该 publication 子矩阵通过。500,000 Query warm/cold-process 并发与 Degradation 仍未执行，因此完整 Reference Performance/API Freeze Gate 继续保持未通过。
 
 EV-102 部分采纳新增的共享动效语言基座：双入口共用重新选定的四档时序和曲线，用户端同范围查询在新快照到达前保留不可交互旧视觉，并以稳定作品身份完成有预算、可中断且无残留的网格交接；媒体在实际解码后于固定槽位显现，灯箱拖动/捏合保持跟手，管理端只增加局部状态与浮层反馈。当前作品 API 是 keyset cursor，数量还可能只是下限，因此没有伪造精确页码滑轨。Chromium/Firefox mock smoke 20/20 与两浏览器各 21 项隔离真实 `galleryd` 完整链通过，但物理移动设备、人工屏幕阅读器和正式 Web Gate 仍未完成。
 
@@ -192,6 +196,8 @@ EV-143 将当前规则编辑器的 RJSF 数组、参数 Schema 属性、tests、
 EV-144 将前端结构化 JSON 的递归挂载边界与后端 `MaxRuleNestingDepth=256` 对齐：显式栈从完整 RulePackage 指针深度检查，完整规则第 257 层容器只显示警告并保留无损文本，跨语言 Go 测试阻止常量漂移。同轮完整 smoke 在 Chromium 捕获 Modal 进入态祖先 opacity 导致的 3.54:1 对比度，改为遮罩背景色过渡及内容位移后，深度/高对比双浏览器定向各 2/2、管理组件 54/54、225 项 Vitest、最终 mock 36/36 与 1068.1 秒根级全仓门禁通过。该证据不限制完整草稿解析或内存，也未覆盖 4,096/10,000 项极限、真实后端同规模或真实设备。
 
 EV-145 直接把规则 Schema 的正式数组上限纳入持续门禁：同一草稿包含 4,096 个 primitive 与 10,000 个 test 时，两类编辑器均只挂载当前 20 项，205/500 页边界正确，切回无损 JSON 文本后 `primitive_limit_4095` 与 `test-limit-09999` 均存在。定向组件 1/1、Chromium/Firefox 2/2、15 文件 226 项 Vitest、完整 mock 36/36 与 1087.5 秒根级全仓门禁通过。该证据不限制完整草稿解析、序列化、AJV 或浏览器内存，也不覆盖无 Schema 项数上限的对象、同规模真实后端或真实设备。
+
+EV-146 修复规则正式内容上限与 HTTP 传输上限不一致：通用 JSON API 继续限制为 1 MiB，规则端点使用可覆盖 Impact 双精确文档最坏 JSON 转义的独立预算，每份内容仍由应用层按 8 MiB 拒绝。管理端用 `TextEncoder` 计算 UTF-8 字节，超限原文保留，但不再进入 Lossless JSON、Schema/AJV 或保存链；Go 测试锁定 TypeScript 与后端常量。真实 HTTP import/save 已接受大于 1 MiB 的正文并拒绝大于 8 MiB 的 content；定向组件 2/2、双浏览器生产资产 4/4、16 文件 228 项 Vitest、mock 38/38、Windows 受影响包、WSL2 race 与 1385.1 秒根级全仓门禁通过。该证据没有从真实 `galleryd` 浏览器提交同一超大正文，也不限制保留原文的内存或证明 8 MiB 内最坏结构。
 
 EV-103 开始阶段 7 的窄发行基线：精确干净提交 `ac92f57` 可构建同源内嵌完整当前用户端/管理端的 Windows x64 便携 ZIP，并生成三个 CycloneDX SBOM、发行清单、包内/外 SHA-256 与实际 Authenticode 状态。12,454,092-byte 本地包通过版本、摘要、SBOM、内嵌 Web 和同 AppDirs 强杀重启 smoke，清单为 `dirty=false`、`unsigned`。它没有安装器、自动更新、CredentialStore、正式签名或真实升级/回滚，不能称为 RC。
 

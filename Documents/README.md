@@ -2,7 +2,9 @@
 
 本目录是 Gallery（中文名“画廊”、代码代号 `gallery`）未来正式实现的唯一工程文档入口。这里保存当前规范、实施指南、验证证据、架构决策，以及集中待评审的前端设计材料，不保存分散的调研过程、阶段汇报或已完成任务清单。
 
-当前补充状态（2026-07-31）：[EV-145](证据/验证记录.md) 已在 EV-136～EV-144 的列表/配置窗口和 256 层深度门禁上，直接验证同一草稿的 4,096 个 primitive 与 10,000 个 test 均只挂载当前 20 项，切回无损 JSON 文本后末项仍完整存在。当前阶段 6 缺口已收窄为完整草稿解析/序列化/AJV/内存、无 Schema 项数上限的任意对象、同规模真实后端、真实设备与完整可访问性/弱网门禁；Web Gate 仍未通过。下文较早的 EV-136～EV-144 汇总应结合本段增量阅读。
+当前补充状态（2026-07-31）：[EV-146](证据/验证记录.md) 已在 EV-136～EV-145 的列表/配置窗口、256 层深度和正式项数门禁上，修复规则正式 8 MiB 内容契约被通用 HTTP 1 MiB 解码上限提前截断的问题，并让管理端按 UTF-8 字节在解析、Schema/AJV 与保存前有界降级、保留超限原文。当前阶段 6 缺口已收窄为 8 MiB 内完整草稿解析/序列化/AJV/内存、无 Schema 项数上限的任意对象、真实 `galleryd` 浏览器超大正文、真实设备与完整可访问性/弱网门禁；Web Gate 仍未通过。下文较早的 EV-136～EV-145 汇总应结合本段增量阅读。
+
+[EV-147](证据/验证记录.md) 已完成阶段 4 的 500,000 Work/十权威目标来源/双 Creator 关系 publication 正式矩阵：1%/10%/50% 各 20/20，总计 60/60、失败 0，P95 为 2.168/2.147/5.581 ms 且全部旧快照跨构建可读。该 publication 子矩阵通过；同形状 Query warm/cold-process 并发与 Degradation 尚未执行，完整 Reference Performance Gate/API Freeze 仍未通过。
 
 2026-07-28 的 [EV-65](证据/验证记录.md) 已把当时的 Personal 11/11、LAN 1/1、同 AppDirs 恢复重启和只读 Source guard 的隔离真实后端链从 Chromium 扩展到桌面 Firefox，并让 Chromium/Firefox smoke 与完整隔离链进入 CI；[EV-66](证据/验证记录.md) 又关闭显式扫描/Watcher 状态脱节、扫描期间事件丢失与维护 Job 终态不刷新的竞态；[EV-67](证据/验证记录.md) 再把全部 15 类现有 primitive config 接入权威 Schema 可视化字段；[EV-68](证据/验证记录.md) 让当前规范 JSON 草稿以无损参数和显式合成 Sample 执行 Dry Run、Explain、Trace；[EV-69](证据/验证记录.md) 补齐基于本地精确基线的按字段撤销；[EV-70](证据/验证记录.md) 继续为 `parameter_schema`、tests、extensions 建立无损结构化编辑和任意 JSON 树；[EV-71](证据/验证记录.md) 再用真实单帧丢失证明 sequence gap 会重取 jobs、libraries 与 sources HTTP snapshot；[EV-72](证据/验证记录.md) 又从双浏览器 UI 证明运行中 Scan、活动 Hash、Attempt 与 publication 的取消收敛；[EV-73](证据/验证记录.md) 继续以真实 `galleryd` 强杀、同 AppDirs 立即重启和未来租约不改表，证明启动期单写者能立即接管遗留 Attempt，并让 UI 解释和治理 `PROCESS_INTERRUPTED`；[EV-74](证据/验证记录.md) 建立首批治理链，[EV-75](证据/验证记录.md) 再覆盖 SourceWork merge、全部 orphan decision/实体类型与已消费决策冲突，[EV-76](证据/验证记录.md) 又补齐普通 Binding issue 三决定、真实生命周期、双标签页冲突与 51 条 keyset 分页并修复活动唯一性，[EV-77](证据/验证记录.md) 再实际消费三种剩余结构 action，并经同 AppDirs 重启验证 Work/Creator/Media 孤儿重现身份语义。阶段 6 Web Gate 仍因真实移动设备/屏幕阅读器、完整弱网矩阵与正式可用性门禁缺口而未通过。
 
