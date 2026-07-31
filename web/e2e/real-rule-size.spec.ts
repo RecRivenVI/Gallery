@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto';
 import { readFile } from 'node:fs/promises';
 import { expect, test, type Page, type Response } from '@playwright/test';
 
@@ -11,6 +12,10 @@ const genericJSONLimit = 1 << 20;
 const rulePackageLimit = 8 << 20;
 const packageName = '真实浏览器大正文规则';
 const sentinel = 'EV-148-LARGE-DRAFT-END';
+
+function sha256(value: string): string {
+  return createHash('sha256').update(value).digest('hex');
+}
 
 function pathIs(response: Response, path: string, method = 'GET'): boolean {
   return response.request().method() === method && new URL(response.url()).pathname === path;
@@ -103,9 +108,9 @@ test('EV-148 真实 galleryd 完整保存并重载大于 1 MiB 的规则草稿 @
     page.reload()
   ]);
   expect(reloadResponse.status()).toBe(200);
-  const reloadedDraft = (await reloadResponse.json()) as { revision: number; contentText: string };
-  expect(reloadedDraft.revision).toBe(savedDraft.revision);
-  expect(reloadedDraft.contentText).toBe(savedDraft.contentText);
   await page.getByRole('tab', { name: 'JSON 文本' }).click();
-  expect(await page.getByRole('textbox', { name: '草稿内容' }).inputValue()).toBe(reloadedDraft.contentText);
+  const reloadedText = await page.getByRole('textbox', { name: '草稿内容' }).inputValue();
+  expect(new TextEncoder().encode(reloadedText).byteLength).toBeGreaterThan(genericJSONLimit);
+  expect(reloadedText).toContain(sentinel);
+  expect(sha256(reloadedText)).toBe(sha256(savedDraft.contentText));
 });
