@@ -162,6 +162,8 @@ type QueryPerfMatrix struct {
 	Fingerprint             string `json:"fingerprint"`
 	PublicationFingerprint  string `json:"publicationFingerprint,omitempty"`
 	ThresholdProfile        string `json:"thresholdProfile,omitempty"`
+	TotalBudget             int64  `json:"totalBudget"`
+	TotalProtocolVersion    int    `json:"totalProtocolVersion"`
 	CacheMode               string `json:"cacheMode"`
 	WarmupRuns              int    `json:"warmupRuns"`
 	PerRequestTimeoutMs     int64  `json:"perRequestTimeoutMs"`

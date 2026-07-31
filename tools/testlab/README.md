@@ -122,7 +122,8 @@ Personal Session，执行 320px/forced-colors/文本间距下的 Token 校验、
 `query-reference-500k-p95-v1`；其它规模和 `directional` 矩阵的 P95 预算为 0，只提供诊断，不能冒充
 Reference 阈值结论。同一组合的并发请求具有完全相同的查询页身份，生产服务允许只合并同时在途的
 同 SQL/实参构建；因此这里的 concurrency 衡量重复请求风暴下的响应延迟，不代表不同搜索词/游标的
-混合吞吐。具体阈值以测试与发布门禁中的冻结表为准。
+混合吞吐。矩阵身份和报告还必须绑定运行时 `TotalBudget`/`TotalProtocolVersion`，预算漂移不得续跑到
+旧报告中。具体阈值以测试与发布门禁中的冻结表为准。
 
 查询矩阵从启动时的 `0/N`、每个完整组合到终态都原子写入同一个 `results-out`。分窗到期会以非零
 退出码和失败 terminal finding 明示“尚未完成”；后续 `-resume` 只保留完整成功的组合前缀并继续下一项。

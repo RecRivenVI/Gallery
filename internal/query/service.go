@@ -29,8 +29,9 @@ const TotalProtocolVersion = 1
 // TotalBudget 是精确计数与下限估算的分界：WHERE 命中行数不超过该值时返回精确值，
 // 否则返回 lower_bound=TotalBudget，避免普通列表路径执行无上限全库 COUNT。变量
 // （非常量）是有意为之：PRE_FREEZE，正式预算与默认策略留待下一轮真实规模压力测试后
-// 冻结，测试可临时调整以验证 lower_bound 分支而不必构造万级合成语料。
-var TotalBudget int64 = 10000
+// 冻结，测试可临时调整以验证 lower_bound 分支而不必构造万级合成语料。5000 是
+// 当前经过 500k cold-process 压力测试收紧后的候选值，API Freeze 前仍可复审。
+var TotalBudget int64 = 5000
 
 // TotalMode 区分 total 语义：exact 精确、lower_bound 命中数超过预算的下限估算、
 // omitted 客户端显式跳过统计。

@@ -9,6 +9,7 @@ import (
 	"sync"
 	"time"
 
+	galleryquery "github.com/RecRivenVI/gallery/internal/query"
 	api "github.com/RecRivenVI/gallery/pkg/galleryapi"
 	"github.com/RecRivenVI/gallery/tools/testlab/internal/corpus"
 	"github.com/RecRivenVI/gallery/tools/testlab/internal/environment"
@@ -294,7 +295,7 @@ const (
 
 	queryPerfTerminalFinding    = "perf/matrix-completed-without-time-abort"
 	environmentGateFinding      = "environment/gate-required-facts-complete"
-	queryPerfFingerprintVersion = "query-perf-matrix-v2"
+	queryPerfFingerprintVersion = "query-perf-matrix-v3"
 )
 
 func queryPerfCacheMode(opts PerfOptions) string {
@@ -313,8 +314,9 @@ func queryPerfCacheMode(opts PerfOptions) string {
 func queryPerfMatrixDefinition(combos []combination, timeouts PerfTimeouts, opts PerfOptions) report.QueryPerfMatrix {
 	var definition strings.Builder
 	thresholdProfile := thresholdProfileFor(combos)
-	fmt.Fprintf(&definition, "%s\npublication=%s\ncache=%s\nwarmup=%d\nprocessColdAtStart=%t\nthresholdProfile=%s\nrequestNs=%d\ncombinationNs=%d\n",
+	fmt.Fprintf(&definition, "%s\npublication=%s\ncache=%s\nwarmup=%d\nprocessColdAtStart=%t\nthresholdProfile=%s\ntotalBudget=%d\ntotalProtocolVersion=%d\nrequestNs=%d\ncombinationNs=%d\n",
 		queryPerfFingerprintVersion, opts.PublicationFingerprint, queryPerfCacheMode(opts), opts.WarmupRuns, opts.ProcessColdAtStart, thresholdProfile,
+		galleryquery.TotalBudget, galleryquery.TotalProtocolVersion,
 		timeouts.PerRequest.Nanoseconds(), timeouts.PerCombination.Nanoseconds())
 	for i, combo := range combos {
 		fmt.Fprintf(&definition, "%d|%s|%d|%d|%d|%d|%t|%.3f|%t\n",
@@ -326,6 +328,8 @@ func queryPerfMatrixDefinition(combos []combination, timeouts PerfTimeouts, opts
 		Fingerprint:             fmt.Sprintf("%x", sum),
 		PublicationFingerprint:  opts.PublicationFingerprint,
 		ThresholdProfile:        thresholdProfile,
+		TotalBudget:             galleryquery.TotalBudget,
+		TotalProtocolVersion:    galleryquery.TotalProtocolVersion,
 		CacheMode:               queryPerfCacheMode(opts),
 		WarmupRuns:              opts.WarmupRuns,
 		PerRequestTimeoutMs:     timeouts.PerRequest.Milliseconds(),
@@ -371,6 +375,8 @@ func sameQueryPerfDefinition(recorded *report.QueryPerfMatrix, expected report.Q
 		recorded.Fingerprint == expected.Fingerprint &&
 		recorded.PublicationFingerprint == expected.PublicationFingerprint &&
 		recorded.ThresholdProfile == expected.ThresholdProfile &&
+		recorded.TotalBudget == expected.TotalBudget &&
+		recorded.TotalProtocolVersion == expected.TotalProtocolVersion &&
 		recorded.CacheMode == expected.CacheMode &&
 		recorded.WarmupRuns == expected.WarmupRuns &&
 		recorded.PerRequestTimeoutMs == expected.PerRequestTimeoutMs &&

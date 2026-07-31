@@ -10,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	galleryquery "github.com/RecRivenVI/gallery/internal/query"
 	"github.com/RecRivenVI/gallery/tools/testlab/internal/corpus"
 	"github.com/RecRivenVI/gallery/tools/testlab/internal/environment"
 	"github.com/RecRivenVI/gallery/tools/testlab/internal/report"
@@ -675,6 +676,20 @@ func TestQueryPerfFingerprintAllowsNewScenarioWindowOnly(t *testing.T) {
 	driftedCombination.PerCombination = 2 * time.Minute
 	if queryPerfMatrixDefinition(combos, base, opts).Fingerprint == queryPerfMatrixDefinition(combos, driftedCombination, opts).Fingerprint {
 		t.Fatal("单组合超时会改变样本含义，必须改变矩阵指纹")
+	}
+}
+
+func TestQueryPerfFingerprintBindsTotalBudget(t *testing.T) {
+	combos := []combination{{shape: perfShapes()["browse"], limit: 20, concurrency: 1, runs: 2}}
+	timeouts := PerfTimeouts{PerRequest: time.Second, PerCombination: time.Minute, Scenario: time.Minute}
+	opts := PerfOptions{WarmupRuns: 1, PublicationFingerprint: "publication-fingerprint"}
+	original := galleryquery.TotalBudget
+	defer func() { galleryquery.TotalBudget = original }()
+	base := queryPerfMatrixDefinition(combos, timeouts, opts)
+	galleryquery.TotalBudget = original - 1
+	drifted := queryPerfMatrixDefinition(combos, timeouts, opts)
+	if base.Fingerprint == drifted.Fingerprint || base.TotalBudget == drifted.TotalBudget {
+		t.Fatalf("TotalBudget 漂移未进入矩阵身份: base=%+v drifted=%+v", base, drifted)
 	}
 }
 
