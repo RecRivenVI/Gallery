@@ -14,6 +14,7 @@ import (
 	"testing"
 	"time"
 
+	api "github.com/RecRivenVI/gallery/api"
 	"github.com/RecRivenVI/gallery/internal/application"
 	"github.com/RecRivenVI/gallery/internal/auth"
 	"github.com/RecRivenVI/gallery/internal/catalog"
@@ -32,7 +33,6 @@ import (
 	"github.com/RecRivenVI/gallery/internal/scanner"
 	"github.com/RecRivenVI/gallery/internal/storage"
 	"github.com/RecRivenVI/gallery/internal/transport/httpapi"
-	api "github.com/RecRivenVI/gallery/pkg/galleryapi"
 )
 
 // TestMediaVerificationBatchJobScopedToTargetsViaAPI 通过公共 HTTP API 对同一 Source 的

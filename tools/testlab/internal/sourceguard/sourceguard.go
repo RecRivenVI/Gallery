@@ -5,7 +5,7 @@
 // 重新实现清单遍历逻辑。
 //
 // 本包只依赖标准库：它同时被 testlabprobe 使用，而 probe 的既定边界是「只导入
-// pkg/galleryapi 与标准库」。因此链接判定在这里本地实现，语义与
+// api 与标准库」。因此链接判定在这里本地实现，语义与
 // internal/platform/filesystem.IsLink 完全一致，并由 sourceguard_link_parity_test.go
 // 逐 mode 位锁定二者不漂移。
 package sourceguard

@@ -172,7 +172,7 @@ func FuzzCursorVerifyMatchesIndependentOracle(f *testing.F) {
 				structured.Code, wantCode, truncateToken(token))
 		}
 		// CURSOR_EXPIRED 必须可重试（客户端从第一页刷新即可恢复），
-		// CURSOR_INVALID 必须不可重试。这条映射是规范/06 明写的客户端契约。
+		// CURSOR_INVALID 必须不可重试。这条映射是 docs/architecture/query-search-and-sorting.md 明写的客户端契约。
 		if structured.Code == fault.CodeCursorExpired && !structured.Retryable {
 			t.Fatalf("CURSOR_EXPIRED 必须可重试: %q", truncateToken(token))
 		}

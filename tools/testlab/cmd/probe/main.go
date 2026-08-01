@@ -1,5 +1,5 @@
 // Command testlabprobe 是正式压力测试的"被测查询路径"驱动器：只导入
-// pkg/galleryapi 生成的公开契约客户端与标准库（以及 tools/testlab 的共享模块和
+// api 生成的公开契约客户端与标准库（以及 tools/testlab 的共享模块和
 // stages/* 阶段包），从不导入 internal/* 包、不直接读写 SQLite 数据库。
 // 它编译并启动真实的 cmd/galleryd 二进制，指向一个既有 AppDirs（通常由
 // tools/testlab/cmd/seed 预先构建），通过一次性配对建立 Personal 管理 Session，再用
@@ -59,7 +59,7 @@ func run() int {
 	runs := flag.Int("runs", 30, "每个延迟场景的重复次数")
 	sourceRoot := flag.String("source-root", "", "media 场景（合成、非真实 Source）使用的可写临时根")
 	sourceIDFlag := flag.String("source-id", "", "real-media 场景使用的本机配置逻辑来源 ID（如 pixiv/微博），从 -config 指向的 testlab.local.json 解析物理路径")
-	configPath := flag.String("config", "", "本地测试配置路径（通常是 Documents/本地/testlab.local.json），real-media 场景必需")
+	configPath := flag.String("config", "", "本地测试配置路径（通常是 docs/development/examples/testlab.local.json），real-media 场景必需")
 	sourceAlias := flag.String("source-alias", "", "media 场景中真实 Source 的脱敏代号（写入结果，不写真实路径）")
 	storageClass := flag.String("storage-class", "", "人工标注的存储介质分类（ssd/hdd）。**只作交叉核对**：介质由 hostfacts 走到物理盘实测，两者不一致时报告冲突并以实测为准")
 	tier := flag.String("tier", "", "本次运行的规模等级标签（smoke/integration/preflight/reference/nonrecommended）")

@@ -6,7 +6,7 @@ body:
     id: location
     attributes:
       label: 文档位置
-      description: 文件路径，例如 README.md、PROJECT_STATUS.md 或 Documents/规范/xx.md
+      description: 文件路径，例如 README.md、AGENTS.md 或 docs/architecture/system-overview.md
     validations:
       required: true
 
@@ -22,7 +22,7 @@ body:
     id: evidence
     attributes:
       label: 事实代码或权威文档依据
-      description: 如果发现文档与实现不符，请指出对应代码路径或 Documents/ 下的权威规范/ADR/验证记录
+      description: 如果发现文档与实现不符，请指出对应代码路径，或 docs/ 下的权威规范、ADR、验证记录
     validations:
       required: false
 
@@ -36,10 +36,10 @@ body:
   - type: dropdown
     id: sync
     attributes:
-      label: 是否涉及 README 与 PROJECT_STATUS.md 的同步
-      description: 这两份文档的总体进度表要求保持一致，见 AGENTS.md「文档维护」一节
+      label: 是否需要同步导航或权威文档
+      description: 改名、移动、职责或事实源变化时，请检查相关索引、引用和唯一权威来源
       options:
-        - "否，只涉及其它文档"
+        - "否，只修改当前文档"
         - "是，需要同步检查"
         - "不确定"
     validations:

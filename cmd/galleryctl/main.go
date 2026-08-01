@@ -8,8 +8,8 @@ import (
 	"os"
 	"time"
 
-	api "github.com/RecRivenVI/gallery/pkg/galleryapi"
-	version "github.com/RecRivenVI/gallery/pkg/galleryversion"
+	api "github.com/RecRivenVI/gallery/api"
+	version "github.com/RecRivenVI/gallery/version"
 )
 
 func main() { os.Exit(run()) }

@@ -27,18 +27,18 @@ test-results/
 .vscode/
 
 # Cleanroom 源码、说明与小型机器可读结果纳入基线；大型可重建产物不入库
-Test-Bench/**/bin/
-Test-Bench/**/obj/
-Test-Bench/**/build/bin/
-Test-Bench/**/build/windows/
-Test-Bench/**/frontend/dist/
-Test-Bench/**/results/**/*-fixtures/
-Test-Bench/**/results/**/bleve/
-Test-Bench/**/*.bolt
-Test-Bench/**/*.zap
-Test-Bench/**/*.bin
+experiments/testbench/**/bin/
+experiments/testbench/**/obj/
+experiments/testbench/**/build/bin/
+experiments/testbench/**/build/windows/
+experiments/testbench/**/frontend/dist/
+experiments/testbench/**/results/**/*-fixtures/
+experiments/testbench/**/results/**/bleve/
+experiments/testbench/**/*.bolt
+experiments/testbench/**/*.zap
+experiments/testbench/**/*.bin
 
-# 本机测试环境路径与机器配置：只提交同目录下的 *.example.* 模板
-/Documents/本地/测试环境.local.md
-/Documents/本地/testlab.local.json
-/Documents/本地/≥1M测试清理清单.local.md
+# 本机测试环境路径与机器配置：只提交明确命名的模板文件
+/docs/development/local-environment.local.md
+/docs/development/examples/testlab.local.json
+/docs/development/large-test-cleanup.local.md

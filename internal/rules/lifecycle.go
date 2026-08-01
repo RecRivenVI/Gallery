@@ -80,7 +80,7 @@ type DryRunWork struct {
 	Date *DryRunWorkDate `json:"date,omitempty"`
 }
 
-// DryRunWorkDate 是作品发布时间的对外形态。RawValue 与 ParserVersion 是 `规范/06` 对时间排序的
+// DryRunWorkDate 是作品发布时间的对外形态。RawValue 与 ParserVersion 是 `docs/architecture/query-search-and-sorting.md` 对时间排序的
 // 明确要求：解析规则一旦变化，必须能识别出历史结果由旧规则产生，而不是让两代解析静默混用。
 type DryRunWorkDate struct {
 	// Instant 是 RFC3339 形式的 UTC 时刻。

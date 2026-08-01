@@ -6,7 +6,7 @@ import (
 	"path/filepath"
 	"testing"
 
-	api "github.com/RecRivenVI/gallery/pkg/galleryapi"
+	api "github.com/RecRivenVI/gallery/api"
 )
 
 type fakeResponse struct {

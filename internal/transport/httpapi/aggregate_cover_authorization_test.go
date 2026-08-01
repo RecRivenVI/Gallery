@@ -12,6 +12,7 @@ import (
 	"testing"
 	"time"
 
+	api "github.com/RecRivenVI/gallery/api"
 	"github.com/RecRivenVI/gallery/internal/application"
 	"github.com/RecRivenVI/gallery/internal/auth"
 	"github.com/RecRivenVI/gallery/internal/catalog"
@@ -27,7 +28,6 @@ import (
 	"github.com/RecRivenVI/gallery/internal/querytext"
 	"github.com/RecRivenVI/gallery/internal/storage"
 	"github.com/RecRivenVI/gallery/internal/transport/httpapi"
-	api "github.com/RecRivenVI/gallery/pkg/galleryapi"
 )
 
 // TestAggregateCoversRespectMediaAuthorization 锁定 Creator/Library 身份与媒体资源的

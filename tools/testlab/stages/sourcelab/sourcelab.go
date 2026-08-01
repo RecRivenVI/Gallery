@@ -12,7 +12,7 @@
 //   - 「跑完了」与「撞到边界停下了」是两个结论。任何一次触顶都会带着 Reason 进入报告，
 //     不允许把有界运行说成完整覆盖。
 //
-// 本包只导入 pkg/galleryapi 与 tools/testlab 的共享模块，不导入 internal/*，也不直接
+// 本包只导入 api 与 tools/testlab 的共享模块，不导入 internal/*，也不直接
 // 读写数据库。
 package sourcelab
 
@@ -25,7 +25,7 @@ import (
 	"strings"
 	"time"
 
-	api "github.com/RecRivenVI/gallery/pkg/galleryapi"
+	api "github.com/RecRivenVI/gallery/api"
 	"github.com/RecRivenVI/gallery/tools/testlab/internal/bounds"
 	"github.com/RecRivenVI/gallery/tools/testlab/internal/environment"
 	"github.com/RecRivenVI/gallery/tools/testlab/internal/report"

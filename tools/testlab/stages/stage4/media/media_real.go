@@ -7,7 +7,7 @@ import (
 	"os"
 	"time"
 
-	api "github.com/RecRivenVI/gallery/pkg/galleryapi"
+	api "github.com/RecRivenVI/gallery/api"
 	"github.com/RecRivenVI/gallery/tools/testlab/internal/environment"
 	"github.com/RecRivenVI/gallery/tools/testlab/internal/report"
 	"github.com/RecRivenVI/gallery/tools/testlab/internal/sourceguard"
@@ -16,7 +16,7 @@ import (
 // SetupRealMediaSourceWithRule 建立指向真实、只读、已授权 Source 有界子目录的
 // Library/Source，绑定 fixtures/rules/<来源> 下与该 Source 结构匹配的规则包，
 // 并触发首次真实 index 扫描。调用方必须先确认 sourceRoot 属于本机配置
-// （Documents/本地/testlab.local.json）登记的授权真实 Source 之一，并只传入该
+// （docs/development/examples/testlab.local.json）登记的授权真实 Source 之一，并只传入该
 // Source 根目录本身（由本函数在其中选择有界子目录），不得传入未授权目录；
 // ruleFixturePath 必须指向与该 Source 目录结构匹配的规则夹具。
 func SetupRealMediaSourceWithRule(rep *report.Report, sess *environment.Session, sourceRoot string, maxMediaItems int, ruleFixturePath string) (libraryID, sourceID string, workCount int, err error) {

@@ -2,44 +2,45 @@
 
 > 制品状态：{{RELEASE_STATUS}}
 >
-> 源码提交：`{{COMMIT}}`
++> 源码提交：`{{COMMIT}}`
++>
++> Authenticode：{{AUTHENTICODE_STATUS}}
 
-本包是无桌面壳发行形态：`galleryd.exe` 已内嵌完整用户前端与管理前端，浏览器是业务界面；
-`galleryctl.exe` 提供最小诊断入口。Node.js、npm 和 Go 不进入运行时。
+本包包含 `galleryd.exe`、`galleryctl.exe` 和内嵌 Web 客户端。运行时不需要 Go、Node.js 或 npm；浏览器是用户端和管理端界面。
 
-## 首次启动
+## 启动
 
-1. 在 PowerShell 中进入本目录。
+1. 完整解压 ZIP，在解压目录打开 PowerShell。
 2. 运行 `./galleryd.exe -mode personal -listen 127.0.0.1:8080`。
 3. 打开 `http://127.0.0.1:8080/`，按页面提示完成 Personal 配对。
-4. 结束服务时在运行窗口按 `Ctrl+C`，等待进程优雅退出。
+4. 结束时按 `Ctrl+C`，等待进程优雅退出。
 
-如果 8080 已占用，可改为其它 loopback 端口。不要把 Personal 模式绑定到局域网或公网地址；服务端也会拒绝该配置。
+端口占用时可选择其它 loopback 端口。Personal 模式不得绑定 LAN 或公网地址。`galleryd.exe -h` 显示当前参数；`galleryd.exe version` 和 `galleryctl.exe version` 显示制品版本。
 
-## 数据与只读 Source
+## 数据目录和 Source
 
-- 程序目录只保存可替换的发行文件；数据库、配置、日志、缓存和临时文件位于当前 Windows 用户的 Gallery AppDirs。
-- 媒体 Source 永久只读。不要把 AppDirs 放进 Source，也不要把 Source 放进 AppDirs。
-- `galleryd.exe -h` 可查看启动参数；`galleryd.exe version` 与 `galleryctl.exe version` 可核对制品版本。
-- `release-manifest.json` 记录目标平台、提交、Web/契约版本、签名状态和文件摘要；包内 `SHA256SUMS` 与 ZIP 旁的 `.sha256` 可用于离线完整性核对。
-- 本制品的 control schema 为 {{CURRENT_CONTROL_SCHEMA}}；真实历史二进制门禁连续覆盖 schema {{MINIMUM_CONTROL_SCHEMA}} 到当前版本的前向迁移。更早的开发快照不在本制品已验证的升级范围内。
+- 默认配置目录为 `%APPDATA%\Gallery`；数据、状态、缓存、日志、临时文件和运行描述符位于 `%LOCALAPPDATA%\Gallery` 的对应子目录。
+- `-app-root <path>` 把上述目录统一放到指定根下，适合隔离实例。
+- Source 永久只读。AppDirs 与 Source 必须互不重叠，不同 Source 根也必须互不重叠。
+- 外部 `ffprobe`/`ffmpeg` 不从 `PATH` 自动发现；使用时必须同时配置路径、版本和 SHA-256。
 
-## 覆盖升级与回退
+## 完整性
 
-1. 在管理端创建并确认最新 `control.db` 备份。
-2. 用 `Ctrl+C` 停止旧进程，确认 `galleryd.exe` 已退出。
-3. 解压新包到新的程序目录，保留旧程序目录作为短期回退副本；不要覆盖或删除 AppDirs。
-4. 启动新版本。服务会在打开数据库前应用兼容迁移；Catalog 不兼容时允许重建，但用户事实必须从 control 备份恢复。
-5. 不要用旧版本直接打开已被新版本迁移的数据。需要回退时，先使用相应版本的 control 备份恢复流程。
+`release-manifest.json` 记录目标、版本、提交、Web/契约版本、签名状态和文件摘要。`SHA256SUMS` 与 ZIP 旁的 `.sha256` 用于离线核对；`sbom/` 保存 CycloneDX SBOM。
 
-当前没有自动更新器；升级必须显式完成上述备份和停止步骤。
+本包的 control schema 为 {{CURRENT_CONTROL_SCHEMA}}，manifest 声明的最早兼容基线为 {{MINIMUM_CONTROL_SCHEMA}}。兼容声明只适用于该制品实际通过的历史升级矩阵，不应外推到更早快照。
 
-## 安全与支持边界
+## 升级与回退
 
-- Authenticode 状态：{{AUTHENTICODE_STATUS}}。未签名包只能用于本地开发测试，不能冒充正式 RC。
-- 当前正式门禁状态以仓库 `PROJECT_STATUS.md` 和 `Documents/证据/验证记录.md` 为准；便携包构建成功不等于
-  Reference Performance、Security、Web、Windows 发行候选或 v1 门禁通过。
-- Windows 11 x64 / NTFS 是 v1 正式目标；其它系统、SMB/NAS/UNC、真实移动设备和桌面壳不得由本包外推为已支持。
+1. 在管理端创建并确认最新 control 备份。
+2. 用 `Ctrl+C` 停止旧进程并确认退出。
+3. 把新包解压到新的程序目录，不覆盖 AppDirs；暂时保留旧程序目录。
+4. 启动新版本并检查迁移与服务状态。
 
-Gallery 依据 GNU AGPL v3 发行。完整许可见 `LICENSE`，第三方说明见 `THIRD_PARTY_NOTICES.md`，对应源码位于
-`https://github.com/RecRivenVI/Gallery`。三个标准 CycloneDX 文件位于 `sbom/`，具体规范版本登记在发行清单中。
+不要用旧版本直接打开已被新版本迁移的数据。回退需要匹配版本和 schema 的已验证备份恢复流程。当前没有自动更新器。
+
+## 支持边界
+
+该制品只面向 Windows x64。未签名或标为测试状态的包不是正式 RC。构建成功、manifest 存在或基础启动成功均不等于 Correctness、Security、Performance、Web、升级和真实 Source 门禁全部通过。
+
+许可见 `LICENSE`，第三方说明见 `THIRD_PARTY_NOTICES.md`，对应源码仓库为 `https://github.com/RecRivenVI/Gallery`。

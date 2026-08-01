@@ -1,46 +1,27 @@
 # 安全政策
 
-## 当前支持状态
+## 支持范围
 
-| 版本 | 安全修复 |
-| --- | --- |
-| `main` / pre-alpha | 尽力处理 |
-| 已发布版本 | 当前没有正式发行版本 |
+Gallery 尚无正式发行版本。`main` 是 pre-alpha 开发线，安全修复按可用维护能力尽力处理，不承诺稳定版本支持周期或固定响应 SLA。
 
-Gallery 目前处于 pre-alpha 阶段，已有同源内嵌 Web/PWA 代码基线，但尚无安装包或正式发行版本，也没有面向普通用户的公开部署。安全政策的主要目的是为早期代码审阅者和贡献者提供一条私密报告渠道，而不是承诺已经具备成熟的漏洞响应 SLA。
+当前部署模型只包括：
 
-当前正式后端已实现 Personal 配对、LAN 本地账户、Argon2id、服务端 Session、API Token、资源 Grant 与即时吊销，以及带 scope/过期/吊销/固定 Blob 语义的匿名 Work/Media/媒体正文分享；Web/PWA 不把 Session、CSRF、secret、publication、cursor 或业务事实写入持久浏览器存储，Service Worker 也不缓存 API、WebSocket 或媒体响应。Chrome/Edge 已通过同机 Personal/LAN 主路径与 Session 吊销验证，但阶段 5 Security Gate 尚未通过。Personal 只用于 loopback；LAN 只适用于受信私网并要求先在 loopback 初始化 Owner；Remote/OIDC 与公网反向代理部署不受支持。当前剩余安全门禁主要是真实 LAN 多设备、目标低端设备 Argon2id 延迟/并发、真实恶意容器和外部工具资源上限验证。
+- Personal：仅允许 loopback，通过一次性配对建立 Session；
+- LAN：仅允许 loopback 或私有地址，必须先在本机初始化 Owner；
+- Remote/OIDC、公网反向代理和多租户：不受支持。
 
-## 报告安全问题
+## 私密报告
 
-请**不要**通过公开 Issue、Discussion 或 Pull Request 报告可能导致以下后果的问题：
+请使用 GitHub 的 [Private vulnerability reporting](https://github.com/RecRivenVI/Gallery/security/advisories/new)，不要通过公开 Issue、Discussion 或 Pull Request 披露可能造成以下影响的问题：
 
-- 未授权文件读取或写入
-- Source 只读边界被突破
-- 路径穿越或符号链接逃逸
-- Session、配对（Pairing）或 capability 授权绕过
-- API Token、资源 Grant、分享 credential 或 WebSocket 吊销绕过
-- 敏感信息、完整媒体路径或 token 泄露
-- 恶意媒体文件或 metadata 导致的资源耗尽（DoS）
-- 数据库损坏或用户事实（Canonical/Overlay/Binding 等）丢失
+- 未授权读取、Source 写入、路径穿越或链接逃逸；
+- 配对、Session、CSRF、账户、Token、Grant、分享或 WebSocket 授权绕过；
+- secret、绝对私人路径、媒体内容或敏感 metadata 泄露；
+- 恶意媒体、规则、Schema 或外部工具导致的资源耗尽；
+- `control.db` 用户事实丢失、备份恢复破坏或 Catalog 交叉 revision 泄漏。
 
-请改为使用 GitHub 的 [Private vulnerability reporting](https://github.com/RecRivenVI/Gallery/security/advisories/new) 提交报告。仓库已启用该功能，报告只对维护者可见。
+报告请包含受影响版本或 commit、最小复现、影响范围和建议缓解措施。使用合成数据并删除凭据、Cookie、个人路径和真实媒体。
 
-提交报告时请尽量包含：
+## 处理原则
 
-- 影响的模块或 API 路径
-- 复现步骤或触发条件
-- 预期行为与实际行为的差异
-- 相关 commit SHA 或分支
-
-请不要在报告中附带真实媒体内容、完整个人路径或其他他人隐私信息；如需说明结构，使用脱敏或合成示例即可。
-
-## 响应流程
-
-作为 pre-alpha 阶段的单人维护项目，暂不承诺固定的响应时限。收到报告后会尽快确认，评估影响范围，并在修复就绪后协调披露时间；报告者会被告知修复进度。
-
-## 已启用的仓库安全能力
-
-- Private vulnerability reporting
-- Dependabot alerts
-- Secret scanning 与 push protection
+维护者会先确认报告可复现性和影响边界，再协调修复与披露。修复尚未发布前，请避免公开利用细节。安全状态以当前代码与当轮验证为准；文档中的设计目标或历史记录不构成安全证明。

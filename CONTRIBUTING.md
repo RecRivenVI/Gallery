@@ -1,72 +1,62 @@
 # 贡献指南
 
-感谢你对 Gallery（画廊）感兴趣。本指南面向人类贡献者；自动化 Agent 除本指南外还必须完整遵守 [AGENTS.md](AGENTS.md)。
-
-## 项目当前状态
-
-- Gallery 仍处于 **pre-alpha**：阶段 0～4 后端主线、阶段 5 安全代码基线和阶段 6 Web/PWA 代码基线已实现，但尚无安装包或正式发行版本。
-- 当前主要目标是并行关闭阶段 4 性能/API Freeze、阶段 5 外部设备 Security Gate 与阶段 6 完整浏览器/可访问性 Gate；不得提前进入桌面壳或发行。
-- 尚无稳定的数据库表结构或 API 兼容性承诺；接口和 Schema 仍可能在冻结前调整。
-
-详见 [README.md](README.md) 和 [PROJECT_STATUS.md](PROJECT_STATUS.md) 的总体进度表。
+Gallery 处于 pre-alpha，当前只接受与 Windows x64 RC 收口、缺陷修复、文档和既有工程边界直接相关的变更。自动化 Agent 除本指南外还必须遵守 [AGENTS.md](AGENTS.md)。
 
 ## 开始之前
 
-- 阅读 [README.md](README.md) 了解项目定位。
-- 阅读 [PROJECT_STATUS.md](PROJECT_STATUS.md) 了解当前阶段与已知缺口。
-- 从 [Documents/README.md](Documents/README.md) 进入权威工程文档（规范、ADR、实施计划、验证记录）。
-- 自动化 Agent 必须额外遵守 [AGENTS.md](AGENTS.md)。
-
-## 提交 Issue
-
-- Bug 报告必须提供可复现步骤、涉及模块和实际/预期行为差异。
-- 功能建议应说明通用使用场景，而不是针对单一用户的定制需求。
-- 不接受针对单一 Provider 或平台的核心业务硬编码；差异应通过规则系统表达。
-- Gallery 是净室实现，不以任何旧 Gallery 的数据库、配置、API 或目录结构为兼容或迁移目标。
-- 安全问题请勿通过公开 Issue 报告，见 [SECURITY.md](SECURITY.md)。
+1. 阅读 [README.md](README.md) 和[产品定义](docs/reference/product-definition.md)。
+2. 从[工程文档总览](docs/README.md)找到对应主题的权威文档。
+3. 检查当前分支与未提交改动，避免覆盖其他工作。
+4. 对较大的架构或契约变化先提交 Issue 或 ADR 讨论。
 
 ## 开发环境
 
-- Go 1.26.5（与 [go.mod](go.mod) 和 CI 一致）；本地按你的操作系统正常安装该版本工具链即可，不需要复用仓库内部 Agent 使用的固定路径配置。
-- PowerShell（跨平台 `pwsh`）用于运行仓库检查脚本。
-- 修改 `web/` 需要 Node.js 22 与 npm 10；Node 只参与开发/构建，不是 `galleryd` 的运行依赖。
-- Git，并了解本仓库的提交信息规范（见下文）。
-- 修改 OpenAPI 定义后必须运行 `go generate ./...` 同步生成的客户端代码。
+- Windows x64；Windows x64 RC 前不主动推进其它系统或架构。
+- Go 1.26.5；仓库检查脚本会拒绝其它 Go 版本。
+- PowerShell 7，用于仓库自带的 Windows 检查与发行脚本。
+- 修改 `web/` 时需要 Node.js 22.22.0 或更高版本及 npm 10.9.8；CI 当前使用 Node.js 22.23.1。
+- Git 检出必须遵守 `.gitattributes`，所有文本使用 UTF-8 与 LF。
 
-### 文本换行
+## 代码边界
 
-- 仓库内所有 tracked 文本文件统一使用 LF，权威规则写在 [.gitattributes](.gitattributes)（`* text=auto eol=lf`），clone 后的换行由它决定。
-- 不需要、也不应该为本仓库修改全局 `core.autocrlf` 或 `core.eol`；无论你的 Git 全局配置是什么，检出结果都一致。
-- 若你的本地副本是在 2026-07-25 之前 clone 的，工作树中可能残留 CRLF。执行一次 `git add --renormalize .` 确认索引无变化后，用 `git rm --cached -r .` 加 `git reset --hard` 刷新工作树即可（该操作会丢弃未提交改动，请先提交或 stash）。
-- Windows 与 Linux/macOS 运行的是同一套格式检查，结果必须一致。若 `Check.ps1` 报出大量 Prettier 失败，先确认工作树换行（`git ls-files --eol`），而不是直接运行 `prettier --write`。
+- `Source` 永久只读，AppDirs 与 Source 必须互不重叠。
+- 不修改历史 migration；新增 Schema 通过新的连续 migration 表达。
+- 来源差异进入规则，不在通用代码中按 Provider 名称硬编码。
+- 平台行为进入 `internal/platform/*`，业务核心保持平台中立。
+- HTTP、WebSocket 和公开 DTO 先修改 OpenAPI 或对应契约源，再更新生成物。
+- 不提交真实媒体、私密路径、凭据、运行数据库、日志或大型测试结果。
 
-## 代码与架构要求
+## 生成与检查
 
-以下边界摘自 [AGENTS.md](AGENTS.md) 的产品不变量，PR 审查会据此把关：
+常用入口如下：
 
-- Source（媒体来源）永久只读，不改名、不移动、不删除、不写回原始媒体或 metadata。
-- 不修改已生效的历史 migration；新变更通过新增 migration 表达。
-- 平台相关能力（文件身份、Watcher、路径、进程、凭据等）必须经 `internal/platform/*` 与 `internal/ports` 适配层，不得直接写入领域或应用层。
-- 规则系统不得执行任意代码；CEL 表达式仅限受限布尔条件、集合谓词和简单值选择。
-- API 拥有协议语义：排序、过滤、分页、授权由后端决定，客户端不得重排服务端列表或直连数据库。
+```powershell
+./Check.ps1 -BackendOnly
+./Check.ps1
+./Check.ps1 -Race
+```
 
-## 依赖与第三方材料
+完整检查会执行依赖安装和测试，运行前先阅读[测试与发布门禁](docs/development/testing-and-release-gates.md)。仅修改 OpenAPI 时，生成入口是：
 
-- 新增依赖前检查其许可证与 AGPL-3.0-only 的兼容性；避免引入未知许可证、来源不明或强 copyleft 冲突的依赖。
-- 直接复制或改编第三方源码、字体、图片等资产时，必须保留原始版权与许可证声明，并在 [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md) 登记来源；不得将第三方文件重新声明为项目原创的 AGPL 材料。
-- `go.mod`/`package.json` 中声明的依赖关系本身不等于仓库复制了其源码，两者在合规处理上不同，不要混为一谈。
-- 安全相关的依赖升级必须同步对应的 manifest 与 lockfile，并执行该模块已有的构建与测试门禁。
+```powershell
+go generate ./...
+cd web
+npm run generate:api
+```
 
-## 测试
+Web 的脚本与产物关系见[生成文件说明](docs/development/generated-files.md)。
 
-- 常规检查使用仓库根目录的 `Check.ps1`（Windows/跨平台 `pwsh`），会先断言 tracked 文件换行为 LF，再执行 Go/OpenAPI 生成一致性、`gofmt`、`go vet`、测试和构建，以及 Web 的 `npm ci`、生成一致性、TypeScript、ESLint、Prettier、Vitest 与生产构建。
-- 浏览器 smoke 运行 `cd web && npm run build && npx playwright install chromium && npm run test:smoke`；真实后端 E2E 只使用合成数据与临时 AppDirs。
-- Race 检测（`-race`）需要在 Linux 环境（原生 Linux 或 WSL2）执行；Windows 原生 Go race runtime 在本项目环境下有已知限制。
-- 新增功能或修复 Bug 必须包含直接测试；migration、OpenAPI 变更需要对应的契约/集成测试覆盖。
+## Issue 与安全问题
+
+- Bug 报告应包含最小复现、实际行为、预期行为、环境和相关模块。
+- 功能建议说明通用场景、范围和非目标，不以单一 Provider 的特例替代规则设计。
+- 安全问题不要公开提交，按 [SECURITY.md](SECURITY.md) 的私密渠道报告。
 
 ## Pull Request
 
-- 一个 PR 对应一个可独立解释、审查和撤销的逻辑结果；不相关的重构、格式化或多个独立能力请拆分为不同 PR。
-- 请在描述中说明契约、migration、测试和文档影响，参考 [PR 模板](.github/PULL_REQUEST_TEMPLATE.md)。
-- 涉及较大设计变更（新增子系统、改变已接受的技术方向）建议先开 Issue 讨论，再提交实现。
-- 提交信息请遵循 Conventional Commit 风格的 `type(scope): 中文标题` 结构；如需了解本仓库对提交粒度和格式的完整强制规范，参见 [AGENTS.md](AGENTS.md) 的“Git Commit Message 规范”一节。
+- 一个 PR 只完成一个可独立审查和回退的逻辑结果。
+- 描述契约、migration、平台、生成物、文档和依赖影响。
+- 只列实际执行过的验证；未运行项明确写出，不引用旧结果替代。
+- 使用仓库 PR 模板，并确保没有 secret、真实路径或媒体内容。
+
+直接包含第三方源码或资产时保留原许可证，并同步 [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)。

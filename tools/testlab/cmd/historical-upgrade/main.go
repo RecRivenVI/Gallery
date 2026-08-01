@@ -14,13 +14,12 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
-	"runtime"
 	"sort"
 	"strconv"
 	"strings"
 	"time"
 
-	api "github.com/RecRivenVI/gallery/pkg/galleryapi"
+	api "github.com/RecRivenVI/gallery/api"
 	testprocess "github.com/RecRivenVI/gallery/tools/testlab/internal/process"
 )
 
@@ -82,8 +81,8 @@ func main() {
 }
 
 func run(historicalBin, currentBin, historicalCommit, currentCommit string, historicalSchema, currentSchema int64) error {
-	if runtime.GOOS != "windows" {
-		return fmt.Errorf("historical upgrade smoke 只能在 Windows 上执行")
+	if err := requireSupportedPlatform(); err != nil {
+		return err
 	}
 	historicalPath, currentPath, err := validateInputs(
 		historicalBin, currentBin, historicalCommit, currentCommit, historicalSchema, currentSchema,

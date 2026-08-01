@@ -88,7 +88,7 @@ func signedCursor(t *testing.T, key []byte, claims query.CursorClaims) string {
 //
 // 二者曾共用不可重试的 `CURSOR_INVALID`：协议一旦升级，每一个正在分页的客户端都会收到一个声称
 // 「不可恢复」的错误，而它拿着的游标在签发时完全合法，正确做法只是从第一页重新开始。
-// `规范/06` 明写「排序协议升级 → CURSOR_EXPIRED」，本测试使代码与规范不再分叉，也使将来为修排序键
+// `docs/architecture/query-search-and-sorting.md` 明写「排序协议升级 → CURSOR_EXPIRED」，本测试使代码与规范不再分叉，也使将来为修排序键
 // 而递增 SortProtocolVersion 时不会把不可重试错误发给所有正在分页的客户端。
 func TestVerifySeparatesProtocolUpgradeFromMalformedCursor(t *testing.T) {
 	now := time.Date(2026, 7, 27, 0, 0, 0, 0, time.UTC)

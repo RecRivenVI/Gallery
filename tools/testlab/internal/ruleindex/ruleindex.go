@@ -2,7 +2,7 @@
 // 只读根路径的清单——的读写与脱敏代号规则。
 //
 // 本包只依赖标准库。它被 testlabprobe 链接，而 probe 的既定边界是「只导入
-// pkg/galleryapi 与标准库、从不导入 internal/*」：转换本身（导入
+// api 与标准库、从不导入 internal/*」：转换本身（导入
 // internal/rules/legacy）由独立的 testlabrulesimport 命令完成，probe 只消费它的产物。
 // 这样「验证入口消费转换产物而不是手写夹具」与「验证入口不持有特权访问」两条同时成立。
 //

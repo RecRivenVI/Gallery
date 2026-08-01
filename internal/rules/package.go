@@ -559,7 +559,7 @@ func compileSemanticExtensions(raw json.RawMessage) ([]IRCompiledExtension, erro
 // `target: "date"` 并因此被静默丢弃。任何新增可赋值字段都必须同时改这里与 assignTarget。
 //
 // **`date` 刻意不在此列。** 作品发布时间必须携带解析后的 instant、原始输入与解析器版本
-// （见 `规范/06` 对时间排序的要求），而普通 selector 只能搬运原始值、无法产出 instant。
+// （见 `docs/architecture/query-search-and-sorting.md` 对时间排序的要求），而普通 selector 只能搬运原始值、无法产出 instant。
 // 因此时间只能由 `work_date` 原语产出，规则里写 `target: "date"` 会在编译期被明确拒绝，
 // 而不是留下一个看似成功却没有时间的规则。
 var assignableTargets = map[string]struct{}{

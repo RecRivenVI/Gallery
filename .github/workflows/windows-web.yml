@@ -1,0 +1,81 @@
+name: Windows x64 Web 组件
+
+on:
+  push:
+    paths:
+      - "web/**"
+      - "api/**"
+      - "cmd/galleryd/**"
+      - "go.mod"
+      - "go.sum"
+      - "internal/**"
+      - ".github/workflows/windows-web.yml"
+  pull_request:
+    paths:
+      - "web/**"
+      - "api/**"
+      - "cmd/galleryd/**"
+      - "go.mod"
+      - "go.sum"
+      - "internal/**"
+      - ".github/workflows/windows-web.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  GOTOOLCHAIN: local
+  GOOS: windows
+  GOARCH: amd64
+
+jobs:
+  web:
+    name: 可选 Web 组件
+    runs-on: windows-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-go@v6
+        with:
+          go-version: 1.26.5
+          cache-dependency-path: go.sum
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 22.23.1
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+      - name: 安装、检查并构建 Web
+        working-directory: web
+        shell: pwsh
+        run: |
+          npm ci
+          npm run audit:ci
+          npm run typecheck
+          npm run lint
+          npm run format:check
+          npm test
+          npm run build
+      - name: 安装 Chromium 与 Firefox
+        working-directory: web
+        run: npx playwright install chromium firefox
+      - name: 执行浏览器 smoke
+        working-directory: web
+        run: npm run test:smoke
+      - name: 执行隔离 Chromium 与 Firefox 真实后端业务 E2E
+        working-directory: web
+        shell: pwsh
+        run: |
+          npm run test:real:bootstrap
+          npm run test:real:bootstrap -- -browser-project firefox
+      - name: 保存真实后端失败诊断
+        if: failure()
+        uses: actions/upload-artifact@v6
+        with:
+          name: web-real-backend-diagnostics
+          path: |
+            web/test-results/real-backend/galleryd*.log
+            web/test-results/**/*.png
+            web/test-results/**/*.webm
+          if-no-files-found: warn
+          retention-days: 7

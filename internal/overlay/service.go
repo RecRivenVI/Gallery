@@ -31,7 +31,7 @@ const (
 // 还是可以在写入后立即以 control.db 当前值展示而不影响当前页成员与顺序（Live）。
 // 这是当前实现，不是字段永久分类：某字段一旦参与过滤、排序、搜索或集合判断，必须
 // 改为 Snapshot 并进入对应查询的 dependency set 与 revision。见
-// Documents/规范/06-查询-搜索与排序.md「Overlay 查询依赖」。
+// docs/architecture/query-search-and-sorting.md「Overlay 查询依赖」。
 type DependencyClass string
 
 const (
@@ -43,7 +43,7 @@ const (
 // 不是任何具体查询的最终 dependency set。具体查询的 dependency set 必须由查询 planner
 // （见 internal/query 的 dependencySet 构建逻辑）根据实际请求（用了哪些过滤字段、
 // 排序依据、是否搜索）从这张能力表筛出真正相关的子集，不能反过来把这张静态表整体
-// 当作某次查询用到的字段集合。见 Documents/规范/06-查询-搜索与排序.md「Overlay 查询依赖」。
+// 当作某次查询用到的字段集合。见 docs/architecture/query-search-and-sorting.md「Overlay 查询依赖」。
 type FieldCapability struct {
 	// Display 字段可以出现在展示层（列表/详情响应）。
 	Display bool

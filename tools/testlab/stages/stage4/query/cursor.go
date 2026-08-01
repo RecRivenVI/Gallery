@@ -3,7 +3,7 @@ package query
 import (
 	"fmt"
 
-	api "github.com/RecRivenVI/gallery/pkg/galleryapi"
+	api "github.com/RecRivenVI/gallery/api"
 	"github.com/RecRivenVI/gallery/tools/testlab/internal/environment"
 	"github.com/RecRivenVI/gallery/tools/testlab/internal/report"
 )

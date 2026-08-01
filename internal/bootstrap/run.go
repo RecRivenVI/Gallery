@@ -43,7 +43,7 @@ import (
 	"github.com/RecRivenVI/gallery/internal/transport/httpapi"
 	watcherservice "github.com/RecRivenVI/gallery/internal/watcher"
 	"github.com/RecRivenVI/gallery/internal/webapp"
-	version "github.com/RecRivenVI/gallery/pkg/galleryversion"
+	version "github.com/RecRivenVI/gallery/version"
 )
 
 // 各资源类别的默认并发上限。scan 允许少量不同 Source 并行；overlay 单活跃投影 Job，取 1 与其

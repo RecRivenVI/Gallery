@@ -16,11 +16,10 @@ import (
 	"os/exec"
 	"path/filepath"
 	"reflect"
-	"runtime"
 	"strings"
 	"time"
 
-	api "github.com/RecRivenVI/gallery/pkg/galleryapi"
+	api "github.com/RecRivenVI/gallery/api"
 	testprocess "github.com/RecRivenVI/gallery/tools/testlab/internal/process"
 )
 
@@ -118,8 +117,8 @@ func main() {
 }
 
 func run(previousBin, currentBin, previousVersion, currentVersion string) error {
-	if runtime.GOOS != "windows" {
-		return fmt.Errorf("portable upgrade smoke 只能在 Windows 上执行")
+	if err := requireSupportedPlatform(); err != nil {
+		return err
 	}
 	if previousBin == "" || currentBin == "" || previousVersion == "" || currentVersion == "" {
 		return fmt.Errorf("必须完整指定两个二进制及其产品版本")

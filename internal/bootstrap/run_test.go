@@ -14,6 +14,7 @@ import (
 	"testing"
 	"time"
 
+	api "github.com/RecRivenVI/gallery/api"
 	"github.com/RecRivenVI/gallery/internal/bootstrap"
 	"github.com/RecRivenVI/gallery/internal/config"
 	"github.com/RecRivenVI/gallery/internal/contract/fault"
@@ -21,7 +22,6 @@ import (
 	"github.com/RecRivenVI/gallery/internal/platform/descriptor"
 	"github.com/RecRivenVI/gallery/internal/ports"
 	"github.com/RecRivenVI/gallery/internal/storage"
-	api "github.com/RecRivenVI/gallery/pkg/galleryapi"
 )
 
 func TestRunnableGallerydUsesAppDirsAndLeavesSyntheticSourceUnchanged(t *testing.T) {

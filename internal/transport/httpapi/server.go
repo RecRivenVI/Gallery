@@ -20,6 +20,7 @@ import (
 	"strings"
 	"time"
 
+	api "github.com/RecRivenVI/gallery/api"
 	"github.com/RecRivenVI/gallery/internal/application"
 	"github.com/RecRivenVI/gallery/internal/auth"
 	"github.com/RecRivenVI/gallery/internal/backup"
@@ -44,7 +45,6 @@ import (
 	"github.com/RecRivenVI/gallery/internal/scanner"
 	"github.com/RecRivenVI/gallery/internal/storage"
 	watcherservice "github.com/RecRivenVI/gallery/internal/watcher"
-	api "github.com/RecRivenVI/gallery/pkg/galleryapi"
 )
 
 type Server struct {

@@ -115,7 +115,7 @@ func validateShape(node *FilterNode, depth int, count *int) error {
 
 // canonicalJSON 提供确定性编码用于查询指纹：Go 结构体固定字段顺序天然规范化了
 // key 顺序。数组内客户端提交顺序被视为有意义并保留（AND/OR 语义上可交换，但本轮
-// 不做重排规范化，属已记录的简化，见 Documents/规范/06-查询-搜索与排序.md）。
+// 不做重排规范化，属已记录的简化，见 docs/architecture/query-search-and-sorting.md）。
 func (n *FilterNode) canonicalJSON() string {
 	if n == nil {
 		return ""

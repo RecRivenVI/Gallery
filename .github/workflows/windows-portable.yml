@@ -16,6 +16,8 @@ permissions:
 
 env:
   GOTOOLCHAIN: local
+  GOOS: windows
+  GOARCH: amd64
 
 jobs:
   package:

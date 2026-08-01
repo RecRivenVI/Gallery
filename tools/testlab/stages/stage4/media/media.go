@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"time"
 
-	api "github.com/RecRivenVI/gallery/pkg/galleryapi"
+	api "github.com/RecRivenVI/gallery/api"
 	"github.com/RecRivenVI/gallery/tools/testlab/internal/environment"
 	"github.com/RecRivenVI/gallery/tools/testlab/internal/report"
 )
@@ -156,7 +156,7 @@ func RunMediaCorrectness(rep *report.Report, sess *environment.Session, libraryI
 		rep.Add("media/if-range-miss-falls-back-200", ifRangeMiss.HTTPResponse.StatusCode == 200, fmt.Sprintf("status=%d", ifRangeMiss.HTTPResponse.StatusCode))
 	}
 
-	// v1 缩略图 resolver 只解析 JPEG 容器（见 Documents/规范/08-文件系统与媒体处理.md），
+	// v1 缩略图 resolver 只解析 JPEG 容器（见 docs/architecture/filesystem-and-media.md），
 	// 真实 Source 中的媒体可能是 PNG/GIF/视频等其它格式；只在目标媒体确实是 JPEG 时才
 	// 运行 DerivedAsset 端到端场景，其余情况记为信息性跳过而不是失败。
 	if targetMedia.MimeType == "image/jpeg" {

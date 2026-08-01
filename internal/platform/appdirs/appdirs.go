@@ -4,12 +4,11 @@ import (
 	"errors"
 	"fmt"
 	"io/fs"
-	"os"
 	"path/filepath"
-	"runtime"
 	"strings"
 
 	"github.com/RecRivenVI/gallery/internal/contract/fault"
+	platformfs "github.com/RecRivenVI/gallery/internal/platform/filesystem"
 	"github.com/RecRivenVI/gallery/internal/ports"
 )
 
@@ -30,52 +29,6 @@ func UnderRoot(root string) Dirs {
 		Logs: filepath.Join(root, "logs"), Temp: filepath.Join(root, "tmp"),
 		Runtime: filepath.Join(root, "run"),
 	}
-}
-
-func Defaults() (Dirs, error) {
-	switch runtime.GOOS {
-	case "windows":
-		roaming := os.Getenv("APPDATA")
-		local := os.Getenv("LOCALAPPDATA")
-		if roaming == "" || local == "" {
-			return Dirs{}, fmt.Errorf("APPDATA/LOCALAPPDATA 不可用")
-		}
-		dirs := UnderRoot(filepath.Join(local, "Gallery"))
-		dirs.Config = filepath.Join(roaming, "Gallery")
-		return dirs, nil
-	case "darwin":
-		home, err := os.UserHomeDir()
-		if err != nil {
-			return Dirs{}, err
-		}
-		root := filepath.Join(home, "Library", "Application Support", "Gallery")
-		dirs := UnderRoot(root)
-		dirs.Cache = filepath.Join(home, "Library", "Caches", "Gallery")
-		dirs.Logs = filepath.Join(home, "Library", "Logs", "Gallery")
-		return dirs, nil
-	default:
-		home, err := os.UserHomeDir()
-		if err != nil {
-			return Dirs{}, err
-		}
-		config := envOr("XDG_CONFIG_HOME", filepath.Join(home, ".config"))
-		data := envOr("XDG_DATA_HOME", filepath.Join(home, ".local", "share"))
-		state := envOr("XDG_STATE_HOME", filepath.Join(home, ".local", "state"))
-		cache := envOr("XDG_CACHE_HOME", filepath.Join(home, ".cache"))
-		return Dirs{
-			Config: filepath.Join(config, "gallery"), Data: filepath.Join(data, "gallery"),
-			State: filepath.Join(state, "gallery"), Cache: filepath.Join(cache, "gallery"),
-			Logs: filepath.Join(state, "gallery", "logs"), Temp: filepath.Join(cache, "gallery", "tmp"),
-			Runtime: filepath.Join(state, "gallery", "run"),
-		}, nil
-	}
-}
-
-func envOr(name, fallback string) string {
-	if value := os.Getenv(name); value != "" {
-		return value
-	}
-	return fallback
 }
 
 func (d Dirs) WriteRoots() []string {
@@ -154,24 +107,17 @@ func canonicalize(fileSystem ports.FileSystem, path string) (string, error) {
 			for i := len(suffix) - 1; i >= 0; i-- {
 				real = filepath.Join(real, suffix[i])
 			}
-			return compareForm(filepath.Clean(real)), nil
+			return platformfs.ComparisonKey(filepath.Clean(real)), nil
 		} else if !errors.Is(statErr, fs.ErrNotExist) {
 			return "", statErr
 		}
 		parent := filepath.Dir(current)
 		if parent == current {
-			return compareForm(abs), nil
+			return platformfs.ComparisonKey(abs), nil
 		}
 		suffix = append(suffix, filepath.Base(current))
 		current = parent
 	}
-}
-
-func compareForm(path string) string {
-	if runtime.GOOS == "windows" {
-		return strings.ToLower(path)
-	}
-	return path
 }
 
 func overlaps(left, right string) bool {

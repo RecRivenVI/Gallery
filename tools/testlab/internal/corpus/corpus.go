@@ -1,7 +1,7 @@
 // Package corpus 定义阶段 4 正式压力测试使用的确定性合成语料生成规则。
 //
 // 本包不导入任何 internal/* 包：seed 工具（导入 internal/catalog 等生产内部包，
-// 直接写入 catalog.db）与 probe 工具（只导入 pkg/galleryapi 与标准库，经由真实
+// 直接写入 catalog.db）与 probe 工具（只导入 api 与标准库，经由真实
 // galleryd 的公开 HTTP API 驱动）共同依赖这份纯函数定义。"确定性"只覆盖内容、
 // 数量、排序与关系（标题、标签、隐藏/收藏比例、媒体种类分布等），不覆盖 Library/
 // Source/Work/Media/Creator 的公开领域 ID——那些 ID 必须由 seed 工具通过与生产
@@ -144,7 +144,7 @@ func TagSlots(i int) (int, int) {
 func TagName(slot int) string { return fmt.Sprintf("tag-%02d", slot) }
 
 // Hidden 报告第 i 个作品是否被标记为隐藏（2%）。Hidden 是 Overlay 字段能力注册表
-// 中登记的 Overlay 事实（见 Documents/规范/06-查询-搜索与排序.md），权威写入路径是
+// 中登记的 Overlay 事实（见 docs/architecture/query-search-and-sorting.md），权威写入路径是
 // catalog.OverlayFact.Hidden 经 ApplyCatalogCandidateOverlays 落地，不是
 // catalog.WorkFact.Hidden——后者会被前者对同一批作品的 UPDATE 无条件覆盖回默认值，
 // 因此 seed 必须只通过 OverlayFact 设置 Hidden，这里的确定性判据两侧共用同一函数。
@@ -178,7 +178,7 @@ func MediaKind(i int) string {
 // ContentVerified 报告第 i 个作品的媒体是否已完整内容确认（约 2/3 已确认，1/3 未确认）。
 // 无论是否确认，seed 都把该媒体的 location_status 写为 present（"已发现"），因为
 // content_verification_state 与 location_status 是正交语义（见
-// Documents/规范/04-扫描-Catalog与任务.md），已发现但未确认内容的媒体仍然"位置可用"。
+// docs/architecture/scanning-catalog-and-jobs.md），已发现但未确认内容的媒体仍然"位置可用"。
 func ContentVerified(i int) bool { return i%3 != 0 }
 
 // SourceKey 返回第 i 个作品在合成 Source 内的相对路径键。source_key 只是

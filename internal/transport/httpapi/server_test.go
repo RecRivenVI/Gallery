@@ -20,6 +20,7 @@ import (
 	"testing"
 	"time"
 
+	api "github.com/RecRivenVI/gallery/api"
 	"github.com/RecRivenVI/gallery/internal/application"
 	"github.com/RecRivenVI/gallery/internal/auth"
 	"github.com/RecRivenVI/gallery/internal/backup"
@@ -41,7 +42,6 @@ import (
 	"github.com/RecRivenVI/gallery/internal/scanner"
 	"github.com/RecRivenVI/gallery/internal/storage"
 	"github.com/RecRivenVI/gallery/internal/transport/httpapi"
-	api "github.com/RecRivenVI/gallery/pkg/galleryapi"
 	"github.com/coder/websocket"
 	"github.com/coder/websocket/wsjson"
 )

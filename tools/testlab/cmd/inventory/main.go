@@ -20,7 +20,7 @@ func main() {
 }
 
 func run() int {
-	configPath := flag.String("config", "", "本地测试配置路径（通常是 Documents/本地/testlab.local.json）")
+	configPath := flag.String("config", "", "本地测试配置路径（通常是 docs/development/examples/testlab.local.json）")
 	flag.Parse()
 
 	cfg, err := config.Load(*configPath)

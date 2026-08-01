@@ -4,7 +4,7 @@
 // 是事实源。因此这里只做结构映射与显式拒绝，不保留任何「运行时回读旧配置」的路径。
 //
 // 一个旧配置产出多份结果：每个启用平台一份规则包（平台在 Gallery 领域模型中对应一个 Source，
-// 见 `规范/03`），外加文件根声明。库级默认值（metadata 文件名、时间显示语义、排序集合）逐平台
+// 见 `docs/architecture/domain-model-and-data-ownership.md`），外加文件根声明。库级默认值（metadata 文件名、时间显示语义、排序集合）逐平台
 // 下发到各自的规则包，使每个 Source 的解释完全自包含。
 package legacy
 
@@ -280,7 +280,7 @@ func Convert(input []byte, ruleSetIDs map[string]string) (Result, error) {
 		return Result{}, fmt.Errorf("比对旧配置字段集合: %w", err)
 	}
 	result.Unconverted = append(result.Unconverted, unknown...)
-	// Gallery 的时刻一律以 UTC 存储（`规范/06`），因此声明为 UTC 的存储时区是等价承接而不是
+	// Gallery 的时刻一律以 UTC 存储（`docs/architecture/query-search-and-sorting.md`），因此声明为 UTC 的存储时区是等价承接而不是
 	// 未转换；声明为其它时区则是真正无法承接的语义，必须登记。
 	if config.Time.StorageTimezone != "" && config.Time.StorageTimezone != "UTC" {
 		result.Unconverted = append(result.Unconverted, Note{

@@ -8,7 +8,6 @@ import (
 	"fmt"
 	"io/fs"
 	"path/filepath"
-	"runtime"
 	"strings"
 	"time"
 	"unicode/utf8"
@@ -17,6 +16,7 @@ import (
 	"github.com/RecRivenVI/gallery/internal/creators"
 	"github.com/RecRivenVI/gallery/internal/domain"
 	"github.com/RecRivenVI/gallery/internal/platform/appdirs"
+	platformfs "github.com/RecRivenVI/gallery/internal/platform/filesystem"
 	"github.com/RecRivenVI/gallery/internal/ports"
 	"github.com/RecRivenVI/gallery/internal/querytext"
 	"github.com/RecRivenVI/gallery/internal/rules"
@@ -1159,10 +1159,7 @@ func (r *Resources) canonicalSourceRoot(root string) (string, string, error) {
 		return "", "", fault.WithField(fault.CodeSourcePathInvalid, "rootPath", err)
 	}
 	canonical := filepath.Clean(real)
-	key := canonical
-	if runtime.GOOS == "windows" {
-		key = strings.ToLower(key)
-	}
+	key := platformfs.ComparisonKey(canonical)
 	return canonical, key, nil
 }
 

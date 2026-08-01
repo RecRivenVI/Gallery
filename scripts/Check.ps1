@@ -1,6 +1,7 @@
 [CmdletBinding()]
 param(
-    [switch]$Race
+    [switch]$Race,
+    [switch]$BackendOnly
 )
 
 $ErrorActionPreference = 'Stop'
@@ -27,7 +28,7 @@ $gofmt = Join-Path $goBin $gofmtName
 
 # 显式列出仓库自身的包集合：`npm ci` 之后 web/node_modules 中的第三方 Go 源码会进入
 # `./...`，使 vet/test/build 的实际范围取决于 node_modules 是否存在（EV-39 的 BLD-1）。
-$goPackages = @('./cmd/...', './internal/...', './pkg/...', './tools/...')
+$goPackages = @('./cmd/...', './internal/...', './api/...', './version/...', './tools/...')
 
 # tracked files 的换行事实源是 `.gitattributes`（`* text=auto eol=lf`）。此处直接断言
 # index 与工作树都只使用 LF，使本地门禁与 CI runner 在任意 `core.autocrlf`/`core.eol`
@@ -39,7 +40,7 @@ if ($LASTEXITCODE -ne 0) { throw 'git ls-files --eol 失败' }
 $badEol = $eolEntries | Where-Object { $_ -match '(^|\s)(i|w)/(crlf|mixed)(\s|$)' }
 if ($badEol) { throw "以下 tracked 文件的换行不是 LF，请检查 .gitattributes 与本地检出：`n$($badEol -join "`n")" }
 
-# 发行脚本只在 Windows 制品 Job 中真实执行，但 PowerShell 语法必须进入所有平台的普通门禁，
+# 发行脚本只在 Windows 制品 Job 中真实执行，但语法必须进入 Windows x64 后端门禁，
 # 否则脚本改坏后要等人工 workflow_dispatch 才能发现。这里不运行任何打包/签名动作。
 $releaseScripts = @(
     (Join-Path $PSScriptRoot 'WindowsHistoricalCompatibility.ps1'),
@@ -64,14 +65,14 @@ foreach ($releaseScript in $releaseScripts) {
 & $go mod tidy -diff
 if ($LASTEXITCODE -ne 0) { throw 'go.mod/go.sum 不是 tidy 状态' }
 
-$generatedPath = Join-Path $PSScriptRoot '..\pkg\galleryapi\openapi.gen.go'
+$generatedPath = Join-Path $PSScriptRoot '..\api\openapi.gen.go'
 $generatedBefore = (Get-FileHash -LiteralPath $generatedPath -Algorithm SHA256).Hash
 & $go generate ./...
 if ($LASTEXITCODE -ne 0) { throw 'go generate 失败' }
 $generatedAfter = (Get-FileHash -LiteralPath $generatedPath -Algorithm SHA256).Hash
 if ($generatedBefore -ne $generatedAfter) { throw 'OpenAPI 生成文件不是最新状态' }
 
-if (-not $Race) {
+if (-not $Race -and -not $BackendOnly) {
     $webPath = Join-Path $PSScriptRoot '..\web'
     $node = Get-Command node -ErrorAction Stop
     $npm = Get-Command npm -ErrorAction Stop
@@ -118,7 +119,7 @@ if (-not $Race) {
     if ($webGeneratedBefore -ne $webGeneratedAfter) { throw 'Web OpenAPI 或生产资产不是最新状态' }
 }
 
-$unformatted = & $gofmt -l cmd internal pkg tools
+$unformatted = & $gofmt -l cmd internal api version tools
 if ($LASTEXITCODE -ne 0) { throw 'gofmt 检查失败' }
 if ($unformatted) { throw "以下文件尚未 gofmt：$($unformatted -join ', ')" }
 

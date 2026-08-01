@@ -2,7 +2,7 @@ openapi: 3.0.3
 info:
   title: Gallery API
   version: 0.6.0-pre-alpha
-  description: Gallery pre-alpha 契约（阶段 5 账户、安全和多客户端正确性切片）；资源面随阶段演进为兼容基线，物理 Schema 与完整 v1 语义尚未冻结。
+  description: Gallery pre-alpha HTTP 契约。当前资源面与错误语义尚未冻结为 v1 兼容承诺。
 servers:
   - url: http://127.0.0.1:{port}
     variables:
@@ -1940,7 +1940,7 @@ paths:
           description: >-
             服务端权威结构化过滤 AST 的 JSON 编码：{"all"|"any"|"not"|"field"/"op"/"value"}。
             未知字段、未知操作符或类型错误一律返回 VALIDATION_ERROR。已注册字段与语义见
-            Documents/规范/06-查询-搜索与排序.md。
+            docs/architecture/query-search-and-sorting.md。
           schema: {type: string, maxLength: 8192}
         - name: sort
           in: query

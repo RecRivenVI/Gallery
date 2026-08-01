@@ -138,7 +138,7 @@ try {
         if (-not $webManifest.$field) { throw "gallery-web.json 缺少 $field" }
     }
 
-    $linkerFlags = "-s -w -X github.com/RecRivenVI/gallery/pkg/galleryversion.Version=$Version"
+    $linkerFlags = "-s -w -X github.com/RecRivenVI/gallery/version.Version=$Version"
     $gallerydPath = Join-Path $packageRoot 'galleryd.exe'
     $galleryctlPath = Join-Path $packageRoot 'galleryctl.exe'
     Push-Location $repoRoot

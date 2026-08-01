@@ -1,6 +1,6 @@
-// Package config 加载本机测试路径配置（Documents/本地/testlab.local.json）。该
+// Package config 加载本机测试路径配置（docs/development/examples/testlab.local.json）。该
 // 文件不入库，只存在于本机工作树；仓库中只提交
-// Documents/本地/testlab.local.example.json 模板。任何 tools/testlab 命令都不得
+// docs/development/examples/testlab.local.example.json 模板。任何 tools/testlab 命令都不得
 // 在配置缺失时猜测或扫描磁盘寻找路径，必须报出明确错误并提示用户先复制模板并
 // 填写真实路径。
 package config
@@ -41,7 +41,7 @@ func Load(path string) (Config, error) {
 	}
 	data, err := os.ReadFile(path)
 	if err != nil {
-		return Config{}, fmt.Errorf("读取本地测试配置失败（%s）：%w；请先复制 Documents/本地/testlab.local.example.json 为 Documents/本地/testlab.local.json 并按本机真实路径填写", path, err)
+		return Config{}, fmt.Errorf("读取本地测试配置失败（%s）：%w；请先复制 docs/development/examples/testlab.local.example.json 为 docs/development/examples/testlab.local.json 并按本机真实路径填写", path, err)
 	}
 	var cfg Config
 	if err := json.Unmarshal(data, &cfg); err != nil {

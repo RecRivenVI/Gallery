@@ -24,7 +24,6 @@ import (
 	"os/signal"
 	"path/filepath"
 	"reflect"
-	"runtime"
 	"sort"
 	"strings"
 	"syscall"
@@ -205,10 +204,7 @@ func run() (exitCode int) {
 	if err := command(runCtx, 5*time.Minute, webRoot, nil, npmBin, "run", "build"); err != nil {
 		return fail("构建 Web 生产资产", err)
 	}
-	galleryd := filepath.Join(testRoot, "galleryd")
-	if runtime.GOOS == "windows" {
-		galleryd += ".exe"
-	}
+	galleryd := filepath.Join(testRoot, platformExecutableName("galleryd"))
 	buildCtx, cancelBuild := context.WithTimeout(runCtx, 2*time.Minute)
 	err = testprocess.BuildGallerydE2EContext(buildCtx, goBin, root, galleryd)
 	cancelBuild()
@@ -1050,19 +1046,6 @@ func retainDiagnostics(logPath, diagnosticsRoot string) error {
 		return fmt.Errorf("保存 galleryd 诊断日志: %w", err)
 	}
 	return nil
-}
-
-func fixedGo() (string, error) {
-	if configured := os.Getenv("GALLERY_GO"); configured != "" {
-		if info, err := os.Stat(configured); err == nil && !info.IsDir() {
-			return configured, nil
-		}
-		return "", fmt.Errorf("GALLERY_GO 指向的文件不存在")
-	}
-	if runtime.GOOS == "windows" {
-		return "", fmt.Errorf("Windows 必须显式设置 GALLERY_GO")
-	}
-	return exec.LookPath("go")
 }
 
 func verifyGo(goBin string) error {

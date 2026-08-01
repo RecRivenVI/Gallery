@@ -17,6 +17,7 @@ import (
 	"testing"
 	"time"
 
+	api "github.com/RecRivenVI/gallery/api"
 	"github.com/RecRivenVI/gallery/internal/application"
 	"github.com/RecRivenVI/gallery/internal/auth"
 	"github.com/RecRivenVI/gallery/internal/config"
@@ -28,7 +29,6 @@ import (
 	"github.com/RecRivenVI/gallery/internal/platform/identity"
 	"github.com/RecRivenVI/gallery/internal/storage"
 	"github.com/RecRivenVI/gallery/internal/transport/httpapi"
-	api "github.com/RecRivenVI/gallery/pkg/galleryapi"
 )
 
 func TestLANInitializationAndSessionAuthentication(t *testing.T) {

@@ -101,7 +101,7 @@ func (s *CursorSigner) Verify(token string) (CursorClaims, error) {
 	// 协议版本不匹配与结构非法是**两类不同的失败**，必须映射到不同的错误码。
 	//
 	// 协议升级后旧游标一定不匹配，但那不是客户端做错了什么——它拿着一个在签发时完全合法的游标。
-	// [查询、搜索与排序](../../../Documents/规范/06-查询-搜索与排序.md) 因此规定「排序协议升级」
+	// [查询、搜索与排序](../../../docs/architecture/query-search-and-sorting.md) 因此规定「排序协议升级」
 	// 返回可重试的 `CURSOR_EXPIRED`，客户端据此从第一页刷新即可恢复。若沿用不可重试的
 	// `CURSOR_INVALID`，一次协议升级会把「不可恢复」发给每一个正在分页的客户端。
 	if err := validateProtocolVersions(claims); err != nil {

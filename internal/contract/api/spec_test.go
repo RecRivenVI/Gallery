@@ -5,9 +5,9 @@ import (
 	"encoding/json"
 	"testing"
 
+	api "github.com/RecRivenVI/gallery/api"
 	contractapi "github.com/RecRivenVI/gallery/internal/contract/api"
 	"github.com/RecRivenVI/gallery/internal/contract/fault"
-	api "github.com/RecRivenVI/gallery/pkg/galleryapi"
 )
 
 func TestGeneratedErrorEnumCoversCanonicalCodes(t *testing.T) {

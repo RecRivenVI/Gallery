@@ -9,8 +9,8 @@ import (
 	"sync"
 	"time"
 
+	api "github.com/RecRivenVI/gallery/api"
 	galleryquery "github.com/RecRivenVI/gallery/internal/query"
-	api "github.com/RecRivenVI/gallery/pkg/galleryapi"
 	"github.com/RecRivenVI/gallery/tools/testlab/internal/corpus"
 	"github.com/RecRivenVI/gallery/tools/testlab/internal/environment"
 	"github.com/RecRivenVI/gallery/tools/testlab/internal/report"

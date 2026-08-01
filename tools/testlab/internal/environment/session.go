@@ -1,5 +1,5 @@
 // Package environment 建立并持有一次针对真实 galleryd 实例的 Personal 管理
-// Session：只使用 pkg/galleryapi 生成的公开契约客户端与真实 HTTP loopback 连接，
+// Session：只使用 api 生成的公开契约客户端与真实 HTTP loopback 连接，
 // 不导入任何 internal 包，也不直接读取数据库。stage3/stage4/未来阶段的
 // orchestrator 共用同一个 Session 建立与调用入口，不各自重新实现配对握手。
 package environment
@@ -11,7 +11,7 @@ import (
 	"net/http/cookiejar"
 	"reflect"
 
-	api "github.com/RecRivenVI/gallery/pkg/galleryapi"
+	api "github.com/RecRivenVI/gallery/api"
 )
 
 // Session 是一次通过公开一次性配对流程建立的 Personal 管理 Session。

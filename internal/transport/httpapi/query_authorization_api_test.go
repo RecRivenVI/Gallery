@@ -11,9 +11,9 @@ import (
 	"slices"
 	"testing"
 
+	api "github.com/RecRivenVI/gallery/api"
 	"github.com/RecRivenVI/gallery/internal/querytext"
 	"github.com/RecRivenVI/gallery/internal/storage"
-	api "github.com/RecRivenVI/gallery/pkg/galleryapi"
 )
 
 func TestWorkListAppliesMemberAuthorizationBeforeTotalAndPaging(t *testing.T) {

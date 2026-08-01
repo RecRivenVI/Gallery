@@ -4,9 +4,9 @@ import (
 	"net/http"
 	"strconv"
 
+	api "github.com/RecRivenVI/gallery/api"
 	"github.com/RecRivenVI/gallery/internal/contract/fault"
 	"github.com/RecRivenVI/gallery/internal/fileroot"
-	api "github.com/RecRivenVI/gallery/pkg/galleryapi"
 )
 
 // listFileRoots 返回已登记的只读文件根。

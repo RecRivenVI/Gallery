@@ -1,0 +1,35 @@
+name: Windows x64 CI
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+env:
+  GOTOOLCHAIN: local
+  GOOS: windows
+  GOARCH: amd64
+
+jobs:
+  backend:
+    name: Go 后端
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-go@v6
+        with:
+          go-version: 1.26.5
+          cache-dependency-path: go.sum
+      - name: 契约生成、静态检查、Go 测试和构建
+        shell: pwsh
+        run: ./scripts/Check.ps1 -BackendOnly
+      - name: 安装 govulncheck
+        shell: pwsh
+        run: go install golang.org/x/vuln/cmd/govulncheck@v1.6.0
+      - name: 依赖漏洞扫描（Windows x64 调用图）
+        shell: pwsh
+        run: |
+          $tool = Join-Path (& go env GOPATH) 'bin\govulncheck.exe'
+          & $tool ./cmd/... ./internal/... ./api/... ./version/... ./tools/...

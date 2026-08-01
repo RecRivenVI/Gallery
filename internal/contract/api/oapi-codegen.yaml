@@ -1,5 +1,5 @@
-package: galleryapi
-output: ../../../pkg/galleryapi/openapi.gen.go
+package: api
+output: ../../../api/openapi.gen.go
 generate:
   models: true
   client: true
