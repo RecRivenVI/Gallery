@@ -4,14 +4,14 @@
 
 ## 文件
 
-| 文件 | 职责 |
-| --- | --- |
-| `tokens.css` | 主题、密度、颜色、间距、排版、焦点和动效 token |
-| `reset.css` | 双入口共享的基础重置 |
-| `primitives.tsx` / `primitives.css` | React Aria 基础组件与样式 |
-| `icons.tsx` | 共享线性图标 |
-| `motion.ts` | 具有稳定业务键的有界连续布局动效 |
-| `index.ts` | 公共导出面 |
+| 文件                                | 职责                                           |
+| ----------------------------------- | ---------------------------------------------- |
+| `tokens.css`                        | 主题、密度、颜色、间距、排版、焦点和动效 token |
+| `reset.css`                         | 双入口共享的基础重置                           |
+| `primitives.tsx` / `primitives.css` | React Aria 基础组件与样式                      |
+| `icons.tsx`                         | 共享线性图标                                   |
+| `motion.ts`                         | 具有稳定业务键的有界连续布局动效               |
+| `index.ts`                          | 公共导出面                                     |
 
 ## 使用规则
 

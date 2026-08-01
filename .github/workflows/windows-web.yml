@@ -49,6 +49,7 @@ jobs:
         working-directory: web
         shell: pwsh
         run: |
+          $PSNativeCommandUseErrorActionPreference = $true
           npm ci
           npm run audit:ci
           npm run typecheck
@@ -66,6 +67,8 @@ jobs:
         working-directory: web
         shell: pwsh
         run: |
+          $PSNativeCommandUseErrorActionPreference = $true
+          $env:GALLERY_GO = (Get-Command go -ErrorAction Stop).Source
           npm run test:real:bootstrap
           npm run test:real:bootstrap -- -browser-project firefox
       - name: 保存真实后端失败诊断

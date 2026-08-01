@@ -224,7 +224,7 @@ function DraftEditor({
       />
     );
   }
-  if ((draft.isPending && draft.fetchStatus !== 'idle') || workspace === null) {
+  if (workspace === null) {
     return <p className="manage-section__description">正在读取草稿…</p>;
   }
 

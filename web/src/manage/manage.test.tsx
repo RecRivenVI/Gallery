@@ -1849,20 +1849,26 @@ describe('规则草稿', () => {
 
   it('首次草稿从 revision 0 保存、吸收校验 revision，并以 before=null 评估', async () => {
     let storedDraft: Record<string, unknown> | null = null;
+    let holdDraftRefetch = true;
+    let resolveDraftRefetch: ((response: Response) => void) | undefined;
     let saveBody: Promise<unknown> | undefined;
     let impactBody: Promise<unknown> | undefined;
     // 防御旧服务端把 optional digest 错误编码为空字符串；前端不得把它回送为 baseSemanticHash。
     route('GET /api/v1/rule-packages/pkg_01', () =>
       jsonResponse(rulePackage({ currentSemanticHash: '', latestValidSemanticHash: '' }))
     );
-    route('GET /api/v1/rule-packages/pkg_01/draft', () =>
-      storedDraft === null ? faultResponse('NOT_FOUND', 404, 'corr-no-draft') : jsonResponse(storedDraft)
-    );
+    route('GET /api/v1/rule-packages/pkg_01/draft', () => {
+      if (storedDraft === null) return faultResponse('NOT_FOUND', 404, 'corr-no-draft');
+      if (!holdDraftRefetch) return jsonResponse(storedDraft);
+      return new Promise<Response>((resolve) => {
+        resolveDraftRefetch = resolve;
+      });
+    });
     route('GET /api/v1/rule-packages/pkg_01/versions', () => jsonResponse({ items: [] }));
     route('GET /api/v1/rule-packages/pkg_01/audits', () => jsonResponse({ items: [] }));
     route('PUT /api/v1/rule-packages/pkg_01/draft', (request) => {
       saveBody = request.clone().json();
-      storedDraft = ruleDraft({ revision: 1, content: { version: 1 } });
+      storedDraft = ruleDraft({ revision: 1, content: { version: 1 }, validationStatus: 'invalid' });
       return jsonResponse(storedDraft);
     });
     route('POST /api/v1/rule-packages/pkg_01/draft/validate', () => {
@@ -1882,6 +1888,14 @@ describe('规则草稿', () => {
     await waitFor(() => expect(requestsTo('PUT /api/v1/rule-packages/pkg_01/draft')).toHaveLength(1));
     expect(requestsTo('PUT /api/v1/rule-packages/pkg_01/draft')[0]?.ifMatch).toBe('"0"');
     expect(await saveBody).toEqual({ content: '{"version":1}', format: 'json' });
+    await waitFor(() => expect(requestsTo('GET /api/v1/rule-packages/pkg_01/draft')).toHaveLength(2));
+    expect(await screen.findByText('校验未通过')).toBeVisible();
+    expect(screen.queryByText('正在读取草稿…')).not.toBeInTheDocument();
+    holdDraftRefetch = false;
+    await act(async () => {
+      resolveDraftRefetch?.(jsonResponse(storedDraft));
+      await Promise.resolve();
+    });
 
     await userEvent.click(await screen.findByRole('button', { name: '校验草稿' }));
     await screen.findByText('校验通过');
