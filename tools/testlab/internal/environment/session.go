@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/cookiejar"
+	"reflect"
 
 	api "github.com/RecRivenVI/gallery/pkg/galleryapi"
 )
@@ -76,6 +77,13 @@ type statusResponse interface{ StatusCode() int }
 
 // StatusOf 从任意生成客户端响应类型中提取 HTTP 状态码，取不到时返回 0。
 func StatusOf(r any) int {
+	if r == nil {
+		return 0
+	}
+	value := reflect.ValueOf(r)
+	if value.Kind() == reflect.Pointer && value.IsNil() {
+		return 0
+	}
 	if s, ok := r.(statusResponse); ok {
 		return s.StatusCode()
 	}

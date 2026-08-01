@@ -143,6 +143,7 @@ type Report struct {
 	Latencies         []LatencySample    `json:"latencies,omitempty"`
 	PublicationMatrix *PublicationMatrix `json:"publicationMatrix,omitempty"`
 	QueryPerfMatrix   *QueryPerfMatrix   `json:"queryPerfMatrix,omitempty"`
+	MaintenanceMatrix *MaintenanceMatrix `json:"maintenanceMatrix,omitempty"`
 	Limitations       []string           `json:"limitations,omitempty"`
 	FailureCount      int                `json:"failureCount"`
 
@@ -153,6 +154,64 @@ type Report struct {
 	CompletedCombinations int    `json:"completedCombinations,omitempty"`
 	AbortedByTimeLimit    bool   `json:"abortedByTimeLimit,omitempty"`
 	AbortReason           string `json:"abortReason,omitempty"`
+}
+
+// MaintenanceMatrix 记录 public maintenance API 在同一不可变 publication 上的
+// 参考机运行结果。它不包含 AppDirs 路径或 Job ID；OperationSamples 只保存墙钟、
+// 空间和固定 publication 读取摘要，使结果可以安全提交，同时仍能区分 GC/checkpoint/VACUUM
+// 的真实代价。Fingerprint 绑定 publication、运行次数与采样预算，避免把不同矩阵
+// 的结果拼成一份报告。
+type MaintenanceMatrix struct {
+	Fingerprint            string                       `json:"fingerprint"`
+	PublicationFingerprint string                       `json:"publicationFingerprint"`
+	HistoricalPublication  bool                         `json:"historicalPublication"`
+	PercentileMethod       string                       `json:"percentileMethod"`
+	QueryIntervalMs        int64                        `json:"queryIntervalMs"`
+	QueryTimeoutMs         int64                        `json:"queryTimeoutMs"`
+	OperationTimeoutMs     int64                        `json:"operationTimeoutMs"`
+	Operations             []MaintenanceOperationResult `json:"operations"`
+}
+
+type MaintenanceOperationResult struct {
+	Operation     string                 `json:"operation"`
+	PlannedRuns   int                    `json:"plannedRuns"`
+	CompletedRuns int                    `json:"completedRuns"`
+	FailedRuns    int                    `json:"failedRuns"`
+	DurationP50Ms float64                `json:"durationP50Ms"`
+	DurationP95Ms float64                `json:"durationP95Ms"`
+	DurationMinMs float64                `json:"durationMinMs"`
+	DurationMaxMs float64                `json:"durationMaxMs"`
+	Runs          []MaintenanceRunSample `json:"runs"`
+}
+
+// MaintenanceRunSample 的 During* 只统计请求时间区间与客户端观测到的 Job
+// 创建/终态墙钟窗口有交集的固定 publication 读取；操作前后读取另有布尔断言，
+// 不能用操作完成后的绿色请求冒充维护进行中的可读性。
+type MaintenanceRunSample struct {
+	Run                       int     `json:"run"`
+	DurationMs                float64 `json:"durationMs"`
+	RequiredBytes             int64   `json:"requiredBytes"`
+	AvailableBytes            int64   `json:"availableBytes"`
+	SpaceSufficient           bool    `json:"spaceSufficient"`
+	SpaceConservative         bool    `json:"spaceConservative"`
+	AppDataBytesBefore        int64   `json:"appDataBytesBefore"`
+	AppDataBytesPeakSampled   int64   `json:"appDataBytesPeakSampled"`
+	AppDataBytesAfter         int64   `json:"appDataBytesAfter"`
+	FinalStatus               string  `json:"finalStatus"`
+	FinalIssueCode            string  `json:"finalIssueCode,omitempty"`
+	FinalProgressCurrent      int64   `json:"finalProgressCurrent"`
+	FinalProgressTotal        int64   `json:"finalProgressTotal"`
+	FinalProgressEstimated    bool    `json:"finalProgressEstimated"`
+	PublicationReadableBefore bool    `json:"publicationReadableBefore"`
+	PublicationReadableAfter  bool    `json:"publicationReadableAfter"`
+	DuringObserved            bool    `json:"duringObserved"`
+	DuringAttempts            int     `json:"duringAttempts"`
+	DuringSuccessful          int     `json:"duringSuccessful"`
+	DuringFailed              int     `json:"duringFailed"`
+	DuringTimedOut            int     `json:"duringTimedOut"`
+	DuringP50Ms               float64 `json:"duringP50Ms"`
+	DuringP95Ms               float64 `json:"duringP95Ms"`
+	DuringMaxMs               float64 `json:"duringMaxMs"`
 }
 
 // QueryPerfMatrix 记录查询性能矩阵的稳定执行身份。ScenarioTimeout 故意不进入
@@ -320,6 +379,18 @@ func (r *Report) scanForSensitiveContent() error {
 		for _, alias := range r.Corpus.SourceAliases {
 			if containsSensitiveMarker(alias) {
 				return fmt.Errorf("corpus Source alias 疑似包含绝对路径或地址")
+			}
+		}
+	}
+	if r.MaintenanceMatrix != nil {
+		for _, operation := range r.MaintenanceMatrix.Operations {
+			if containsSensitiveMarker(operation.Operation) {
+				return fmt.Errorf("maintenance operation 疑似包含绝对路径或地址")
+			}
+			for _, run := range operation.Runs {
+				if containsSensitiveMarker(run.FinalStatus) || containsSensitiveMarker(run.FinalIssueCode) {
+					return fmt.Errorf("maintenance final status 疑似包含绝对路径或地址")
+				}
 			}
 		}
 	}

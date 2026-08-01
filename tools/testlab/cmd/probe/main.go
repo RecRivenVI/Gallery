@@ -32,6 +32,7 @@ import (
 	"github.com/RecRivenVI/gallery/tools/testlab/internal/ruleindex"
 	"github.com/RecRivenVI/gallery/tools/testlab/internal/sourceguard"
 	"github.com/RecRivenVI/gallery/tools/testlab/stages/sourcelab"
+	"github.com/RecRivenVI/gallery/tools/testlab/stages/stage4/maintenanceperf"
 	"github.com/RecRivenVI/gallery/tools/testlab/stages/stage4/media"
 	"github.com/RecRivenVI/gallery/tools/testlab/stages/stage4/query"
 )
@@ -52,8 +53,8 @@ func run() int {
 	repoRoot := flag.String("repo", "", "仓库根目录（用于 go build ./cmd/galleryd）")
 	appRoot := flag.String("approot", "", "既有 AppDirs 根（由 testlabseed 预先构建，或为空目录用于 media 场景）")
 	logPath := flag.String("log", "", "galleryd 标准输出/错误日志的写入路径（必须位于授权测试根 logs/ 目录内）")
-	scenario := flag.String("scenario", "correctness", "correctness | perf | media | cursor | all | source-bounded | source-index | source-incremental | source-verify")
-	manifestPath := flag.String("manifest", "", "testlabseed 产出的 manifest JSON 路径（correctness/perf/cursor/all 场景必需）")
+	scenario := flag.String("scenario", "correctness", "correctness | perf | maintenance-perf | media | cursor | all | source-bounded | source-index | source-incremental | source-verify")
+	manifestPath := flag.String("manifest", "", "testlabseed 产出的 manifest JSON 路径（correctness/perf/maintenance-perf/cursor/all 场景必需）")
 	resultsOut := flag.String("results-out", "", "脱敏结果 JSON 输出路径")
 	runs := flag.Int("runs", 30, "每个延迟场景的重复次数")
 	sourceRoot := flag.String("source-root", "", "media 场景（合成、非真实 Source）使用的可写临时根")
@@ -73,6 +74,14 @@ func run() int {
 	perfP99Runs := flag.Int("perf-p99-runs", 100, "perf full 矩阵中承载 P99 的查询类别（browse/selective-cjk/filename-infix）的重复次数；低于 100 时 P99 无法估计，报告会以失败 finding 说明")
 	perfWarmupRuns := flag.Int("perf-warmup-runs", 3, "perf 每个组合在测量前串行执行的预热请求次数；预热请求不进入分位数样本。0 表示不预热（此时缓存状态如实记为 warm-incidental 或 unknown）")
 	perfCacheMode := flag.String("perf-cache", "warm", "perf 缓存条件：warm（每个组合先预热再测量）| cold-process（每个组合前重启 galleryd，使首次请求由从未服务过查询的新进程处理；不清空操作系统文件缓存，因此不代表冷存储读）")
+	maintenanceGCRuns := flag.Int("maintenance-gc-runs", 1, "maintenance-perf 的 catalog GC 重复次数；0 表示跳过")
+	maintenanceCheckpointRuns := flag.Int("maintenance-checkpoint-runs", 1, "maintenance-perf 的 checkpoint 重复次数；0 表示跳过")
+	maintenanceVacuumRuns := flag.Int("maintenance-vacuum-runs", 1, "maintenance-perf 的 VACUUM 重复次数；0 表示跳过")
+	maintenanceQueryInterval := flag.Duration("maintenance-query-interval", 10*time.Millisecond, "maintenance-perf 维护期间旧 publication 读取与 AppDirs 字节峰值的采样间隔")
+	maintenanceQueryTimeout := flag.Duration("maintenance-query-timeout", 5*time.Second, "maintenance-perf 单次旧 publication 读取/Job 状态请求超时")
+	maintenanceOperationTimeout := flag.Duration("maintenance-operation-timeout", 60*time.Minute, "maintenance-perf 单个维护 Job 的墙钟上限；超限会请求取消并失败")
+	maintenancePublicationID := flag.String("maintenance-publication-id", "", "maintenance-perf 固定读取的历史 queryPublicationId；为空时使用 manifest 当前 publication，后者不构成历史快照门禁")
+	startupTimeout := flag.Duration("startup-timeout", 60*time.Second, "真实 galleryd 启动/迁移墙钟上限；正式大库 migration 测量必须显式放宽")
 	resume := flag.Bool("resume", false, "仅用于 -scenario=perf：从 results-out 的原子断点继续未完成组合；环境、语料、publication、矩阵和缓存条件必须完全一致")
 	rulesIndex := flag.String("rules-index", "", "source-* 场景：testlabrulesimport 产出的转换产物索引路径（rule-index.json 或其所在目录）")
 	platformCode := flag.String("platform-code", "", "source-* 场景：要验证的平台脱敏代号（testlabrulesimport 输出中的 p-xxxxxxxx）")
@@ -119,7 +128,7 @@ func run() int {
 	}
 	defer os.Remove(binPath)
 
-	runner := &gallerydRunner{binPath: binPath, appRoot: *appRoot, logPath: *logPath}
+	runner := &gallerydRunner{binPath: binPath, appRoot: *appRoot, logPath: *logPath, startupTimeout: *startupTimeout}
 	if err := runner.start(); err != nil {
 		fmt.Fprintf(os.Stderr, "start galleryd: %v\n", err)
 		return 1
@@ -137,7 +146,7 @@ func run() int {
 	}
 
 	var manifest corpus.Manifest
-	if *scenario == "correctness" || *scenario == "perf" || *scenario == "cursor" || *scenario == "all" {
+	if *scenario == "correctness" || *scenario == "perf" || *scenario == "maintenance-perf" || *scenario == "cursor" || *scenario == "all" {
 		if *manifestPath == "" {
 			fmt.Fprintf(os.Stderr, "-scenario=%s 必须指定 -manifest（由 testlabseed -manifest-out 产出）\n", *scenario)
 			return 2
@@ -225,6 +234,33 @@ func run() int {
 		}
 		if *resume {
 			replaceFinding(rep, "perf/resume-state-validated", true, "")
+		}
+	case "maintenance-perf":
+		if !query.ValidatePerfCorpusBinding(rep, sess, manifest) {
+			if saveErr := rep.Save(*resultsOut); saveErr != nil {
+				fmt.Fprintf(os.Stderr, "save rejected maintenance perf report: %v\n", saveErr)
+			}
+			return 1
+		}
+		publicationID := manifest.QueryPublicationID
+		historicalPublication := false
+		if strings.TrimSpace(*maintenancePublicationID) != "" {
+			publicationID = strings.TrimSpace(*maintenancePublicationID)
+			historicalPublication = publicationID != manifest.QueryPublicationID
+		}
+		runErr := maintenanceperf.Run(rep, sess, publicationID, maintenanceperf.Options{
+			DataDir: dataDir, GCRuns: *maintenanceGCRuns, CheckpointRuns: *maintenanceCheckpointRuns,
+			VacuumRuns: *maintenanceVacuumRuns, QueryInterval: *maintenanceQueryInterval,
+			QueryTimeout: *maintenanceQueryTimeout, OperationTimeout: *maintenanceOperationTimeout,
+			PublicationFingerprint: queryPerfPublicationFingerprint(manifest),
+			HistoricalPublication:  historicalPublication,
+		})
+		if runErr != nil {
+			if saveErr := rep.Save(*resultsOut); saveErr != nil {
+				fmt.Fprintf(os.Stderr, "save failed maintenance perf report: %v\n", saveErr)
+			}
+			fmt.Fprintf(os.Stderr, "run maintenance perf matrix: %v\n", runErr)
+			return 1
 		}
 	case "media":
 		var libraryID, sourceID string
@@ -496,11 +532,12 @@ func perfOptions(cacheMode string, warmupRuns int, processColdAtStart bool, runn
 // Windows 上清空它需要管理员权限与平台专有接口，本工具不做，因此 cold-process 不等于
 // 冷存储读，报告里据此登记为限制。
 type gallerydRunner struct {
-	binPath  string
-	appRoot  string
-	logPath  string
-	restarts int
-	current  *process.Process
+	binPath        string
+	appRoot        string
+	logPath        string
+	startupTimeout time.Duration
+	restarts       int
+	current        *process.Process
 }
 
 func (r *gallerydRunner) start() error {
@@ -511,7 +548,11 @@ func (r *gallerydRunner) start() error {
 		extension := filepath.Ext(r.logPath)
 		logPath = strings.TrimSuffix(r.logPath, extension) + fmt.Sprintf("-restart%02d", r.restarts) + extension
 	}
-	proc, err := process.StartGalleryd(r.binPath, r.appRoot, logPath, 60*time.Second)
+	timeout := r.startupTimeout
+	if timeout <= 0 {
+		timeout = 60 * time.Second
+	}
+	proc, err := process.StartGalleryd(r.binPath, r.appRoot, logPath, timeout)
 	if err != nil {
 		return err
 	}
