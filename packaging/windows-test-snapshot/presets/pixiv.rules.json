@@ -1,0 +1,481 @@
+{
+  "cel_expressions": [],
+  "cel_profile_version": "gallery-cel-v1",
+  "compiler_requirement": "gallery-rule-compiler-v1",
+  "extensions": {},
+  "normalization_algorithm_version": "gallery-canonical-json-v1",
+  "parameter_schema": {
+    "additionalProperties": false,
+    "type": "object"
+  },
+  "primitives": [
+    {
+      "config": {
+        "glob": "*/*",
+        "metadata_file": "metadata.json",
+        "scope": "work_directory",
+        "stable_key": "relative_path",
+        "title": "directory_name"
+      },
+      "id": "work",
+      "kind": "path_match"
+    },
+    {
+      "config": {
+        "pointers": [
+          "/title/text",
+          "/title"
+        ],
+        "target": "title"
+      },
+      "id": "title",
+      "kind": "fallback"
+    },
+    {
+      "config": {
+        "pointers": [
+          "/user/name"
+        ],
+        "target": "creator"
+      },
+      "id": "creator",
+      "kind": "fallback"
+    },
+    {
+      "config": {
+        "pointers": [
+          "/caption",
+          "/text"
+        ],
+        "target": "description"
+      },
+      "id": "description",
+      "kind": "fallback"
+    },
+    {
+      "config": {
+        "pointers": [
+          "/postUrl",
+          "/post_url",
+          "/url",
+          "/sourceUrl",
+          "/source_url",
+          "/permalink",
+          "/link",
+          "/source/url"
+        ],
+        "target": "source_url"
+      },
+      "id": "source-url",
+      "kind": "fallback"
+    },
+    {
+      "config": {
+        "pointers": [
+          "/tags"
+        ],
+        "target": "tags"
+      },
+      "id": "tags",
+      "kind": "fallback"
+    },
+    {
+      "config": {
+        "pattern": "^(?P\u003cauthor\u003e[^/]+)/(?P\u003cwork\u003e[^/]+)$",
+        "targets": {
+          "creator": "author"
+        }
+      },
+      "id": "path-segments",
+      "kind": "path_capture"
+    },
+    {
+      "config": {
+        "pointer": "/user/id",
+        "target": "creator"
+      },
+      "id": "creator-id",
+      "kind": "stable_key"
+    },
+    {
+      "config": {
+        "input_timezone": "UTC",
+        "path_pattern": "/(?P\u003cyear\u003e\\d{4})-(?P\u003cmonth\u003e\\d{2})-(?P\u003cday\u003e\\d{2})_(?P\u003chour\u003e\\d{2})-(?P\u003cminute\u003e\\d{2})-(?P\u003csecond\u003e\\d{2})_",
+        "path_timezone": "UTC",
+        "pointers": [
+          "/date"
+        ]
+      },
+      "id": "work-date",
+      "kind": "work_date"
+    },
+    {
+      "config": {
+        "glob": "*.avi",
+        "kind": "video",
+        "mime": "video/x-msvideo"
+      },
+      "id": "media-avi",
+      "kind": "media_classify"
+    },
+    {
+      "config": {
+        "glob": "*.avif",
+        "kind": "image",
+        "mime": "image/avif"
+      },
+      "id": "media-avif",
+      "kind": "media_classify"
+    },
+    {
+      "config": {
+        "glob": "*.bmp",
+        "kind": "image",
+        "mime": "image/bmp"
+      },
+      "id": "media-bmp",
+      "kind": "media_classify"
+    },
+    {
+      "config": {
+        "glob": "*.gif",
+        "kind": "image",
+        "mime": "image/gif"
+      },
+      "id": "media-gif",
+      "kind": "media_classify"
+    },
+    {
+      "config": {
+        "glob": "*.ico",
+        "kind": "image",
+        "mime": "image/x-icon"
+      },
+      "id": "media-ico",
+      "kind": "media_classify"
+    },
+    {
+      "config": {
+        "glob": "*.jpeg",
+        "kind": "image",
+        "mime": "image/jpeg"
+      },
+      "id": "media-jpeg",
+      "kind": "media_classify"
+    },
+    {
+      "config": {
+        "glob": "*.jpg",
+        "kind": "image",
+        "mime": "image/jpeg"
+      },
+      "id": "media-jpg",
+      "kind": "media_classify"
+    },
+    {
+      "config": {
+        "glob": "*.m4v",
+        "kind": "video",
+        "mime": "video/mp4"
+      },
+      "id": "media-m4v",
+      "kind": "media_classify"
+    },
+    {
+      "config": {
+        "glob": "*.mkv",
+        "kind": "video",
+        "mime": "video/x-matroska"
+      },
+      "id": "media-mkv",
+      "kind": "media_classify"
+    },
+    {
+      "config": {
+        "glob": "*.mov",
+        "kind": "video",
+        "mime": "video/quicktime"
+      },
+      "id": "media-mov",
+      "kind": "media_classify"
+    },
+    {
+      "config": {
+        "glob": "*.mp4",
+        "kind": "video",
+        "mime": "video/mp4"
+      },
+      "id": "media-mp4",
+      "kind": "media_classify"
+    },
+    {
+      "config": {
+        "glob": "*.ogv",
+        "kind": "video",
+        "mime": "video/ogg"
+      },
+      "id": "media-ogv",
+      "kind": "media_classify"
+    },
+    {
+      "config": {
+        "glob": "*.png",
+        "kind": "image",
+        "mime": "image/png"
+      },
+      "id": "media-png",
+      "kind": "media_classify"
+    },
+    {
+      "config": {
+        "glob": "*.svg",
+        "kind": "image",
+        "mime": "image/svg+xml"
+      },
+      "id": "media-svg",
+      "kind": "media_classify"
+    },
+    {
+      "config": {
+        "glob": "*.tif",
+        "kind": "image",
+        "mime": "image/tiff"
+      },
+      "id": "media-tif",
+      "kind": "media_classify"
+    },
+    {
+      "config": {
+        "glob": "*.tiff",
+        "kind": "image",
+        "mime": "image/tiff"
+      },
+      "id": "media-tiff",
+      "kind": "media_classify"
+    },
+    {
+      "config": {
+        "glob": "*.webm",
+        "kind": "video",
+        "mime": "video/webm"
+      },
+      "id": "media-webm",
+      "kind": "media_classify"
+    },
+    {
+      "config": {
+        "glob": "*.webp",
+        "kind": "image",
+        "mime": "image/webp"
+      },
+      "id": "media-webp",
+      "kind": "media_classify"
+    },
+    {
+      "config": {
+        "globs": [
+          ".*",
+          "cover.*",
+          ".cover.*"
+        ]
+      },
+      "id": "hidden",
+      "kind": "media_hidden"
+    },
+    {
+      "config": {
+        "filename": ".nocover"
+      },
+      "id": "nocover",
+      "kind": "cover_disable_marker"
+    },
+    {
+      "config": {
+        "glob": "cover.*",
+        "priority": 100
+      },
+      "id": "cover-0",
+      "kind": "cover_candidate"
+    },
+    {
+      "config": {
+        "glob": ".cover.*",
+        "priority": 100
+      },
+      "id": "cover-1",
+      "kind": "cover_candidate"
+    },
+    {
+      "config": {
+        "badge_id": "r18",
+        "label": "R-18",
+        "order": 1,
+        "position": "cover_top_left",
+        "style": {
+          "background": "#773333",
+          "border": "#9b4a4a",
+          "color": "#ffffff"
+        },
+        "when": {
+          "tags": [
+            "R-18"
+          ]
+        }
+      },
+      "id": "badge-r18",
+      "kind": "badge"
+    },
+    {
+      "config": {
+        "badge_id": "ai",
+        "label": "AI生成",
+        "order": 1,
+        "position": "tag_leading",
+        "style": {
+          "background": "#3a2020",
+          "background_light": "#fbeaea",
+          "border": "#714040",
+          "border_light": "#dcb5b6",
+          "color": "#f2e7e7",
+          "color_light": "#7a1a20"
+        },
+        "when": {
+          "metadata_pointer": "/illust_ai_type",
+          "metadata_values": [
+            2
+          ]
+        }
+      },
+      "id": "badge-ai",
+      "kind": "badge"
+    },
+    {
+      "config": {
+        "badge_id": "image",
+        "label": "图片",
+        "order": 1,
+        "position": "cover_top_right",
+        "style": {
+          "background": "#121316",
+          "background_light": "#ffffff",
+          "border": "#24262a",
+          "border_light": "#d4d7db",
+          "color": "#f1f1f1",
+          "color_light": "#17181a"
+        },
+        "when": {
+          "case_insensitive": true,
+          "media_suffix": [
+            "jpg",
+            "jpeg",
+            "png",
+            "gif",
+            "bmp",
+            "webp",
+            "svg",
+            "ico",
+            "tiff",
+            "tif",
+            "avif",
+            "JPG",
+            "JPEG",
+            "PNG",
+            "GIF",
+            "WEBP"
+          ]
+        }
+      },
+      "id": "badge-image",
+      "kind": "badge"
+    },
+    {
+      "config": {
+        "badge_id": "video",
+        "label": "视频",
+        "order": 2,
+        "position": "cover_top_right",
+        "style": {
+          "background": "#1d4d49",
+          "background_light": "#dff1ef",
+          "border": "#2a726c",
+          "border_light": "#8fc4bf",
+          "color": "#d7fffb",
+          "color_light": "#10514c"
+        },
+        "when": {
+          "case_insensitive": true,
+          "media_suffix": [
+            "mp4",
+            "webm",
+            "mov",
+            "mkv",
+            "avi",
+            "m4v",
+            "ogv",
+            "MP4",
+            "MOV"
+          ]
+        }
+      },
+      "id": "badge-video",
+      "kind": "badge"
+    },
+    {
+      "config": {
+        "author_label": "画师",
+        "description": "pixiv 插画与漫画",
+        "icon": {
+          "background": "#1688f0",
+          "border": "transparent",
+          "color": "#ffffff",
+          "glyph": "P",
+          "kind": "glyph"
+        },
+        "name": "pixiv",
+        "show_in_manager": true,
+        "show_in_sidebar": true,
+        "sort": {
+          "author_default": "name_asc",
+          "author_options": [
+            "name_asc",
+            "name_desc",
+            "latest_desc",
+            "latest_asc",
+            "posts_desc",
+            "posts_asc"
+          ],
+          "browse_default": "natural_asc",
+          "browse_options": [
+            "natural_asc",
+            "natural_desc"
+          ],
+          "collation": "zh-CN",
+          "work_default": "date_desc",
+          "work_options": [
+            "date_desc",
+            "date_asc",
+            "title_asc",
+            "title_desc",
+            "name_asc",
+            "name_desc"
+          ]
+        },
+        "time": {
+          "display_format": "YYYY-MM-DD HH:mm:ss",
+          "display_timezone": "Asia/Shanghai"
+        }
+      },
+      "id": "presentation",
+      "kind": "presentation"
+    }
+  ],
+  "provider_namespaces": [],
+  "rule_set_id": "rset_019fb7c0-5aab-7e7d-9702-79d17b915386",
+  "schema_version": 1,
+  "tests": [
+    {
+      "id": "imported"
+    }
+  ],
+  "version": "1.0.0"
+}
