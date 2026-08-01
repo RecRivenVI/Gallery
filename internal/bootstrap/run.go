@@ -189,6 +189,12 @@ func run(ctx context.Context, cfg config.Config, logger *slog.Logger, ready chan
 	if err != nil {
 		return err
 	}
+	catalogStore.SetMaintenanceObserver(func(operation string, amount int64, duration time.Duration) {
+		if duration >= time.Second {
+			logger.Warn("catalog_maintenance_slow_operation", "operation", operation, "amount", amount,
+				"duration_ms", duration.Milliseconds())
+		}
+	})
 	derivedService, err := derived.New(store.Catalog.SQL(), cfg.AppDirs.Cache, systemClock, nil)
 	if err != nil {
 		return err

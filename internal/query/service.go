@@ -14,6 +14,7 @@ import (
 	"strings"
 	"time"
 
+	catalogstore "github.com/RecRivenVI/gallery/internal/catalog"
 	"github.com/RecRivenVI/gallery/internal/contract/fault"
 	contractquery "github.com/RecRivenVI/gallery/internal/contract/query"
 	"github.com/RecRivenVI/gallery/internal/domain"
@@ -177,6 +178,14 @@ type Service struct {
 	exact   *exactValueIndexCache
 	totals  *totalResultCache
 	pages   *pageInFlightGroup
+	leases  *catalogstore.PublicationLeaseCoordinator
+}
+
+// SetPublicationLeaseCoordinator 由组合根注入 Catalog Store 的共享 lease 协调器。
+// 未注入时（主要是窄单元测试）保持直接 SQLite 路径；正式 HTTP 服务必须注入，才能
+// 在 full VACUUM 窗口继续提供冻结 publication 读取。
+func (s *Service) SetPublicationLeaseCoordinator(coordinator *catalogstore.PublicationLeaseCoordinator) {
+	s.leases = coordinator
 }
 
 func NewService(ctx context.Context, control, catalog *sql.DB, clock ports.Clock, random io.Reader) (*Service, error) {
@@ -1128,6 +1137,13 @@ func (s *Service) createLease(ctx context.Context, publicationID, authHash strin
 	}
 	id := "lease_" + hex.EncodeToString(buffer)
 	now := s.clock.Now().UTC()
+	if s.leases != nil {
+		if err := s.leases.Create(ctx, id, publicationID, authHash,
+			now.Add(CursorLeaseDuration).Unix(), now.Unix()); err != nil {
+			return "", err
+		}
+		return id, nil
+	}
 	_, err := s.catalog.ExecContext(ctx, "INSERT INTO query_publication_leases (lease_id, query_publication_id, authorization_scope_hash, expires_at, created_at) VALUES (?, ?, ?, ?, ?)", id, publicationID, authHash, now.Add(CursorLeaseDuration).Unix(), now.Unix())
 	if err != nil {
 		return "", fault.New(fault.CodeInternal, true, err)
@@ -1136,6 +1152,16 @@ func (s *Service) createLease(ctx context.Context, publicationID, authHash strin
 }
 
 func (s *Service) verifyLease(ctx context.Context, leaseID, publicationID, authHash string) error {
+	if s.leases != nil {
+		valid, err := s.leases.Verify(ctx, leaseID, publicationID, authHash, s.clock.Now().Unix())
+		if err != nil {
+			return fault.New(fault.CodeInternal, true, err)
+		}
+		if !valid {
+			return fault.New(fault.CodeCursorExpired, true, nil)
+		}
+		return nil
+	}
 	var expires int64
 	err := s.catalog.QueryRowContext(ctx, "SELECT expires_at FROM query_publication_leases WHERE lease_id=? AND query_publication_id=? AND authorization_scope_hash=?", leaseID, publicationID, authHash).Scan(&expires)
 	if err != nil || s.clock.Now().Unix() >= expires {

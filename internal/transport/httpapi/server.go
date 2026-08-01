@@ -115,6 +115,9 @@ func New(mode config.Mode, store *storage.Store, clock ports.Clock, personal *au
 	if err != nil {
 		panic(fmt.Sprintf("初始化查询服务: %v", err))
 	}
+	if catalogStore != nil {
+		queryService.SetPublicationLeaseCoordinator(catalogStore.PublicationLeases())
+	}
 	var option Options
 	if len(options) > 0 {
 		option = options[0]

@@ -121,6 +121,93 @@ func TestMaintenancePublishesPersistentJobLifecycle(t *testing.T) {
 	}
 }
 
+// TestLongMaintenanceKeepsAttemptLeaseAlive 复现 500k Catalog GC 的真实失败形态：
+// executing 阶段超过两分钟而没有进度回调时，维护 Job 仍必须独立 heartbeat，不能被
+// 中央租约恢复器当成孤儿 Attempt。这里用 Coordinator 持锁制造可控长操作，不依赖
+// 大数据库或墙钟等待。
+func TestLongMaintenanceKeepsAttemptLeaseAlive(t *testing.T) {
+	ctx := context.Background()
+	dirs := appdirs.UnderRoot(filepath.Join(t.TempDir(), "app"))
+	if err := dirs.Ensure(filesystem.OS{}); err != nil {
+		t.Fatal(err)
+	}
+	store, err := storage.Open(ctx, dirs)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	clk := clock.NewManual(time.Date(2026, 7, 31, 7, 0, 0, 0, time.UTC))
+	ids := identity.NewGenerator(clk)
+	jobStore, err := jobs.NewStore(store.Control.SQL(), clk, ids)
+	if err != nil {
+		t.Fatal(err)
+	}
+	catalogStore, err := catalog.NewStore(store.Catalog.SQL(), clk, ids)
+	if err != nil {
+		t.Fatal(err)
+	}
+	service, err := maintenance.New(ctx, store.Control.SQL(), catalogStore, jobStore, nil, dirs,
+		spaceChecker{free: 1 << 30}, clk, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	service.SetHeartbeatPolicy(5 * time.Millisecond)
+	coordinator := maintenance.NewCoordinator()
+	service.SetCoordinator(coordinator)
+	release := coordinator.AcquireMaintenance()
+	released := false
+	defer func() {
+		if !released {
+			release()
+		}
+	}()
+
+	job, err := service.CreateGC(ctx, "owner", maintenance.Request{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	done := make(chan error, 1)
+	go func() { done <- service.Execute(ctx, job.ID) }()
+
+	var before jobs.Job
+	deadline := time.Now().Add(time.Second)
+	for time.Now().Before(deadline) {
+		before, err = jobStore.Get(ctx, job.ID)
+		if err == nil && before.Status == jobs.StatusRunning && before.Stage == "executing" {
+			break
+		}
+		time.Sleep(time.Millisecond)
+	}
+	if before.Status != jobs.StatusRunning || before.Stage != "executing" || before.HeartbeatAt == nil {
+		t.Fatalf("维护 Job 未进入受 heartbeat 保护的 executing: %+v err=%v", before, err)
+	}
+	clk.Advance(3 * time.Minute)
+	time.Sleep(25 * time.Millisecond)
+	after, err := jobStore.Get(ctx, job.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if after.HeartbeatAt == nil || !after.HeartbeatAt.After(*before.HeartbeatAt) || after.LeaseExpiresAt == nil ||
+		!after.LeaseExpiresAt.After(clk.Now()) {
+		t.Fatalf("长维护操作没有续租: before=%+v after=%+v", before, after)
+	}
+
+	release()
+	released = true
+	select {
+	case executeErr := <-done:
+		if executeErr != nil {
+			t.Fatal(executeErr)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("释放维护互斥后 Execute 未收敛")
+	}
+	stored, err := jobStore.Get(ctx, job.ID)
+	if err != nil || stored.Status != jobs.StatusCompleted {
+		t.Fatalf("续租后的维护 Job 未完成: %+v err=%v", stored, err)
+	}
+}
+
 // TestEveryMaintenanceTypePersistsEstimatedPhases 防止只有 GC 走进度路径，而
 // checkpoint/VACUUM/Derived GC 又退回“running 后长时间无任何可见变化”。每个子测试
 // 使用独立 AppDirs，避免维护单活跃约束和 SQLite 文件状态互相污染。

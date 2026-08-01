@@ -36,10 +36,9 @@ func (s *Store) AcquirePublicationLease(ctx context.Context, publicationID, auth
 	}
 	id := "qlease_" + hex.EncodeToString(buffer)
 	now := s.clock.Now().UTC()
-	if _, err := s.db.ExecContext(ctx, `INSERT INTO query_publication_leases
-(lease_id, query_publication_id, authorization_scope_hash, expires_at, created_at) VALUES (?, ?, ?, ?, ?)`,
-		id, publicationID, authorizationScopeHash, now.Add(PublicationReadLeaseDuration).Unix(), now.Unix()); err != nil {
-		return nil, fault.New(fault.CodeInternal, true, err)
+	if err := s.publicationLeases.Create(ctx, id, publicationID, authorizationScopeHash,
+		now.Add(PublicationReadLeaseDuration).Unix(), now.Unix()); err != nil {
+		return nil, err
 	}
 	return &PublicationReadLease{store: s, id: id}, nil
 }
@@ -51,7 +50,7 @@ func (l *PublicationReadLease) Close() error {
 	var result error
 	l.closed.Do(func() {
 		if l.store != nil && l.id != "" {
-			_, result = l.store.db.Exec("DELETE FROM query_publication_leases WHERE lease_id=?", l.id)
+			result = l.store.publicationLeases.Delete(context.Background(), l.id)
 		}
 	})
 	return result

@@ -11,14 +11,71 @@ import (
 	"testing"
 	"time"
 
+	"github.com/RecRivenVI/gallery/internal/catalog"
 	"github.com/RecRivenVI/gallery/internal/contract/fault"
 	"github.com/RecRivenVI/gallery/internal/platform/appdirs"
 	"github.com/RecRivenVI/gallery/internal/platform/clock"
 	"github.com/RecRivenVI/gallery/internal/platform/filesystem"
+	"github.com/RecRivenVI/gallery/internal/platform/identity"
 	galleryquery "github.com/RecRivenVI/gallery/internal/query"
 	"github.com/RecRivenVI/gallery/internal/querytext"
 	"github.com/RecRivenVI/gallery/internal/storage"
 )
+
+func TestCursorLeaseContinuesThroughDeferredVacuumWindow(t *testing.T) {
+	ctx := context.Background()
+	now := time.Date(2026, 7, 31, 13, 0, 0, 0, time.UTC)
+	dirs := appdirs.UnderRoot(t.TempDir())
+	if err := dirs.Ensure(filesystem.OS{}); err != nil {
+		t.Fatal(err)
+	}
+	store, err := storage.Open(ctx, dirs)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	seedPublication(t, store, "910", []seedWork{{title: "A"}, {title: "B"}})
+	fixed := clock.Fixed{Time: now}
+	catalogStore, err := catalog.NewStore(store.Catalog.SQL(), fixed, identity.NewGenerator(fixed))
+	if err != nil {
+		t.Fatal(err)
+	}
+	service, err := galleryquery.NewService(ctx, store.Control.SQL(), store.Catalog.SQL(), fixed, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	service.SetPublicationLeaseCoordinator(catalogStore.PublicationLeases())
+	catalogStore.PublicationLeases().BeginDeferred()
+	scope := galleryquery.AuthorizationScope("owner", []string{"library.read"})
+	request := authorizedRequest(galleryquery.Request{Limit: 1, Sort: "title_asc", AuthorizationScope: scope})
+	first, err := service.Search(ctx, request)
+	if err != nil || first.NextCursor == "" {
+		t.Fatalf("deferred 首屏失败: %+v err=%v", first, err)
+	}
+	var persisted int
+	if err := store.Catalog.SQL().QueryRowContext(ctx,
+		"SELECT count(*) FROM query_publication_leases").Scan(&persisted); err != nil {
+		t.Fatal(err)
+	}
+	if persisted != 0 {
+		t.Fatalf("VACUUM 窗口 lease 提前落盘: %d", persisted)
+	}
+	request.Cursor = first.NextCursor
+	second, err := service.Search(ctx, request)
+	if err != nil || len(second.Items) != 1 || second.Items[0].Title != "B" {
+		t.Fatalf("deferred 游标续页失败: %+v err=%v", second, err)
+	}
+	if err := catalogStore.PublicationLeases().FlushAndEnd(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.Catalog.SQL().QueryRowContext(ctx,
+		"SELECT count(*) FROM query_publication_leases").Scan(&persisted); err != nil {
+		t.Fatal(err)
+	}
+	if persisted != 1 {
+		t.Fatalf("VACUUM 后 lease 未持久化: %d", persisted)
+	}
+}
 
 func TestFTSSnapshotKeysetCursorAndAuthorization(t *testing.T) {
 	ctx := context.Background()

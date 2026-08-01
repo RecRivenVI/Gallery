@@ -255,18 +255,69 @@ type GCOptions struct {
 	DryRun         bool
 }
 
-type Store struct {
-	db          *sql.DB
-	clock       ports.Clock
-	ids         ports.IDGenerator
-	candidateMu sync.Mutex
+type garbageCollectSnapshot struct {
+	publication string
+	catalog     string
+	overlay     string
 }
+
+type Store struct {
+	db                  *sql.DB
+	clock               ports.Clock
+	ids                 ports.IDGenerator
+	publicationLeases   *PublicationLeaseCoordinator
+	candidateMu         sync.Mutex
+	garbageCollectBatch int
+	maintenanceObserver func(string, int64, time.Duration)
+}
+
+const (
+	defaultGarbageCollectBatch = 2_048
+	workSearchMergePages       = 512
+	workSearchAutomerge        = 4
+	workSearchCrisismerge      = 16
+	workSearchGCCrisismerge    = 65_536
+)
 
 func NewStore(db *sql.DB, clock ports.Clock, ids ports.IDGenerator) (*Store, error) {
 	if db == nil || clock == nil || ids == nil {
 		return nil, fmt.Errorf("Catalog Store 缺少依赖")
 	}
-	return &Store{db: db, clock: clock, ids: ids}, nil
+	store := &Store{
+		db: db, clock: clock, ids: ids,
+		publicationLeases:   newPublicationLeaseCoordinator(db),
+		garbageCollectBatch: defaultGarbageCollectBatch,
+	}
+	policyCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	if err := store.ensureWorkSearchMaintenancePolicy(policyCtx); err != nil {
+		return nil, fmt.Errorf("恢复 FTS5 维护策略: %w", err)
+	}
+	return store, nil
+}
+
+func (s *Store) PublicationLeases() *PublicationLeaseCoordinator {
+	return s.publicationLeases
+}
+
+// SetGarbageCollectBatchPolicy 只用于运行调优和确定性测试。批大小属于
+// PRE_FREEZE 维护策略，不进入 Catalog 或 HTTP 契约。
+func (s *Store) SetGarbageCollectBatchPolicy(batch int) {
+	if batch > 0 {
+		s.garbageCollectBatch = batch
+	}
+}
+
+// SetMaintenanceObserver 注册非敏感维护观测器；调用方应自行过滤短批次，不能在
+// observer 中读取 Catalog 内容或执行阻塞工作。
+func (s *Store) SetMaintenanceObserver(observer func(string, int64, time.Duration)) {
+	s.maintenanceObserver = observer
+}
+
+func (s *Store) observeMaintenance(operation string, amount int64, started time.Time) {
+	if s.maintenanceObserver != nil {
+		s.maintenanceObserver(operation, amount, time.Since(started))
+	}
 }
 
 // BeginCandidate 是同一逻辑 Job 多 Attempt 下候选构建的幂等入口：Candidate 归 Job 所有
@@ -1600,8 +1651,8 @@ func protectedBlobClause(revisionColumn string, blobs []domain.ContentBlobRef) (
 }
 
 // GarbageCollect 回收超过保留期且未被活动 publication、游标租约或 Blob
-// 读取租约保护的查询快照。FTS5 表不受外键级联管理，必须与对应 Overlay
-// revision 在同一事务中显式删除。
+// 读取租约保护的查询快照。FTS5 表不受外键级联管理，必须在对应 Overlay
+// revision 的有界清理流程中显式删除。
 func (s *Store) GarbageCollect(ctx context.Context, retention time.Duration) (GCResult, error) {
 	s.candidateMu.Lock()
 	defer s.candidateMu.Unlock()
@@ -1612,27 +1663,68 @@ func (s *Store) garbageCollect(ctx context.Context, retention time.Duration, pro
 	if retention < 0 {
 		return GCResult{}, fault.New(fault.CodeValidation, false, nil)
 	}
+	// 大批 DELETE 若保留 automerge=4，会把增量段合并隐式塞进任一普通
+	// DELETE，500k 实测仍会产生分钟级写者长尾。GC 自己在末尾执行 bounded
+	// merge，因此删除窗口临时关闭 automerge，并只在该窗口把 crisismerge 提高到
+	// 65536；正常返回或错误都用独立恢复 context 还原产品策略 4/16，强杀遗留则由
+	// 下次 NewStore 启动校正。日常写入不能永久失去 crisis merge 的最终保险。
+	if err := s.setWorkSearchAutomerge(ctx, 0); err != nil {
+		return GCResult{}, fault.New(fault.CodeInternal, true, err)
+	}
+	if err := s.setWorkSearchCrisismerge(ctx, workSearchGCCrisismerge); err != nil {
+		restoreCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		restoreErr := s.setWorkSearchAutomerge(restoreCtx, workSearchAutomerge)
+		cancel()
+		return GCResult{}, fault.New(fault.CodeInternal, true, errors.Join(err, restoreErr))
+	}
+	result, collectErr := s.garbageCollectBatched(ctx, retention, protectedBlobs)
+	restoreCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	restoreErr := errors.Join(
+		s.setWorkSearchAutomerge(restoreCtx, workSearchAutomerge),
+		s.setWorkSearchCrisismerge(restoreCtx, workSearchCrisismerge),
+	)
+	cancel()
+	if collectErr != nil {
+		if restoreErr != nil {
+			return GCResult{}, fault.New(fault.CodeInternal, true, errors.Join(collectErr, restoreErr))
+		}
+		return GCResult{}, collectErr
+	}
+	if restoreErr != nil {
+		return GCResult{}, fault.New(fault.CodeInternal, true, restoreErr)
+	}
+	return result, nil
+}
+
+func (s *Store) garbageCollectBatched(ctx context.Context, retention time.Duration, protectedBlobs []domain.ContentBlobRef) (GCResult, error) {
 	now := s.clock.Now().UTC().Unix()
 	cutoff := s.clock.Now().UTC().Add(-retention).Unix()
+	var result GCResult
+
+	// 租约表很小，先用一个短事务清理过期行。历史实现把这两次删除、全部
+	// publication/FTS/投影级联以及 Catalog root 删除放在同一个事务里；500k × 10
+	// publication 的真实维护矩阵会因此产生十几分钟的单写事务，期间连活动快照为
+	// 下一页签发 lease 都会被 busy_timeout 阻塞。后续大表清理必须走有界批次。
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return GCResult{}, fault.New(fault.CodeInternal, true, err)
 	}
-	defer tx.Rollback()
-
-	var result GCResult
 	if result.ExpiredQueryLeases, err = deleteCount(ctx, tx,
 		"DELETE FROM query_publication_leases WHERE expires_at<=?", now); err != nil {
+		tx.Rollback()
 		return GCResult{}, fault.New(fault.CodeInternal, true, err)
 	}
 	if result.ExpiredBlobLeases, err = deleteCount(ctx, tx,
 		"DELETE FROM blob_read_leases WHERE expires_at<=?", now); err != nil {
+		tx.Rollback()
+		return GCResult{}, fault.New(fault.CodeInternal, true, err)
+	}
+	if err := tx.Commit(); err != nil {
 		return GCResult{}, fault.New(fault.CodeInternal, true, err)
 	}
 
 	publicationProtectedClause, publicationProtectedArgs := protectedBlobClause("q.catalog_revision_id", protectedBlobs)
-	type snapshot struct{ publication, catalog, overlay string }
-	rows, err := tx.QueryContext(ctx, `SELECT q.query_publication_id, q.catalog_revision_id, q.overlay_revision_id
+	rows, err := s.db.QueryContext(ctx, `SELECT q.query_publication_id, q.catalog_revision_id, q.overlay_revision_id
 FROM query_publications q
 LEFT JOIN active_query_publication a ON a.query_publication_id=q.query_publication_id
 WHERE a.query_publication_id IS NULL AND q.created_at<=?
@@ -1655,9 +1747,9 @@ ORDER BY q.created_at, q.query_publication_id`, append([]any{cutoff, now, now}, 
 	if err != nil {
 		return GCResult{}, fault.New(fault.CodeInternal, true, err)
 	}
-	var snapshots []snapshot
+	var snapshots []garbageCollectSnapshot
 	for rows.Next() {
-		var item snapshot
+		var item garbageCollectSnapshot
 		if err := rows.Scan(&item.publication, &item.catalog, &item.overlay); err != nil {
 			rows.Close()
 			return GCResult{}, fault.New(fault.CodeInternal, true, err)
@@ -1669,39 +1761,31 @@ ORDER BY q.created_at, q.query_publication_id`, append([]any{cutoff, now, now}, 
 	}
 
 	for _, item := range snapshots {
-		if _, err := tx.ExecContext(ctx, "DELETE FROM query_publications WHERE query_publication_id=?", item.publication); err != nil {
+		removed, err := s.deleteCollectiblePublication(ctx, item, cutoff, now, protectedBlobs)
+		if err != nil {
 			return GCResult{}, fault.New(fault.CodeInternal, true, err)
+		}
+		if !removed {
+			continue
 		}
 		result.Publications++
-		var references int
-		if err := tx.QueryRowContext(ctx,
-			"SELECT count(*) FROM query_publications WHERE catalog_revision_id=? AND overlay_revision_id=?",
-			item.catalog, item.overlay).Scan(&references); err != nil {
+		removed, err = s.deleteOverlayRevisionBatched(ctx, item.catalog, item.overlay)
+		if err != nil {
 			return GCResult{}, fault.New(fault.CodeInternal, true, err)
 		}
-		if references == 0 {
-			if _, err := tx.ExecContext(ctx,
-				"DELETE FROM work_search WHERE catalog_revision_id=? AND overlay_revision_id=?",
-				item.catalog, item.overlay); err != nil {
-				return GCResult{}, fault.New(fault.CodeInternal, true, err)
-			}
-			count, err := deleteCount(ctx, tx,
-				"DELETE FROM overlay_projection_revisions WHERE catalog_revision_id=? AND overlay_revision_id=?",
-				item.catalog, item.overlay)
-			if err != nil {
-				return GCResult{}, fault.New(fault.CodeInternal, true, err)
-			}
-			result.OverlayRevisions += count
+		if removed {
+			result.OverlayRevisions++
 		}
 	}
 
 	// Overlay 构建可能在 publication 创建前因冲突、取消或失败进入 aborted/superseded。
-	// 这类 revision 没有 query_publications 行，所以上面的快照循环永远看不到它们；超过保留期后
-	// 必须显式删除 FTS，再由 Overlay 外键级联清理普通投影与窄候选。
+	// 这类 revision 没有 query_publications 行，所以上面的快照循环永远看不到它们；published
+	// 但已没有 publication 的 revision 则是分批 GC 删除 publication 后被取消/强杀留下的可恢复
+	// 中间态。超过保留期后都必须显式删除 FTS，再由 Overlay 外键级联清理普通投影与窄候选。
 	overlayProtectedClause, overlayProtectedArgs := protectedBlobClause("o.catalog_revision_id", protectedBlobs)
-	rows, err = tx.QueryContext(ctx, `SELECT o.catalog_revision_id, o.overlay_revision_id
+	rows, err = s.db.QueryContext(ctx, `SELECT o.catalog_revision_id, o.overlay_revision_id
 FROM overlay_projection_revisions o
-WHERE o.status IN ('aborted', 'superseded') AND o.created_at<=?
+WHERE o.status IN ('aborted', 'superseded', 'published') AND o.created_at<=?
 AND NOT EXISTS (
   SELECT 1 FROM query_publications q
   WHERE q.catalog_revision_id=o.catalog_revision_id AND q.overlay_revision_id=o.overlay_revision_id
@@ -1721,9 +1805,9 @@ ORDER BY o.created_at, o.overlay_revision_id`, append([]any{cutoff, now}, overla
 	if err != nil {
 		return GCResult{}, fault.New(fault.CodeInternal, true, err)
 	}
-	var standaloneOverlays []snapshot
+	var standaloneOverlays []garbageCollectSnapshot
 	for rows.Next() {
-		var item snapshot
+		var item garbageCollectSnapshot
 		if err := rows.Scan(&item.catalog, &item.overlay); err != nil {
 			rows.Close()
 			return GCResult{}, fault.New(fault.CodeInternal, true, err)
@@ -1734,20 +1818,24 @@ ORDER BY o.created_at, o.overlay_revision_id`, append([]any{cutoff, now}, overla
 		return GCResult{}, fault.New(fault.CodeInternal, true, err)
 	}
 	for _, item := range standaloneOverlays {
-		if _, err := tx.ExecContext(ctx, `DELETE FROM work_search
-WHERE catalog_revision_id=? AND overlay_revision_id=?`, item.catalog, item.overlay); err != nil {
-			return GCResult{}, fault.New(fault.CodeInternal, true, err)
-		}
-		count, err := deleteCount(ctx, tx, `DELETE FROM overlay_projection_revisions
-WHERE catalog_revision_id=? AND overlay_revision_id=?`, item.catalog, item.overlay)
+		eligible, err := s.standaloneOverlayCollectible(ctx, item.catalog, item.overlay, cutoff, now, protectedBlobs)
 		if err != nil {
 			return GCResult{}, fault.New(fault.CodeInternal, true, err)
 		}
-		result.OverlayRevisions += count
+		if !eligible {
+			continue
+		}
+		removed, err := s.deleteOverlayRevisionBatched(ctx, item.catalog, item.overlay)
+		if err != nil {
+			return GCResult{}, fault.New(fault.CodeInternal, true, err)
+		}
+		if removed {
+			result.OverlayRevisions++
+		}
 	}
 
 	revisionProtectedClause, revisionProtectedArgs := protectedBlobClause("catalog_revisions.catalog_revision_id", protectedBlobs)
-	rows, err = tx.QueryContext(ctx, `SELECT catalog_revision_id FROM catalog_revisions
+	rows, err = s.db.QueryContext(ctx, `SELECT catalog_revision_id FROM catalog_revisions
 WHERE status IN ('published', 'aborted') AND created_at<=?
 AND NOT EXISTS (SELECT 1 FROM query_publications q WHERE q.catalog_revision_id=catalog_revisions.catalog_revision_id)
 AND NOT EXISTS (
@@ -1777,20 +1865,347 @@ AND NOT EXISTS (
 		return GCResult{}, fault.New(fault.CodeInternal, true, err)
 	}
 	for _, catalogRevisionID := range staleCatalogRevisions {
-		// catalog_revisions 的普通表子树受外键管理，FTS5 不受；必须先清 FTS 再删根行。
-		if _, err := tx.ExecContext(ctx, `DELETE FROM work_search WHERE catalog_revision_id=?`, catalogRevisionID); err != nil {
-			return GCResult{}, fault.New(fault.CodeInternal, true, err)
-		}
-		count, err := deleteCount(ctx, tx, `DELETE FROM catalog_revisions WHERE catalog_revision_id=?`, catalogRevisionID)
+		eligible, err := s.catalogRevisionCollectible(ctx, catalogRevisionID, cutoff, now, protectedBlobs)
 		if err != nil {
 			return GCResult{}, fault.New(fault.CodeInternal, true, err)
 		}
-		result.CatalogRevisions += count
+		if !eligible {
+			continue
+		}
+		removedOverlays, removed, err := s.deleteCatalogRevisionBatched(ctx, catalogRevisionID)
+		if err != nil {
+			return GCResult{}, fault.New(fault.CodeInternal, true, err)
+		}
+		result.OverlayRevisions += removedOverlays
+		if removed {
+			result.CatalogRevisions++
+		}
 	}
-	if err := tx.Commit(); err != nil {
+	// 即使本轮没有新删 revision，也执行一次廉价的 bounded merge 探针：上一轮可能
+	// 在删除提交后、FTS 合并完成前被取消或强杀。没有待合并 segment 时首条命令即
+	// 收敛；存在遗留时则从稳定的 FTS5 segment 状态继续，而不是永久依赖 automerge。
+	if err := s.compactWorkSearchBatched(ctx); err != nil {
 		return GCResult{}, fault.New(fault.CodeInternal, true, err)
 	}
 	return result, nil
+}
+
+// deleteCollectiblePublication 在一个短事务内重新核对全部保护判据并删除 publication。
+// 列表查询与删除之间新签发的 lease 因此必定让删除变成 no-op，不会被级联吞掉。
+func (s *Store) deleteCollectiblePublication(ctx context.Context, item garbageCollectSnapshot, cutoff, now int64, protectedBlobs []domain.ContentBlobRef) (bool, error) {
+	protected, unlock := s.publicationLeases.lockPublicationDeletion(item.publication, now)
+	defer unlock()
+	if protected {
+		return false, nil
+	}
+	protectedClause, protectedArgs := protectedBlobClause("query_publications.catalog_revision_id", protectedBlobs)
+	args := []any{item.publication, cutoff, now, now}
+	args = append(args, protectedArgs...)
+	started := time.Now()
+	result, err := s.db.ExecContext(ctx, `DELETE FROM query_publications
+WHERE query_publication_id=? AND created_at<=?
+AND NOT EXISTS (
+  SELECT 1 FROM active_query_publication a
+  WHERE a.query_publication_id=query_publications.query_publication_id
+)
+AND NOT EXISTS (
+  SELECT 1 FROM query_publication_leases l
+  WHERE l.query_publication_id=query_publications.query_publication_id AND l.expires_at>?
+)
+AND NOT EXISTS (
+  SELECT 1 FROM content_blobs b JOIN blob_read_leases l
+    ON l.blob_algorithm=b.algorithm AND l.blob_digest=b.digest
+  WHERE b.catalog_revision_id=query_publications.catalog_revision_id AND l.expires_at>?
+)
+AND NOT EXISTS (
+  SELECT 1 FROM overlay_projection_revisions pending
+  WHERE pending.catalog_revision_id=query_publications.catalog_revision_id
+    AND pending.base_overlay_revision_id=query_publications.overlay_revision_id
+    AND pending.status='staging'
+)`+protectedClause, args...)
+	if err != nil {
+		return false, err
+	}
+	count, err := result.RowsAffected()
+	s.observeMaintenance("query_publications", count, started)
+	return count == 1, err
+}
+
+func (s *Store) standaloneOverlayCollectible(ctx context.Context, catalogRevisionID, overlayRevisionID string, cutoff, now int64, protectedBlobs []domain.ContentBlobRef) (bool, error) {
+	protectedClause, protectedArgs := protectedBlobClause("o.catalog_revision_id", protectedBlobs)
+	args := []any{catalogRevisionID, overlayRevisionID, cutoff, now}
+	args = append(args, protectedArgs...)
+	var count int
+	err := s.db.QueryRowContext(ctx, `SELECT count(*) FROM overlay_projection_revisions o
+WHERE o.catalog_revision_id=? AND o.overlay_revision_id=?
+AND o.status IN ('aborted', 'superseded', 'published') AND o.created_at<=?
+AND NOT EXISTS (
+  SELECT 1 FROM query_publications q
+  WHERE q.catalog_revision_id=o.catalog_revision_id AND q.overlay_revision_id=o.overlay_revision_id
+)
+AND NOT EXISTS (
+  SELECT 1 FROM content_blobs b JOIN blob_read_leases l
+    ON l.blob_algorithm=b.algorithm AND l.blob_digest=b.digest
+  WHERE b.catalog_revision_id=o.catalog_revision_id AND l.expires_at>?
+)
+AND NOT EXISTS (
+  SELECT 1 FROM overlay_projection_revisions pending
+  WHERE pending.catalog_revision_id=o.catalog_revision_id
+    AND pending.base_overlay_revision_id=o.overlay_revision_id
+    AND pending.status='staging'
+)`+protectedClause, args...).Scan(&count)
+	return count == 1, err
+}
+
+func (s *Store) catalogRevisionCollectible(ctx context.Context, catalogRevisionID string, cutoff, now int64, protectedBlobs []domain.ContentBlobRef) (bool, error) {
+	protectedClause, protectedArgs := protectedBlobClause("catalog_revisions.catalog_revision_id", protectedBlobs)
+	args := []any{catalogRevisionID, cutoff, now}
+	args = append(args, protectedArgs...)
+	var count int
+	err := s.db.QueryRowContext(ctx, `SELECT count(*) FROM catalog_revisions
+WHERE catalog_revision_id=? AND status IN ('published', 'aborted') AND created_at<=?
+AND NOT EXISTS (SELECT 1 FROM query_publications q WHERE q.catalog_revision_id=catalog_revisions.catalog_revision_id)
+AND NOT EXISTS (
+  SELECT 1 FROM overlay_projection_revisions pending
+  WHERE pending.catalog_revision_id=catalog_revisions.catalog_revision_id
+    AND pending.status='staging' AND pending.base_overlay_revision_id<>''
+)
+AND NOT EXISTS (
+  SELECT 1 FROM content_blobs b JOIN blob_read_leases l
+    ON l.blob_algorithm=b.algorithm AND l.blob_digest=b.digest
+  WHERE b.catalog_revision_id=catalog_revisions.catalog_revision_id AND l.expires_at>?
+)`+protectedClause, args...).Scan(&count)
+	return count == 1, err
+}
+
+// deleteOverlayRevisionBatched 先显式清理所有大子表，最后才删 root。每个批次独立
+// 提交，使活动 publication 的只读查询与 lease 写入可以在 GC 期间持续取得写者时隙；
+// 中断只会留下不可达、可由下一轮 GC 继续清理的 revision，不会暴露半成品快照。
+func (s *Store) deleteOverlayRevisionBatched(ctx context.Context, catalogRevisionID, overlayRevisionID string) (bool, error) {
+	var references int
+	if err := s.db.QueryRowContext(ctx, `SELECT count(*) FROM query_publications
+WHERE catalog_revision_id=? AND overlay_revision_id=?`, catalogRevisionID, overlayRevisionID).Scan(&references); err != nil || references > 0 {
+		return false, err
+	}
+	tables := []string{
+		"work_search",
+		"work_creator_relations",
+		"work_search_candidates",
+		"creator_source_cover_projections",
+		"aggregate_cover_projections",
+		"media_projections",
+		"work_projections",
+		"creator_projections",
+		"candidate_validation_seals",
+	}
+	for _, table := range tables {
+		if err := s.deleteRowsInBatches(ctx, table, "catalog_revision_id=? AND overlay_revision_id=?", catalogRevisionID, overlayRevisionID); err != nil {
+			return false, err
+		}
+	}
+	started := time.Now()
+	result, err := s.db.ExecContext(ctx, `DELETE FROM overlay_projection_revisions
+WHERE catalog_revision_id=? AND overlay_revision_id=?
+AND NOT EXISTS (
+  SELECT 1 FROM query_publications q
+  WHERE q.catalog_revision_id=overlay_projection_revisions.catalog_revision_id
+    AND q.overlay_revision_id=overlay_projection_revisions.overlay_revision_id
+)
+AND NOT EXISTS (
+  SELECT 1 FROM overlay_projection_revisions pending
+  WHERE pending.catalog_revision_id=overlay_projection_revisions.catalog_revision_id
+    AND pending.base_overlay_revision_id=overlay_projection_revisions.overlay_revision_id
+    AND pending.status='staging'
+)`, catalogRevisionID, overlayRevisionID)
+	if err != nil {
+		return false, err
+	}
+	count, err := result.RowsAffected()
+	s.observeMaintenance("overlay_projection_revisions", count, started)
+	return count == 1, err
+}
+
+func (s *Store) deleteCatalogRevisionBatched(ctx context.Context, catalogRevisionID string) (int, bool, error) {
+	rows, err := s.db.QueryContext(ctx, `SELECT overlay_revision_id FROM overlay_projection_revisions
+WHERE catalog_revision_id=? ORDER BY created_at DESC, overlay_revision_id DESC`, catalogRevisionID)
+	if err != nil {
+		return 0, false, err
+	}
+	var overlays []string
+	for rows.Next() {
+		var overlayRevisionID string
+		if err := rows.Scan(&overlayRevisionID); err != nil {
+			rows.Close()
+			return 0, false, err
+		}
+		overlays = append(overlays, overlayRevisionID)
+	}
+	if err := rows.Close(); err != nil {
+		return 0, false, err
+	}
+	removedOverlays := 0
+	for _, overlayRevisionID := range overlays {
+		removed, err := s.deleteOverlayRevisionBatched(ctx, catalogRevisionID, overlayRevisionID)
+		if err != nil {
+			return removedOverlays, false, err
+		}
+		if removed {
+			removedOverlays++
+		}
+	}
+	for _, table := range []string{"file_locations", "source_media", "source_works", "source_creators", "catalog_revision_sources", "content_blobs"} {
+		if err := s.deleteRowsInBatches(ctx, table, "catalog_revision_id=?", catalogRevisionID); err != nil {
+			return removedOverlays, false, err
+		}
+	}
+	started := time.Now()
+	result, err := s.db.ExecContext(ctx, `DELETE FROM catalog_revisions
+WHERE catalog_revision_id=?
+AND NOT EXISTS (SELECT 1 FROM query_publications q WHERE q.catalog_revision_id=catalog_revisions.catalog_revision_id)
+AND NOT EXISTS (SELECT 1 FROM overlay_projection_revisions o WHERE o.catalog_revision_id=catalog_revisions.catalog_revision_id)`, catalogRevisionID)
+	if err != nil {
+		return removedOverlays, false, err
+	}
+	count, err := result.RowsAffected()
+	s.observeMaintenance("catalog_revisions", count, started)
+	return removedOverlays, count == 1, err
+}
+
+func (s *Store) deleteRowsInBatches(ctx context.Context, table, predicate string, args ...any) error {
+	batch := s.garbageCollectBatch
+	if batch <= 0 {
+		batch = defaultGarbageCollectBatch
+	}
+	// FTS5 对“DELETE virtual_table WHERE rowid IN (SELECT rowid FROM 同一虚表 …)”
+	// 可能选择近似整段物化的自引用计划，使名义上的 2,048 行仍占用写者数分钟。
+	// 先以只读游标顺序取显式 rowid，再用主键列表执行短写事务；lastRowID 保证每个
+	// target 只顺序扫描一次，不因前批删除而反复从虚表开头寻找同 revision。
+	lastRowID := int64(0)
+	for {
+		selectArgs := append(append([]any(nil), args...), lastRowID, batch)
+		rows, err := s.db.QueryContext(ctx, fmt.Sprintf(`SELECT rowid FROM %s
+WHERE (%s) AND rowid>? ORDER BY rowid LIMIT ?`, table, predicate), selectArgs...)
+		if err != nil {
+			return err
+		}
+		rowIDs := make([]int64, 0, batch)
+		for rows.Next() {
+			var rowID int64
+			if err := rows.Scan(&rowID); err != nil {
+				rows.Close()
+				return err
+			}
+			rowIDs = append(rowIDs, rowID)
+		}
+		if err := rows.Close(); err != nil {
+			return err
+		}
+		if len(rowIDs) == 0 {
+			return nil
+		}
+		placeholders := make([]string, len(rowIDs))
+		deleteArgs := make([]any, len(rowIDs))
+		for index, rowID := range rowIDs {
+			placeholders[index] = "?"
+			deleteArgs[index] = rowID
+		}
+		started := time.Now()
+		result, err := s.db.ExecContext(ctx,
+			fmt.Sprintf("DELETE FROM %s WHERE rowid IN (%s)", table, strings.Join(placeholders, ",")), deleteArgs...)
+		if err != nil {
+			return err
+		}
+		count, err := result.RowsAffected()
+		if err != nil {
+			return err
+		}
+		if count != int64(len(rowIDs)) {
+			return fmt.Errorf("GC %s 批次只删除 %d/%d 行", table, count, len(rowIDs))
+		}
+		s.observeMaintenance(table, count, started)
+		lastRowID = rowIDs[len(rowIDs)-1]
+		if len(rowIDs) < batch {
+			return nil
+		}
+		// 给已在 SQLite busy handler 中等待的 publication lease 写入一个明确的
+		// 调度窗口；该 1 ms 让步属于 PRE_FREEZE 维护策略，不改变删除语义。
+		time.Sleep(time.Millisecond)
+	}
+}
+
+// compactWorkSearchBatched 使用 FTS5 官方的 bounded merge 序列：第一次负参数启动
+// 全索引合并，后续正参数每次只写大约 N 个 FTS page，直到同一 connection 的
+// total_changes 增量小于 2。相较 optimize 或默认 crisismerge，这不会把全部段合并
+// 隐藏在某一次 DELETE 中；每次命令独立提交，并为 publication lease 留出写者窗口。
+func (s *Store) compactWorkSearchBatched(ctx context.Context) error {
+	connection, err := s.db.Conn(ctx)
+	if err != nil {
+		return err
+	}
+	defer connection.Close()
+	pages := -workSearchMergePages
+	for {
+		var before int64
+		if err := connection.QueryRowContext(ctx, "SELECT total_changes()").Scan(&before); err != nil {
+			return err
+		}
+		started := time.Now()
+		if _, err := connection.ExecContext(ctx,
+			"INSERT INTO work_search(work_search, rank) VALUES('merge', ?)", pages); err != nil {
+			return err
+		}
+		var after int64
+		if err := connection.QueryRowContext(ctx, "SELECT total_changes()").Scan(&after); err != nil {
+			return err
+		}
+		s.observeMaintenance("work_search.merge", after-before, started)
+		if after-before < 2 {
+			return nil
+		}
+		pages = workSearchMergePages
+		timer := time.NewTimer(time.Millisecond)
+		select {
+		case <-ctx.Done():
+			timer.Stop()
+			return ctx.Err()
+		case <-timer.C:
+		}
+	}
+}
+
+func (s *Store) ensureWorkSearchMaintenancePolicy(ctx context.Context) error {
+	var automerge, crisismerge int
+	if err := s.db.QueryRowContext(ctx,
+		"SELECT coalesce((SELECT v FROM work_search_config WHERE k='automerge'), 4)").Scan(&automerge); err != nil {
+		return err
+	}
+	if err := s.db.QueryRowContext(ctx,
+		"SELECT coalesce((SELECT v FROM work_search_config WHERE k='crisismerge'), 16)").Scan(&crisismerge); err != nil {
+		return err
+	}
+	if automerge != workSearchAutomerge {
+		if err := s.setWorkSearchAutomerge(ctx, workSearchAutomerge); err != nil {
+			return err
+		}
+	}
+	if crisismerge != workSearchCrisismerge {
+		if err := s.setWorkSearchCrisismerge(ctx, workSearchCrisismerge); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (s *Store) setWorkSearchAutomerge(ctx context.Context, value int) error {
+	_, err := s.db.ExecContext(ctx,
+		"INSERT INTO work_search(work_search, rank) VALUES('automerge', ?)", value)
+	return err
+}
+
+func (s *Store) setWorkSearchCrisismerge(ctx context.Context, value int) error {
+	_, err := s.db.ExecContext(ctx,
+		"INSERT INTO work_search(work_search, rank) VALUES('crisismerge', ?)", value)
+	return err
 }
 
 // GarbageCollectWithOptions 在已有 GC 保护之外收敛遗留 staging candidate。活动 Job 的
@@ -1858,8 +2273,14 @@ func (s *Store) GarbageCollectWithOptions(ctx context.Context, options GCOptions
 }
 
 func (s *Store) Checkpoint(ctx context.Context) error {
-	if _, err := s.db.ExecContext(ctx, "PRAGMA wal_checkpoint(TRUNCATE)"); err != nil {
+	var busy, logFrames, checkpointedFrames int
+	if err := s.db.QueryRowContext(ctx, "PRAGMA wal_checkpoint(TRUNCATE)").Scan(
+		&busy, &logFrames, &checkpointedFrames); err != nil {
 		return fault.New(fault.CodeInternal, true, err)
+	}
+	if busy != 0 {
+		return fault.New(fault.CodeMaintenanceBlocked, true, fmt.Errorf(
+			"Catalog checkpoint busy: log=%d checkpointed=%d", logFrames, checkpointedFrames))
 	}
 	return nil
 }

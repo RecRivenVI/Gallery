@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/RecRivenVI/gallery/internal/catalog"
@@ -66,6 +67,9 @@ type Service struct {
 	temp     *jobs.TempStore
 	coord    *Coordinator
 	notifier Notifier
+	// heartbeatInterval 必须明显短于 Job Store 当前 2 分钟运行租约；具体值仍是
+	// PRE_FREEZE 运行策略，和 Hash Job 一样可由启动配置/确定性测试收紧。
+	heartbeatInterval time.Duration
 }
 
 func New(ctx context.Context, control *sql.DB, catalogStore *catalog.Store, jobStore *jobs.Store, derivedService *derived.Service, dirs appdirs.Dirs, space ports.SpaceChecker, clock ports.Clock, notifier Notifier) (*Service, error) {
@@ -80,12 +84,21 @@ func New(ctx context.Context, control *sql.DB, catalogStore *catalog.Store, jobS
 		return nil, err
 	}
 	return &Service{context: ctx, control: control, catalog: catalogStore, jobs: jobStore, derived: derivedService,
-		dirs: dirs, space: space, clock: clock, temp: tempStore, coord: NewCoordinator(), notifier: notifier}, nil
+		dirs: dirs, space: space, clock: clock, temp: tempStore, coord: NewCoordinator(), notifier: notifier,
+		heartbeatInterval: 30 * time.Second}, nil
 }
 
 func (s *Service) SetCoordinator(coordinator *Coordinator) {
 	if coordinator != nil {
 		s.coord = coordinator
+	}
+}
+
+// SetHeartbeatPolicy 只用于运行配置和确定性测试；租约/心跳数值属于 PRE_FREEZE
+// 调优项，不进入公开维护协议。
+func (s *Service) SetHeartbeatPolicy(interval time.Duration) {
+	if interval > 0 {
+		s.heartbeatInterval = interval
 	}
 }
 
@@ -177,7 +190,7 @@ func (s *Service) Execute(ctx context.Context, jobID string) error {
 	if err := s.progress(ctx, jobID, "executing", 1); err != nil {
 		return s.fail(ctx, jobID, err)
 	}
-	if err := run(); err != nil {
+	if err := s.runWithHeartbeat(ctx, jobID, run); err != nil {
 		return s.fail(ctx, jobID, err)
 	}
 	if err := s.progress(ctx, jobID, "finalizing", 2); err != nil {
@@ -192,6 +205,35 @@ func (s *Service) Execute(ctx context.Context, jobID string) error {
 	}
 	s.notifier.JobChanged(completed)
 	return nil
+}
+
+// runWithHeartbeat 覆盖 GC/VACUUM 这种长时间没有逐页进度回调的区间。旧实现只在
+// entering executing 时续租一次，500k GC 超过两分钟后会被中央恢复器当成孤儿
+// Attempt 回收，即使底层 SQL 仍在正常工作。心跳只更新 control.db，不接触 Source，
+// 也不伪造 Catalog 操作的字节或百分比进度。
+func (s *Service) runWithHeartbeat(ctx context.Context, jobID string, run func() error) error {
+	heartbeatCtx, stop := context.WithCancel(ctx)
+	var wait sync.WaitGroup
+	wait.Add(1)
+	go func() {
+		defer wait.Done()
+		ticker := time.NewTicker(s.heartbeatInterval)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-heartbeatCtx.Done():
+				return
+			case <-ticker.C:
+				// 使用可取消的维护 context，避免主操作结束后被一个仍在等待
+				// SQLite busy handler 的后台心跳拖住 Execute 收敛。
+				_, _ = s.jobs.Heartbeat(heartbeatCtx, jobID)
+			}
+		}
+	}()
+	err := run()
+	stop()
+	wait.Wait()
+	return err
 }
 
 // progress 将维护任务的粗粒度阶段持久化并立即发出失效提示。SQLite 的 VACUUM/
@@ -384,8 +426,14 @@ FROM shares WHERE revoked_at IS NULL AND expires_at>? AND fixed_blob_algorithm I
 func (s *Service) Checkpoint(ctx context.Context) error {
 	release := s.coord.AcquireMaintenance()
 	defer release()
-	if _, err := s.control.ExecContext(ctx, "PRAGMA wal_checkpoint(TRUNCATE)"); err != nil {
+	var busy, logFrames, checkpointedFrames int
+	if err := s.control.QueryRowContext(ctx, "PRAGMA wal_checkpoint(TRUNCATE)").Scan(
+		&busy, &logFrames, &checkpointedFrames); err != nil {
 		return maintenanceFault(err)
+	}
+	if busy != 0 {
+		return fault.New(fault.CodeMaintenanceBlocked, true, fmt.Errorf(
+			"control checkpoint busy: log=%d checkpointed=%d", logFrames, checkpointedFrames))
 	}
 	return s.catalog.Checkpoint(ctx)
 }
@@ -396,7 +444,20 @@ func (s *Service) Vacuum(ctx context.Context) error {
 	if _, err := s.control.ExecContext(ctx, "VACUUM"); err != nil {
 		return maintenanceFault(err)
 	}
-	return s.catalog.Vacuum(ctx)
+	leases := s.catalog.PublicationLeases()
+	leases.BeginDeferred()
+	vacuumErr := s.catalog.Vacuum(ctx)
+	// 即使请求 context 在 full VACUUM 期间取消，也必须尽力把已经返回给客户端的
+	// cursor/显式快照 lease 落盘；否则维护锁一释放，后续 GC 会看不到保护事实。
+	flushCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	flushErr := leases.FlushAndEnd(flushCtx)
+	cancel()
+	if vacuumErr != nil || flushErr != nil {
+		return maintenanceFault(errors.Join(vacuumErr, flushErr))
+	}
+	// WAL 模式下 full VACUUM 的重写结果可能全部位于 catalog.db-wal；lease 已持久化后
+	// 再做 TRUNCATE checkpoint，确保空间回收事实落到主文件并避免重启时携带巨型 WAL。
+	return s.catalog.Checkpoint(ctx)
 }
 
 func maintenanceFault(err error) error {
