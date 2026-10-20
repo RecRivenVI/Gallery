@@ -12,7 +12,7 @@ import { createPrecompiledValidator, type ValidatorFunctions } from '@rjsf/valid
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import buildSchema from '../../../../internal/rules/rule-package.schema.json';
 import { Button, ErrorState, Select } from '../../design';
-import { describeError, errorCode, errorCorrelationId } from '../../shared/errors';
+import { describeError, errorCode, errorCorrelationId } from '../../runtime/errors';
 import { useRuleExamples, useRuleSchema } from '../api';
 import { ConfirmAction } from '../ui';
 import validatorFunctions from '../ruleSchemaValidator.gen.cjs';

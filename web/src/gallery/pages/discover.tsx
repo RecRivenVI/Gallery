@@ -9,8 +9,8 @@
 import { useEffect, useState } from 'react';
 import { Link, useParams, useSearchParams } from 'react-router';
 import { Badge, Button, EmptyState, ErrorState, Select, Spinner } from '../../design';
-import { describeError, errorCode, errorCorrelationId } from '../../shared/errors';
-import { useCapability } from '../../shared/session';
+import { describeError, errorCode, errorCorrelationId } from '../../runtime/errors';
+import { useCapability } from '../../runtime/session';
 import { mediaContentUrl, type Creator, type Source, type SourcePresentation } from '../contracts';
 import { useCreator, useCreators, useFileRoots, useSources, type CreatorSort } from '../queries';
 import { WorkBrowser } from '../components/browser';

@@ -3,7 +3,7 @@
 // **路径被两处外部资产钉死，不要移动本文件**：`internal/auth/web_capability_vocabulary_test.go`
 // 按 `web/src/auth/capabilities.ts` 读取并逐项比对，`web/e2e/gallery.spec.ts` 按同一路径
 // 导入 CAPABILITIES 构造合成 bootstrap。因此 M6a 的前端重写删掉了 `src/auth/` 下的其余文件，
-// 只保留这一份词表；共享层通过 `src/shared/session.tsx` 转发它，不另抄一份。
+// 只保留这一份词表；共享层通过 `src/runtime/session.tsx` 转发它，不另抄一份。
 //
 // 词表事实源是 `internal/auth.PersonalOwnerCapabilities` 与 control 迁移
 // `00020_phase5_security.sql` 的 `security_role_capabilities`；`internal/auth` 的

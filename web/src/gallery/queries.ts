@@ -2,7 +2,7 @@
  * 画廊的数据获取层。
  *
  * 所有列表都来自服务端快照：客户端不本地重排、不跨快照拼接、不把实时事件当成数据源。
- * queryKey 的第一段一律取自 `shared/query.ts` 的 `SNAPSHOT_QUERY_PREFIXES`，否则实时
+ * queryKey 的第一段一律取自 `runtime/query.ts` 的 `SNAPSHOT_QUERY_PREFIXES`，否则实时
  * 重连时不会自动重取。
  *
  * 两条最容易出错的契约，在这里集中处理，页面不需要各自记住：
@@ -26,8 +26,8 @@ import {
 } from '@tanstack/react-query';
 import { useCallback, useEffect, useState } from 'react';
 import { api, expectData } from '../api/client';
-import { isRetryable } from '../shared/errors';
-import { useCsrfHeaders } from '../shared/session';
+import { isRetryable } from '../runtime/errors';
+import { useCsrfHeaders } from '../runtime/session';
 import {
   classifyCursorFailure,
   type Creator,

@@ -15,10 +15,10 @@ import { createRoot } from 'react-dom/client';
 import { BrowserRouter } from 'react-router';
 import { useRegisterSW } from 'virtual:pwa-register/react';
 import { Button, SkipLink, ToastProvider, Toast } from '../design';
-import { createQueryClient } from '../shared/query';
-import { RealtimeProvider } from '../shared/realtime';
-import { SessionProvider } from '../shared/session';
-import { ThemeProvider } from '../shared/theme';
+import { createQueryClient } from '../runtime/query';
+import { RealtimeProvider } from '../runtime/realtime';
+import { SessionProvider } from '../runtime/session';
+import { ThemeProvider } from '../runtime/theme';
 import { GalleryApp } from './app';
 
 /**

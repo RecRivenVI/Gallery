@@ -11,7 +11,7 @@
 
 import { useState } from 'react';
 import { Badge, Button, Dialog, Select, Tabs, TextInput, useToast } from '../../design';
-import { useCapability } from '../../shared/session';
+import { useCapability } from '../../runtime/session';
 import {
   useBindingAction,
   useBindingIssues,

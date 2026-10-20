@@ -12,8 +12,8 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Link, useNavigate, useParams, useSearchParams } from 'react-router';
 import { Badge, Button, ErrorState, IconButton, Spinner } from '../../design';
-import { describeError, errorCode, errorCorrelationId } from '../../shared/errors';
-import { useTheme } from '../../shared/theme';
+import { describeError, errorCode, errorCorrelationId } from '../../runtime/errors';
+import { useTheme } from '../../runtime/theme';
 import {
   isAudioMedia,
   isImageMedia,

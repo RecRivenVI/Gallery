@@ -35,7 +35,7 @@ func (recorder *publicationRecorder) PublicationPublished(publication catalog.Pu
 }
 
 func TestWalkingSkeletonScanPublishesAndFailurePreservesOldPublication(t *testing.T) {
-	fixture, err := os.ReadFile(filepath.Join("..", "..", "tests", "fixtures", "walking-skeleton", "work-one", "media.bin"))
+	fixture, err := os.ReadFile(filepath.Join("testdata", "walking-skeleton", "work-one", "media.bin"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -125,7 +125,7 @@ func TestFantiaCreatorOccurrencesReuseCanonicalCreatorByStableRuleIdentity(t *te
 	resources, jobStore, catalogStore, service, baselineSource, store := setup(t, []byte("unused baseline fixture"))
 	defer store.Close()
 
-	fixtureRoot := filepath.Join("..", "..", "tests", "fixtures", "creator-aggregation", "fantia")
+	fixtureRoot := filepath.Join("testdata", "creator-aggregation", "fantia")
 	sourceRoot := filepath.Join(filepath.Dir(baselineSource.RootPath), "fantia-source")
 	if err := os.CopyFS(sourceRoot, os.DirFS(filepath.Join(fixtureRoot, "source"))); err != nil {
 		t.Fatal(err)

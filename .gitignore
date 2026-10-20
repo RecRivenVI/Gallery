@@ -1,19 +1,15 @@
-# Gallery 本地 AppDirs 与构建输出
+# 本机状态与原生构建缓存
 /.gallery/
 /bin/
 /build/
 /coverage/
 /dist/
 /tmp/
-
-# 本地数据库、日志和运行时文件
 *.db
 *.db-*
 *.sqlite
 *.sqlite-*
 *.log
-
-# Go / Node / IDE 生成物
 *.exe
 *.dll
 *.pdb
@@ -26,19 +22,14 @@ test-results/
 .idea/
 .vscode/
 
-# Cleanroom 源码、说明与小型机器可读结果纳入基线；大型可重建产物不入库
-experiments/testbench/**/bin/
-experiments/testbench/**/obj/
-experiments/testbench/**/build/bin/
-experiments/testbench/**/build/windows/
-experiments/testbench/**/frontend/dist/
-experiments/testbench/**/results/**/*-fixtures/
-experiments/testbench/**/results/**/bleve/
-experiments/testbench/**/*.bolt
-experiments/testbench/**/*.zap
-experiments/testbench/**/*.bin
+# 由 Web 构建恢复的输入与生产输出
+/internal/webapp/dist/
+/web/public/icons/
+/web/public/gallery-web.json
+/web/src/manage/ruleSchemaValidator.gen.cjs
+/web/src/manage/ruleSchemaValidator.gen.d.cts
 
-# 本机测试环境路径与机器配置：只提交明确命名的模板文件
-/docs/development/local-environment.local.md
-/docs/development/examples/testlab.local.json
-/docs/development/large-test-cleanup.local.md
+# 只保存于本机，模板和说明在 documents
+/tools/build/local.json
+/tools/testlab/local.json
+/tools/windows-portable/templates/**/pixiv-root.local.txt

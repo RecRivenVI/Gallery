@@ -15,8 +15,8 @@
 
 import type { CSSProperties } from 'react';
 import type { components } from '../api/schema.gen';
-import { errorCode } from '../shared/errors';
-import type { ResolvedTheme } from '../shared/theme';
+import { errorCode } from '../runtime/errors';
+import type { ResolvedTheme } from '../runtime/theme';
 
 /* ————————————————————————————— 契约类型别名 ————————————————————————————— */
 

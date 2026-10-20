@@ -1,6 +1,5 @@
 {
   "name": "@gallery/web",
-  "version": "0.1.0-pre-alpha",
   "private": true,
   "type": "module",
   "packageManager": "npm@10.9.8",
@@ -12,10 +11,9 @@
     "js-yaml": "4.3.0"
   },
   "scripts": {
-    "audit:ci": "node scripts/check-audit.mjs",
     "dev": "vite",
-    "generate": "npm run generate:api && npm run generate:icons && npm run generate:rules-schema",
-    "generate:api": "openapi-typescript ../internal/contract/api/openapi.yaml -o src/api/schema.gen.ts",
+    "generate": "npm run generate:api && npm run generate:icons && npm run generate:rules-schema && npm run generate:manifest",
+    "generate:api": "openapi-typescript ../api/openapi.yaml -o src/api/schema.gen.ts",
     "generate:icons": "node scripts/generate-icons.mjs",
     "generate:rules-schema": "node scripts/generate-rule-schema-validator.mjs",
     "typecheck": "tsc -b --pretty false",
@@ -25,7 +23,8 @@
     "build": "npm run generate && tsc -b --pretty false && vite build",
     "test:e2e": "playwright test",
     "test:real:bootstrap": "node scripts/run-real-e2e.mjs",
-    "test:smoke": "playwright test --project=chromium --project=firefox --workers=50% --grep @smoke"
+    "test:smoke": "playwright test --project=chromium --project=firefox --workers=50% --grep @smoke",
+    "generate:manifest": "node scripts/generate-manifest.mjs"
   },
   "dependencies": {
     "@rjsf/core": "6.7.1",

@@ -7,7 +7,7 @@ import (
 	"strings"
 	"testing"
 
-	contractapi "github.com/RecRivenVI/gallery/internal/contract/api"
+	contractapi "github.com/RecRivenVI/gallery/api"
 )
 
 var (

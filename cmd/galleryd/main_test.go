@@ -15,7 +15,7 @@ import (
 	"testing"
 	"time"
 
-	version "github.com/RecRivenVI/gallery/version"
+	version "github.com/RecRivenVI/gallery/internal/version"
 )
 
 // cmd/galleryd 的可观察契约只有三样东西：**退出码**、**stdout/stderr 上的结构化日志**，

@@ -62,12 +62,14 @@ func main() {
 
 func run() (exitCode int) {
 	var repoRoot string
+	var goExecutable string
 	var browserProject string
 	var keep bool
 	var governanceOnly bool
 	var jobHistoryOnly bool
 	var accessibilityOnly bool
 	var ruleSizeOnly bool
+	flag.StringVar(&goExecutable, "go-executable", "", "Go 可执行文件的显式路径")
 	flag.StringVar(&repoRoot, "repo-root", ".", "Gallery 仓库根目录")
 	flag.StringVar(&browserProject, "browser-project", "chromium", "Playwright 浏览器项目（chromium 或 firefox）")
 	flag.BoolVar(&keep, "keep", false, "保留临时验证目录")
@@ -89,12 +91,12 @@ func run() (exitCode int) {
 	if err != nil {
 		return fail("解析仓库根目录", err)
 	}
-	goBin, err := fixedGo()
-	if err != nil {
-		return fail("解析固定 Go 工具链", err)
-	}
-	if err := verifyGo(goBin); err != nil {
-		return fail("验证固定 Go 工具链", err)
+	goBin := goExecutable
+	if goBin == "" {
+		goBin, err = fixedGo()
+		if err != nil {
+			return fail("解析 Go 工具链", err)
+		}
 	}
 	nodeBin, err := exec.LookPath("node")
 	if err != nil {
@@ -148,7 +150,7 @@ func run() (exitCode int) {
 			return fail("创建隔离目录", err)
 		}
 	}
-	fixture := filepath.Join(root, "tests", "fixtures", "walking-skeleton")
+	fixture := filepath.Join(root, "internal", "scanner", "testdata", "walking-skeleton")
 	if err := os.CopyFS(sourceRoot, os.DirFS(fixture)); err != nil {
 		return fail("复制合成 Source", err)
 	}
@@ -1044,22 +1046,6 @@ func retainDiagnostics(logPath, diagnosticsRoot string) error {
 	}
 	if err := os.WriteFile(filepath.Join(diagnosticsRoot, filepath.Base(logPath)), content, 0o600); err != nil {
 		return fmt.Errorf("保存 galleryd 诊断日志: %w", err)
-	}
-	return nil
-}
-
-func verifyGo(goBin string) error {
-	cmd := exec.Command(goBin, "version")
-	cmd.Env = append(os.Environ(), "GOTOOLCHAIN=local")
-	output, err := cmd.CombinedOutput()
-	if err != nil {
-		return fmt.Errorf("go version: %w: %s", err, strings.TrimSpace(string(output)))
-	}
-	version := strings.TrimSpace(string(output))
-	fmt.Println(version)
-	fields := strings.Fields(version)
-	if len(fields) < 3 || fields[0] != "go" || fields[1] != "version" || fields[2] != "go1.26.5" {
-		return fmt.Errorf("需要 Go 1.26.5，实际为 %s", version)
 	}
 	return nil
 }

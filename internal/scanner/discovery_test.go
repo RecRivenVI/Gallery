@@ -24,7 +24,7 @@ func TestDiscoveryStopsAtWalkEntryWhenContextIsCancelled(t *testing.T) {
 }
 
 func TestFantiaCreatorStableIdentityIsSharedWithoutDisplayNameMerging(t *testing.T) {
-	fixtureRoot := filepath.Join("..", "..", "tests", "fixtures", "creator-aggregation", "fantia")
+	fixtureRoot := filepath.Join("testdata", "creator-aggregation", "fantia")
 	packageJSON, err := os.ReadFile(filepath.Join(fixtureRoot, "rule-package.json"))
 	if err != nil {
 		t.Fatal(err)
@@ -64,7 +64,7 @@ func TestFantiaCreatorStableIdentityIsSharedWithoutDisplayNameMerging(t *testing
 }
 
 func TestRuleIRDiscoversDifferentDirectoryAndMetadataShapes(t *testing.T) {
-	root := filepath.Join("..", "..", "tests", "fixtures", "architecture-proof")
+	root := filepath.Join("testdata", "architecture-proof")
 	tests := []struct {
 		name, relativeRoot, workGlob, metadataFile, mediaGlob string
 		selectors, expressions, condition                     string
@@ -154,7 +154,7 @@ func TestRuleIRReportsMissingRequiredMetadata(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	_, err = discover(context.Background(), filepath.Join("..", "..", "tests", "fixtures", "architecture-proof", "layout-c"), ir, parameters)
+	_, err = discover(context.Background(), filepath.Join("testdata", "architecture-proof", "layout-c"), ir, parameters)
 	if err == nil {
 		t.Fatal("缺失必需 metadata 未阻塞规则执行")
 	}

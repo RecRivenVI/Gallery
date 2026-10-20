@@ -13,8 +13,8 @@
 import { lazy, Suspense, useEffect, useState } from 'react';
 import { Link, useParams } from 'react-router';
 import { Badge, Button, Checkbox, ErrorState, Select, Tabs, TextInput, useToast } from '../../design';
-import { describeError, errorCode, errorCorrelationId } from '../../shared/errors';
-import { useCapability } from '../../shared/session';
+import { describeError, errorCode, errorCorrelationId } from '../../runtime/errors';
+import { useCapability } from '../../runtime/session';
 import {
   useExportRuleVersion,
   usePublishRuleDraft,

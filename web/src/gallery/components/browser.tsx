@@ -11,8 +11,8 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { useSearchParams } from 'react-router';
 import { Button, EmptyState, ErrorState, Select, Spinner, Switch, TextInput } from '../../design';
-import { describeError, errorCode, errorCopy, errorCorrelationId } from '../../shared/errors';
-import { useCapability } from '../../shared/session';
+import { describeError, errorCode, errorCopy, errorCorrelationId } from '../../runtime/errors';
+import { useCapability } from '../../runtime/session';
 import {
   buildFilterAst,
   formatTotal,

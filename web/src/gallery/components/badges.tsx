@@ -10,7 +10,7 @@
  */
 
 import { Badge } from '../../design';
-import { useTheme } from '../../shared/theme';
+import { useTheme } from '../../runtime/theme';
 import { badgeStyle, badgesAt, type RuleBadge } from '../contracts';
 
 export interface RuleBadgesProps {

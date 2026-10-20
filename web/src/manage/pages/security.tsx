@@ -12,7 +12,7 @@
 import { useState, type ReactNode } from 'react';
 import type { InfiniteData } from '@tanstack/react-query';
 import { Badge, Button, Checkbox, Select, Tabs, TextInput, useToast } from '../../design';
-import { CAPABILITIES, useCapability, useSession, type Capability } from '../../shared/session';
+import { CAPABILITIES, useCapability, useSession, type Capability } from '../../runtime/session';
 import type { components } from '../../api/schema.gen';
 import {
   useApiTokens,

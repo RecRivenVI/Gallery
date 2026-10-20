@@ -13,8 +13,8 @@
 import { useEffect, useState } from 'react';
 import { Link, useParams, useSearchParams } from 'react-router';
 import { Badge, Button, EmptyState, ErrorState, Spinner } from '../../design';
-import { describeError, errorCode, errorCorrelationId } from '../../shared/errors';
-import { useCapability } from '../../shared/session';
+import { describeError, errorCode, errorCorrelationId } from '../../runtime/errors';
+import { useCapability } from '../../runtime/session';
 import type { FileRootEntry } from '../contracts';
 import { useFileEntries, useFileRoots } from '../queries';
 

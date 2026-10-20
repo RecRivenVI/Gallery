@@ -9,7 +9,7 @@
 import { Route, Routes } from 'react-router';
 import { useState } from 'react';
 import { Button, EmptyState, Spinner, TextInput } from '../design';
-import { AuthGate, useAuthActions, useSession } from '../shared/session';
+import { AuthGate, useAuthActions, useSession } from '../runtime/session';
 import { ManageLayout } from './layout';
 import { DiagnosticsPage } from './pages/diagnostics';
 import { GovernancePage } from './pages/governance';

@@ -1,0 +1,5 @@
+Gallery（画廊）依据根目录 LICENSE 发行。
+
+当前树没有直接包含的第三方源码或媒体材料。
+
+通过 Go/npm 获取的第三方依赖以 go.mod、go.sum、web/package.json 和 web/package-lock.json 为准，其许可证由对应依赖保留。web/vendor/minimatch-legacy-adapter 是本项目编写的导出适配层，不是第三方源码副本。

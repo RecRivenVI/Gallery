@@ -27,7 +27,7 @@ import {
   TextInput,
   useToast
 } from '../../design';
-import { describeError, errorCode, errorCorrelationId } from '../../shared/errors';
+import { describeError, errorCode, errorCorrelationId } from '../../runtime/errors';
 import { formatProgress, publicationHref, type PublishedMedia, type WorkOverlayState } from '../contracts';
 import { useOverlayMutation, useWorkOverlay } from '../queries';
 

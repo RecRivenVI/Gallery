@@ -11,7 +11,7 @@
 
 import { Link, Route, Routes } from 'react-router';
 import { EmptyState } from '../design';
-import { AuthGate } from '../shared/session';
+import { AuthGate } from '../runtime/session';
 import { ConnectionStatus, ScrollRestoration, SignInPanel, TopBar } from './components/chrome';
 import { BrowsePage, CreatorPage, CreatorsPage, HomePage, SourcePage } from './pages/discover';
 import { FileBrowserPage, FileRootsPage } from './pages/files';

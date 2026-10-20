@@ -3,13 +3,13 @@
  *
  * 三条约定：
  *
- * 1. **queryKey 的第一段必须来自 `shared/query.ts` 的 SNAPSHOT_QUERY_PREFIXES**，否则
+ * 1. **queryKey 的第一段必须来自 `runtime/query.ts` 的 SNAPSHOT_QUERY_PREFIXES**，否则
  *    WebSocket 重连、序号缺口或 `connection.ready` 触发的「重新拉快照」不会覆盖它。
  *    唯一的例外是 `security`：安全资源不在该表里，因此 `layout.tsx` 显式订阅
  *    `session.revoked` / `grant.revoked` 并按快照代次失效它，注释见那里。
  * 2. **所有变更都带 CSRF header**，取值来自 bootstrap；认证状态变化后 token 会变，
  *    `useCsrfHeaders()` 每次渲染都取最新值。
- * 3. **变更绝不自动重试**（`shared/query.ts` 已设 `retry: false`）：重复提交可能产生
+ * 3. **变更绝不自动重试**（`runtime/query.ts` 已设 `retry: false`）：重复提交可能产生
  *    第二个 Job 或第二条不可重建的用户事实。
  */
 
@@ -24,7 +24,7 @@ import {
 import { useCallback } from 'react';
 import { api, expectData, expectNoContent } from '../api/client';
 import type { components } from '../api/schema.gen';
-import { useCsrfHeaders } from '../shared/session';
+import { useCsrfHeaders } from '../runtime/session';
 import { isRecord, parseRuleValue } from './rules/lossless';
 
 type Schemas = components['schemas'];

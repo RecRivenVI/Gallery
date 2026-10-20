@@ -7,7 +7,7 @@
 
 import { Link } from 'react-router';
 import { Badge } from '../../design';
-import { useSession } from '../../shared/session';
+import { useSession } from '../../runtime/session';
 import {
   useBindingIssues,
   useCurrentPublication,

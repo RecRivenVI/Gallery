@@ -11,8 +11,8 @@
 import { useState } from 'react';
 import { Link } from 'react-router';
 import { Badge, Button, Select, TextInput, useToast } from '../../design';
-import { useCapability } from '../../shared/session';
-import { errorCode } from '../../shared/errors';
+import { useCapability } from '../../runtime/session';
+import { errorCode } from '../../runtime/errors';
 import {
   useCreateRulePackage,
   useCreateSourceRuleBinding,

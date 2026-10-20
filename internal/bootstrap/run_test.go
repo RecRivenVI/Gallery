@@ -77,7 +77,7 @@ func TestWalkingSkeletonPersistsAcrossRealGallerydRestart(t *testing.T) {
 	if err := os.MkdirAll(work, 0o700); err != nil {
 		t.Fatal(err)
 	}
-	fixture, err := os.ReadFile(filepath.Join("..", "..", "tests", "fixtures", "walking-skeleton", "work-one", "media.bin"))
+	fixture, err := os.ReadFile(filepath.Join("..", "scanner", "testdata", "walking-skeleton", "work-one", "media.bin"))
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -22,9 +22,9 @@ import {
 } from 'react';
 import { Link } from 'react-router';
 import { Badge, IconButton, useKeyedLayoutMotion, useToast } from '../../design';
-import { describeError } from '../../shared/errors';
-import { useCapability } from '../../shared/session';
-import { useTheme } from '../../shared/theme';
+import { describeError } from '../../runtime/errors';
+import { useCapability } from '../../runtime/session';
+import { useTheme } from '../../runtime/theme';
 import {
   formatCreator,
   formatPublishedAt,

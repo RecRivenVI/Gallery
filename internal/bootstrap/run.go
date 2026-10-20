@@ -10,12 +10,12 @@ import (
 	"path/filepath"
 	"time"
 
+	contractapi "github.com/RecRivenVI/gallery/api"
 	"github.com/RecRivenVI/gallery/internal/application"
 	"github.com/RecRivenVI/gallery/internal/auth"
 	"github.com/RecRivenVI/gallery/internal/backup"
 	"github.com/RecRivenVI/gallery/internal/catalog"
 	"github.com/RecRivenVI/gallery/internal/config"
-	contractapi "github.com/RecRivenVI/gallery/internal/contract/api"
 	"github.com/RecRivenVI/gallery/internal/contract/fault"
 	"github.com/RecRivenVI/gallery/internal/contract/realtime"
 	"github.com/RecRivenVI/gallery/internal/creators"
@@ -41,9 +41,9 @@ import (
 	"github.com/RecRivenVI/gallery/internal/storage"
 	"github.com/RecRivenVI/gallery/internal/toolrunner"
 	"github.com/RecRivenVI/gallery/internal/transport/httpapi"
+	version "github.com/RecRivenVI/gallery/internal/version"
 	watcherservice "github.com/RecRivenVI/gallery/internal/watcher"
 	"github.com/RecRivenVI/gallery/internal/webapp"
-	version "github.com/RecRivenVI/gallery/version"
 )
 
 // 各资源类别的默认并发上限。scan 允许少量不同 Source 并行；overlay 单活跃投影 Job，取 1 与其

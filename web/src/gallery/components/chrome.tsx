@@ -11,10 +11,10 @@
 import { useCallback, useEffect, useLayoutEffect, useState, type FormEvent, type ReactNode } from 'react';
 import { Link, NavLink, NavigationType, useLocation, useNavigate, useNavigationType } from 'react-router';
 import { Button, Dialog, Icon, Menu, Spinner, TextInput, type IconName } from '../../design';
-import { describeError } from '../../shared/errors';
-import { useRealtime } from '../../shared/realtime';
-import { SignOutButton, useAuthActions, useCapability, useSession } from '../../shared/session';
-import { DENSITY_LABELS, THEME_LABELS, useTheme, type ThemePreference } from '../../shared/theme';
+import { describeError } from '../../runtime/errors';
+import { useRealtime } from '../../runtime/realtime';
+import { SignOutButton, useAuthActions, useCapability, useSession } from '../../runtime/session';
+import { DENSITY_LABELS, THEME_LABELS, useTheme, type ThemePreference } from '../../runtime/theme';
 import type { Source } from '../contracts';
 import { useFileRoots, useSources } from '../queries';
 
@@ -404,7 +404,7 @@ export function ScrollRestoration() {
  *
  * Personal 模式是一次性配对（仅 loopback 可用），LAN 模式是本地账户登录。两者的会话都由
  * 服务端下发 HttpOnly Cookie，前端读不到，因此认证成功后一律重新拉 bootstrap——
- * 这件事由 shared/session 的动作负责，这里不重复处理。
+ * 这件事由 runtime/session 的动作负责，这里不重复处理。
  */
 export function SignInPanel() {
   const { mode, bootstrap } = useSession();

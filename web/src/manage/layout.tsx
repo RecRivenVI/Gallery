@@ -11,10 +11,10 @@ import type { ReactNode } from 'react';
 import { NavLink } from 'react-router';
 import { useQueryClient } from '@tanstack/react-query';
 import { Badge, Button, Dialog, Icon, Menu, type IconName } from '../design';
-import { SNAPSHOT_QUERY_PREFIXES } from '../shared/query';
-import { useRealtime, useRealtimeEvent, type RealtimeStatus } from '../shared/realtime';
-import { SignOutButton, useSession } from '../shared/session';
-import { DENSITY_LABELS, THEME_LABELS, useTheme, type ThemePreference } from '../shared/theme';
+import { SNAPSHOT_QUERY_PREFIXES } from '../runtime/query';
+import { useRealtime, useRealtimeEvent, type RealtimeStatus } from '../runtime/realtime';
+import { SignOutButton, useSession } from '../runtime/session';
+import { DENSITY_LABELS, THEME_LABELS, useTheme, type ThemePreference } from '../runtime/theme';
 import './manage.css';
 
 export interface NavItem {
@@ -71,7 +71,7 @@ function realtimeTone(status: RealtimeStatus): 'success' | 'warning' | 'danger' 
 /**
  * 安全资源的快照失效。
  *
- * `shared/query.ts` 的 SNAPSHOT_QUERY_PREFIXES 里没有 `security`（会话、Token、分享、账户、
+ * `runtime/query.ts` 的 SNAPSHOT_QUERY_PREFIXES 里没有 `security`（会话、Token、分享、账户、
  * 授权、审计），因此实时层的自动失效覆盖不到它们。这里显式补上：会话或授权被吊销时，
  * 以及任何一次「必须重新拉快照」时，都重置 `['security']`。安全列表使用 live keyset，
  * 不能在外部写入后拿旧页锚点重新抓取后续页。

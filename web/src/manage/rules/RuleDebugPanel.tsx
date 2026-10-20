@@ -1,6 +1,6 @@
 import { useMemo, useState } from 'react';
 import { Button, TextInput } from '../../design';
-import { useCapability } from '../../shared/session';
+import { useCapability } from '../../runtime/session';
 import {
   useRuleDryRun,
   useRuleExplain,

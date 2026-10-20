@@ -29,7 +29,7 @@ import {
   type ButtonVariant,
   type Tone
 } from '../design';
-import { describeError, errorCode, errorCorrelationId } from '../shared/errors';
+import { describeError, errorCode, errorCorrelationId } from '../runtime/errors';
 import { contractNotes, type ContractArea, type ContractNote } from './contract';
 import './manage.css';
 

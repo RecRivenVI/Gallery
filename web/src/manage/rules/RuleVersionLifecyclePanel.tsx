@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react';
 import { Badge, Checkbox, Select, TextInput, useToast } from '../../design';
-import { errorCode } from '../../shared/errors';
-import { useCapability } from '../../shared/session';
+import { errorCode } from '../../runtime/errors';
+import { useCapability } from '../../runtime/session';
 import {
   useDeprecateRulePackage,
   useDeprecateRuleVersion,

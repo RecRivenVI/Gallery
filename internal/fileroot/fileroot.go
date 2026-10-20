@@ -2,10 +2,9 @@
 //
 // **文件根是独立于 Source 的领域概念**，不是 Source 的一种变体。三条各自独立的理由：
 //
-//  1. 物理上不可能作为 Source 存在。真实规则把 `F:\Gallery` 声明为文件根，而各平台 Source 是
-//     `F:\Gallery\gallery-dl\Galleries\pixiv` 等——AppDirs 的 ValidateDisjoint 做的是**双向包含**
-//     判定，祖先关系必然命中 `SOURCE_ROOTS_OVERLAP`。放宽那个判定不可接受：同一个函数同时承担
-//     AppDirs 保护，削弱它等于削弱「数据库、缓存、日志不得落在 Source 内」这条边界。
+//  1. 文件根可以是多个 Source 的共同祖先；它不承担 Source 的成员与投影义务。
+//     AppDirs 的 ValidateDisjoint 做双向包含判定，不能为文件浏览削弱这一写入保护。
+//     Source 的祖先关系会命中 SOURCE_ROOTS_OVERLAP，不能为浏览绕过校验。
 //
 //  2. Source 承载的领域义务文件根一概不需要：Source 必须归属 Library、是扫描与规则绑定的单位、
 //     是 Catalog revision 成员事实的主体。文件根是**实时只读视图**，不产生 Work、不进 publication、

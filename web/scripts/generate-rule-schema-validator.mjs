@@ -15,10 +15,15 @@ const generated = compileSchemaValidatorsCode(schema, {
   ajvFormatOptions: false
 });
 
-// 生成文件进入 Git，必须与仓库统一为 LF；AJV standalone 本身不承担工作树换行策略。
-await writeFile(outputPath, generated.replace(/\r\n?/g, '\n'), 'utf8');
+// 构建时生成并忽略；写入来源标记与 LF。
+await writeFile(
+  outputPath,
+  '// Code generated from internal/rules/rule-package.schema.json. DO NOT EDIT.\n' +
+    generated.replace(/\r\n?/g, '\n'),
+  'utf8'
+);
 await writeFile(
   declarationPath,
-  "import type { ValidatorFunctions } from '@rjsf/validator-ajv8';\n\ndeclare const validatorFunctions: ValidatorFunctions;\nexport = validatorFunctions;\n",
+  "// Code generated from internal/rules/rule-package.schema.json. DO NOT EDIT.\nimport type { ValidatorFunctions } from '@rjsf/validator-ajv8';\n\ndeclare const validatorFunctions: ValidatorFunctions;\nexport = validatorFunctions;\n",
   'utf8'
 );

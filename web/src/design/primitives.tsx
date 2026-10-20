@@ -723,7 +723,7 @@ export function EmptyState({ title, description, action }: EmptyStateProps) {
 
 export interface ErrorStateProps {
   title?: string;
-  /** 已本地化的中文说明。请用 shared/errors.ts 的 describeError/errorCopy 生成。 */
+  /** 已本地化的中文说明。请用 runtime/errors.ts 的 describeError/errorCopy 生成。 */
   description: ReactNode;
   /** 服务端稳定 code 与关联 ID，供用户报告问题时引用。 */
   code?: string;
@@ -735,8 +735,8 @@ export interface ErrorStateProps {
 /**
  * 错误状态。
  *
- * 刻意不接受 `error: unknown`：design/ 不依赖 shared/，否则设计系统会反向依赖会话与 API 层。
- * 调用方先用 shared/errors.ts 把错误翻成中文，再传进来。
+ * 刻意不接受 `error: unknown`：design/ 不依赖 runtime/，否则设计系统会反向依赖会话与 API 层。
+ * 调用方先用 runtime/errors.ts 把错误翻成中文，再传进来。
  */
 export function ErrorState({
   title = '无法完成请求',

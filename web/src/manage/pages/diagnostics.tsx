@@ -9,7 +9,7 @@
 
 import { useState } from 'react';
 import { Badge, Button, Checkbox, Select, TextInput, useToast } from '../../design';
-import { useCapability } from '../../shared/session';
+import { useCapability } from '../../runtime/session';
 import {
   useControlBackups,
   useCreateControlBackup,

@@ -16,7 +16,7 @@
 import { createContext, useCallback, useContext, useEffect, useRef, useState } from 'react';
 import type { ReactNode, RefObject } from 'react';
 import { Button, Spinner, VisuallyHidden } from '../../design';
-import { describeError, errorCode, isRetryable } from '../../shared/errors';
+import { describeError, errorCode, isRetryable } from '../../runtime/errors';
 import { isAbortError, mediaLoader, type MediaLoader } from '../media';
 import { thumbnailScheduler, canRequestThumbnail, type ThumbnailCandidate } from '../thumbnails';
 import { derivedAssetUrl, mediaContentUrl } from '../contracts';

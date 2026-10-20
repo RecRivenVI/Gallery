@@ -9,7 +9,7 @@ import (
 	"time"
 
 	api "github.com/RecRivenVI/gallery/api"
-	version "github.com/RecRivenVI/gallery/version"
+	version "github.com/RecRivenVI/gallery/internal/version"
 )
 
 func main() { os.Exit(run()) }
